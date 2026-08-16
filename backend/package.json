@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "prisma generate",
+    "db:upgrade": "prisma db push",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts"
   },

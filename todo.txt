@@ -1,0 +1,27 @@
+create a pro type of account
+
+Multiplayer
+-think of tournment structure
+-players create teams, choose team color, jerseys, country, stadium name, etc.
+--allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
+-initial player names for that team should match the chosen country, same as youth-generated players
+-push notifications for match started and match ended
+--pros can see match goals and other events and also get their league results as push
+-invite players should give some in-game advantage or give free pro
+-let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
+
+Implement a format to see the match happening (based on globoesporte?)
+
+Balance economy
+-also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
+-prevent people from creating a new disposeable team and ripping that team off in favor of their main team (prevent this through the bidding mechanism somehow, we can't guarante we'll be able to stop multiple accs)
+
+
+Questions:
+-what does a player salary depend on? does it increase overtime or as they win prizes, etc.? do they demand higher wages when contracts renew?
+-how are contract renewals processed?
+-does the release clause adjust proportionally to the lenght of the contract? in real life, it is usually 1/2 of the wages they would receive until end of contract
+
+Questions/multiplayer:
+-how do we structure leagues/cups when players are coming/dropping? i thought of a seasons system, where a season is roughly a month in real life (with matches every other day or so). but i want some cups and periodically world cups with best teams from multiple leagues
+-how can we replace teams whose players are inactive/dropped? do we even need to do that? study how other games like Hattrick solve for that?

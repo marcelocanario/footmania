@@ -14,6 +14,7 @@ import { LiveMatch } from "./screens/LiveMatch";
 import { Transfers } from "./screens/Transfers";
 import { Finances } from "./screens/Finances";
 import { SeasonEnd } from "./screens/SeasonEnd";
+import { Records } from "./screens/Records";
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, setUser } = useGame();
@@ -70,6 +71,7 @@ function AppRoutes() {
       <Route path="/transfers" element={<Guard><Transfers /></Guard>} />
       <Route path="/finances" element={<Guard><Finances /></Guard>} />
       <Route path="/season-end" element={<Guard><SeasonEnd /></Guard>} />
+      <Route path="/records" element={<Guard><Records /></Guard>} />
       <Route path="*" element={<Navigate to="/saves" replace />} />
     </Routes>
   );

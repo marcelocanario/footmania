@@ -70,7 +70,7 @@ export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
       overall: p.overall,
       energy: p.energy,
       injuryDays: p.injuryDays,
-      suspended: p.suspended,
+      suspended: p.suspendedGames > 0,
     };
   };
   const toPlayers = (ids: number[]): LivePlayerView[] => ids.map(pv).filter((p): p is LivePlayerView => !!p);

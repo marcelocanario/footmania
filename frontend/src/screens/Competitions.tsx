@@ -15,7 +15,7 @@ export function Competitions() {
   const { snapshot, saveId } = useGame();
   const [compId, setCompId] = useState<number | null>(null);
   const [table, setTable] = useState<TableRow[] | GroupTable[] | null>(null);
-  const [fixtures, setFixtures] = useState<{ id: number; round: number; leg: number; home: string; away: string; dayLabel: string; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[]>([]);
+  const [fixtures, setFixtures] = useState<{ id: number; round: number; roundLabel: string; leg: number; home: string; away: string; dayLabel: string; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[]>([]);
   const [bracket, setBracket] = useState<{ round: number; ties: { home: string; away: string; leg1: string | null; leg2: string | null; pen: string | null; winner: string; played: boolean }[] }[] | null>(null);
   const [tab, setTab] = useState(0);
 
@@ -104,21 +104,24 @@ export function Competitions() {
                 </div>
               )}
             </div>
-          ) : (
-            isGrouped && (
-              <div className="grid">
-                {(table as GroupTable[]).map((g) => (
-                  <div className="card" key={g.groupName}>
-                    <h3 style={{ marginBottom: 10 }}>{strings.competitions.group} {g.groupName}</h3>
-                    <div className="table-wrap">
-                      <DataTable value={g.rows} rowClassName={(r) => (r.isHuman ? "human-row" : "")} rows={10} dataKey="clubId">
-                        {tableColumns()}
-                      </DataTable>
-                    </div>
+          ) : isGrouped ? (
+            <div className="grid">
+              {(table as GroupTable[]).map((g) => (
+                <div className="card" key={g.groupName}>
+                  <h3 style={{ marginBottom: 10 }}>{strings.competitions.group} {g.groupName}</h3>
+                  <div className="table-wrap">
+                    <DataTable value={g.rows} rowClassName={(r) => (r.isHuman ? "human-row" : "")} rows={10} dataKey="clubId">
+                      {tableColumns()}
+                    </DataTable>
                   </div>
-                ))}
-              </div>
-            )
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <Trophy size={30} style={{ opacity: 0.5 }} />
+              {comp?.kind === "cup" ? strings.competitions.knockoutTable : strings.competitions.finished}
+            </div>
           )}
         </TabPanel>
 
@@ -126,7 +129,7 @@ export function Competitions() {
           <div className="card">
             <div className="table-wrap">
               <DataTable value={fixtures} rowClassName={(r) => (r.isHuman ? "human-row" : "")} rows={20} dataKey="id">
-                <Column header={strings.competitions.round} body={(r) => `${r.round + 1}${r.leg === 2 ? " (2)" : ""}`} style={{ width: 90 }} />
+                <Column header={strings.competitions.round} body={(r) => `${r.roundLabel}${r.leg === 2 ? " (2)" : ""}`} style={{ width: 130 }} />
                 <Column header={strings.matchday.home} field="home" style={{ minWidth: 150 }} />
                 <Column
                   header=""

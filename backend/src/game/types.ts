@@ -49,7 +49,9 @@ export interface Player {
   tacPos: number;
   onSale: boolean;
   salePrice: number | null;
-  suspended: boolean;
+  suspendedGames: number;
+  morale: number;
+  loanId: number | null;
 }
 
 export interface LedgerEntry {
@@ -194,6 +196,8 @@ export interface MatchStats {
   corners: [number, number];
   yellows: [number, number];
   reds: [number, number];
+  tackles: [number, number];
+  wrongPasses: [number, number];
 }
 
 export interface Match {
@@ -214,6 +218,11 @@ export interface Match {
   minuteEvents: MatchEvent[][];
 }
 
+export interface SubSlots {
+  gn: number[][];
+  gm: number[][];
+}
+
 export interface LiveMatchState {
   matchId: number;
   fixtureId: number;
@@ -222,6 +231,8 @@ export interface LiveMatchState {
   awayClubId: number;
   homeNeutral: boolean;
   decider: boolean;
+  compKind: "league" | "cup" | "state";
+  year: number;
   homeXI: number[];
   awayXI: number[];
   homeSubs: number[];
@@ -229,6 +240,7 @@ export interface LiveMatchState {
   homeOn: number[];
   awayOn: number[];
   usedSubs: [number, number];
+  subbedIn: [number[], number[]];
   scores: [number, number];
   stats: MatchStats;
   events: MatchEvent[];
@@ -238,6 +250,9 @@ export interface LiveMatchState {
   secondHalfLen: number;
   extraTimePlayed: boolean;
   withBall: number;
+  possessionCounts: [number, number];
+  playerYellows: Record<number, number>;
+  subSlots: SubSlots;
   suspensionClears: number[];
   shootout?: { scores: [number, number]; winner: number };
   ended: boolean;
@@ -257,6 +272,57 @@ export interface AuctionListing {
   deadlineDay: number;
   sellerClubId: number | null;
   bids: { clubId: number; amount: number }[];
+}
+
+export interface Loan {
+  id: number;
+  playerId: number;
+  fromClubId: number;
+  toClubId: number | null;
+  startDay: number;
+  endDay: number;
+  recalled: boolean;
+}
+
+export interface SeasonAward {
+  season: number;
+  category: string;
+  competitionId: number | null;
+  playerId: number | null;
+  clubId: number | null;
+  playerNameSnapshot: string | null;
+  detail: string | null;
+}
+
+export interface CareerRecord {
+  category: string;
+  value: number;
+  holderName: string;
+}
+
+export interface ManagerHistoryEntry {
+  clubId: number;
+  name: string;
+  appointedDay: number;
+  departedDay: number | null;
+  gamesInCharge: number;
+  reason: string | null;
+}
+
+export interface StadiumUpgrade {
+  clubId: number;
+  startedDay: number;
+  completesDay: number;
+  newCapacity: number;
+  cost: number;
+  completed: boolean;
+}
+
+export interface TvDeal {
+  clubId: number;
+  season: number;
+  baseAmount: number;
+  positionBonus: number;
 }
 
 export interface SeasonSummary {
@@ -281,6 +347,13 @@ export interface World {
   matches: Match[];
   news: NewsItem[];
   auctions: AuctionListing[];
+  loans: Loan[];
+  seasonAwards: SeasonAward[];
+  records: CareerRecord[];
+  managerHistory: ManagerHistoryEntry[];
+  ticketPrices: Record<number, [number, number, number, number]>;
+  stadiumUpgrades: StadiumUpgrade[];
+  tvDeals: TvDeal[];
   humanClubId: number | null;
   seasonSummary: SeasonSummary | null;
   rng: RngState;

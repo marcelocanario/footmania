@@ -121,6 +121,21 @@ export function SeasonEnd() {
         </div>
       </div>
 
+      {snapshot?.seasonAwards && snapshot.seasonAwards.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 className="card-title"><Medal size={17} /> Season awards</h2>
+          <div className="news-list">
+            {snapshot.seasonAwards.slice(0, 12).map((award, i) => (
+              <div className="news-item" key={`${award.category}-${award.competitionId}-${i}`}>
+                <span className="day">{award.category.replaceAll("_", " ")}</span>
+                <span>{award.playerNameSnapshot ?? "Club award"}</span>
+                <span style={{ marginLeft: "auto", color: "var(--text-3)" }}>{award.detail}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ marginTop: 24, textAlign: "center" }}>
         <button className="btn gold" style={{ fontSize: "1.1rem", minHeight: 52, padding: "14px 40px" }} onClick={() => navigate("/dashboard")}>
           <Trophy size={18} /> {strings.seasonEnd.newYear}

@@ -30,6 +30,8 @@ export const FORMATION_NAMES = [
   "4-3-3",
   "3-5-2",
   "3-4-3",
+  "4-2-3-1",
+  "4-2-3-1 Alas",
 ];
 
 export const STYLE_NAMES = ["Balanced", "Total Attack", "Counter-attack"];
@@ -102,6 +104,14 @@ export const LEAGUE_PRIZES: number[][] = [
 
 export const STATE_PRIZES = [700000, 500000, 300000, 100000];
 
+export const TV_POSITION_BONUS: number[][] = [
+  [0, 0, 0, 0, 0, 0],
+  [3000000, 2000000, 1500000, 1000000, 750000, 500000],
+  [1500000, 1000000, 750000, 500000, 250000, 150000],
+  [750000, 500000, 300000, 200000, 100000, 75000],
+  [400000, 250000, 150000, 100000, 75000, 50000],
+];
+
 export const CUP_PRIZES: number[][] = [
   [0, 0, 0, 0, 0, 0],
   [100000, 100000, 400000, 500000, 700000, 700000, 700000, 700000],
@@ -162,6 +172,7 @@ export const EVENT_CODES = {
   INJURY: 5,
   SUB: 6,
   MISSED_PENALTY: 7,
+  ASSIST: 8,
 };
 
 export const GOAL_SUBTYPES = {
@@ -176,21 +187,36 @@ export const GOAL_SUBTYPES = {
 export const FORMATION_SUB_BONUS = [1, 22, 24, 12, 14, 16, 2, 9, 3, 5];
 
 export const CARD_YELLOW = [70, 40, 30];
-export const CARD_YELLOW_PRESSING = [30, 10, 30];
+export const CARD_YELLOW_SECOND = [45, 40, 30];
+export const CARD_YELLOW_PRESSING = [30, 10, 0];
 export const CARD_RED_FIRST = [1200, 900, 800];
 export const CARD_RED_SECOND = [800, 700, 550];
 export const INJURY_FIRST = [1500, 1000, 800];
 export const INJURY_SECOND = [800, 600, 600];
 
+// Brasfoot c/b.java Tx — shooter weights by tacPos (index 0 unused).
 export const SHOTTER_WEIGHTS: Record<number, number> = {
-  3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1,
-  2: 1, 9: 1,
-  11: 8, 12: 8, 13: 8, 14: 8, 15: 8, 16: 8,
-  10: 8, 17: 8,
+  1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1,
+  9: 8, 10: 4, 11: 4, 12: 4, 13: 8, 14: 8, 15: 8, 16: 8, 17: 8,
   18: 22, 19: 22, 20: 22, 21: 22, 22: 22, 23: 22, 24: 22, 25: 22,
 };
 
-export const TACTIC_STYLE_POSSESSION = [0.0, 0.04, 0.08];
+// Brasfoot c/b.java Ty — assister weights by tacPos.
+export const ASSISTER_WEIGHTS: Record<number, number> = {
+  1: 1, 2: 10, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 10,
+  10: 10, 11: 4, 12: 4, 13: 4, 14: 20, 15: 20, 16: 20, 17: 10,
+  18: 10, 19: 10, 20: 10, 21: 10, 22: 10, 23: 10, 24: 10, 25: 10,
+};
+
+// Brasfoot c/b.java Tz — own-goal weights by tacPos.
+export const OWN_GOAL_WEIGHTS: Record<number, number> = {
+  1: 1, 2: 5, 3: 18, 4: 18, 5: 18, 6: 18, 7: 18, 8: 18, 9: 5,
+  10: 1, 11: 5, 12: 5, 13: 5, 14: 1, 15: 1, 16: 1, 17: 1,
+  18: 1, 19: 1, 20: 1, 21: 1, 22: 1, 23: 1, 24: 1, 25: 1,
+};
+
+// Brasfoot c/b.java ez() — possession bonus indexed by pressing level.
+export const PRESSING_POSSESSION = [0.0, 0.04, 0.08];
 
 export const GOAL_DAMPING: Record<number, number[]> = {
   0: [5.5, 35.55, 15.0],

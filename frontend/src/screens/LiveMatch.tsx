@@ -442,6 +442,8 @@ export function LiveMatch() {
       <div className="card">
         <h2 className="card-title">Match stats</h2>
         {barRow("Fouls", stats.fouls[0], stats.fouls[1])}
+        {barRow("Tackles", stats.tackles[0], stats.tackles[1])}
+        {barRow("Wrong passes", stats.wrongPasses[0], stats.wrongPasses[1])}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
           <span className="chip">🟨 {stats.yellows[0]} : {stats.yellows[1]}</span>
           <span className="chip">🟥 {stats.reds[0]} : {stats.reds[1]}</span>

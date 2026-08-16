@@ -87,11 +87,13 @@ function sideVariant(position: Position, c1: number, c2: number): number {
   return 0;
 }
 
+// Faithful port of best/F.java j(int, int) — individual skills on Brasfoot's scale.
 function generateSkills(rng: RngState, position: Position, c1: number, c2: number, overall: number, lvl: number, rep: number): SkillSet {
-  const n2 = Math.round(lvl / 3);
+  const n2 = Math.max(1, levelFactor(lvl) - 4);
   const n3 = rep;
   const n4 = Math.round(n2 / 3);
   let s: SkillSet = { gol: 1, vel: 1, tec: 1, pas: 1, des: 1, arm: 1, fin: 1 };
+  const variant = sideVariant(position, c1, c2);
   if (position === 0) {
     s.gol = overall + nextInt(rng, 2);
     s.vel = n2 + nextInt(rng, 7);
@@ -101,18 +103,17 @@ function generateSkills(rng: RngState, position: Position, c1: number, c2: numbe
     s.arm = n3 + nextInt(rng, 3);
     s.fin = n3 + nextInt(rng, 3);
   } else if (position === 1) {
-    if (sideVariant(position, c1, c2) === 0) {
-      s.gol = 1 + nextInt(rng, 4);
+    s.gol = 1 + nextInt(rng, 4);
+    if (variant === 0) {
       s.des = Math.round(overall * 0.8) + nextInt(rng, 6);
-      s.arm = n3 + nextInt(rng, 4);
+      s.fin = n3 + nextInt(rng, 4);
       s.pas = n2 + nextInt(rng, 3);
       s.tec = n2 + nextInt(rng, 7);
-      s.fin = n3 + nextInt(rng, 5);
+      s.arm = n3 + nextInt(rng, 5);
       s.vel = n2 + n3 + nextInt(rng, 6);
     } else {
-      s.gol = 1 + nextInt(rng, 4);
-      s.fin = Math.round(overall * 0.5) + nextInt(rng, 5);
-      s.arm = n2 + n3 + nextInt(rng, 4);
+      s.arm = Math.round(overall * 0.5) + nextInt(rng, 5);
+      s.fin = n2 + n3 + nextInt(rng, 4);
       s.pas = n2 + n4 + nextInt(rng, 3);
       s.tec = n2 + n4 + nextInt(rng, 7);
       s.des = n2 + nextInt(rng, 4);
@@ -127,53 +128,50 @@ function generateSkills(rng: RngState, position: Position, c1: number, c2: numbe
     s.arm = n3 + nextInt(rng, 6);
     s.fin = n2 + nextInt(rng, 5);
   } else if (position === 3) {
-    if (sideVariant(position, c1, c2) === 0) {
-      s.gol = 1 + nextInt(rng, 4);
+    s.gol = 1 + nextInt(rng, 4);
+    if (variant === 0) {
       s.des = Math.round(overall * 0.7) + nextInt(rng, 6);
-      s.arm = n2 + nextInt(rng, 4);
+      s.fin = n2 + nextInt(rng, 4);
       s.pas = n2 + nextInt(rng, 3);
       s.tec = n2 + nextInt(rng, 7);
-      s.fin = n2 + nextInt(rng, 5);
+      s.arm = n2 + nextInt(rng, 5);
       s.vel = n2 + n3 + nextInt(rng, 6);
     } else {
-      s.gol = 1 + nextInt(rng, 4);
-      s.fin = overall + nextInt(rng, 2);
-      s.arm = n2 + n4 + nextInt(rng, 4);
+      s.arm = overall + nextInt(rng, 2);
+      s.fin = n2 + n4 + nextInt(rng, 4);
       s.pas = n2 + n3 + nextInt(rng, 3);
       s.tec = n2 + n4 + nextInt(rng, 7);
       s.des = n2 + nextInt(rng, 4);
       s.vel = n2 + n4 + nextInt(rng, 4);
     }
   } else {
-    s.gol = 1 + nextInt(rng, 4);
-    s.des = Math.round(overall * 0.5) + nextInt(rng, 5);
-    s.arm = n2 + n3 + nextInt(rng, 4);
-    s.pas = n2 + nextInt(rng, 4);
-    s.tec = n2 + n3 + nextInt(rng, 7);
-    s.fin = n2 + n4 + nextInt(rng, 3);
-    s.vel = n2 + n3 + nextInt(rng, 4);
+    s.gol = 1 + nextInt(rng, 6);
+    s.fin = Math.round(overall * 0.8) + nextInt(rng, 2);
+    s.vel = n2 + n4 + nextInt(rng, 4);
+    s.tec = n2 + n4 + nextInt(rng, 7);
+    s.pas = n2 + n3 + nextInt(rng, 3);
+    s.des = n3 + nextInt(rng, 6);
+    s.arm = n2 + n3 + nextInt(rng, 5);
   }
-  const bonuses: [number, number, keyof SkillSet, number][] = [
-    [4, 4, "des", 0], [4, 4, "arm", 0],
-  ];
-  const applyTrait = (c: number, kind: number) => {
+  const applyTrait = (c: number, primary: boolean) => {
     if (position === 0) {
-      if (c === 0 || c === 3) s.tec += 2 + nextInt(rng, 5);
-      if (c === 2) s.vel += 2 + nextInt(rng, 5);
-      if (c === 1) s.gol += 1 + nextInt(rng, 3);
+      if (c === 0 || c === 3) s.tec += primary ? 2 + nextInt(rng, 5) : nextInt(rng, 2);
+      if (c === 2) s.vel += primary ? 2 + nextInt(rng, 5) : nextInt(rng, 2);
+      if (c === 1) s.gol += primary ? 1 + nextInt(rng, 3) : nextInt(rng, 2);
     } else if (position === 1) {
-      if (c === 4 || c === 8) { s.des += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) { s.arm += 2 + nextInt(rng, 3); s.des += 2 + nextInt(rng, 3); }
+      if (c === 4) { s.arm += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
+      if (c === 5) { s.fin += 2 + nextInt(rng, 3); s.des += 2 + nextInt(rng, 3); }
       if (c === 6) s.pas += 2 + nextInt(rng, 3);
       if (c === 7) s.des += n3 + nextInt(rng, 3);
-      if (c === 9) { s.arm += n3 + nextInt(rng, 3); s.vel += n3 + nextInt(rng, 3); }
+      if (c === 8) s.tec += n3 + nextInt(rng, 3);
+      if (c === 9) { s.fin += n3 + nextInt(rng, 3); s.vel += n3 + nextInt(rng, 3); }
       if (c === 10) s.des += n3 + nextInt(rng, 5);
       if (c === 11) s.pas += n3 + nextInt(rng, 3);
       if (c === 12) s.des += 3 + nextInt(rng, 3);
       if (c === 13) s.vel += n2 + nextInt(rng, 3);
     } else if (position === 2) {
-      if (c === 4) { s.des += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) { s.arm += n3 + nextInt(rng, 6); }
+      if (c === 4) { s.arm += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
+      if (c === 5) s.arm += n3 + nextInt(rng, 6);
       if (c === 6) s.pas += 2 + nextInt(rng, 3);
       if (c === 7) s.des += n3 + nextInt(rng, 3);
       if (c === 8) s.tec += n3 + nextInt(rng, 3);
@@ -183,35 +181,36 @@ function generateSkills(rng: RngState, position: Position, c1: number, c2: numbe
       if (c === 12) s.des += n3 + nextInt(rng, 2);
       if (c === 13) s.vel += n2 + nextInt(rng, 3);
     } else if (position === 3) {
-      if (c === 4 || c === 8) { s.des += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) s.arm += n3 + nextInt(rng, 5);
-      if (c === 6) s.pas += n3 + nextInt(rng, 3);
+      if (c === 4) { s.arm += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
+      if (c === 5) { s.fin += 2 + nextInt(rng, 3); s.des += 2 + nextInt(rng, 3); }
+      if (c === 6) s.pas += 2 + nextInt(rng, 3);
       if (c === 7) s.des += n3 + nextInt(rng, 3);
-      if (c === 9) { s.arm += n3 + nextInt(rng, 5); s.vel += n3 + nextInt(rng, 3); }
-      if (c === 10) s.des += n3 + nextInt(rng, 3);
-      if (c === 11) s.pas += n3 + nextInt(rng, 3);
-      if (c === 12) s.des += 3 + nextInt(rng, 3);
-      if (c === 13) s.vel += n3 + nextInt(rng, 3);
-    } else {
-      if (c === 4 || c === 8) { s.des += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) { s.arm += n3 + nextInt(rng, 5); s.fin += n3 + nextInt(rng, 3); }
-      if (c === 6) s.pas += 3 + nextInt(rng, 3);
-      if (c === 7) s.des += n3 + nextInt(rng, 3);
+      if (c === 8) s.tec += n3 + nextInt(rng, 3);
       if (c === 9) s.fin += n3 + nextInt(rng, 3);
-      if (c === 10) s.des += n3 + nextInt(rng, 3);
-      if (c === 11) s.pas += n3 + nextInt(rng, 3);
+      if (c === 10) s.des += 3 + nextInt(rng, 3);
+      if (c === 11) s.pas += n3 + nextInt(rng, 2);
       if (c === 12) s.des += 3 + nextInt(rng, 3);
+      if (c === 13) s.vel += n2 + nextInt(rng, 3);
+    } else {
+      if (c === 4) { s.arm += n2 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
+      if (c === 5) s.fin += 2 + nextInt(rng, 3);
+      if (c === 6) s.pas += 2 + nextInt(rng, 3);
+      if (c === 7) s.des += n3 + nextInt(rng, 3);
+      if (c === 8) s.tec += n3 + nextInt(rng, 3);
+      if (c === 9) s.fin += 3 + nextInt(rng, 3);
+      if (c === 10) s.des += 3 + nextInt(rng, 3);
+      if (c === 11) s.pas += n2 + nextInt(rng, 2);
+      if (c === 12) { s.des += 3 + nextInt(rng, 3); s.fin += 2; }
       if (c === 13) s.vel += n2 + nextInt(rng, 3);
     }
   };
-  applyTrait(c1, 0);
-  applyTrait(c2, 1);
+  applyTrait(c1, true);
+  applyTrait(c2, false);
   for (const key of Object.keys(s) as (keyof SkillSet)[]) {
     if (s[key] > 100) s[key] = 100;
   }
   return s;
 }
-
 export function calcOverall(rng: RngState, club: Club, tier: number, isStar: boolean, isYouth: boolean): number {
   const [rep] = repFactor(club);
   let base = levelFactor(club.level) + rep + nextInt(rng, 3);
@@ -317,7 +316,8 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     country = foreign[nextInt(rng, foreign.length)];
   }
   const overall = calcOverall(rng, club, tier, isStar, isYouth);
-  const skills = generateSkills(rng, position, c1, c2, overall, club.level, club.reputation);
+  const [ovrRep, skillRep] = repFactor(club);
+  const skills = generateSkills(rng, position, c1, c2, overall, club.level, skillRep);
   const player: Player = {
     id: opts.id,
     name: generateName(rng, country),
@@ -354,7 +354,9 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     tacPos: -1,
     onSale: false,
     salePrice: null,
-    suspended: false,
+    suspendedGames: 0,
+    morale: 70,
+    loanId: null,
   };
   player.releaseClause = Math.round(player.value * (0.12 + nextInt(rng, 24) / 100));
   if (isYouth) player.releaseClause = Math.round(player.value * 0.35);

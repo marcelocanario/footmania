@@ -48,7 +48,7 @@ export function eligible(players: Player[]): Player[] {
 export function pickForTacPos(players: Player[], tacPos: number, excluded: Set<number>, sideVariant: boolean): Player | null {
   const position = tacPosToBasePosition(tacPos);
   const candidates = players.filter(
-    (p) => p.injuryDays === 0 && !p.suspended && p.position === position && !excluded.has(p.id) && !(tacPos === 1 && p.position !== 0)
+    (p) => p.injuryDays === 0 && p.suspendedGames === 0 && p.position === position && !excluded.has(p.id) && !(tacPos === 1 && p.position !== 0)
   );
   if (candidates.length === 0) return null;
   if (sideVariant) {
@@ -86,12 +86,12 @@ export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
     const rosterIds = new Set(allPlayers.filter((p) => p.clubId === club.id).map((p) => p.id));
     const starters = saved.starters
       .map((id) => allPlayers.find((p) => p.id === id))
-      .filter((p): p is Player => !!p && rosterIds.has(p.id) && p.injuryDays === 0 && !p.suspended);
+      .filter((p): p is Player => !!p && rosterIds.has(p.id) && p.injuryDays === 0 && p.suspendedGames === 0);
     if (starters.length === 11) {
       const seen = new Set(starters.map((p) => p.id));
       const subs = saved.subs
         .map((id) => allPlayers.find((p) => p.id === id))
-        .filter((p): p is Player => !!p && !seen.has(p.id) && rosterIds.has(p.id) && p.injuryDays === 0 && !p.suspended);
+        .filter((p): p is Player => !!p && !seen.has(p.id) && rosterIds.has(p.id) && p.injuryDays === 0 && p.suspendedGames === 0);
       return { starters, subs, formation: club.tactics.formation, positions: formation };
     }
   }
@@ -107,7 +107,10 @@ export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
 
 export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const roster = allPlayers.filter((p) => p.clubId === club.id && !p.onSale);
-  const available = roster.filter((p) => p.injuryDays === 0 && !p.suspended);
+  for (const player of allPlayers) {
+    if (player.clubId === club.id) player.starter = false;
+  }
+  const available = roster.filter((p) => p.injuryDays === 0 && p.suspendedGames === 0);
   const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
   const excluded = new Set<number>();
   const starters: Player[] = [];
@@ -151,7 +154,7 @@ export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedL
   for (const id of all) {
     const p = byId.get(id);
     if (!p) return "Lineup contains a player not in the squad";
-    if (p.injuryDays > 0 || p.suspended || p.onSale) {
+    if (p.injuryDays > 0 || p.suspendedGames > 0 || p.onSale) {
       return `${p.name} is not available (injured, suspended or on sale)`;
     }
     if (seen.has(id)) return "A player appears twice in the lineup";
@@ -180,19 +183,22 @@ function lineupValid(club: Club, saved: NonNullable<Club["savedLineup"]>, allPla
   for (const id of saved.starters) {
     const p = byId(allPlayers, id);
     if (!p || !rosterIds.has(id) || seen.has(id)) return false;
-    if (p.injuryDays > 0 || p.suspended || p.onSale) return false;
+    if (p.injuryDays > 0 || p.suspendedGames > 0 || p.onSale) return false;
     seen.add(id);
   }
   for (const id of saved.subs) {
     if (seen.has(id) || !rosterIds.has(id)) return false;
     const p = byId(allPlayers, id);
-    if (!p || p.injuryDays > 0 || p.suspended || p.onSale) return false;
+    if (!p || p.injuryDays > 0 || p.suspendedGames > 0 || p.onSale) return false;
     seen.add(id);
   }
   return true;
 }
 
 export function lineupForMatch(club: Club, allPlayers: Player[]): Lineup | null {
+  for (const player of allPlayers) {
+    if (player.clubId === club.id) player.starter = false;
+  }
   const saved = club.savedLineup;
   if (saved && lineupValid(club, saved, allPlayers)) {
     const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
@@ -282,15 +288,17 @@ export function calcGate(
   rng: RngState,
   home: Club,
   away: Club,
-  compKind: string
+  compKind: string,
+  configuredPrices?: [number, number, number, number]
 ): TicketCalc {
   const sectors = sectorCapacity(home.stadiumCapacity);
-  let prices = TICKET_PRICES[Math.min(5, home.reputation)].map((x) => Math.max(1, Math.round(x / 200)));
-  if (compKind === "state" || compKind === "cup") {
-    prices = prices.map((x) => Math.max(1, Math.round(x * 0.7)));
-  }
+  const reference = TICKET_PRICES[Math.min(5, home.reputation)].map((x) => Math.max(1, Math.round(x / 200)));
+  let prices = configuredPrices ? [...configuredPrices] : [...reference] as number[];
+  if (!configuredPrices && (compKind === "state" || compKind === "cup")) prices = prices.map((x) => Math.max(1, Math.round(x * 0.7)));
   const noise = TICKET_PRICE_NOISE[Math.min(4, home.reputation)];
-  for (let i = 0; i < 4; i++) prices[i] += nextInt(rng, Math.max(1, Math.round(noise[i] / 10)) + 1);
+  if (!configuredPrices) {
+    for (let i = 0; i < 4; i++) prices[i] += nextInt(rng, Math.max(1, Math.round(noise[i] / 10)) + 1);
+  }
   let demand = 0.3;
   if (compKind === "league") demand += 0.15;
   if (compKind === "state" || compKind === "cup") demand += 0.3;
@@ -302,7 +310,6 @@ export function calcGate(
     prices[i] = away.reputation > home.reputation ? prices[i] + adj : Math.max(1, prices[i] - adj);
   }
   const fanFactor = Math.max(0.3, home.fanConfidence / 100);
-  for (let i = 0; i < 4; i++) prices[i] = Math.max(1, Math.round(prices[i] * fanFactor));
   const table = ATTENDANCE_BY_COMP[compKind] ?? ATTENDANCE_BY_COMP.league;
   const attIdx = Math.min(4, Math.max(0, compKind === "league" ? home.division : home.reputation - 1));
   const attPct = table[attIdx] ?? table[0];
@@ -310,7 +317,9 @@ export function calcGate(
   let revenue = 0;
   for (let i = 0; i < 4; i++) {
     const cap = sectors[i];
-    const tickets = Math.min(cap, Math.max(0, Math.round((cap * attPct[i]) / 100)));
+    const referencePrice = Math.max(1, reference[i]);
+    const elasticity = Math.max(0.35, Math.min(1.5, 1 / (1 + (prices[i] - referencePrice) / referencePrice)));
+    const tickets = Math.min(cap, Math.max(0, Math.round((cap * attPct[i] * elasticity * fanFactor) / 100)));
     attendance += tickets;
     revenue += tickets * prices[i];
   }

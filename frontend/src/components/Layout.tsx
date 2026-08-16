@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Play, Home } from "lucide-react";
+import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Play, Home, Medal } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
@@ -14,6 +14,7 @@ const NAV = [
   { to: "/matchday", label: "Matches", icon: <CalendarDays size={15} /> },
   { to: "/transfers", label: "Transfers", icon: <ArrowLeftRight size={15} /> },
   { to: "/finances", label: "Finances", icon: <Wallet size={15} /> },
+  { to: "/records", label: "Records", icon: <Medal size={15} /> },
 ];
 
 const BOTTOM = NAV.filter((n) => n.to !== "/competitions");

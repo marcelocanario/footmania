@@ -14,6 +14,16 @@ export interface ClubOption {
   division: number;
 }
 
+export interface SkillSet {
+  gol: number;
+  vel: number;
+  tec: number;
+  pas: number;
+  des: number;
+  arm: number;
+  fin: number;
+}
+
 export interface PlayerView {
   id: number;
   name: string;
@@ -26,7 +36,7 @@ export interface PlayerView {
   overall: number;
   potential: number;
   tier: number;
-  skills: { gol: number; vel: number; tec: number; pas: number; des: number; arm: number; fin: number };
+  skills: SkillSet;
   energy: number;
   value: number;
   salary: number;
@@ -46,6 +56,9 @@ export interface PlayerView {
   onSale: boolean;
   salePrice: number | null;
   suspended: boolean;
+  suspendedGames: number;
+  morale: number;
+  loanId: number | null;
   releaseClause: number;
 }
 
@@ -87,6 +100,47 @@ export interface Snapshot {
   news: { dayIndex: number; dayLabel: string; text: string; kind: string }[];
   auctions: AuctionView[];
   freeAgents: PlayerView[];
+  records: CareerRecord[];
+  seasonAwards: SeasonAward[];
+}
+
+export interface CareerRecord {
+  category: string;
+  value: number;
+  holderName: string;
+}
+
+export interface SeasonAward {
+  season: number;
+  category: string;
+  competitionId: number | null;
+  playerId: number | null;
+  clubId: number | null;
+  playerNameSnapshot: string | null;
+  detail: string | null;
+}
+
+export interface LoanView {
+  id: number;
+  playerId: number;
+  fromClubId: number;
+  toClubId: number | null;
+  startDay: number;
+  endDay: number;
+  recalled: boolean;
+  player: { id: number; name: string; age: number; overall: number; position: number; salary: number } | null;
+  fromClub: string;
+  toClub: string | null;
+  available: boolean;
+}
+
+export interface FinanceDetails {
+  ticketPrices: [number, number, number, number];
+  ticketBounds: { min: number; max: number }[];
+  stadiumUpgrade: { clubId: number; startedDay: number; completesDay: number; newCapacity: number; cost: number; completed: boolean } | null;
+  tvDeal: { clubId: number; season: number; baseAmount: number; positionBonus: number } | null;
+  records: CareerRecord[];
+  awards: SeasonAward[];
 }
 
 export interface LedgerEntry {
@@ -103,6 +157,7 @@ export interface AuctionView {
   overall: number;
   position: number;
   age: number;
+  skills: SkillSet;
   minBid: number;
   deadlineDay: number;
   deadlineLabel: string;
@@ -167,7 +222,7 @@ export interface LiveState {
   extraTime: boolean;
   ended: boolean;
   shootout: { scores: [number, number]; winner: string } | null;
-  stats: { possession: [number, number]; shots: [number, number]; onGoal: [number, number]; offTarget: [number, number]; fouls: [number, number]; corners: [number, number]; yellows: [number, number]; reds: [number, number] };
+  stats: { possession: [number, number]; shots: [number, number]; onGoal: [number, number]; offTarget: [number, number]; fouls: [number, number]; corners: [number, number]; yellows: [number, number]; reds: [number, number]; tackles: [number, number]; wrongPasses: [number, number] };
   events: LiveEvent[];
   homeOn: LivePlayer[];
   awayOn: LivePlayer[];
@@ -208,7 +263,7 @@ export interface MatchEvents {
     away: string;
     homeScore: number;
     awayScore: number;
-    stats: { possession: [number, number]; shots: [number, number]; onGoal: [number, number]; offTarget: [number, number]; fouls: [number, number]; yellows: [number, number]; reds: [number, number] };
+    stats: { possession: [number, number]; shots: [number, number]; onGoal: [number, number]; offTarget: [number, number]; fouls: [number, number]; yellows: [number, number]; reds: [number, number]; tackles: [number, number]; wrongPasses: [number, number] };
     attendance: number;
     gateRevenue: number;
   };
@@ -294,7 +349,7 @@ export const api = {
   competitionTable: (saveId: number, compId: number) =>
     request<{ competition: { id: number; name: string; kind: string; stage: string }; table: TableRow[] | { groupName: string; rows: TableRow[] }[] }>(`/api/competitions/${compId}/table?saveId=${saveId}`),
   competitionFixtures: (saveId: number, compId: number) =>
-    request<{ competition: { id: number; name: string }; fixtures: { id: number; round: number; leg: number; home: string; away: string; dayLabel: string; dayIndex: number; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[] }>(`/api/competitions/${compId}/fixtures?saveId=${saveId}`),
+    request<{ competition: { id: number; name: string }; fixtures: { id: number; round: number; roundLabel: string; leg: number; home: string; away: string; dayLabel: string; dayIndex: number; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[] }>(`/api/competitions/${compId}/fixtures?saveId=${saveId}`),
   competitionBracket: (saveId: number, compId: number) =>
     request<{ competition: { id: number; name: string }; bracket: { round: number; ties: { home: string; away: string; leg1: string | null; leg2: string | null; pen: string | null; winner: string; played: boolean }[] }[] }>(`/api/competitions/${compId}/bracket?saveId=${saveId}`),
 
@@ -316,4 +371,15 @@ export const api = {
     request<{ cash: number; loanBalance: number; loanLimit: number; income: LedgerEntry[]; expense: LedgerEntry[] }>(`/api/club/finances?saveId=${saveId}`),
   loan: (saveId: number, action: "take" | "repay") =>
     request<{ ok: boolean; cash: number; loanBalance: number }>(`/api/club/loan?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
+  financeDetails: (saveId: number) => request<FinanceDetails>(`/api/club/finance-details?saveId=${saveId}`),
+  setTicketPrices: (saveId: number, prices: [number, number, number, number]) =>
+    request<{ ok: boolean; prices: [number, number, number, number] }>(`/api/club/tickets?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ prices }) }),
+  startStadiumUpgrade: (saveId: number) =>
+    request<{ ok: boolean; upgrade: FinanceDetails["stadiumUpgrade"] }>(`/api/club/stadium-upgrade?saveId=${saveId}`, { method: "POST" }),
+  listLoans: (saveId: number) => request<{ loans: LoanView[] }>(`/api/transfers/loans?saveId=${saveId}`),
+  loanPlayer: (saveId: number, playerId: number, action: "offer" | "take" | "recall") =>
+    request<{ ok: boolean }>(`/api/players/${playerId}/loan?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
+  contractDemand: (saveId: number, playerId: number) =>
+    request<{ demand: number; salary: number; contractDays: number }>(`/api/players/${playerId}/contract?saveId=${saveId}`),
+  records: (saveId: number) => request<{ records: CareerRecord[]; awards: SeasonAward[] }>(`/api/records?saveId=${saveId}`),
 };

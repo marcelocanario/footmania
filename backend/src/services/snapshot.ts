@@ -37,7 +37,10 @@ export function playerView(p: World["players"][number]) {
     characteristic2: p.characteristic2,
     onSale: p.onSale,
     salePrice: p.salePrice,
-    suspended: p.suspended,
+    suspended: p.suspendedGames > 0,
+    suspendedGames: p.suspendedGames,
+    morale: p.morale,
+    loanId: p.loanId,
     releaseClause: p.releaseClause,
   };
 }
@@ -85,6 +88,8 @@ export function buildSnapshot(world: World, clubId: number) {
       playerName: p?.name ?? "",
       overall: p?.overall ?? 0,
       position: p?.position ?? 0,
+      age: p?.age ?? 0,
+      skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
       minBid: a.minBid,
       deadlineDay: a.deadlineDay,
       deadlineLabel: dayInfo(a.deadlineDay).label,
@@ -170,6 +175,8 @@ export function buildSnapshot(world: World, clubId: number) {
     news,
     auctions,
     freeAgents,
+    records: world.records,
+    seasonAwards: world.seasonAwards.slice(-40).reverse(),
   };
 }
 

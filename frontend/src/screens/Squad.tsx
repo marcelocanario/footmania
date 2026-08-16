@@ -11,6 +11,7 @@ import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { PlayerName } from "../components/PlayerName";
 import { RatingBar } from "../components/RatingBar";
+import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
 import { LineupPicker } from "../components/LineupPicker";
 import { useIsMobile } from "../hooks/useIsMobile";
@@ -33,16 +34,6 @@ const DIRECTIONS = [
   { label: "Down the wings", value: 1 },
 ];
 
-const SKILL_LABELS: [keyof PlayerView["skills"], string][] = [
-  ["gol", "Goalkeeping"],
-  ["vel", "Speed"],
-  ["tec", "Technique"],
-  ["pas", "Passing"],
-  ["des", "Defending"],
-  ["arm", "Playmaking"],
-  ["fin", "Finishing"],
-];
-
 const TRAITS = [
   "Positioning", "Penalty Save", "Reflexes", "Off the Line", "Playmaking",
   "Heading", "Crossing", "Tackling", "Dribbling", "Finishing",
@@ -58,6 +49,7 @@ export function Squad() {
   const [showRenew, setShowRenew] = useState(false);
   const [renewMonths, setRenewMonths] = useState(12);
   const [renewSalary, setRenewSalary] = useState(0);
+  const [renewDemand, setRenewDemand] = useState(0);
   const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
   const [tab, setTab] = useState<Tab>("seniors");
   const toast = useRef<Toast>(null);
@@ -71,6 +63,11 @@ export function Squad() {
     setSelected(p);
     setRenewMonths(12);
     setRenewSalary(p.salary);
+    setRenewDemand(p.salary);
+    if (saveId) void api.contractDemand(saveId, p.id).then((res) => {
+      setRenewDemand(res.demand);
+      setRenewSalary(res.demand);
+    });
     setShowRenew(true);
   };
 
@@ -107,6 +104,18 @@ export function Squad() {
       await api.setTactics(saveId, { style: tactics.style, pressing: tactics.pressing, direction: tactics.direction });
       toast.current?.show({ severity: "success", summary: "Tactics saved" });
       refresh();
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    }
+  };
+
+  const loanAction = async (p: PlayerView) => {
+    if (!saveId) return;
+    const action = p.loanId === null ? "offer" : "recall";
+    try {
+      await api.loanPlayer(saveId, p.id, action);
+      toast.current?.show({ severity: "success", summary: action === "offer" ? "Player listed for loan" : "Player recalled" });
+      await refresh();
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     }
@@ -186,6 +195,7 @@ export function Squad() {
                 <Column field="overall" header={strings.squad.overall} body={ratingBody} style={{ width: 70 }} />
                 <Column field="age" header={strings.squad.age} style={{ width: 50 }} />
                 <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} />} style={{ width: 120 }} />
+                {!isMobile && <Column header="Morale" body={(p: PlayerView) => <RatingBar value={p.morale} />} style={{ width: 110 }} />}
                 {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} style={{ width: 90 }} />}
                 {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => `${money(p.salary)}/mo`} style={{ width: 100 }} />}
               </DataTable>
@@ -200,7 +210,8 @@ export function Squad() {
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
                     {selectedPlayer.positionName} · {selectedPlayer.age} yrs · {selectedPlayer.country}
                     {selectedPlayer.isStar ? " · ★ Star" : ""}
-                    {selectedPlayer.worldClass ? " · World Class" : ""}
+                   {selectedPlayer.worldClass ? " · World Class" : ""}
+                    {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
                   </div>
                 </div>
                 <span
@@ -229,13 +240,14 @@ export function Squad() {
                 <RatingBar value={selectedPlayer.overall} />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 14px", margin: "14px 0", padding: "12px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
-                {SKILL_LABELS.map(([key, label]) => (
-                  <div key={key}>
-                    <div style={{ color: "var(--text-3)", fontSize: "0.74rem", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>{label}</div>
-                    <RatingBar value={selectedPlayer.skills[key]} />
-                  </div>
-                ))}
+              <div style={{ margin: "10px 0" }}>
+                <div style={{ color: "var(--text-3)", fontSize: "0.74rem", marginBottom: 4 }}>Morale {selectedPlayer.morale}%</div>
+                <RatingBar value={selectedPlayer.morale} />
+              </div>
+
+              <div style={{ margin: "14px 0", padding: "12px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
+                <div className="section-label" style={{ marginBottom: 2 }}>Skill profile</div>
+                <PlayerSkillsRadar skills={selectedPlayer.skills} />
               </div>
 
               <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 14 }}>
@@ -269,6 +281,11 @@ export function Squad() {
                 <button className="btn ghost" style={{ flex: 1 }} onClick={() => train(selectedPlayer)}>
                   <Dumbbell size={14} /> {strings.squad.train}
                 </button>
+                {selectedPlayer.age <= 23 && !selectedPlayer.isYouth && (
+                  <button className="btn ghost" style={{ flex: 1 }} onClick={() => loanAction(selectedPlayer)}>
+                    {selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -280,7 +297,7 @@ export function Squad() {
           <>
             <h3 style={{ marginBottom: 4 }}>{selectedPlayer.name}</h3>
             <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 16 }}>
-              Current salary {money(selectedPlayer.salary)}/mo · Contract {Math.round(selectedPlayer.contractDays / 30)} mo left
+              Current salary {money(selectedPlayer.salary)}/mo · Demand {money(renewDemand)}/mo · Contract {Math.round(selectedPlayer.contractDays / 30)} mo left
             </div>
             <div className="form-group">
               <label htmlFor="renew-months">{strings.squad.contractMonths}</label>

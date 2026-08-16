@@ -8,10 +8,10 @@ datasource db {
 }
 
 model User {
-  id           Int       @id @default(autoincrement())
-  username     String    @unique
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
   passwordHash String
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime @default(now())
   sessions     Session[]
   saves        Save[]
 }
@@ -24,17 +24,405 @@ model Session {
   expiresAt DateTime
 }
 
-// A save holds the full world state as a JSON document (the in-memory engine graph).
-// This mirrors the original game, which serializes the whole world (Kryo) per save.
+// A save is fully normalized: every world entity lives in its own table.
+// The in-memory `World` object stays the engine's source of truth; persistence
+// is a full sync (delete + insert) inside the save lock, and loading rebuilds
+// the World from the tables. `LiveMatch` is the documented exception: transient
+// runtime state kept as JSON because it is never queried relationally.
+// `worldJson` is retained only as a one-release compatibility bridge for saves
+// created by the pre-normalized schema.
 model Save {
   id          Int      @id @default(autoincrement())
   userId      Int
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name        String
-  worldJson   String
   year        Int
   dayIndex    Int
   humanClubId Int?
+  seed        Int      @default(0)
+  rngState    BigInt   @default(0)
+  worldJson   String?
+  seasonSummaryJson  String?
+  pendingEventsJson  String?
+  pendingMatchIdsJson String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  clubs          Club[]
+  players        Player[]
+  loans          Loan[]
+  competitions   Competition[]
+  standingsRows  StandingsRow[]
+  fixtures       Fixture[]
+  matches        Match[]
+  matchStats     MatchStat[]
+  matchEvents    MatchEvent[]
+  newsItems      NewsItem[]
+  ledgerEntries  LedgerEntry[]
+  auctions       Auction[]
+  auctionBids    AuctionBid[]
+  trophies       Trophy[]
+  managerHistory ManagerHistory[]
+  seasonAwards   SeasonAward[]
+  records        CareerRecord[]
+  ticketPrices   ClubTicketPrices[]
+  stadiumUpgrades StadiumUpgrade[]
+  tvDeals        TvDeal[]
+  liveMatch      LiveMatch?
+}
+
+model Club {
+  id               Int
+  saveId           Int
+  save             Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  name             String
+  shortName        String
+  stateCode        String
+  division         Int
+  reputation       Int
+  level            Int
+  cash             Int
+  loanBalance      Int
+  stadiumName      String
+  stadiumCapacity  Int
+  primaryColor     String
+  secondaryColor   String
+  coachName        String
+  boardConfidence  Int
+  fanConfidence    Int
+  isHuman          Boolean
+  captainId        Int?
+  penaltyTakerId   Int?
+  tacticsFormation Int
+  tacticsStyle     Int
+  tacticsPressing  Int
+  tacticsDirection Int
+  savedLineupJson  String?
+
+  @@id([saveId, id])
+  @@index([saveId])
+}
+
+model Player {
+  id              Int
+  saveId          Int
+  save            Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId          Int?
+  name            String
+  country         String
+  age             Int
+  position        Int
+  side            Int
+  overall         Int
+  potential       Int
+  tier            Int
+  characteristic1 Int
+  characteristic2 Int
+  energy          Int
+  salary          Int
+  value           Int
+  releaseClause   Int
+  injuryDays      Int
+  contractDays    Int
+  isYouth         Boolean
+  isStar          Boolean
+  worldClass      Boolean
+  starter         Boolean
+  growthAcc       Float
+  potentialAcc    Float
+  careerGoals     Int
+  careerAssists   Int
+  seasonGoals     Int
+  seasonAssists   Int
+  yellows         Int
+  reds            Int
+  tacPos          Int
+  onSale          Boolean
+  salePrice       Int?
+  suspendedGames  Int
+  morale          Int
+  loanId          Int?
+  skillGol        Int
+  skillVel        Int
+  skillTec        Int
+  skillPas        Int
+  skillDes        Int
+  skillArm        Int
+  skillFin        Int
+  skillAccJson    String
+
+  @@id([saveId, id])
+  @@index([saveId, clubId])
+}
+
+model Loan {
+  id         Int
+  saveId     Int
+  save       Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  playerId   Int
+  fromClubId Int
+  toClubId   Int?
+  startDay   Int
+  endDay     Int
+  recalled   Boolean
+
+  @@id([saveId, id])
+}
+
+model Competition {
+  id                  Int
+  saveId              Int
+  save                Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  kind                String
+  division            Int
+  stateCode           String
+  name                String
+  round               Int
+  stage               String
+  configJson          String
+  winnersJson         String
+  knockoutsJson       String
+  groupStandingsJson  String
+
+  @@id([saveId, id])
+  @@index([saveId])
+}
+
+model StandingsRow {
+  id            Int     @id @default(autoincrement())
+  saveId        Int
+  save          Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  competitionId Int
+  clubId        Int
+  played        Int
+  wins          Int
+  draws         Int
+  losses        Int
+  goalsFor      Int
+  goalsAgainst  Int
+  points        Int
+  groupName     String?
+
+  @@index([saveId, competitionId])
+}
+
+model Fixture {
+  id            Int
+  saveId        Int
+  save          Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  competitionId Int
+  round         Int
+  homeClubId    Int
+  awayClubId    Int
+  dayIndex      Int
+  played        Boolean
+  leg           Int?
+  tie           Int?
+
+  @@id([saveId, id])
+  @@index([saveId, competitionId])
+}
+
+model Match {
+  id               Int
+  saveId           Int
+  save             Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  fixtureId        Int
+  competitionId    Int
+  homeClubId       Int
+  awayClubId       Int
+  homeScore        Int
+  awayScore        Int
+  penaltyWinnerId  Int?
+  penaltyScoreJson String?
+  attendance       Int
+  gateRevenue      Int
+  extraTime        Boolean
+
+  @@id([saveId, id])
+  @@index([saveId])
+}
+
+model MatchStat {
+  id              Int    @id @default(autoincrement())
+  saveId          Int
+  save            Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  matchId         Int
+  homePossession  Int
+  awayPossession  Int
+  homeShots       Int
+  awayShots       Int
+  homeOnGoal      Int
+  awayOnGoal      Int
+  homeOffTarget   Int
+  awayOffTarget   Int
+  homeFouls       Int
+  awayFouls       Int
+  homeCorners     Int
+  awayCorners     Int
+  homeYellows     Int
+  awayYellows     Int
+  homeReds        Int
+  awayReds        Int
+  homeTackles     Int
+  awayTackles     Int
+  homeWrongPasses Int
+  awayWrongPasses Int
+
+  @@unique([saveId, matchId])
+}
+
+model MatchEvent {
+  id        Int    @id @default(autoincrement())
+  saveId    Int
+  save      Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  matchId   Int
+  minute    Int
+  half      Int
+  type      Int
+  subtype   Int
+  clubId    Int
+  playerId  Int?
+  player2Id Int?
+  goalType  Int
+  ordinal   Int
+
+  @@index([saveId, matchId])
+}
+
+model NewsItem {
+  id       Int    @id @default(autoincrement())
+  saveId   Int
+  save     Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  dayIndex Int
+  text     String
+  kind     String
+  clubId   Int?
+}
+
+model LedgerEntry {
+  id        Int    @id @default(autoincrement())
+  saveId    Int
+  save      Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId    Int
+  direction String
+  code      Int
+  amount    Int
+  day       Int
+  label     String
+
+  @@index([saveId, clubId])
+}
+
+model Auction {
+  id           Int
+  saveId       Int
+  save         Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  playerId     Int
+  minBid       Int
+  deadlineDay  Int
+  sellerClubId Int?
+
+  @@id([saveId, id])
+}
+
+model AuctionBid {
+  id        Int    @id @default(autoincrement())
+  saveId    Int
+  save      Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  auctionId Int
+  clubId    Int
+  amount    Int
+
+  @@index([saveId, auctionId])
+}
+
+model Trophy {
+  id              Int    @id @default(autoincrement())
+  saveId          Int
+  save            Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId          Int
+  competitionName String
+  count           Int
+
+  @@index([saveId, clubId])
+}
+
+model ManagerHistory {
+  id           Int     @id @default(autoincrement())
+  saveId       Int
+  save         Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId       Int
+  name         String
+  appointedDay Int
+  departedDay  Int?
+  gamesInCharge Int
+  reason       String?
+}
+
+model SeasonAward {
+  id                  Int    @id @default(autoincrement())
+  saveId              Int
+  save                Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  season              Int
+  category            String
+  competitionId       Int?
+  playerId            Int?
+  clubId              Int?
+  playerNameSnapshot  String?
+  detail              String?
+}
+
+model CareerRecord {
+  id         Int    @id @default(autoincrement())
+  saveId     Int
+  save       Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  category   String
+  value      Int
+  holderName String
+}
+
+model ClubTicketPrices {
+  id       Int    @id @default(autoincrement())
+  saveId   Int
+  save     Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId   Int
+  sector0  Int
+  sector1  Int
+  sector2  Int
+  sector3  Int
+
+  @@unique([saveId, clubId])
+}
+
+model StadiumUpgrade {
+  id            Int     @id @default(autoincrement())
+  saveId        Int
+  save          Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId        Int
+  startedDay    Int
+  completesDay  Int
+  newCapacity   Int
+  cost          Int
+  completed     Boolean @default(false)
+
+  @@index([saveId, clubId])
+}
+
+model TvDeal {
+  id            Int  @id @default(autoincrement())
+  saveId        Int
+  save          Save @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId        Int
+  season        Int
+  baseAmount    Int
+  positionBonus Int
+
+  @@index([saveId, clubId])
+}
+
+model LiveMatch {
+  saveId    Int    @id
+  save      Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  stateJson String
 }

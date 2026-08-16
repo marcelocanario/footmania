@@ -3,23 +3,25 @@ import { Dialog } from "primereact/dialog";
 import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Gavel, HandCoins, Users } from "lucide-react";
-import { api, type AuctionView, type PlayerView } from "../api/client";
+import { api, type AuctionView, type LoanView, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { PlayerName, POSITION_CLASS, POSITION_LETTER } from "../components/PlayerName";
+import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
 import { money } from "../format";
 
-type Tab = "auctions" | "free" | "sell";
+type Tab = "auctions" | "free" | "loans" | "sell";
 
 export function Transfers() {
   const { snapshot, saveId, refresh } = useGame();
   const [auctions, setAuctions] = useState<AuctionView[]>([]);
+  const [loans, setLoans] = useState<LoanView[]>([]);
   const [tab, setTab] = useState<Tab>("auctions");
   const [sellPlayer, setSellPlayer] = useState<PlayerView | null>(null);
   const [sellMode, setSellMode] = useState<"auction" | "fixed">("auction");
   const [sellPrice, setSellPrice] = useState(0);
-  const [bidTarget, setBidTarget] = useState<{ playerId: number; name: string; value: number } | null>(null);
+  const [bidTarget, setBidTarget] = useState<PlayerView | null>(null);
   const [bidAmount, setBidAmount] = useState(0);
   const [auctionBidTarget, setAuctionBidTarget] = useState<AuctionView | null>(null);
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
@@ -28,6 +30,7 @@ export function Transfers() {
   const loadAuctions = async () => {
     if (!saveId) return;
     setAuctions((await api.listAuctions(saveId)).auctions);
+    setLoans((await api.listLoans(saveId)).loans);
   };
 
   useEffect(() => {
@@ -51,7 +54,7 @@ export function Transfers() {
   const submitBid = async () => {
     if (!saveId || !bidTarget) return;
     try {
-      const res = await api.bidPlayer(saveId, bidTarget.playerId, bidAmount);
+      const res = await api.bidPlayer(saveId, bidTarget.id, bidAmount);
       if (res.accepted) {
         toast.current?.show({ severity: "success", summary: strings.transfers.bidAccepted });
       } else {
@@ -80,6 +83,18 @@ export function Transfers() {
     }
   };
 
+  const takeLoan = async (loan: LoanView) => {
+    if (!saveId || !loan.player) return;
+    try {
+      await api.loanPlayer(saveId, loan.player.id, "take");
+      toast.current?.show({ severity: "success", summary: "Loan agreed" });
+      await refresh();
+      setLoans((await api.listLoans(saveId)).loans);
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    }
+  };
+
   const freeAgents = snapshot?.freeAgents ?? [];
   const squad = snapshot?.squad ?? [];
 
@@ -97,6 +112,7 @@ export function Transfers() {
           items={[
             { value: "auctions", label: strings.transfers.auctions, icon: <Gavel size={14} />, count: auctions.length },
             { value: "free", label: strings.transfers.freeAgents, icon: <Users size={14} />, count: freeAgents.length },
+            { value: "loans", label: "Loans", icon: <Users size={14} />, count: loans.filter((loan) => loan.available).length },
             { value: "sell", label: strings.transfers.sell, icon: <HandCoins size={14} /> },
           ]}
         />
@@ -152,9 +168,28 @@ export function Transfers() {
                       OVR <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · {p.age} yrs · Value {money(p.value)}
                     </div>
                   </div>
-                  <button className="btn" onClick={() => { setBidTarget({ playerId: p.id, name: p.name, value: p.value }); setBidAmount(p.value); }}>
+                   <button className="btn" onClick={() => { setBidTarget(p); setBidAmount(p.value); }}>
                     {strings.transfers.sign}
                   </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "loans" && (
+        <div className="card">
+          {loans.length === 0 ? <div className="empty-state">No players are currently listed for loan.</div> : (
+            <div className="grid stagger">
+              {loans.map((loan) => loan.player && (
+                <div className="card hoverable" key={loan.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{loan.player.name}</div>
+                    <div className="hint">{loan.player.overall} OVR · {loan.player.age} yrs · From {loan.fromClub}</div>
+                  </div>
+                  {loan.available && <button className="btn" onClick={() => takeLoan(loan)}>Take on loan</button>}
+                  {!loan.available && loan.toClub && <span className="chip">At {loan.toClub}</span>}
                 </div>
               ))}
             </div>
@@ -213,6 +248,18 @@ export function Transfers() {
       </Dialog>
 
       <Dialog header={`${strings.transfers.bid} — ${bidTarget?.name ?? ""}`} visible={bidTarget !== null} onHide={() => setBidTarget(null)} style={{ width: 400 }}>
+        {bidTarget && (
+          <>
+            <div className="transfer-player-summary">
+              <div>
+                <div className="kicker">Player profile</div>
+                <h3>{bidTarget.positionName}</h3>
+              </div>
+              <span className="transfer-overall">{bidTarget.overall}</span>
+            </div>
+            <PlayerSkillsRadar skills={bidTarget.skills} />
+          </>
+        )}
         <p style={{ color: "var(--text-2)", marginTop: 0 }}>
           Market value: <b style={{ color: "var(--gold-2)" }}>{money(bidTarget?.value ?? 0)}</b>
         </p>
@@ -227,6 +274,18 @@ export function Transfers() {
       </Dialog>
 
       <Dialog header={`${strings.transfers.bid} — ${auctionBidTarget?.playerName ?? ""}`} visible={auctionBidTarget !== null} onHide={() => setAuctionBidTarget(null)} style={{ width: 400 }}>
+        {auctionBidTarget && (
+          <>
+            <div className="transfer-player-summary">
+              <div>
+                <div className="kicker">Player profile</div>
+                <h3>{POSITION_LETTER[auctionBidTarget.position] ?? "Player"}</h3>
+              </div>
+              <span className="transfer-overall">{auctionBidTarget.overall}</span>
+            </div>
+            <PlayerSkillsRadar skills={auctionBidTarget.skills} />
+          </>
+        )}
         <div className="form-group">
           <label htmlFor="auc-bid">{strings.transfers.yourBid} (min {money(auctionBidTarget?.minBid ?? 0)})</label>
           <InputNumber id="auc-bid" value={auctionBidAmount} onValueChange={(e) => setAuctionBidAmount(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />

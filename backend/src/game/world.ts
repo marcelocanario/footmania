@@ -19,8 +19,8 @@ import {
   updateGroupStandings,
 } from "./stateChampionship";
 import { dayInfo, isDayTwo, isSunday, isWeekend } from "./calendar";
-import { awardCupPrizes, awardLeaguePrizes, awardStatePrizes, monthlyFinances, payWeeklySalaries, rolloverSeason, weeklyUpdate, yearlySponsorship } from "./season";
-import { aiBid, aiBuyGaps, aiBuyListings, aiSellSurplus, createAuction, keepFreeAgentPool, resolveAuction } from "./transfers";
+import { awardCupPrizes, awardLeaguePrizes, awardStatePrizes, awardTvPositionBonuses, computeSeasonAwards, contractCycle, loanCycle, monthlyFinances, rolloverSeason, stadiumCycle, updateCareerRecords, weeklyUpdate, yearlySponsorship } from "./season";
+import { aiBid, aiBuyGaps, aiBuyListings, aiSellSurplus, auctionAvailableCash, createAuction, isEligibleAuctionBidder, keepFreeAgentPool, resolveAuction } from "./transfers";
 import { calcGate } from "./club";
 
 export function nextId(world: World): number {
@@ -52,7 +52,7 @@ function playFixture(rng: World["rng"], world: World, fixture: Fixture): Match {
   const servingSuspensions = new Set<number>();
   for (const p of world.players) {
     if (p.clubId === fixture.homeClubId || p.clubId === fixture.awayClubId) {
-      if (p.suspended) servingSuspensions.add(p.id);
+      if (p.suspendedGames > 0) servingSuspensions.add(p.id);
     }
   }
   const match: Match = {
@@ -67,15 +67,18 @@ function playFixture(rng: World["rng"], world: World, fixture: Fixture): Match {
     attendance: 0,
     gateRevenue: 0,
     events: [],
-    stats: { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0] },
+    stats: { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0], tackles: [0, 0], wrongPasses: [0, 0] },
     minuteEvents: [],
   };
   if (home && away) {
+    const comp = findCompetition(world, fixture.competitionId);
     const sim = simulateMatch(rng, home, away, world.players, {
       competitionId: fixture.competitionId,
       fixtureId: fixture.id,
       homeNeutral: false,
       decider: fixtureNeedsDecider(world, fixture),
+      compKind: comp?.kind ?? "league",
+      year: world.year,
     });
     match.homeScore = sim.homeGoals;
     match.awayScore = sim.awayGoals;
@@ -84,8 +87,7 @@ function playFixture(rng: World["rng"], world: World, fixture: Fixture): Match {
     match.penaltyWinnerId = sim.match.penaltyWinnerId;
     match.penaltyScore = sim.match.penaltyScore;
     match.extraTime = sim.match.extraTime;
-    const comp = findCompetition(world, fixture.competitionId);
-    const gate = calcGate(rng, home, away, comp?.kind ?? "league");
+    const gate = calcGate(rng, home, away, comp?.kind ?? "league", world.ticketPrices[home.id]);
     match.attendance = gate.attendance;
     match.gateRevenue = gate.revenue;
     home.cash += gate.revenue;
@@ -93,12 +95,13 @@ function playFixture(rng: World["rng"], world: World, fixture: Fixture): Match {
   }
   fixture.played = true;
   world.matches.push(match);
-  applyMatchToPlayers(match, world.players);
+  applyMatchToPlayers(match, world);
   for (const id of servingSuspensions) {
     const p = world.players.find((x) => x.id === id);
-    if (p) p.suspended = false;
+    if (p) p.suspendedGames = Math.max(0, p.suspendedGames - 1);
   }
   applyMatchToStandings(world, fixture, match);
+  updateConfidence(world, match);
   return match;
 }
 
@@ -116,6 +119,7 @@ function createHumanLiveMatch(world: World, fixture: Fixture): Match {
   const rng = world.rng;
   const home = findClub(world, fixture.homeClubId)!;
   const away = findClub(world, fixture.awayClubId)!;
+  const comp = findCompetition(world, fixture.competitionId);
   const match: Match = {
     id: world.nextId++,
     fixtureId: fixture.id,
@@ -128,7 +132,7 @@ function createHumanLiveMatch(world: World, fixture: Fixture): Match {
     attendance: 0,
     gateRevenue: 0,
     events: [],
-    stats: { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0] },
+    stats: { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0], tackles: [0, 0], wrongPasses: [0, 0] },
     minuteEvents: [],
   };
   world.matches.push(match);
@@ -138,6 +142,8 @@ function createHumanLiveMatch(world: World, fixture: Fixture): Match {
     fixtureId: fixture.id,
     homeNeutral: false,
     decider: fixtureNeedsDecider(world, fixture),
+    compKind: comp?.kind ?? "league",
+    year: world.year,
   });
   return match;
 }
@@ -212,7 +218,6 @@ function completeDay(rng: World["rng"], world: World, playedMatches: Match[], hu
       }
     }
   }
-  resolveAuctionDeadlines(world);
   if (allCompetitionsFinished(world)) {
     seasonEnd(world, events);
     return buildDayResult(world, playedMatches, events, humanMatch, true);
@@ -230,7 +235,7 @@ export function finalizeLiveMatch(world: World): DayResult {
   const match = buildMatchFromState(st, home, away, world.players);
   if (fixture) {
     const comp = findCompetition(world, fixture.competitionId);
-    const gate = calcGate(rng, home, away, comp?.kind ?? "league");
+    const gate = calcGate(rng, home, away, comp?.kind ?? "league", world.ticketPrices[home.id]);
     match.attendance = gate.attendance;
     match.gateRevenue = gate.revenue;
     home.cash += gate.revenue;
@@ -243,12 +248,13 @@ export function finalizeLiveMatch(world: World): DayResult {
     world.matches.push(match);
   }
   if (fixture) fixture.played = true;
-  applyMatchToPlayers(match, world.players);
+  applyMatchToPlayers(match, world);
   for (const id of st.suspensionClears ?? []) {
     const p = world.players.find((x) => x.id === id);
-    if (p) p.suspended = false;
+    if (p) p.suspendedGames = Math.max(0, p.suspendedGames - 1);
   }
   if (fixture) applyMatchToStandings(world, fixture, match);
+  updateConfidence(world, match);
   world.liveMatch = null;
   const events = world.pendingDayEvents ?? [];
   world.pendingDayEvents = undefined;
@@ -301,6 +307,26 @@ function advanceKnockouts(rng: World["rng"], world: World, competition: Competit
   }
 }
 
+function updateConfidence(world: World, match: Match) {
+  const home = findClub(world, match.homeClubId);
+  const away = findClub(world, match.awayClubId);
+  if (!home || !away) return;
+  const hGoals = match.homeScore;
+  const aGoals = match.awayScore;
+  const apply = (club: Club, opponent: Club, goals: number, conceded: number) => {
+    let board = 0;
+    if (goals > conceded) board = club.reputation <= opponent.reputation ? 5 : 3;
+    else if (goals < conceded) board = club.reputation >= opponent.reputation ? -7 : -4;
+    club.boardConfidence = Math.max(0, Math.min(100, club.boardConfidence + board));
+    let fan = board > 0 ? 3 : board < 0 ? -4 : 0;
+    fan += Math.min(3, goals);
+    if (home.stateCode === away.stateCode) fan += goals > conceded ? 2 : goals === conceded ? 1 : -1;
+    club.fanConfidence = Math.max(0, Math.min(100, club.fanConfidence + fan));
+  };
+  apply(home, away, hGoals, aGoals);
+  apply(away, home, aGoals, hGoals);
+}
+
 function processDayEvents(rng: World["rng"], world: World, events: string[]) {
   const info = dayInfo(world.dayIndex);
   if (world.dayIndex === 1) {
@@ -317,7 +343,10 @@ function processDayEvents(rng: World["rng"], world: World, events: string[]) {
   }
   if (isSunday(world.dayIndex)) {
     weeklyUpdate(rng, world);
+    contractCycle(rng, world);
+    loanCycle(rng, world);
   }
+  stadiumCycle(world);
   const aiClubs = world.clubs.filter((c) => !c.isHuman);
   if (isWeekend(world.dayIndex) && chance(rng, 10) && aiClubs.length > 0) {
     aiSellSurplus(rng, world, pick(rng, aiClubs));
@@ -326,6 +355,9 @@ function processDayEvents(rng: World["rng"], world: World, events: string[]) {
     aiBuyGaps(rng, world, pick(rng, aiClubs));
   }
   for (const club of world.clubs) {
+    for (const player of world.players) {
+      if (player.clubId === club.id && player.contractDays > 0) player.contractDays--;
+    }
     const expiring = world.players.filter((p) => p.clubId === club.id && p.contractDays <= 60 && p.contractDays > 0);
     for (const p of expiring) {
       if (chance(rng, 3)) {
@@ -342,6 +374,10 @@ function processDayEvents(rng: World["rng"], world: World, events: string[]) {
   }
   if (chance(rng, 10)) {
     keepFreeAgentPool(rng, world);
+  }
+  resolveAuctionDeadlines(world);
+  if (world.auctions.length > 0 && chance(rng, 25)) {
+    aiBidDuringWindow(world);
   }
 }
 
@@ -360,11 +396,10 @@ function resolveAuctionDeadlines(world: World) {
   const due = world.auctions.filter((a) => a.deadlineDay <= world.dayIndex);
   for (const listing of due) {
     for (const club of world.clubs) {
-      if (club.division > 2) continue;
-      if (listing.bids.some((b) => b.clubId === club.id)) continue;
+      if (!isEligibleAuctionBidder(listing, club)) continue;
       const player = world.players.find((p) => p.id === listing.playerId);
       if (!player) continue;
-      const bid = aiBid(world.rng, club, listing, player.value);
+      const bid = aiBid(world.rng, club, listing, player.value, player.position, world.players, auctionAvailableCash(world, club.id, listing.id));
       if (bid !== null) {
         listing.bids.push({ clubId: club.id, amount: bid });
       }
@@ -382,7 +417,20 @@ function resolveAuctionDeadlines(world: World) {
   }
 }
 
-function allCompetitionsFinished(world: World): boolean {
+export function aiBidDuringWindow(world: World) {
+  const open = world.auctions.filter((a) => a.deadlineDay > world.dayIndex);
+  if (open.length === 0) return;
+  const listing = pick(world.rng, open);
+  const player = world.players.find((p) => p.id === listing.playerId);
+  if (!player) return;
+  const candidates = world.clubs.filter((c) => isEligibleAuctionBidder(listing, c));
+  if (candidates.length === 0) return;
+  const club = pick(world.rng, candidates);
+  const bid = aiBid(world.rng, club, listing, player.value, player.position, world.players, auctionAvailableCash(world, club.id, listing.id));
+  if (bid !== null) {
+    listing.bids.push({ clubId: club.id, amount: bid });
+  }
+}function allCompetitionsFinished(world: World): boolean {
   if (world.competitions.length === 0) return false;
   const leagueDone = world.competitions.filter((c) => c.kind === "league").every((c) => isLeagueFinished(c, world.fixtures) && Object.values(c.standings).length > 0);
   const cupDone = world.competitions.filter((c) => c.kind === "cup").every((c) => c.stage === "finished");
@@ -412,6 +460,9 @@ function seasonEnd(world: World, events: string[]) {
   awardLeaguePrizes(world);
   awardStatePrizes(world);
   awardCupPrizes(world);
+  awardTvPositionBonuses(world);
+  computeSeasonAwards(world);
+  updateCareerRecords(world);
   const rollover = rolloverSeason(world.rng, world);
   world.seasonSummary = {
     leagueChampionId: championId,
@@ -459,7 +510,17 @@ export function leagueTable(world: World, competitionId: number) {
   });
 }
 
+export function roundLabelFor(competition: Competition, round: number): string {
+  if (competition.kind === "state" && round >= 100) {
+    const idx = round - 100;
+    const names = ["Quarter-finals", "Semi-finals", "Final"];
+    return names[idx] ?? `Knockout ${idx + 1}`;
+  }
+  return `Round ${round + 1}`;
+}
+
 export function competitionFixtures(world: World, competitionId: number) {
+  const comp = findCompetition(world, competitionId);
   return world.fixtures
     .filter((f) => f.competitionId === competitionId)
     .sort((a, b) => a.round - b.round || (a.leg ?? 0) - (b.leg ?? 0))
@@ -470,6 +531,7 @@ export function competitionFixtures(world: World, competitionId: number) {
       return {
         id: f.id,
         round: f.round,
+        roundLabel: comp ? roundLabelFor(comp, f.round) : `Round ${f.round + 1}`,
         leg: f.leg ?? 1,
         homeClubId: f.homeClubId,
         awayClubId: f.awayClubId,

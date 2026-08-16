@@ -83,6 +83,7 @@ export const strings = {
     leg: "Leg",
     group: "Group",
     finished: "Finished",
+    knockoutTable: "This is a knockout competition — see the Bracket tab",
   },
   transfers: {
     title: "Transfers",

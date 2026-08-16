@@ -38,6 +38,9 @@ export function evaluateBid(
   buyer: Club,
   allPlayers: Player[]
 ): { accepted: boolean; counter: number } {
+  if (player.releaseClause > 0 && bid >= player.releaseClause) {
+    return { accepted: true, counter: bid };
+  }
   if (player.isStar || player.worldClass) {
     if (bid < counterOffer(seller, player, allPlayers)) {
       return { accepted: false, counter: Math.round(counterOffer(seller, player, allPlayers) * 1.3) };
@@ -59,6 +62,8 @@ export function evaluateBid(
 export function createAuction(rng: RngState, world: World, playerId: number, sellerClubId: number | null, deadlineDay: number): number {
   const player = world.players.find((p) => p.id === playerId);
   if (!player) return -1;
+  player.onSale = true;
+  player.salePrice = null;
   const listing = {
     id: world.nextId++,
     playerId,
@@ -71,16 +76,61 @@ export function createAuction(rng: RngState, world: World, playerId: number, sel
   return listing.id;
 }
 
-export function aiBid(rng: RngState, club: Club, listing: { minBid: number; bids: { clubId: number; amount: number }[] }, playerValue: number): number | null {
+export function aiBid(
+  rng: RngState,
+  club: Club,
+  listing: { minBid: number; bids: { clubId: number; amount: number }[] },
+  playerValue: number,
+  position?: number,
+  allPlayers?: Player[],
+  availableCash = club.cash
+): number | null {
+  if (position !== undefined && allPlayers !== undefined) {
+    const counts = [0, 0, 0, 0, 0];
+    for (const p of allPlayers) {
+      if (p.clubId === club.id && !p.isYouth) counts[p.position]++;
+    }
+    if (counts[position] > MIN_SQUAD[position] + 1) return null;
+  }
   const currentMax = listing.bids.length > 0 ? Math.max(...listing.bids.map((b) => b.amount)) : 0;
   const minBid = listing.minBid;
   const ceiling = minBid * 2.5;
-  let bid = Math.round(minBid * (0.45 + nextInt(rng, 38) / 100));
-  if (currentMax > 0) bid = Math.round(currentMax * (1.02 + nextInt(rng, 5) / 100));
-  if (bid > ceiling) bid = ceiling;
+  let bid: number;
+  if (currentMax > 0) {
+    bid = Math.round(currentMax * (1.02 + nextInt(rng, 8) / 100));
+  } else {
+    bid = Math.max(minBid, Math.round(minBid * (0.9 + nextInt(rng, 50) / 100)));
+  }
+  if (bid > ceiling) return null;
   if (bid <= currentMax) return null;
-  if (bid > club.cash) return null;
+  if (bid > availableCash) return null;
   return bid;
+}
+
+/** Cash already committed to bids on other active auctions. */
+export function auctionReservedCash(world: World, clubId: number, excludeAuctionId?: number): number {
+  return world.auctions.reduce((sum, auction) => {
+    if (auction.id === excludeAuctionId) return sum;
+    const bid = auction.bids.find((b) => b.clubId === clubId);
+    return sum + (bid?.amount ?? 0);
+  }, 0);
+}
+
+export function auctionAvailableCash(world: World, clubId: number, excludeAuctionId?: number): number {
+  const club = world.clubs.find((c) => c.id === clubId);
+  if (!club) return 0;
+  return club.cash - auctionReservedCash(world, clubId, excludeAuctionId);
+}
+
+export function isEligibleAuctionBidder(
+  listing: { sellerClubId: number | null; bids: { clubId: number }[] },
+  club: Club
+): boolean {
+  if (club.isHuman) return false;
+  if (club.division > 2) return false;
+  if (listing.sellerClubId !== null && club.id === listing.sellerClubId) return false;
+  if (listing.bids.some((b) => b.clubId === club.id)) return false;
+  return true;
 }
 
 export function resolveAuction(world: World, listingId: number): number | null {
@@ -88,21 +138,29 @@ export function resolveAuction(world: World, listingId: number): number | null {
   if (idx < 0) return null;
   const listing = world.auctions[idx];
   world.auctions.splice(idx, 1);
-  if (listing.bids.length === 0) return null;
-  const best = [...listing.bids].sort((a, b) => b.amount - a.amount)[0];
   const player = world.players.find((p) => p.id === listing.playerId);
-  if (!player) return null;
-  const buyer = world.clubs.find((c) => c.id === best.clubId);
-  const seller = listing.sellerClubId ? world.clubs.find((c) => c.id === listing.sellerClubId) : null;
-  if (buyer) {
-    buyer.cash -= best.amount;
-    if (seller) seller.cash += best.amount;
-    transferPlayer(world, player, buyer, best.amount);
+  if (listing.bids.length === 0) {
+    if (player) player.onSale = false;
+    return null;
   }
-  return best.clubId;
+  if (!player) return null;
+  const best = [...listing.bids]
+    .sort((a, b) => b.amount - a.amount)
+    .find((bid) => bid.amount <= auctionAvailableCash(world, bid.clubId, listing.id));
+  if (!best) {
+    player.onSale = false;
+    return null;
+  }
+  const buyer = world.clubs.find((c) => c.id === best.clubId);
+  if (buyer && transferPlayer(world, player, buyer, best.amount)) {
+    return best.clubId;
+  }
+  player.onSale = false;
+  return null;
 }
 
-export function transferPlayer(world: World, player: Player, toClub: Club, fee: number) {
+export function transferPlayer(world: World, player: Player, toClub: Club, fee: number): boolean {
+  if (!Number.isFinite(fee) || fee < 0 || toClub.cash < fee) return false;
   const from = world.clubs.find((c) => c.id === player.clubId);
   if (from) {
     from.cash += fee;
@@ -115,6 +173,7 @@ export function transferPlayer(world: World, player: Player, toClub: Club, fee: 
   player.salePrice = null;
   toClub.cash -= fee;
   toClub.ledger.expense.push({ code: 1, amount: fee, day: world.dayIndex, label: `Transfer fee: ${player.name}` });
+  return true;
 }
 
 export function generateFreeAgents(rng: RngState, world: World, count: number) {
@@ -131,7 +190,7 @@ export function generateFreeAgents(rng: RngState, world: World, count: number) {
 }
 
 export function aiSellSurplus(rng: RngState, world: World, club: Club) {
-  const roster = world.players.filter((p) => p.clubId === club.id && !p.isStar && !p.worldClass);
+  const roster = world.players.filter((p) => p.clubId === club.id && !p.isStar && !p.worldClass && !p.onSale);
   const counts = positionCount(club, world.players);
   for (const p of roster) {
     if (counts[p.position] > MIN_SQUAD[p.position] + 1) {
@@ -140,8 +199,10 @@ export function aiSellSurplus(rng: RngState, world: World, club: Club) {
         if (p.clubId !== null) {
           const buyer = findBuyer(rng, world, p);
           if (buyer) {
-            transferPlayer(world, p, buyer, Math.max(1, Math.round(price * 0.9)));
-            world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed ${p.name} from ${club.name}`, kind: "transfer" });
+            const fee = Math.max(1, Math.round(price * 0.9));
+            if (transferPlayer(world, p, buyer, fee)) {
+              world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed ${p.name} from ${club.name}`, kind: "transfer" });
+            }
           }
         }
       }
@@ -172,8 +233,9 @@ export function aiBuyGaps(rng: RngState, world: World, club: Club) {
         const target = sorted[0];
         const price = Math.max(1, Math.round(target.value * 0.9));
         if (club.cash - price < monthlySalaries) continue;
-        transferPlayer(world, target, club, price);
-        world.news.push({ dayIndex: world.dayIndex, text: `${club.name} signed ${target.name}`, kind: "transfer" });
+        if (transferPlayer(world, target, club, price)) {
+          world.news.push({ dayIndex: world.dayIndex, text: `${club.name} signed ${target.name}`, kind: "transfer" });
+        }
       }
     }
   }
@@ -191,10 +253,11 @@ export function aiBuyListings(rng: RngState, world: World) {
     if (buyers.length === 0) continue;
     const buyer = pick(rng, buyers);
     if (chance(rng, 50)) {
-      transferPlayer(world, player, buyer, player.salePrice!);
-      player.onSale = false;
-      player.salePrice = null;
-      world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} bought ${player.name} from ${seller.name}`, kind: "transfer" });
+      if (transferPlayer(world, player, buyer, player.salePrice!)) {
+        player.onSale = false;
+        player.salePrice = null;
+        world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} bought ${player.name} from ${seller.name}`, kind: "transfer" });
+      }
     }
   }
 }

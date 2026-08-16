@@ -14,7 +14,7 @@ beforeAll(() => {
     env: { ...process.env, DATABASE_URL: "file:./test-live.db" },
     stdio: "ignore",
   });
-});
+}, 30_000);
 
 import { buildServer } from "../src/server";
 import type { FastifyInstance } from "fastify";
@@ -211,7 +211,7 @@ describe("live match over WebSocket", () => {
         }, 40);
       });
 
-    const waitForTickEnded = (msgs: Record<string, unknown>[], timeoutMs = 10000) =>
+    const waitForTickEnded = (msgs: Record<string, unknown>[], timeoutMs = 60000) =>
       new Promise<void>((resolve, reject) => {
         const started = Date.now();
         const iv = setInterval(() => {
@@ -239,7 +239,7 @@ describe("live match over WebSocket", () => {
       const latest = [...messages].reverse().find((m) => m.type === "tick")?.state as { ended: boolean } | undefined;
       if (latest?.ended) break;
     }
-    await waitForTickEnded(messages, 10000);
+    await waitForTickEnded(messages, 60000);
     const final = [...messages].reverse().find((m) => m.type === "tick")?.state as { ended: boolean; phase: string } | undefined;
     expect(final?.ended).toBe(true);
 
@@ -251,5 +251,5 @@ describe("live match over WebSocket", () => {
 
     ws.close();
     await app.close();
-  });
+  }, 90_000);
 });

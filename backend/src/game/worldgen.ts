@@ -6,7 +6,7 @@ import { tacticsForClub } from "../game/club";
 import { createLeagueFixtures, emptyStandingsRow } from "../game/league";
 import { createCup, scheduleCupRound } from "../game/cup";
 import { createStateChampionship, createStateGroupFixtures } from "../game/stateChampionship";
-import { STARTING_CASH } from "../game/constants";
+import { STARTING_CASH, TICKET_PRICES } from "../game/constants";
 import { generateName } from "../game/names";
 import { generateFreeAgents } from "../game/transfers";
 
@@ -199,6 +199,13 @@ export function generateWorld(seed: number): World {
     matches: [],
     news: [{ dayIndex: 0, text: "Welcome to Footmania! A new season is about to begin.", kind: "season" }],
     auctions: [],
+    loans: [],
+    seasonAwards: [],
+    records: [],
+    managerHistory: [],
+    ticketPrices: {},
+    stadiumUpgrades: [],
+    tvDeals: [],
     humanClubId: null,
     seasonSummary: null,
     rng,
@@ -231,6 +238,10 @@ export function generateWorld(seed: number): World {
     clubs.push(club);
   }
   world.clubs = clubs;
+  for (const club of clubs) {
+    const base = TICKET_PRICES[Math.min(5, club.reputation)].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];
+    world.ticketPrices[club.id] = base;
+  }
 
   const statePool = [...stateClubs, ...extraClubs];
   for (const club of clubs) {
