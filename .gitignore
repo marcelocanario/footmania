@@ -1,0 +1,27 @@
+Brasfoot/
+
+.kilo
+
+node_modules/
+
+# Build output
+backend/dist/
+frontend/dist/
+
+# Databases (SQLite)
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# Env
+backend/.env
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Playwright MCP snapshots
+.playwright-mcp/

@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  sessions     Session[]
+  saves        Save[]
+}
+
+model Session {
+  token     String   @id
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+}
+
+// A save holds the full world state as a JSON document (the in-memory engine graph).
+// This mirrors the original game, which serializes the whole world (Kryo) per save.
+model Save {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  worldJson   String
+  year        Int
+  dayIndex    Int
+  humanClubId Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
