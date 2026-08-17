@@ -6,7 +6,6 @@ import { tacticsForClub } from "../game/club";
 import { createLeagueFixtures, emptyStandingsRow } from "../game/league";
 import { STARTING_CASH, TICKET_PRICES } from "../game/constants";
 import { generateName } from "../game/names";
-import { generateFreeAgents } from "../game/transfers";
 import { COUNTRIES, COUNTRY_BY_CODE, FEATURED_COUNTRIES } from "../game/countries";
 import { gameConfig } from "../config";
 
@@ -82,7 +81,6 @@ function makeClub(
     reputation,
     level,
     cash: STARTING_CASH[Math.max(0, Math.min(4, reputation - 1))],
-    loanBalance: 0,
     stadiumName: `${city} Stadium`,
     stadiumCapacity: capacity,
     primaryColor: primary,
@@ -214,7 +212,6 @@ export function generateWorld(seed: number): World {
   }
 
   buildSeasonStructure(world);
-  generateFreeAgents(rng, world, 15);
   return world;
 }
 

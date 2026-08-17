@@ -56,6 +56,10 @@ export interface PlayerView {
   morale: number;
   loanId: number | null;
   releaseClause: number;
+  onLoan: boolean;
+  onLoanOut: boolean;
+  loanClubName: string | null;
+  loanFromName: string | null;
   signingBonus?: number;
 }
 
@@ -73,7 +77,6 @@ export interface Snapshot {
     reputation: number;
     level: number;
     cash: number;
-    loanBalance: number;
     stadiumName: string;
     stadiumCapacity: number;
     primaryColor: string;
@@ -90,6 +93,7 @@ export interface Snapshot {
   competitions: { id: number; kind: string; name: string; stage: string; round: number; position: number; winnerId: number | null }[];
   squad: PlayerView[];
   juniors: PlayerView[];
+  loanedOut: PlayerView[];
   news: { dayIndex: number; dayLabel: string; text: string; kind: string }[];
   auctions: AuctionView[];
   freeAgents: PlayerView[];
@@ -235,6 +239,8 @@ export interface LiveState {
   awayManager: string;
   homeFormation: string;
   awayFormation: string;
+  homeFormationId: number;
+  awayFormationId: number;
 }
 
 export interface LineupPlayer {
@@ -374,9 +380,7 @@ export const api = {
   setTactics: (saveId: number, tactics: { style: number; pressing: number; direction: number }) =>
     request<{ ok: boolean }>(`/api/club/tactics?saveId=${saveId}`, { method: "POST", body: JSON.stringify(tactics) }),
   finances: (saveId: number) =>
-    request<{ cash: number; loanBalance: number; loanLimit: number; loanInterestPercent: number; income: LedgerEntry[]; expense: LedgerEntry[] }>(`/api/club/finances?saveId=${saveId}`),
-  loan: (saveId: number, action: "take" | "repay") =>
-    request<{ ok: boolean; cash: number; loanBalance: number }>(`/api/club/loan?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
+    request<{ cash: number; income: LedgerEntry[]; expense: LedgerEntry[] }>(`/api/club/finances?saveId=${saveId}`),
   financeDetails: (saveId: number) => request<FinanceDetails>(`/api/club/finance-details?saveId=${saveId}`),
   setTicketPrices: (saveId: number, prices: [number, number, number, number]) =>
     request<{ ok: boolean; prices: [number, number, number, number] }>(`/api/club/tickets?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ prices }) }),
@@ -387,6 +391,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/players/${playerId}/loan?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
   academyAction: (saveId: number, playerId: number, action: "promote" | "dismiss") =>
     request<{ ok: boolean }>(`/api/players/${playerId}/academy?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
+  releasePlayer: (saveId: number, playerId: number) =>
+    request<{ ok: boolean; cost: number }>(`/api/players/${playerId}/release?saveId=${saveId}`, { method: "POST" }),
   contractDemand: (saveId: number, playerId: number) =>
     request<{ demand: number; salary: number; contractDays: number }>(`/api/players/${playerId}/contract?saveId=${saveId}`),
   records: (saveId: number) => request<{ records: CareerRecord[]; awards: SeasonAward[] }>(`/api/records?saveId=${saveId}`),

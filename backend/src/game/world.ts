@@ -13,7 +13,7 @@ import { applyDevelopment } from "./player";
 import { updateStandings, emptyStandingsRow, isLeagueFinished, getPosition, sortedStandings } from "./league";
 import { dayInfo, isIntervalDay } from "./calendar";
 import { awardLeaguePrizes, awardTvPositionBonuses, computeSeasonAwards, contractCycle, loanCycle, seasonEndDay, settlePayroll, rolloverSeason, stadiumCycle, updateCareerRecords, weeklyUpdate, yearlySponsorship } from "./season";
-import { aiBid, aiBuyGaps, aiBuyListings, aiSellSurplus, auctionAvailableCash, createAuction, isEligibleAuctionBidder, keepFreeAgentPool, resolveAuction } from "./transfers";
+import { aiBid, aiBuyGaps, aiBuyListings, aiSellSurplus, auctionAvailableCash, createAuction, isEligibleAuctionBidder, resolveAuction } from "./transfers";
 import { calcGate } from "./club";
 import { gameConfig } from "../config";
 
@@ -327,9 +327,6 @@ function processDayEvents(rng: World["rng"], world: World, events: string[]) {
   if (chance(rng, 8)) {
     aiBuyListings(rng, world);
   }
-  if (chance(rng, 10)) {
-    keepFreeAgentPool(rng, world);
-  }
   resolveAuctionDeadlines(world);
   if (world.auctions.length > 0 && chance(rng, 25)) {
     aiBidDuringWindow(world);
@@ -340,7 +337,7 @@ function spawnAuction(rng: World["rng"], world: World) {
   const sellers = world.clubs.filter((c) => !c.isHuman);
   if (sellers.length === 0) return;
   const seller = pick(rng, sellers);
-  const roster = world.players.filter((p) => p.clubId === seller.id && !p.isYouth && !p.isStar && !p.onSale);
+  const roster = world.players.filter((p) => p.clubId === seller.id && p.loanId === null && !p.isYouth && !p.isStar && !p.onSale);
   if (roster.length === 0) return;
   const player = pick(rng, roster);
   createAuction(rng, world, player.id, seller.id, seasonEndDay(world.dayIndex, gameConfig.auctionDurationDays));

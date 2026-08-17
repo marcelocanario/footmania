@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FastForward, Flag, Play, RefreshCw, Subscript } from "lucide-react";
+import { FastForward, Flag, Play, RefreshCw, Subscript, Users } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -52,7 +52,7 @@ interface WsMessage {
 }
 
 export function LiveMatch() {
-  const { saveId, dayResult, refresh, setDayResult } = useGame();
+  const { saveId, dayResult, refresh, setDayResult, setLiveMatch } = useGame();
   const { matchDurationMinutes } = useSettings();
   const navigate = useNavigate();
   const [state, setState] = useState<LiveState | null>(null);
@@ -60,6 +60,7 @@ export function LiveMatch() {
   const [reconnecting, setReconnecting] = useState(false);
   const [fast, setFast] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
+  const [showLineup, setShowLineup] = useState(false);
   const [subOut, setSubOut] = useState<LivePlayer | null>(null);
   const [subIn, setSubIn] = useState<LivePlayer | null>(null);
   const [subBusy, setSubBusy] = useState(false);
@@ -74,8 +75,11 @@ export function LiveMatch() {
   const matchId = liveId;
 
   useEffect(() => {
-    if (noLive) navigate("/matchday");
-  }, [noLive, navigate]);
+    if (noLive) {
+      setLiveMatch(null);
+      navigate("/matchday");
+    }
+  }, [noLive, navigate, setLiveMatch]);
 
   useEffect(() => {
     if (!saveId) return;
@@ -181,12 +185,13 @@ export function LiveMatch() {
   const handleFinished = useCallback(
     (result?: unknown) => {
       if (result) setDayResult(result as Parameters<typeof setDayResult>[0]);
+      setLiveMatch(null);
       void (async () => {
         await refresh();
         navigate("/dashboard");
       })();
     },
-    [refresh, navigate, setDayResult]
+    [refresh, navigate, setDayResult, setLiveMatch]
   );
 
   const finish = useCallback(async () => {
@@ -340,11 +345,11 @@ export function LiveMatch() {
               <Play size={17} /> Kick off
             </button>
           </div>
-          <LineupPicker mode="match" matchId={state.matchId} />
+          <LineupPicker mode="match" matchId={state.matchId} liveState={state} />
         </div>
         <MatchPitch
-          home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn }}
-          away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn }}
+          home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn, formationId: state.homeFormationId }}
+          away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn, formationId: state.awayFormationId }}
           events={state.events}
           phase={state.phase}
           minute={state.minute}
@@ -397,8 +402,8 @@ export function LiveMatch() {
       </div>
 
       <MatchPitch
-        home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn }}
-        away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn }}
+        home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn, formationId: state.homeFormationId }}
+        away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn, formationId: state.awayFormationId }}
         events={state.events}
         phase={state.phase}
         minute={state.minute}
@@ -408,14 +413,30 @@ export function LiveMatch() {
         <div className="card" style={{ borderColor: "rgba(240,180,41,0.4)", marginBottom: 16, textAlign: "center", padding: "18px 14px" }}>
           <h2 style={{ fontSize: "1.3rem", marginBottom: 6 }}>Interval</h2>
           <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
-            You may make substitutions ({subsLeft} left).
+            You may change your formation or make substitutions ({subsLeft} left).
           </div>
-          <div style={{ display: "flex", gap: 10, justifyContent: "center" }}>
+          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+            <button className="btn" onClick={() => setShowLineup((v) => !v)}>
+              <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
+            </button>
             <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
               <Subscript size={15} /> Substitutions
             </button>
             <button className="btn gold" onClick={() => void tick()}>Resume</button>
           </div>
+          {showLineup && (
+            <div style={{ textAlign: "left", marginTop: 16 }}>
+              <LineupPicker
+                mode="match"
+                matchId={state.matchId}
+                liveState={state}
+                onSaved={(s) => {
+                  setShowLineup(false);
+                  if (s) applyState(s);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
 

@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Wand2, Target } from "lucide-react";
-import { api, type LineupView } from "../api/client";
+import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 
 const FORMATIONS = [
-  { label: "5-4-1", value: 0 }, { label: "5-4-1", value: 1 }, { label: "5-3-2", value: 2 },
-  { label: "4-5-1", value: 3 }, { label: "4-4-2", value: 4 }, { label: "4-4-2", value: 5 },
-  { label: "4-4-2", value: 6 }, { label: "4-3-3", value: 7 }, { label: "4-3-3", value: 8 },
-  { label: "3-5-2", value: 9 }, { label: "3-4-3", value: 10 },
+  { label: "5-4-1", value: 0 },
+  { label: "5-4-1 · Wide", value: 1 },
+  { label: "5-3-2", value: 2 },
+  { label: "4-5-1", value: 3 },
+  { label: "4-4-2", value: 4 },
+  { label: "4-4-2 · Diamond", value: 5 },
+  { label: "4-4-2 · Attacking", value: 6 },
+  { label: "4-3-3", value: 7 },
+  { label: "4-3-3 · Holding", value: 8 },
+  { label: "3-5-2", value: 9 },
+  { label: "3-4-3", value: 10 },
+  { label: "4-2-3-1", value: 11 },
+  { label: "4-2-3-1 · Wide", value: 12 },
 ];
 
 const SLOT_NAMES: Record<number, string> = {
@@ -49,10 +58,11 @@ interface Ed {
 interface Props {
   mode: "club" | "match";
   matchId?: number;
-  onSaved?: () => void;
+  liveState?: LiveState;
+  onSaved?: (state?: LiveState) => void;
 }
 
-export function LineupPicker({ mode, matchId, onSaved }: Props) {
+export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
   const { saveId } = useGame();
   const [data, setData] = useState<LineupView | null>(null);
   const [ed, setEd] = useState<Ed | null>(null);
@@ -65,16 +75,27 @@ export function LineupPicker({ mode, matchId, onSaved }: Props) {
       .getLineup(saveId)
       .then((res) => {
         setData(res);
+        const live = mode === "match" && liveState?.matchId === matchId ? liveState : null;
+        const liveOn = live ? (live.humanSide === 0 ? live.homeOn : live.awayOn).map((p) => p.id) : [];
+        const liveBench = live ? (live.humanSide === 0 ? live.homeBench : live.awayBench).map((p) => p.id) : [];
+        const liveStarters = live ? [...liveOn, ...liveBench.filter((id) => !liveOn.includes(id))].slice(0, 11) : [];
+        const starterIds = liveStarters.length === 11 ? liveStarters : res.starters.map((p) => p?.id ?? null);
+        const starterSet = new Set(starterIds.filter((id): id is number => id !== null));
+        const liveSubs = live
+          ? liveBench.filter((id) => !starterSet.has(id)).map((id) => id as number)
+          : res.subs.map((p) => p?.id ?? null);
+        const penaltyTakerId = res.penaltyTakerId !== null && starterSet.has(res.penaltyTakerId) ? res.penaltyTakerId : null;
+        const freeKickTakerId = res.freeKickTakerId !== null && starterSet.has(res.freeKickTakerId) ? res.freeKickTakerId : null;
         setEd({
           formation: res.formation,
-          starters: res.starters.map((p) => p?.id ?? null),
-          subs: res.subs.map((p) => p?.id ?? null),
-          penaltyTakerId: res.penaltyTakerId,
-          freeKickTakerId: res.freeKickTakerId,
+          starters: starterIds,
+          subs: liveStarters.length === 11 ? liveSubs : res.subs.map((p) => p?.id ?? null),
+          penaltyTakerId,
+          freeKickTakerId,
         });
       })
       .catch((e) => setStatus({ kind: "err", text: (e as Error).message }));
-  }, [saveId]);
+  }, [saveId, mode, matchId, liveState?.matchId]);
 
   const byId = useMemo(() => {
     const m = new Map<number, { id: number; name: string; position: number; overall: number; injuryDays: number; suspended: boolean }>();
@@ -98,11 +119,13 @@ export function LineupPicker({ mode, matchId, onSaved }: Props) {
         };
         if (mode === "club") {
           await api.setLineup(saveId, payload);
+          setStatus({ kind: "ok", text: "Saved" });
+          onSaved?.();
         } else if (matchId) {
-          await api.matchLineup(saveId, matchId, payload);
+          const res = await api.matchLineup(saveId, matchId, payload);
+          setStatus({ kind: "ok", text: "Saved" });
+          onSaved?.(res.state);
         }
-        setStatus({ kind: "ok", text: "Saved" });
-        onSaved?.();
       } catch (e) {
         setStatus({ kind: "err", text: (e as Error).message });
       } finally {
@@ -162,6 +185,13 @@ export function LineupPicker({ mode, matchId, onSaved }: Props) {
     setSaving(true);
     try {
       const res = await api.getLineup(saveId, true, formation);
+      if (mode === "match" && ed) {
+        // During a live match, changing shape must not replace the current
+        // XI with the club's saved XI (which may contain subbed-off players).
+        setData((prev) => (prev ? { ...prev, formation, slots: res.slots } : res));
+        commit({ ...ed, formation });
+        return;
+      }
       setData(res);
       const next: Ed = {
         formation,
@@ -180,6 +210,10 @@ export function LineupPicker({ mode, matchId, onSaved }: Props) {
 
   const autoFill = async () => {
     if (!saveId) return;
+    if (mode === "match" && liveState?.phase === "halftime") {
+      setStatus({ kind: "err", text: "Auto lineup is unavailable at halftime; choose players manually." });
+      return;
+    }
     setSaving(true);
     try {
       const res = await api.getLineup(saveId, true, ed?.formation);
@@ -267,7 +301,7 @@ export function LineupPicker({ mode, matchId, onSaved }: Props) {
       </div>
 
       <div style={{ display: "flex", gap: 8, margin: "12px 0", flexWrap: "wrap", alignItems: "center" }}>
-        <button className="btn sm ghost" onClick={() => void autoFill()} disabled={saving}>
+        <button className="btn sm ghost" onClick={() => void autoFill()} disabled={saving || (mode === "match" && liveState?.phase === "halftime")}>
           <Wand2 size={14} /> Auto lineup
         </button>
         <span style={{ fontSize: "0.82rem", color: status.kind === "err" ? "var(--red-2)" : status.kind === "ok" ? "var(--grass-2)" : "var(--text-3)" }}>

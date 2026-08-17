@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { aiBid, auctionAvailableCash, createAuction, freeAgentSigningBonus, isEligibleAuctionBidder, resolveAuction } from "../src/game/transfers";
+import { aiBid, auctionAvailableCash, createAuction, freeAgentSigningBonus, isEligibleAuctionBidder, releasePlayer, resolveAuction, transferPlayer } from "../src/game/transfers";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
@@ -13,7 +13,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     reputation: 4,
     level: 20,
     cash: 10_000_000,
-    loanBalance: 0,
     stadiumName: "St",
     stadiumCapacity: 40000,
     primaryColor: "#000",
@@ -168,6 +167,101 @@ describe("auction resolution", () => {
     expect(resolveAuction(world, listingId)).toBeNull();
     expect(world.auctions).toHaveLength(0);
     expect(player.onSale).toBe(false);
+  });
+});
+
+describe("releasePlayer", () => {
+  it("pays the release clause and moves a senior player to free agency", () => {
+    const club = makeClub(1, { cash: 5_000_000 });
+    const rng = createRng(9);
+    const player = generatePlayer(rng, club, { id: 1 });
+    player.releaseClause = 1_000_000;
+    const world = makeWorld([club], [player]);
+
+    const result = releasePlayer(world, player, club);
+    expect(result.ok).toBe(true);
+    expect(result.cost).toBe(1_000_000);
+    expect(club.cash).toBe(4_000_000);
+    expect(club.ledger.expense.filter((e) => e.code === 2 && e.label.includes(player.name))).toHaveLength(1);
+    expect(player.clubId).toBeNull();
+    expect(player.onSale).toBe(false);
+    expect(player.salePrice).toBeNull();
+    expect(world.news.some((n) => n.text.includes(`${player.name} was released`))).toBe(true);
+  });
+
+  it("rejects a release the club cannot afford", () => {
+    const club = makeClub(1, { cash: 100_000 });
+    const rng = createRng(9);
+    const player = generatePlayer(rng, club, { id: 1 });
+    player.releaseClause = 1_000_000;
+    const world = makeWorld([club], [player]);
+
+    const result = releasePlayer(world, player, club);
+    expect(result.ok).toBe(false);
+    expect(player.clubId).toBe(club.id);
+    expect(club.cash).toBe(100_000);
+  });
+
+  it("releases youth players for free", () => {
+    const club = makeClub(1, { cash: 0 });
+    const rng = createRng(9);
+    const player = generatePlayer(rng, club, { id: 1, isYouth: true });
+    const world = makeWorld([club], [player]);
+
+    const result = releasePlayer(world, player, club);
+    expect(result.ok).toBe(true);
+    expect(result.cost).toBe(0);
+    expect(player.clubId).toBeNull();
+  });
+
+  it("rejects a player who does not belong to the club", () => {
+    const club = makeClub(1);
+    const other = makeClub(2);
+    const rng = createRng(9);
+    const player = generatePlayer(rng, other, { id: 1 });
+    const world = makeWorld([club, other], [player]);
+
+    const result = releasePlayer(world, player, club);
+    expect(result.ok).toBe(false);
+    expect(player.clubId).toBe(other.id);
+  });
+
+  it("does not release a player who is on loan to the club", () => {
+    const owner = makeClub(1);
+    const receiving = makeClub(2, { cash: 100_000 });
+    const rng = createRng(9);
+    const player = generatePlayer(rng, owner, { id: 1 });
+    player.clubId = receiving.id;
+    player.loanId = 10;
+    player.releaseClause = 1_000_000;
+    const world = makeWorld([owner, receiving], [player]);
+    world.loans.push({ id: 10, playerId: player.id, fromClubId: owner.id, toClubId: receiving.id, startDay: 1, endDay: 20, recalled: false });
+
+    const result = releasePlayer(world, player, receiving);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("A player on loan cannot be released");
+    expect(player.clubId).toBe(receiving.id);
+    expect(player.loanId).toBe(10);
+    expect(world.loans[0].recalled).toBe(false);
+    expect(world.news).toHaveLength(0);
+  });
+
+  it("rejects transfers and auctions for players on loan", () => {
+    const owner = makeClub(1);
+    const buyer = makeClub(2, { cash: 2_000_000 });
+    const rng = createRng(9);
+    const player = generatePlayer(rng, owner, { id: 1 });
+    player.loanId = 10;
+    const world = makeWorld([owner, buyer], [player]);
+
+    expect(transferPlayer(world, player, buyer, 500_000)).toBe(false);
+    expect(createAuction(rng, world, player.id, owner.id, world.dayIndex + 7)).toBe(-1);
+    expect(player.clubId).toBe(owner.id);
+    expect(player.loanId).toBe(10);
+    expect(player.onSale).toBe(false);
+    expect(owner.cash).toBe(10_000_000);
+    expect(buyer.cash).toBe(2_000_000);
   });
 });
 

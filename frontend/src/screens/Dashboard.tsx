@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { Play, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn } from "lucide-react";
+import { Play, Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { useAdvanceDay } from "../hooks/useAdvanceDay";
@@ -10,7 +10,7 @@ function confidenceDot(v: number): string {
 }
 
 export function Dashboard() {
-  const { snapshot, dayResult } = useGame();
+  const { snapshot, dayResult, liveMatchId } = useGame();
   const navigate = useNavigate();
   const { busy, run } = useAdvanceDay();
 
@@ -44,9 +44,23 @@ export function Dashboard() {
           </div>
         </div>
         <button className="btn gold" style={{ fontSize: "1.05rem", minHeight: 50, padding: "14px 34px" }} onClick={() => run()} disabled={busy}>
-          <Play size={19} /> {busy ? strings.common.loading : strings.dashboard.continue}
+          {liveMatchId ? <Radio size={19} /> : <Play size={19} />} {busy ? strings.common.loading : liveMatchId ? strings.dashboard.resume : strings.dashboard.continue}
         </button>
       </div>
+
+      {liveMatchId && (
+        <div className="card" style={{ borderColor: "rgba(61,220,132,0.5)", marginBottom: 16, textAlign: "center", padding: "22px 18px" }}>
+          <div className="live-tag" style={{ marginBottom: 8 }}>
+            <span className="pulse-dot" /> {strings.dashboard.liveMatch}
+          </div>
+          <div style={{ color: "var(--text-2)", fontSize: "0.95rem" }}>
+            {strings.dashboard.liveMatchHint}
+          </div>
+          <button className="btn gold" style={{ marginTop: 12 }} onClick={() => navigate("/live-match")}>
+            <Radio size={16} /> {strings.dashboard.resume}
+          </button>
+        </div>
+      )}
 
       {results && (results.playedMatches.length > 0 || results.events.length > 0) && (
         <div className="card" style={{ borderColor: "rgba(61,220,132,0.4)", marginBottom: 16 }}>

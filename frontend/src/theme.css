@@ -695,6 +695,10 @@ a { color: var(--grass-2); text-decoration: none; }
 .fc-wc { background: rgba(240, 180, 41, 0.32); color: var(--gold-2); }
 .fc-sus { background: rgba(229, 72, 77, 0.22); color: var(--red-2); }
 .fc-inj { background: rgba(229, 72, 77, 0.15); color: var(--red-2); }
+.fc-loan { background: rgba(120, 150, 190, 0.2); color: #9fb8d8; }
+
+.player-name.on-loan { opacity: 0.6; }
+.player-name.on-loan .nm { text-decoration: line-through; }
 
 /* ---------- tables ---------- */
 

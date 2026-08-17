@@ -1101,6 +1101,11 @@ export function isPregame(st: LiveMatchState): boolean {
   return !st.ended && !st.extraTimePlayed && st.half === 0 && st.minute === 0 && st.events.length === 0;
 }
 
+/** True while the match is paused at half-time (no clock running). */
+export function isHalftime(st: LiveMatchState): boolean {
+  return !st.ended && !st.extraTimePlayed && st.half === 1 && st.minute === 0;
+}
+
 export function livePhase(st: LiveMatchState): string {
   if (st.ended) return st.shootout ? "shootout" : "fulltime";
   if (isPregame(st)) return "pregame";
@@ -1110,6 +1115,13 @@ export function livePhase(st: LiveMatchState): string {
 }
 
 export function rebuildLiveHumanLineup(st: LiveMatchState, humanClub: Club, allPlayers: Player[]): void {
+  if (!isPregame(st) && !isHalftime(st)) return;
+
+  const sentOffIds = new Set(
+    st.events
+      .filter((event) => (event.type === EVENT_CODES.RED || event.type === EVENT_CODES.YELLOW_RED) && event.clubId === humanClub.id && event.playerId !== null)
+      .map((event) => event.playerId as number),
+  );
   const setup = lineupForMatch(humanClub, allPlayers);
   if (!setup) return;
   const xi = setup.starters.length === 11 ? setup.starters : setup.subs.slice(0, 11).concat(setup.starters).slice(0, 11);
@@ -1120,14 +1132,61 @@ export function rebuildLiveHumanLineup(st: LiveMatchState, humanClub: Club, allP
   for (const id of [...xiIds, ...subIds]) {
     if (st.playerMinutes[id] === undefined) st.playerMinutes[id] = 0;
   }
-  if (st.homeClubId === humanClub.id) {
-    st.homeXI = xiIds;
-    st.homeOn = xiIds.slice();
-    st.homeSubs = subIds;
+  const home = st.homeClubId === humanClub.id;
+  if (isPregame(st)) {
+    // Full squad reset before kickoff.
+    if (home) {
+      st.homeXI = xiIds;
+      st.homeOn = xiIds.slice();
+      st.homeSubs = subIds;
+    } else {
+      st.awayXI = xiIds;
+      st.awayOn = xiIds.slice();
+      st.awaySubs = subIds;
+    }
+    return;
+  }
+  // Halftime (paused): keep the players who are already on the pitch and only
+  // re-role them into the new formation. Players who are off the pitch already
+  // (sent off / substituted off) stay out; newly-selected starters come in.
+  const onIds = home ? st.homeOn : st.awayOn;
+  const newOn: number[] = [];
+  const used = new Set<number>();
+  const eligibleXiIds = xiIds.filter((id) => {
+    const player = allPlayers.find((candidate) => candidate.id === id);
+    return player && player.injuryDays === 0 && !sentOffIds.has(id);
+  });
+  for (const slot of setup.positions) {
+    const current = onIds.find((id) => {
+      const p = allPlayers.find((x) => x.id === id);
+      return p && !used.has(id) && p.injuryDays === 0;
+    });
+    const chosen = current ?? eligibleXiIds.find((id) => !used.has(id));
+    if (chosen !== undefined) {
+      const player = allPlayers.find((candidate) => candidate.id === chosen);
+      if (player) player.tacPos = slot;
+      newOn.push(chosen);
+      used.add(chosen);
+    }
+  }
+  // Fill any gaps from eligible selected players without restoring a sent-off
+  // player to the pitch.
+  for (const id of eligibleXiIds) {
+    if (newOn.length >= 11) break;
+    if (!used.has(id)) {
+      newOn.push(id);
+      used.add(id);
+    }
+  }
+  const remaining = setup.subs.filter((p) => !used.has(p.id) && !sentOffIds.has(p.id)).map((p) => p.id);
+  if (home) {
+    st.homeXI = newOn.slice();
+    st.homeOn = newOn.slice();
+    st.homeSubs = remaining;
   } else {
-    st.awayXI = xiIds;
-    st.awayOn = xiIds.slice();
-    st.awaySubs = subIds;
+    st.awayXI = newOn.slice();
+    st.awayOn = newOn.slice();
+    st.awaySubs = remaining;
   }
 }
 

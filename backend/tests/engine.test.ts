@@ -17,7 +17,6 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
     reputation: 4,
     level: 20,
     cash: 10000000,
-    loanBalance: 0,
     stadiumName: "St",
     stadiumCapacity: 40000,
     primaryColor: "#000",

@@ -4,11 +4,11 @@ import { useGame } from "../store/game";
 
 /**
  * Shared "advance to next match day" flow used by the Dashboard button
- * and the mobile play FAB. Navigates to the live match when the human
- * club plays, or to the season review when the year ends.
+ * and the mobile play FAB. When a live match is already in progress it
+ * resumes it; otherwise it advances to the next match day.
  */
 export function useAdvanceDay() {
-  const { advance } = useGame();
+  const { advance, checkLiveMatch } = useGame();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 
@@ -16,13 +16,18 @@ export function useAdvanceDay() {
     if (busy) return false;
     setBusy(true);
     try {
+      const live = await checkLiveMatch();
+      if (live) {
+        navigate("/live-match");
+        return true;
+      }
       const result = await advance();
       if (!result) return false;
       if (result.seasonEnded) {
         navigate("/season-end");
         return true;
       }
-      if (result.humanMatch) {
+      if (result.humanMatch || result.matchPending) {
         navigate("/live-match");
         return true;
       }
@@ -30,7 +35,7 @@ export function useAdvanceDay() {
     } finally {
       setBusy(false);
     }
-  }, [advance, navigate, busy]);
+  }, [advance, navigate, busy, checkLiveMatch]);
 
   return { busy, run };
 }

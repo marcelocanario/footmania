@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { LiveEvent, LivePlayer } from "../api/client";
-import { cueForEvent, eventKey, pitchPoint, type PitchCue, type PitchPoint, type PitchSide } from "./matchPitchUtils";
+import { cueForEvent, eventKey, teamPitchPoints, type PitchCue, type PitchPoint, type PitchSide } from "./matchPitchUtils";
 
 interface PitchTeam {
   clubId: number;
   name: string;
   kit: { primary: string; secondary: string };
   players: LivePlayer[];
+  formationId: number;
 }
 
 export interface MatchPitchProps {
@@ -28,8 +29,7 @@ const EVENT_COPY: Record<string, string> = {
   assist: "Assist",
 };
 
-function PlayerMarker({ player, side, kit, highlighted }: { player: LivePlayer; side: PitchSide; kit: PitchTeam["kit"]; highlighted: boolean }) {
-  const point = pitchPoint(player.tacPos, side);
+function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer; point: PitchPoint; side: PitchSide; kit: PitchTeam["kit"]; highlighted: boolean }) {
   const style = { left: `${point.x}%`, top: `${point.y}%`, "--kit": kit.primary, "--kit-2": kit.secondary } as CSSProperties;
   return (
     <span
@@ -92,12 +92,15 @@ export function MatchPitch({ home, away, events, phase, minute, reducedMotion = 
   }, []);
 
   const players = useMemo(() => [...home.players, ...away.players], [home.players, away.players]);
+  const homePoints = useMemo(() => teamPitchPoints(home.players, "home", home.formationId), [home.players, home.formationId]);
+  const awayPoints = useMemo(() => teamPitchPoints(away.players, "away", away.formationId), [away.players, away.formationId]);
   useEffect(() => {
     for (const player of players) {
       const side: PitchSide = home.players.some((p) => p.id === player.id) ? "home" : "away";
-      rememberedRef.current.set(player.id, pitchPoint(player.tacPos, side));
+      const points = side === "home" ? homePoints : awayPoints;
+      rememberedRef.current.set(player.id, points.get(player.id) ?? { x: 50, y: 50 });
     }
-  }, [players, home.players]);
+  }, [players, home.players, homePoints, awayPoints]);
 
   useEffect(() => {
     const fresh = events.filter((event) => !seenRef.current.has(eventKey(event)));
@@ -155,13 +158,14 @@ export function MatchPitch({ home, away, events, phase, minute, reducedMotion = 
             </linearGradient>
           </defs>
           <rect x="0" y="0" width="100" height="64" rx="3" fill="url(#pitchGrass)" />
-          <path d="M 50 0 V 64 M 2 2 H 98 V 62 H 2 Z M 2 18 H 18 V 46 H 2 Z M 2 25 H 8 V 39 H 2 Z M 98 18 H 82 V 46 H 98 Z M 98 25 H 92 V 39 H 98 Z M 50 31 A 8 8 0 1 1 50 33 A 8 8 0 1 1 50 31" fill="none" stroke="rgba(238,246,239,0.72)" strokeWidth="0.45" />
+          <path d="M 50 0 V 64 M 2 2 H 98 V 62 H 2 Z M 2 18 H 18 V 46 H 2 Z M 2 25 H 8 V 39 H 2 Z M 98 18 H 82 V 46 H 98 Z M 98 25 H 92 V 39 H 98 Z" fill="none" stroke="rgba(238,246,239,0.72)" strokeWidth="0.45" />
+          <circle cx="50" cy="32" r="8" fill="none" stroke="rgba(238,246,239,0.72)" strokeWidth="0.45" />
           <circle cx="50" cy="32" r="0.7" fill="rgba(238,246,239,0.8)" />
         </svg>
         {cue && <CueOverlay cue={cue} reducedMotion={motionReduced} />}
         <div className="pitch-players">
-          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} side="home" kit={home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} />)}
-          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} side="away" kit={away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} />)}
+          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} />)}
+          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} />)}
         </div>
         {cue && activeEvent && <div className="pitch-event-banner"><b>{EVENT_COPY[cue.kind]}</b><span>{cue.event.player || cue.event.player2}</span></div>}
       </div>

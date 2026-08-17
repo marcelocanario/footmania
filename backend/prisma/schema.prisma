@@ -81,7 +81,6 @@ model Club {
   reputation       Int
   level            Int
   cash             Int
-  loanBalance      Int
   stadiumName      String
   stadiumCapacity  Int
   primaryColor     String

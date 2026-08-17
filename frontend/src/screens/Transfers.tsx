@@ -196,7 +196,7 @@ export function Transfers() {
                     <div style={{ fontWeight: 700 }}>{loan.player.name}</div>
                     <div className="hint">{loan.player.overall} OVR · {loan.player.age} yrs · Salary {money(loan.player.salary)}/season · From {loan.fromClub}</div>
                   </div>
-                  {loan.available && <button className="btn" onClick={() => setLoanTarget(loan)}>View profile & take</button>}
+                  {loan.available && <button className="btn" title={strings.transfers.borrowLoanHint} onClick={() => setLoanTarget(loan)}>View profile & take</button>}
                   {!loan.available && loan.toClub && <span className="chip">At {loan.toClub}</span>}
                 </div>
               ))}
@@ -214,7 +214,7 @@ export function Transfers() {
             </div>
           ) : (
             <div className="grid stagger">
-              {squad.filter((p) => !p.isStar && !p.onSale).map((p) => (
+              {squad.filter((p) => !p.isStar && !p.onSale && !p.onLoan && !p.onLoanOut).map((p) => (
                 <div className="card hoverable" key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
                   <div>
                     <PlayerName player={p} />
@@ -331,7 +331,7 @@ export function Transfers() {
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
               <button className="btn ghost" style={{ flex: 1 }} onClick={() => setLoanTarget(null)}>{strings.common.cancel}</button>
-              <button className="btn" style={{ flex: 1 }} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>
+              <button className="btn" style={{ flex: 1 }} title={strings.transfers.borrowLoanHint} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>
             </div>
           </>
         )}

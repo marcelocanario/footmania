@@ -6,6 +6,7 @@ process.env.NODE_ENV = "test";
 
 import { buildServer } from "../src/server";
 import type { FastifyInstance } from "fastify";
+import { FORMATION_POSITIONS } from "../src/game/constants";
 
 async function setupCareer(app: FastifyInstance, username: string) {
   const register = await app.inject({
@@ -170,6 +171,124 @@ describe("live match over REST", () => {
       payload: { formation: 4, starters: newStarters, subs: newSubs, penaltyTakerId: null, freeKickTakerId: null },
     });
     expect(locked.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("GET /club/lineup without a formation param returns the club's saved formation", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie, saveId } = await setupCareer(app, "restplayer4");
+    const clubId = (await app.inject({ method: "GET", url: `/api/saves/${saveId}/state`, headers: { cookie } })).json().snapshot.club.id;
+
+    // Build and save a 4-3-3 (formation 7) via the club lineup endpoint.
+    const auto = await app.inject({ method: "GET", url: `/api/club/lineup?saveId=${saveId}&auto=1&formation=7`, headers: { cookie } });
+    expect(auto.statusCode).toBe(200);
+    const autoLineup = auto.json();
+    expect(autoLineup.formation).toBe(7);
+    const persist = await app.inject({
+      method: "POST",
+      url: `/api/club/lineup?saveId=${saveId}`,
+      headers: { cookie },
+      payload: {
+        formation: 7,
+        starters: autoLineup.starters.map((p: { id: number }) => p.id),
+        subs: autoLineup.subs.map((p: { id: number }) => p.id),
+        penaltyTakerId: null,
+        freeKickTakerId: null,
+      },
+    });
+    expect(persist.statusCode).toBe(200);
+
+    // Plain GET (no formation param) must reflect the saved formation, not 0.
+    const view = await app.inject({ method: "GET", url: `/api/club/lineup?saveId=${saveId}`, headers: { cookie } });
+    expect(view.statusCode).toBe(200);
+    expect(view.json().formation).toBe(7);
+    expect(view.json().slots).toHaveLength(11);
+
+    // Advancing into a live match must use the saved 4-3-3 shape.
+    const day = await advanceUntilMatch(app, cookie, saveId);
+    const matchId = day.humanMatch.id;
+    const live = await app.inject({ method: "GET", url: `/api/matches/${matchId}/live?saveId=${saveId}`, headers: { cookie } });
+    const st = live.json().state;
+    const humanOn = st.humanSide === 0 ? st.homeOn : st.awayOn;
+    const tac = humanOn.map((p: { tacPos: number }) => p.tacPos).sort((a: number, b: number) => a - b);
+    expect(st.homeClubId === clubId || st.awayClubId === clubId).toBe(true);
+    // 4-3-3 per engine bands: 1 GK, 4 defenders (2-9), 3 midfielders (10-17), 3 attackers (18-25).
+    expect(tac.filter((t: number) => t === 1)).toHaveLength(1);
+    expect(tac.filter((t: number) => t >= 2 && t <= 9)).toHaveLength(4);
+    expect(tac.filter((t: number) => t >= 10 && t <= 17)).toHaveLength(3);
+    expect(tac.filter((t: number) => t >= 18 && t <= 25)).toHaveLength(3);
+    await app.close();
+  });
+  it("lets the manager change formation at halftime while the match is paused", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie, saveId } = await setupCareer(app, "restplayer5");
+    const day = await advanceUntilMatch(app, cookie, saveId);
+    const matchId = day.humanMatch.id;
+
+    // Kick off, make a first-half substitution, and advance to halftime.
+    const live0 = await app.inject({ method: "GET", url: `/api/matches/${matchId}/live?saveId=${saveId}`, headers: { cookie } });
+    const s0 = live0.json().state;
+    const humanSide = s0.humanSide;
+
+    let state = s0;
+    const kickoff = await app.inject({
+      method: "POST",
+      url: `/api/matches/${matchId}/tick?saveId=${saveId}`,
+      headers: { cookie },
+      payload: { minutes: 5 },
+    });
+    expect(kickoff.statusCode).toBe(200);
+    state = kickoff.json().state;
+    const currentOn = humanSide === 0 ? state.homeOn : state.awayOn;
+    const currentBench = humanSide === 0 ? state.homeBench : state.awayBench;
+    const swappedOut = currentOn[1].id;
+    const swappedIn = currentBench[0].id;
+    const sub = await app.inject({
+      method: "POST",
+      url: `/api/matches/${matchId}/sub?saveId=${saveId}`,
+      headers: { cookie },
+      payload: { outId: swappedOut, inId: swappedIn },
+    });
+    expect(sub.statusCode).toBe(200);
+
+    let guard = 0;
+    while (state.phase !== "halftime" && !state.ended && guard++ < 60) {
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/matches/${matchId}/tick?saveId=${saveId}`,
+        headers: { cookie },
+        payload: { minutes: 5 },
+      });
+      expect(res.statusCode).toBe(200);
+      state = res.json().state;
+    }
+    expect(state.phase).toBe("halftime");
+    const starters = (humanSide === 0 ? state.homeOn : state.awayOn).map((p: { id: number }) => p.id);
+    const subs = (humanSide === 0 ? state.homeBench : state.awayBench).map((p: { id: number }) => p.id);
+
+    // Change the human lineup to a 4-3-3 (formation 7) while paused.
+    const lineupRes = await app.inject({
+      method: "POST",
+      url: `/api/matches/${matchId}/lineup?saveId=${saveId}`,
+      headers: { cookie },
+      payload: { formation: 7, starters, subs, penaltyTakerId: null, freeKickTakerId: null },
+    });
+    expect(lineupRes.statusCode).toBe(200);
+    const after = lineupRes.json().state;
+    const humanOn = after.humanSide === 0 ? after.homeOn : after.awayOn;
+    const tac = humanOn.map((p: { tacPos: number }) => p.tacPos).sort((a: number, b: number) => a - b);
+    const substitutedPlayer = humanOn.find((p: { id: number }) => p.id === swappedIn);
+    expect(substitutedPlayer?.tacPos).toBe(FORMATION_POSITIONS[7][1]);
+    // 4-3-3: 1 GK, 4 defenders, 3 mids, 3 attackers.
+    expect(tac.filter((t: number) => t === 1)).toHaveLength(1);
+    expect(tac.filter((t: number) => t >= 2 && t <= 9)).toHaveLength(4);
+    expect(tac.filter((t: number) => t >= 10 && t <= 17)).toHaveLength(3);
+    expect(tac.filter((t: number) => t >= 18 && t <= 25)).toHaveLength(3);
+
+    // Still paused after the change (no clock advanced).
+    expect(after.phase).toBe("halftime");
     await app.close();
   });
 });

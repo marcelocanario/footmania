@@ -8,12 +8,15 @@ interface GameState {
   dayResult: DayResult | null;
   loading: boolean;
   error: string | null;
+  liveMatchId: number | null;
   setUser: (user: User | null) => void;
   enterSave: (saveId: number) => void;
   loadSave: (saveId: number) => Promise<boolean>;
   refresh: () => Promise<void>;
   advance: () => Promise<DayResult | null>;
   setDayResult: (result: DayResult | null) => void;
+  setLiveMatch: (id: number | null) => void;
+  checkLiveMatch: () => Promise<number | null>;
   clear: () => void;
 }
 
@@ -45,17 +48,18 @@ export const useGame = create<GameState>((set, get) => ({
   dayResult: null,
   loading: false,
   error: null,
+  liveMatchId: null,
 
   setUser: (user) => set({ user }),
 
   enterSave: (saveId) => {
     persistSaveId(saveId);
-    set({ saveId, dayResult: null });
+    set({ saveId, dayResult: null, liveMatchId: null });
   },
 
   loadSave: async (saveId) => {
     persistSaveId(saveId);
-    set({ loading: true, error: null, saveId, dayResult: null });
+    set({ loading: true, error: null, saveId, dayResult: null, liveMatchId: null });
     try {
       const res = await api.saveState(saveId);
       if (!res.started) {
@@ -86,7 +90,9 @@ export const useGame = create<GameState>((set, get) => ({
     if (!saveId) return null;
     try {
       const result = await api.advance(saveId);
-      set({ dayResult: result });
+      // A pending result means a live match is now (or already was) running.
+      const nextLive = result.matchPending ? (result.humanMatch?.id ?? get().liveMatchId) : null;
+      set({ dayResult: result, liveMatchId: nextLive });
       await get().refresh();
       return result;
     } catch (e) {
@@ -97,8 +103,23 @@ export const useGame = create<GameState>((set, get) => ({
 
   setDayResult: (result) => set({ dayResult: result }),
 
+  setLiveMatch: (id) => set({ liveMatchId: id }),
+
+  checkLiveMatch: async () => {
+    const { saveId } = get();
+    if (!saveId) return null;
+    try {
+      const res = await api.liveMatchInfo(saveId);
+      const id = res.match?.id ?? null;
+      set({ liveMatchId: id });
+      return id;
+    } catch {
+      return null;
+    }
+  },
+
   clear: () => {
     persistSaveId(null);
-    set({ saveId: null, snapshot: null, dayResult: null });
+    set({ saveId: null, snapshot: null, dayResult: null, liveMatchId: null });
   },
 }));

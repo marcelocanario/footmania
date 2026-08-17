@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownRight, ArrowUpRight, Wallet, Banknote, Landmark, Building2 } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Wallet, Building2 } from "lucide-react";
 import { Toast } from "primereact/toast";
 import { api, type FinanceDetails, type LedgerEntry } from "../api/client";
 import { useGame } from "../store/game";
@@ -10,9 +10,6 @@ export function Finances() {
   const { snapshot, saveId, refresh } = useGame();
   const [income, setIncome] = useState<LedgerEntry[]>([]);
   const [expense, setExpense] = useState<LedgerEntry[]>([]);
-  const [loanBalance, setLoanBalance] = useState(0);
-  const [loanLimit, setLoanLimit] = useState(1000000);
-  const [loanInterestPercent, setLoanInterestPercent] = useState(3);
   const [busy, setBusy] = useState(false);
   const [details, setDetails] = useState<FinanceDetails | null>(null);
   const [prices, setPrices] = useState<number[]>([]);
@@ -24,9 +21,6 @@ export function Finances() {
       const res = await api.finances(saveId);
       setIncome(res.income);
       setExpense(res.expense);
-      setLoanBalance(res.loanBalance);
-      setLoanLimit(res.loanLimit);
-      setLoanInterestPercent(res.loanInterestPercent);
       const financeDetails = await api.financeDetails(saveId);
       setDetails(financeDetails);
       setPrices([...financeDetails.ticketPrices]);
@@ -34,25 +28,6 @@ export function Finances() {
   }, [saveId, snapshot?.club?.cash]);
 
   const club = snapshot?.club;
-  const loanPct = Math.min(100, (loanBalance / Math.max(1, loanLimit)) * 100);
-
-  const doLoan = async (action: "take" | "repay") => {
-    if (!saveId) return;
-    setBusy(true);
-    try {
-      const res = await api.loan(saveId, action);
-      setLoanBalance(res.loanBalance);
-      toast.current?.show({ severity: "success", summary: action === "take" ? "Loan taken" : "Loan repaid" });
-      await refresh();
-      const fin = await api.finances(saveId);
-      setIncome(fin.income);
-      setExpense(fin.expense);
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const savePrices = async () => {
     if (!saveId || prices.length !== 4) return;
@@ -112,25 +87,6 @@ export function Finances() {
             {money(club?.cash ?? 0)}
           </div>
           <div className="hint">{num(club?.stadiumCapacity ?? 0)} seats · {club?.stadiumName}</div>
-        </div>
-
-        <div className="card" style={{ flex: 1 }}>
-          <div className="label" style={{ color: "var(--text-3)", fontSize: "0.76rem", textTransform: "uppercase", letterSpacing: "0.11em", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Banknote size={12} /> {strings.finances.loan}
-          </div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "1.7rem", fontWeight: 800, marginTop: 6 }}>{money(loanBalance)}</div>
-          <div style={{ height: 7, background: "rgba(228,245,235,0.1)", borderRadius: 999, marginTop: 10, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${loanPct}%`, background: loanPct > 70 ? "var(--red)" : "linear-gradient(90deg, var(--gold), var(--gold-2))", borderRadius: 999, transition: "width .4s ease" }} />
-          </div>
-          <div className="hint">Limit {money(loanLimit)} · {loanInterestPercent}% interest per payroll</div>
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button className="btn sm" disabled={busy || loanBalance >= loanLimit} onClick={() => doLoan("take")}>
-              <Landmark size={14} /> {strings.finances.takeLoan}
-            </button>
-            <button className="btn sm ghost" disabled={busy || loanBalance <= 0} onClick={() => doLoan("repay")}>
-              {strings.finances.repayLoan}
-            </button>
-          </div>
         </div>
 
         <div className="card" style={{ flex: 1 }}>

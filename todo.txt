@@ -35,3 +35,5 @@ Questions/multiplayer:
 -how do we structure leagues/cups when players are coming/dropping? i thought of a seasons system, where a season is roughly a month in real life (with matches every other day or so). but i want some cups and periodically world cups with best teams from multiple leagues
 -how can we replace teams whose players are inactive/dropped? do we even need to do that? study how other games like Hattrick solve for that?
 -how many teams per league so that a season will take around 1 month with a game every other day?
+
+validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime

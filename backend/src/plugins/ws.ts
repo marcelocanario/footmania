@@ -2,7 +2,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadWorld, persistWorld } from "../services/saveService";
 import { liveStateView } from "../services/liveView";
-import { performLiveSub, tickLiveMatch, isPregame, rebuildLiveHumanLineup } from "../game/match";
+import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
 import { finalizeLiveMatch } from "../game/world";
 import { withSaveLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
@@ -164,7 +164,7 @@ async function handleMessage(
         return;
       }
       if (msg.type === "lineup") {
-        if (!isPregame(st)) {
+        if (!isPregame(st) && !isHalftime(st)) {
           send(ws, { type: "error", message: "The match already started" });
           return;
         }

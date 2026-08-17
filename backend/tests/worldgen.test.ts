@@ -9,7 +9,7 @@ import { tickLiveMatch } from "../src/game/match";
 import { generateName, hasNamePool } from "../src/game/names";
 import { createRng } from "../src/game/rng";
 import { parseGameConfig } from "../src/config";
-import { LEAGUE_PRIZES, LOAN_LIMITS, TV_POSITION_BONUS } from "../src/game/constants";
+import { LEAGUE_PRIZES, TV_POSITION_BONUS } from "../src/game/constants";
 import { sortedStandings } from "../src/game/league";
 import type { World } from "../src/game/types";
 
@@ -114,7 +114,7 @@ describe("worldgen", () => {
     expect(Object.keys(world.seasonSummary!).sort()).toEqual(["leagueChampionId", "leagueRunnerUpId"]);
   });
 
-  it("economy sim: no club goes bankrupt, payroll ≈ seasonal wage bill, prizes land, loan limits hold", () => {
+  it("economy sim: no club goes bankrupt, payroll ≈ seasonal wage bill, prizes land", () => {
     const world = generateWorld(4242);
     world.humanClubId = world.clubs[0].id;
     world.clubs[0].isHuman = true;
@@ -130,8 +130,6 @@ describe("worldgen", () => {
       if (res.seasonEnded) seasonEnded = true;
       for (const club of world.clubs) {
         expect(club.cash, `${club.name} cash on day ${world.dayIndex}`).toBeGreaterThanOrEqual(0);
-        const limit = LOAN_LIMITS[Math.max(0, Math.min(4, club.reputation - 1))];
-        expect(club.loanBalance).toBeLessThanOrEqual(limit);
       }
     }
     expect(seasonEnded).toBe(true);
@@ -164,7 +162,6 @@ describe("game config validation", () => {
       transferIntervalDays: 1,
       auctionDurationDays: 7,
       loanDurationSeasons: 1,
-      payrollLoanInterestPercent: 3,
       stadiumUpgradeDays: 15,
       contractWarningSeasons: 2,
       humanMatchDurationMinutes: 10,
@@ -182,7 +179,6 @@ describe("game config validation", () => {
         transferIntervalDays: 1,
         auctionDurationDays: 7,
         loanDurationSeasons: 1,
-        payrollLoanInterestPercent: 3,
         stadiumUpgradeDays: 15,
         contractWarningSeasons: 2,
         humanMatchDurationMinutes: 10,
@@ -197,7 +193,6 @@ describe("game config validation", () => {
         transferIntervalDays: 1,
         auctionDurationDays: 7,
         loanDurationSeasons: 1,
-        payrollLoanInterestPercent: 3,
         stadiumUpgradeDays: 15,
         contractWarningSeasons: 2,
         humanMatchDurationMinutes: 10,

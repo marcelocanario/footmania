@@ -100,7 +100,6 @@ export interface Club {
   reputation: number;
   level: number;
   cash: number;
-  loanBalance: number;
   stadiumName: string;
   stadiumCapacity: number;
   primaryColor: string;

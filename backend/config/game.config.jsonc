@@ -30,9 +30,6 @@
   // Length of a loan in seasons (converted to game-days via seasonDays).
   "loanDurationSeasons": 1,
 
-  // Annual interest rate (percent) charged on a club's outstanding bank loan
-  // balance each payroll interval.
-  "payrollLoanInterestPercent": 3,
   // Game-days a stadium expansion takes to complete once construction starts.
   "stadiumUpgradeDays": 15,
   // How many seasons before a contract's expiry (in game-days) a club starts

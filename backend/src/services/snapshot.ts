@@ -5,7 +5,7 @@ import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION
 import { freeAgentSigningBonus } from "../game/transfers";
 import { gameConfig } from "../config";
 
-export function playerView(p: World["players"][number]) {
+export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
   return {
     id: p.id,
     name: p.name,
@@ -42,6 +42,27 @@ export function playerView(p: World["players"][number]) {
     morale: p.morale,
     loanId: p.loanId,
     releaseClause: p.releaseClause,
+    onLoan: loan?.onLoan ?? false,
+    onLoanOut: loan?.onLoanOut ?? false,
+    loanClubName: loan?.loanClubName ?? null,
+    loanFromName: loan?.loanFromName ?? null,
+  };
+}
+
+/** Loan context for a player relative to a club, or neutral defaults. */
+function loanInfo(world: World, p: World["players"][number], clubId: number) {
+  if (p.loanId === null) {
+    return { onLoan: false, onLoanOut: false, loanClubName: null as string | null, loanFromName: null as string | null };
+  }
+  const loan = world.loans.find((l) => l.id === p.loanId);
+  if (!loan || loan.recalled || loan.toClubId === null) {
+    return { onLoan: false, onLoanOut: false, loanClubName: null as string | null, loanFromName: null as string | null };
+  }
+  return {
+    onLoan: p.clubId === clubId && loan.fromClubId !== clubId,
+    onLoanOut: loan.fromClubId === clubId && p.clubId !== clubId,
+    loanClubName: world.clubs.find((c) => c.id === loan.toClubId)?.name ?? null,
+    loanFromName: world.clubs.find((c) => c.id === loan.fromClubId)?.name ?? null,
   };
 }
 
@@ -68,11 +89,19 @@ export function buildSnapshot(world: World, clubId: number) {
   const squad = world.players
     .filter((p) => p.clubId === clubId && !p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map(playerView);
+    .map((p) => playerView(p, loanInfo(world, p, clubId)));
   const juniors = world.players
     .filter((p) => p.clubId === clubId && p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map(playerView);
+    .map((p) => playerView(p, loanInfo(world, p, clubId)));
+  // Players the club owns but that are away on loan, so the ceding club can
+  // still see them in its roster.
+  const loanedOut = world.players
+    .filter((p) => p.clubId !== clubId && p.loanId !== null && world.loans.some((l) => l.id === p.loanId && l.fromClubId === clubId && l.toClubId !== null && !l.recalled))
+    .sort((a, b) => b.overall - a.overall)
+    .map((p) => playerView(p, loanInfo(world, p, clubId)));
+  // Loaned-out players appear in the senior roster (greyed out in the UI).
+  const squadAll = [...squad, ...loanedOut].sort((a, b) => b.overall - a.overall);
 
   const news = world.news
     .slice(-30)
@@ -128,7 +157,6 @@ export function buildSnapshot(world: World, clubId: number) {
           reputation: club.reputation,
           level: club.level,
           cash: club.cash,
-          loanBalance: club.loanBalance,
           stadiumName: club.stadiumName,
           stadiumCapacity: club.stadiumCapacity,
           primaryColor: club.primaryColor,
@@ -167,8 +195,9 @@ export function buildSnapshot(world: World, clubId: number) {
         }
       : null,
     competitions,
-    squad,
+    squad: squadAll,
     juniors,
+    loanedOut,
     news,
     auctions,
     freeAgents,

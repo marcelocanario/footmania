@@ -1,6 +1,7 @@
 import type { LiveMatchState, World } from "../game/types";
 import { livePhase } from "../game/match";
 import { dayInfo } from "../game/calendar";
+import { FORMATION_NAMES } from "../game/constants";
 
 export interface LiveEventView {
   sequence: number;
@@ -58,6 +59,8 @@ export interface LiveStateView {
   awayManager: string;
   homeFormation: string;
   awayFormation: string;
+  homeFormationId: number;
+  awayFormationId: number;
 }
 
 export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
@@ -128,11 +131,12 @@ export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
     awayManager: away?.coachName ?? "",
     homeFormation: formationName(home),
     awayFormation: formationName(away),
+    homeFormationId: home?.tactics?.formation ?? 4,
+    awayFormationId: away?.tactics?.formation ?? 4,
   };
 }
 
 function formationName(club: { tactics?: { formation: number } } | undefined): string {
   if (!club?.tactics) return "";
-  const names = ["5-4-1", "5-4-1", "5-3-2", "4-5-1", "4-4-2", "4-4-2", "4-4-2", "4-3-3", "4-3-3", "3-5-2", "3-4-3"];
-  return names[club.tactics.formation] ?? "";
+  return FORMATION_NAMES[club.tactics.formation] ?? "";
 }

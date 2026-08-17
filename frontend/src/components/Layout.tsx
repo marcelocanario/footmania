@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Play, Home, Medal, Settings as SettingsIcon } from "lucide-react";
+import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Play, Home, Medal, Settings as SettingsIcon, Radio } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useAdvanceDay } from "../hooks/useAdvanceDay";
+import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
 
 const NAV = [
   { to: "/dashboard", label: "Home", icon: <Home size={15} /> },
@@ -25,11 +26,12 @@ function confidenceDot(v: number): string {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { snapshot, clear, setUser } = useGame();
+  const { snapshot, clear, setUser, liveMatchId } = useGame();
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobile();
   const { busy: playBusy, run: playDay } = useAdvanceDay();
+  useLiveMatchWatcher();
   const club = snapshot?.club;
 
   const logout = async () => {
@@ -128,10 +130,10 @@ export function Layout({ children }: { children: ReactNode }) {
           className="fab"
           onClick={() => playDay()}
           disabled={playBusy}
-          title={strings.dashboard.continue}
-          aria-label={strings.dashboard.continue}
+          title={liveMatchId ? strings.dashboard.resume : strings.dashboard.continue}
+          aria-label={liveMatchId ? strings.dashboard.resume : strings.dashboard.continue}
         >
-          <Play size={22} fill="currentColor" />
+          {liveMatchId ? <Radio size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
         </button>
       )}
     </div>

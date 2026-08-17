@@ -1,8 +1,6 @@
 import type { Club, Player, RngState, World } from "./types";
 import { chance, nextInt, pick } from "./rng";
 import { positionCount } from "./club";
-import { generatePlayer } from "./player";
-import { generateName } from "./names";
 import { DAYS_PER_YEAR } from "./constants";
 
 const MIN_SQUAD = [3, 4, 4, 5, 4];
@@ -70,7 +68,7 @@ export function evaluateBid(
 
 export function createAuction(rng: RngState, world: World, playerId: number, sellerClubId: number | null, deadlineDay: number): number {
   const player = world.players.find((p) => p.id === playerId);
-  if (!player) return -1;
+  if (!player || player.loanId !== null) return -1;
   player.onSale = true;
   player.salePrice = null;
   const listing = {
@@ -171,7 +169,7 @@ export function resolveAuction(world: World, listingId: number): number | null {
 }
 
 export function transferPlayer(world: World, player: Player, toClub: Club, fee: number): boolean {
-  if (!Number.isFinite(fee) || fee < 0 || toClub.cash < fee) return false;
+  if (player.loanId !== null || !Number.isFinite(fee) || fee < 0 || toClub.cash < fee) return false;
   const from = world.clubs.find((c) => c.id === player.clubId);
   if (from) {
     from.cash += fee;
@@ -187,21 +185,40 @@ export function transferPlayer(world: World, player: Player, toClub: Club, fee: 
   return true;
 }
 
-export function generateFreeAgents(rng: RngState, world: World, count: number) {
-  for (let i = 0; i < count; i++) {
-    const club = pick(rng, world.clubs);
-    const player = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
-    player.clubId = null;
-    player.contractDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
-    player.age = 18 + nextInt(rng, 12);
-    player.isYouth = false;
-    player.name = generateName(rng, club.country);
-    world.players.push(player);
+/** Free-agent days granted when a player leaves a club (release or expiry). */
+const FREE_AGENT_DAYS = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
+
+/**
+ * Releases a player from the human club's squad. For senior players the club
+ * pays the release clause; youth players can always be released for free. The
+ * player becomes a free agent.
+ */
+export function releasePlayer(world: World, player: Player, club: Club): { ok: boolean; error?: string; cost: number } {
+  if (player.clubId !== club.id) return { ok: false, error: "Player not in squad", cost: 0 };
+  if (player.loanId !== null) return { ok: false, error: "A player on loan cannot be released", cost: 0 };
+  const cost = player.isYouth ? 0 : Math.max(0, player.releaseClause);
+  if (cost > club.cash) return { ok: false, error: "The club cannot afford to release this player", cost };
+  club.cash -= cost;
+  if (cost > 0) {
+    club.ledger.expense.push({ code: 2, amount: cost, day: world.dayIndex, label: `Release clause: ${player.name}` });
   }
+  player.clubId = null;
+  player.contractDays = FREE_AGENT_DAYS;
+  player.tacPos = -1;
+  player.starter = false;
+  player.onSale = false;
+  player.salePrice = null;
+  world.news.push({
+    dayIndex: world.dayIndex,
+    text: `${player.name} was released by ${club.name} as a free agent`,
+    kind: "contract",
+    clubId: club.id,
+  });
+  return { ok: true, cost };
 }
 
 export function aiSellSurplus(rng: RngState, world: World, club: Club) {
-  const roster = world.players.filter((p) => p.clubId === club.id && !p.isStar && !p.worldClass && !p.onSale);
+  const roster = world.players.filter((p) => p.clubId === club.id && p.loanId === null && !p.isStar && !p.worldClass && !p.onSale);
   const counts = positionCount(club, world.players);
   for (const p of roster) {
     if (counts[p.position] > MIN_SQUAD[p.position] + 1) {
@@ -257,7 +274,7 @@ export function aiBuyGaps(rng: RngState, world: World, club: Club) {
 }
 
 export function aiBuyListings(rng: RngState, world: World) {
-  const listings = world.players.filter((p) => p.onSale && p.salePrice !== null && p.clubId !== null);
+  const listings = world.players.filter((p) => p.onSale && p.salePrice !== null && p.clubId !== null && p.loanId === null);
   for (const player of listings) {
     const seller = world.clubs.find((c) => c.id === player.clubId);
     if (!seller) continue;
@@ -275,10 +292,4 @@ export function aiBuyListings(rng: RngState, world: World) {
       }
     }
   }
-}
-
-export function keepFreeAgentPool(rng: RngState, world: World) {
-  const current = world.players.filter((p) => p.clubId === null).length;
-  if (current >= 15) return;
-  generateFreeAgents(rng, world, 3);
 }

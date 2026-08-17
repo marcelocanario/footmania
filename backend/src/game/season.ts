@@ -8,9 +8,9 @@ import {
   potentialGrowth,
   shouldRetire,
 } from "./player";
-import { LEAGUE_PRIZES, LOAN_LIMITS, SPONSORSHIP, TV_POSITION_BONUS, DAYS_PER_YEAR } from "./constants";
+import { LEAGUE_PRIZES, SPONSORSHIP, TV_POSITION_BONUS, DAYS_PER_YEAR } from "./constants";
 import { getPosition, sortedStandings } from "./league";
-import { generateFreeAgents, squadNeeds } from "./transfers";
+import { squadNeeds } from "./transfers";
 import { generateName } from "./names";
 import { buildSeasonStructure } from "./worldgen";
 import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
@@ -21,6 +21,11 @@ import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
 export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
   return Math.min(LEAGUE_LAST_MATCH_DAY + 1, dayIndex + daysFromNow);
 }
+
+export function loanFitsContract(startDay: number, endDay: number, contractDays: number): boolean {
+  return endDay > startDay && endDay - startDay <= contractDays;
+}
+
 export const SENIOR_SQUAD_LIMIT = 35;
 const ACADEMY_TARGET = 8;
 
@@ -217,11 +222,6 @@ export function settlePayroll(rng: World["rng"], world: World) {
     }
     club.cash -= salaries;
     club.ledger.expense.push({ code: 4, amount: salaries, day: world.dayIndex, label: "Player salaries" });
-    if (club.loanBalance > 0) {
-      const interest = Math.round(club.loanBalance * (gameConfig.payrollLoanInterestPercent / 100));
-      club.cash -= interest;
-      club.ledger.expense.push({ code: 8, amount: interest, day: world.dayIndex, label: "Loan interest" });
-    }
     if (club.cash < 0) {
       club.boardConfidence = Math.max(0, club.boardConfidence - 10);
       if (club.boardConfidence < 25) {
@@ -234,24 +234,6 @@ export function settlePayroll(rng: World["rng"], world: World) {
           kind: "finance",
           clubId: club.id,
         });
-      }
-    }
-    if (!club.isHuman) {
-      const limit = LOAN_LIMITS[Math.max(0, Math.min(4, club.reputation - 1))];
-      if (club.cash < salaries && club.loanBalance < limit) {
-        const take = Math.min(limit - club.loanBalance, Math.round((salaries - club.cash) * 1.2));
-        if (take > 0) {
-          club.loanBalance += take;
-          club.cash += take;
-          club.ledger.income.push({ code: 8, amount: take, day: world.dayIndex, label: "Bank loan" });
-        }
-      } else if (club.cash > salaries * 2 && club.loanBalance > 0) {
-        const repay = Math.min(club.loanBalance, club.cash - salaries * 2);
-        if (repay > 0) {
-          club.loanBalance -= repay;
-          club.cash -= repay;
-          club.ledger.expense.push({ code: 7, amount: repay, day: world.dayIndex, label: "Loan repayment" });
-        }
       }
     }
   }
@@ -423,6 +405,8 @@ export function contractCycle(rng: World["rng"], world: World) {
       player.contractDays = freeAgentDays;
       player.tacPos = -1;
       player.starter = false;
+      player.onSale = false;
+      player.salePrice = null;
       world.news.push({
         dayIndex: world.dayIndex,
         text: `${player.name} left ${club?.name ?? "his club"} as a free agent after his contract expired`,
@@ -485,20 +469,23 @@ export function loanCycle(rng: World["rng"], world: World) {
     if (club.isHuman || !chance(rng, 15)) continue;
     const roster = world.players.filter(
       (p) =>
-        p.clubId === club.id && !p.isYouth && p.age <= 23 && !p.onSale && p.loanId === null && p.injuryDays === 0 && p.overall < 70
+        p.clubId === club.id && !p.isYouth && !p.onSale && p.loanId === null && p.injuryDays === 0 && p.overall < 70
     );
     if (roster.length === 0) continue;
     const inXI = lastMatchXI(world, club.id);
     const candidates = roster.filter((p) => !inXI.has(p.id));
     if (candidates.length === 0) continue;
-    const p = pick(rng, candidates);
+    const endDay = seasonEndDay(world.dayIndex, DAYS_PER_YEAR * gameConfig.loanDurationSeasons);
+    const contractEligible = candidates.filter((p) => loanFitsContract(world.dayIndex, endDay, p.contractDays));
+    if (contractEligible.length === 0) continue;
+    const p = pick(rng, contractEligible);
     world.loans.push({
       id: world.nextId++,
       playerId: p.id,
       fromClubId: club.id,
       toClubId: null,
       startDay: world.dayIndex,
-      endDay: seasonEndDay(world.dayIndex, DAYS_PER_YEAR * gameConfig.loanDurationSeasons),
+      endDay,
       recalled: false,
     });
     world.news.push({

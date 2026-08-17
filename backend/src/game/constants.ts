@@ -24,18 +24,18 @@ export const FORMATION_POSITIONS: number[][] = [
 
 export const FORMATION_NAMES = [
   "5-4-1",
-  "5-4-1",
+  "5-4-1 Wide",
   "5-3-2",
   "4-5-1",
   "4-4-2",
-  "4-4-2",
-  "4-4-2",
+  "4-4-2 Diamond",
+  "4-4-2 Attacking",
   "4-3-3",
-  "4-3-3",
+  "4-3-3 Holding",
   "3-5-2",
   "3-4-3",
   "4-2-3-1",
-  "4-2-3-1 Alas",
+  "4-2-3-1 Wide",
 ];
 
 export const STYLE_NAMES = ["Balanced", "Total Attack", "Counter-attack"];
@@ -107,8 +107,6 @@ export const TV_POSITION_BONUS: number[] = [3000000, 2000000, 1200000, 800000, 5
 export const SPONSORSHIP: number[] = [800000, 1500000, 3000000, 5000000, 8000000];
 
 export const STARTING_CASH: number[] = [3500000, 6000000, 9000000, 15000000, 25000000];
-
-export const LOAN_LIMITS: number[] = [1000000, 1500000, 2000000, 3000000, 5000000];
 
 export const TICKET_PRICES: number[][] = [
   [200, 500, 50, 0],

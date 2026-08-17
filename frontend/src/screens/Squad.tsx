@@ -51,6 +51,8 @@ export function Squad() {
   const [renewSeasons, setRenewSeasons] = useState(1);
   const [renewSalary, setRenewSalary] = useState(0);
   const [renewDemand, setRenewDemand] = useState(0);
+  const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => Promise<void> } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
   const [tab, setTab] = useState<Tab>("seniors");
   const [trainingFocus, setTrainingFocus] = useState<TrainingFocus>(snapshot?.club?.trainingFocus ?? "assistant");
@@ -126,17 +128,51 @@ export function Squad() {
     }
   };
 
-  const academyAction = async (p: PlayerView, action: "promote" | "dismiss") => {
-    if (!saveId) return;
-    const message = action === "promote" ? `Promote ${p.name} to the senior squad?` : `Release ${p.name} from the youth academy?`;
-    if (!window.confirm(message)) return;
+  const confirm = (title: string, message: string, onConfirm: () => Promise<void>) => {
+    setConfirmAction({ title, message, onConfirm });
+  };
+
+  const runConfirm = async () => {
+    if (!confirmAction) return;
+    setConfirmBusy(true);
     try {
-      await api.academyAction(saveId, p.id, action);
-      toast.current?.show({ severity: "success", summary: action === "promote" ? "Player promoted" : "Player released" });
-      await refresh();
+      await confirmAction.onConfirm();
+      setConfirmAction(null);
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    } finally {
+      setConfirmBusy(false);
     }
+  };
+
+  const academyAction = async (p: PlayerView, action: "promote" | "dismiss") => {
+    if (!saveId) return;
+    confirm(
+      action === "promote" ? "Promote player" : "Release from academy",
+      action === "promote" ? `Promote ${p.name} to the senior squad?` : `Release ${p.name} from the youth academy?`,
+      async () => {
+        await api.academyAction(saveId, p.id, action);
+        toast.current?.show({ severity: "success", summary: action === "promote" ? "Player promoted" : "Player released" });
+        await refresh();
+      }
+    );
+  };
+
+  const releasePlayer = (p: PlayerView) => {
+    if (!saveId) return;
+    confirm(
+      strings.squad.release,
+      strings.squad.releaseConfirm.replace("{{name}}", p.name),
+      async () => {
+        const res = await api.releasePlayer(saveId, p.id);
+        toast.current?.show({
+          severity: "success",
+          summary: strings.squad.releaseDone,
+          detail: res.cost > 0 ? `Paid ${money(res.cost)} release clause` : undefined,
+        });
+        await refresh();
+      }
+    );
   };
 
   const ratingBody = (p: PlayerView) => (
@@ -300,7 +336,7 @@ export function Squad() {
                 </div>
                 <div className="stat">
                   <div className="label">Release clause</div>
-                  <div className="value" style={{ fontSize: "1.15rem" }}>{money(selectedPlayer.releaseClause)}</div>
+                  <div className="value" style={{ fontSize: "1.15rem" }}>{money(selectedPlayer.isYouth ? 0 : selectedPlayer.releaseClause)}</div>
                 </div>
                 <div className="stat">
                   <div className="label">{strings.squad.contract}</div>
@@ -313,19 +349,39 @@ export function Squad() {
               </div>
 
               <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                {!selectedPlayer.isYouth && <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>{strings.squad.renew}</button>}
-                {selectedPlayer.isYouth ? (
-                  <>
-                    <button className="btn" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "promote")}>{strings.squad.promoteYouth}</button>
-                    <button className="btn ghost" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "dismiss")}>{strings.squad.dismissYouth}</button>
-                  </>
-                ) : selectedPlayer.age <= 23 && (
-                  <button className="btn ghost" style={{ flex: 1 }} onClick={() => loanAction(selectedPlayer)}>
-                    {selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
+                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && !selectedPlayer.onLoanOut && <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>{strings.squad.renew}</button>}
+                {selectedPlayer.isYouth && !selectedPlayer.onLoanOut && (
+                  <button className="btn" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "promote")}>{strings.squad.promoteYouth}</button>
+                )}
+                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && (
+                  <button
+                    className="btn ghost"
+                    style={{ flex: 1 }}
+                    title={!selectedPlayer.onLoanOut ? strings.transfers.lendLoanHint : undefined}
+                    onClick={() => loanAction(selectedPlayer)}
+                  >
+                    {selectedPlayer.onLoanOut ? "Recall from loan" : selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
                   </button>
                 )}
               </div>
-              {selectedPlayer.isYouth && <div className="hint" style={{ marginTop: 10 }}>Automatic promotion is attempted when this player reaches age 21.</div>}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && !selectedPlayer.onLoanOut && (
+                  <button
+                    className="btn ghost danger"
+                    style={{ flex: 1 }}
+                    disabled={(selectedPlayer.releaseClause ?? 0) > (club?.cash ?? 0)}
+                    title={(selectedPlayer.releaseClause ?? 0) > (club?.cash ?? 0) ? "The club cannot afford the release clause" : undefined}
+                    onClick={() => releasePlayer(selectedPlayer)}
+                  >
+                    {strings.squad.release} ({money(selectedPlayer.releaseClause ?? 0)})
+                  </button>
+                )}
+                {selectedPlayer.isYouth && !selectedPlayer.onLoan && (
+                  <button className="btn ghost danger" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "dismiss")}>
+                    {strings.squad.dismissYouth}
+                  </button>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -355,6 +411,18 @@ export function Squad() {
             <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
               <button className="btn ghost" style={{ flex: 1 }} onClick={() => setShowRenew(false)}>{strings.common.cancel}</button>
               <button className="btn" style={{ flex: 1 }} onClick={renew}>{strings.common.confirm}</button>
+            </div>
+          </>
+        )}
+      </Dialog>
+
+      <Dialog header={confirmAction?.title ?? ""} visible={confirmAction !== null} onHide={() => setConfirmAction(null)} style={{ width: 400 }}>
+        {confirmAction && (
+          <>
+            <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{confirmAction.message}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
+              <button className="btn ghost" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => setConfirmAction(null)}>{strings.common.cancel}</button>
+              <button className="btn red" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => void runConfirm()}>{strings.common.confirm}</button>
             </div>
           </>
         )}

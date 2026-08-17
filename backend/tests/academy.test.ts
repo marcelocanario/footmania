@@ -13,7 +13,6 @@ function makeClub(): Club {
     reputation: 4,
     level: 20,
     cash: 10_000_000,
-    loanBalance: 0,
     stadiumName: "Academy Ground",
     stadiumCapacity: 40_000,
     primaryColor: "#000",

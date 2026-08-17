@@ -38,6 +38,9 @@ export const strings = {
   dashboard: {
     title: "Dashboard",
     continue: "Continue",
+    resume: "Resume match",
+    liveMatch: "Live match",
+    liveMatchHint: "A match is being played right now. Resume it to keep watching.",
     nextFixture: "Next Match",
     noNextFixture: "No upcoming matches",
     cash: "Cash",
@@ -90,6 +93,9 @@ export const strings = {
     characteristic: "Traits",
     promoteYouth: "Promote to senior squad",
     dismissYouth: "Release from academy",
+    release: "Release",
+    releaseConfirm: "Release {{name}}? Paying the release clause will make the player a free agent.",
+    releaseDone: "Player released",
   },
   competitions: {
     title: "Competitions",
@@ -114,6 +120,8 @@ export const strings = {
     freeAgents: "Free Agents",
     sign: "Sign",
     loan: "Take on loan",
+    borrowLoanHint: "Add squad depth without paying a transfer or signing fee; your club pays the salary during the loan.",
+    lendLoanHint: "Keep ownership while the receiving club pays the salary and regular playing time helps the player develop.",
     bidAccepted: "Bid accepted!",
     bidRejected: "Bid rejected",
     price: "Price",
@@ -124,9 +132,6 @@ export const strings = {
     income: "Income",
     expense: "Expenses",
     balance: "Balance",
-    loan: "Loan",
-    takeLoan: "Take Loan",
-    repayLoan: "Repay Loan",
   },
   matchday: {
     title: "Match Day",
