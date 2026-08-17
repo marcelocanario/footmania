@@ -309,6 +309,10 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface Settings {
+  humanMatchDurationMinutes: number;
+}
+
 export const api = {
   me: () => request<User>("/api/auth/me"),
   register: (username: string, password: string) =>
@@ -386,4 +390,8 @@ export const api = {
   contractDemand: (saveId: number, playerId: number) =>
     request<{ demand: number; salary: number; contractDays: number }>(`/api/players/${playerId}/contract?saveId=${saveId}`),
   records: (saveId: number) => request<{ records: CareerRecord[]; awards: SeasonAward[] }>(`/api/records?saveId=${saveId}`),
+
+  settings: () => request<Settings>("/api/settings"),
+  updateSettings: (humanMatchDurationMinutes: number) =>
+    request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify({ humanMatchDurationMinutes }) }),
 };

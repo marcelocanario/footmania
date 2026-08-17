@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { FastForward, Flag, Play, RefreshCw, Subscript } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
+import { useSettings } from "../store/settings";
+import { tickDelayMs } from "../matchPace";
 import { LineupPicker } from "../components/LineupPicker";
 import { MatchPitch } from "../components/MatchPitch";
 
@@ -51,6 +53,7 @@ interface WsMessage {
 
 export function LiveMatch() {
   const { saveId, dayResult, refresh, setDayResult } = useGame();
+  const { matchDurationMinutes } = useSettings();
   const navigate = useNavigate();
   const [state, setState] = useState<LiveState | null>(null);
   const [wsMode, setWsMode] = useState(false);
@@ -218,6 +221,7 @@ export function LiveMatch() {
           if ((e as Error).message.includes("No live match")) setNoLive(true);
         });
     }
+    const delay = tickDelayMs(matchDurationMinutes);
     const iv = setInterval(() => {
       const st = stateRef.current;
       if (!st) return;
@@ -230,9 +234,9 @@ export function LiveMatch() {
       if (wsMode) {
         void tick();
       }
-    }, wsMode ? 800 : 1200);
+    }, delay);
     return () => clearInterval(iv);
-  }, [saveId, matchId, applyState, tick, wsMode, reconnecting]);
+  }, [saveId, matchId, applyState, tick, wsMode, reconnecting, matchDurationMinutes]);
 
   useEffect(() => {
     if (!wsMode && !reconnecting && stateRef.current && !stateRef.current.ended) {

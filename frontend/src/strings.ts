@@ -151,9 +151,17 @@ export const strings = {
   common: {
     loading: "Loading...",
     save: "Save",
+    saving: "Saving...",
     cancel: "Cancel",
     confirm: "Confirm",
     back: "Back",
     error: "Something went wrong",
+  },
+  settings: {
+    matchDurationTitle: "Human match duration",
+    matchDurationHint: "How long (in real time) a match you play should last. AI-vs-AI matches always resolve instantly with the same engine.",
+    matchDuration: "Match duration",
+    matchDurationPreview: "Estimated",
+    saved: "Saved",
   },
 };

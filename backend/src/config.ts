@@ -25,6 +25,7 @@ const gameConfigSchema = z
     payrollLoanInterestPercent: z.number().int().min(0).max(100),
     stadiumUpgradeDays: z.number().int().min(1),
     contractWarningSeasons: z.number().int().min(1),
+    humanMatchDurationMinutes: z.number().int().min(1).max(60),
   })
   .superRefine((cfg, ctx) => {
     const matchDays = cfg.league.turns * (cfg.league.teams - 1);
@@ -51,29 +52,70 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   payrollLoanInterestPercent: 3,
   stadiumUpgradeDays: 15,
   contractWarningSeasons: 2,
+  humanMatchDurationMinutes: 10,
 };
 
 /** Validates a raw config object against the game config schema (throws on failure). */
 export function parseGameConfig(raw: unknown): GameConfig {
   const parsed = gameConfigSchema.safeParse(raw);
   if (!parsed.success) {
-    throw new Error(`Invalid game.config.json: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+    throw new Error(`Invalid game.config.jsonc: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
   return parsed.data;
 }
 
+/**
+ * Removes `//` and `/* ... *\/` comments from JSONC text while preserving the
+ * contents of string literals (so URLs or text containing `//` survive).
+ */
+export function stripJsoncComments(text: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (inString) {
+      out += ch;
+      if (ch === "\\") {
+        out += next ?? "";
+        i++;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 function loadGameConfig(): GameConfig {
   const here = dirname(fileURLToPath(import.meta.url));
-  const file = join(here, "..", "config", "game.config.json");
+  const file = join(here, "..", "config", "game.config.jsonc");
   try {
-    return parseGameConfig(JSON.parse(readFileSync(file, "utf8")));
+    return parseGameConfig(JSON.parse(stripJsoncComments(readFileSync(file, "utf8"))));
   } catch (err) {
-    if (err instanceof Error && err.message.startsWith("Invalid game.config.json")) throw err;
+    if (err instanceof Error && err.message.startsWith("Invalid game.config.jsonc")) throw err;
     return DEFAULT_GAME_CONFIG;
   }
 }
 
-/** Typed game settings consumed by the game modules (see config/game.config.json). */
+/** Typed game settings consumed by the game modules (see config/game.config.jsonc). */
 export const gameConfig = loadGameConfig();
 
 /** Derived: total number of league match days (rounds). */

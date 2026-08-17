@@ -167,6 +167,7 @@ describe("game config validation", () => {
       payrollLoanInterestPercent: 3,
       stadiumUpgradeDays: 15,
       contractWarningSeasons: 2,
+      humanMatchDurationMinutes: 10,
     });
     expect(cfg.league.teams).toBe(8);
   });
@@ -184,6 +185,7 @@ describe("game config validation", () => {
         payrollLoanInterestPercent: 3,
         stadiumUpgradeDays: 15,
         contractWarningSeasons: 2,
+        humanMatchDurationMinutes: 10,
       })
     ).toThrow(/lastMatchDay/);
     expect(() =>
@@ -198,6 +200,7 @@ describe("game config validation", () => {
         payrollLoanInterestPercent: 3,
         stadiumUpgradeDays: 15,
         contractWarningSeasons: 2,
+        humanMatchDurationMinutes: 10,
       })
     ).toThrow();
   });

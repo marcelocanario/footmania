@@ -7,6 +7,7 @@ import { assignHumanClub } from "../game/worldgen";
 import { dayInfo } from "../game/calendar";
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import { withSaveLock } from "../services/lock";
+import { gameConfig } from "../config";
 import type { DayResult, World } from "../game/types";
 
 const createSchema = z.object({
@@ -22,7 +23,7 @@ const startSchema = z.object({
 export async function savesRoutes(app: FastifyInstance) {
   app.addHook("preHandler", async (req, reply) => {
     const path = req.routeOptions?.url ?? req.url;
-    if (path.includes("/saves")) {
+    if (path.includes("/saves") || path.includes("/settings")) {
       await app.authenticate(req, reply);
     }
   });
@@ -125,6 +126,19 @@ export async function savesRoutes(app: FastifyInstance) {
         away: away?.name ?? "",
       },
     };
+  });
+
+  app.get("/settings", async () => ({
+    humanMatchDurationMinutes: gameConfig.humanMatchDurationMinutes,
+  }));
+
+  app.put("/settings", async (req, reply) => {
+    const parsed = z
+      .object({ humanMatchDurationMinutes: z.number().int().min(1).max(60) })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    gameConfig.humanMatchDurationMinutes = parsed.data.humanMatchDurationMinutes;
+    return { humanMatchDurationMinutes: gameConfig.humanMatchDurationMinutes };
   });
 }
 

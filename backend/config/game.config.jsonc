@@ -1,0 +1,46 @@
+{
+  // Length of a season in game-days: from the day after the previous season's
+  // final match day through the last league round + 1. The engine derives the
+  // season end from this and LEAGUE_LAST_MATCH_DAY.
+  "seasonDays": 30,
+
+  // League structure. Total match days = turns * (teams - 1).
+  "league": {
+    // Number of clubs in the league (also the number generated for the world).
+    "teams": 8,
+    // Number of times each pair of teams meets (2 = home and away).
+    "turns": 2,
+    // Day of the season (0-indexed) on which the first league round is played.
+    "startDay": 1,
+    // Game-days between consecutive league rounds.
+    "matchIntervalDays": 2
+  },
+
+  // Game-day cadence at which player wages are paid. Wages are prorated over
+  // seasonDays so a full season sums to the stored annual salary.
+  "payrollIntervalDays": 7,
+  // Game-day cadence for weekly sim updates (energy recovery, morale,
+  // potential growth, board/fan confidence, manager firings).
+  "weeklyIntervalDays": 7,
+  // Game-day cadence at which AI clubs list players for sale and generate
+  // transfer activity.
+  "transferIntervalDays": 1,
+  // Game-days an auction stays open before it resolves to the highest bidder.
+  "auctionDurationDays": 7,
+  // Length of a loan in seasons (converted to game-days via seasonDays).
+  "loanDurationSeasons": 1,
+
+  // Annual interest rate (percent) charged on a club's outstanding bank loan
+  // balance each payroll interval.
+  "payrollLoanInterestPercent": 3,
+  // Game-days a stadium expansion takes to complete once construction starts.
+  "stadiumUpgradeDays": 15,
+  // How many seasons before a contract's expiry (in game-days) a club starts
+  // trying to renew the player.
+  "contractWarningSeasons": 2,
+
+  // How long (in real time) a match involving the human player's club takes to
+  // play out, used to pace the live-match ticker. AI-vs-AI matches always
+  // resolve instantly with the same engine.
+  "humanMatchDurationMinutes": 10
+}

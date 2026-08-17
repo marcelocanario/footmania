@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
 import { api } from "./api/client";
 import { useGame } from "./store/game";
+import { useSettings } from "./store/settings";
 import { strings } from "./strings";
 import { Layout } from "./components/Layout";
 import { Login } from "./screens/Login";
@@ -15,9 +16,11 @@ import { Transfers } from "./screens/Transfers";
 import { Finances } from "./screens/Finances";
 import { SeasonEnd } from "./screens/SeasonEnd";
 import { Records } from "./screens/Records";
+import { SettingsScreen } from "./screens/Settings";
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, setUser } = useGame();
+  const loadSettings = useSettings((s) => s.load);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -27,6 +30,10 @@ function Gate({ children }: { children: React.ReactNode }) {
       .then((res) => setUser(res))
       .catch(() => navigate("/login"));
   }, [user, setUser, navigate]);
+
+  useEffect(() => {
+    if (user) void loadSettings();
+  }, [user, loadSettings]);
 
   if (!user) return null;
   return <>{children}</>;
@@ -72,6 +79,7 @@ function AppRoutes() {
       <Route path="/finances" element={<Guard><Finances /></Guard>} />
       <Route path="/season-end" element={<Guard><SeasonEnd /></Guard>} />
       <Route path="/records" element={<Guard><Records /></Guard>} />
+      <Route path="/settings" element={<Guard><SettingsScreen /></Guard>} />
       <Route path="*" element={<Navigate to="/saves" replace />} />
     </Routes>
   );
