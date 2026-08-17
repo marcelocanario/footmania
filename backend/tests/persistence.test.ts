@@ -8,6 +8,7 @@ import { createSaveRecord, loadWorld, persistWorld } from "../src/services/saveS
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
 import { advance, finalizeLiveMatch } from "../src/game/world";
 import { applyDevelopment } from "../src/game/player";
+import { gameConfig } from "../src/config";
 
 const prisma = new PrismaClient();
 
@@ -105,22 +106,20 @@ describe("development persistence", () => {
     }
   });
 
-  it("keeps the release clause proportional to the player's own factor after development ticks", async () => {
+  it("keeps the release clause in sync with salary and remaining contract after development ticks", async () => {
     const { user, saveId, world } = await freshSave(555);
     try {
       const club = world.clubs[0];
       const p = world.players.find((x) => x.clubId === club.id && !x.isYouth)!;
-      const factor = p.releaseClauseFactor;
-      expect(Number.isFinite(factor)).toBe(true);
       for (let day = 1; day <= 10; day++) {
         applyDevelopment(world.rng, p, club, day);
       }
-      expect(p.releaseClauseFactor).toBe(factor);
-      expect(p.releaseClause).toBe(Math.round(p.value * factor));
+      const expected = Math.round(p.salary * (p.contractDays / gameConfig.seasonDays) * 0.5);
+      expect(p.releaseClause).toBe(expected);
       await persistWorld(prisma, saveId, user.id, world);
       const reloaded = await loadWorld(prisma, saveId, user.id);
       const p2 = reloaded!.world.players.find((x) => x.id === p.id)!;
-      expect(p2.releaseClauseFactor).toBeCloseTo(p.releaseClause / p.value, 6);
+      expect(p2.releaseClause).toBe(expected);
     } finally {
       await teardown(user.id);
     }

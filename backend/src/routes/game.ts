@@ -5,7 +5,9 @@ import { bracketView, buildSnapshot, competitionTable, playerView } from "../ser
 import { liveStateView } from "../services/liveView";
 import { dayInfo } from "../game/calendar";
 import { withSaveLock } from "../services/lock";
-import { counterOffer, evaluateBid, createAuction, auctionAvailableCash, freeAgentSigningBonus, releasePlayer } from "../game/transfers";
+import { evaluateBid, createAuction, auctionAvailableCash, freeAgentSigningBonus, releasePlayer } from "../game/transfers";
+import { calculateReleaseClause, remainingSeasons } from "../game/economy";
+import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
 import { finalizeLiveMatch, roundLabelFor } from "../game/world";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
@@ -32,7 +34,7 @@ const auctionBidSchema = z.object({
 });
 
 const contractSchema = z.object({
-  length: z.number().int().min(1).max(5), // contract length in seasons
+  length: z.number().int().min(1).max(gameConfig.maxContractSeasons), // contract length in seasons
   salary: z.number().int().min(0),
 });
 
@@ -354,9 +356,11 @@ export async function gameRoutes(app: FastifyInstance) {
         buyer.cash -= parsed.data.bid;
         buyer.ledger.expense.push({ code: 1, amount: parsed.data.bid, day: world.dayIndex, label: `Signing bonus: ${player.name}` });
         player.clubId = buyer.id;
+        resetPayrollPeriod(player, world.dayIndex);
         player.tacPos = -1;
         player.starter = false;
         player.contractDays = Math.max(player.contractDays, gameConfig.seasonDays);
+        player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
         player.onSale = false;
         player.salePrice = null;
         world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed free agent ${player.name}`, kind: "transfer" });
@@ -366,25 +370,16 @@ export async function gameRoutes(app: FastifyInstance) {
       if (!seller) return { error: { code: 400, body: { error: "Player has no club" } } };
       if (buyer.id === seller.id) return { error: { code: 400, body: { error: "Cannot bid on own player" } } };
       if (player.loanId !== null) return { error: { code: 400, body: { error: "A player on loan cannot be transferred" } } };
-      if (player.isStar) {
-        const target = counterOffer(seller, player, world.players);
-        if (parsed.data.bid >= target) {
-          buyer.cash -= parsed.data.bid;
-          seller.cash += parsed.data.bid;
-          player.clubId = buyer.id;
-          player.tacPos = -1;
-          world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed ${player.name} for ${parsed.data.bid}`, kind: "transfer" });
-          return { value: { accepted: true, price: parsed.data.bid } };
-        }
-        return { value: { accepted: false, counter: Math.round(target * 1.3) } };
-      }
       const evalRes = evaluateBid(world.rng, player, parsed.data.bid, seller, buyer, world.players);
       if (evalRes.accepted) {
         buyer.cash -= parsed.data.bid;
         seller.cash += parsed.data.bid;
+        // Settle the seller's accrued wages before changing ownership.
+        settlePlayerPayroll(world, player);
         player.clubId = buyer.id;
         player.tacPos = -1;
         player.contractDays = Math.max(player.contractDays, gameConfig.seasonDays);
+        player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
         world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed ${player.name} for ${parsed.data.bid}`, kind: "transfer" });
         return { value: { accepted: true, price: parsed.data.bid } };
       }
@@ -456,12 +451,19 @@ export async function gameRoutes(app: FastifyInstance) {
       if (!club || !player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in squad" } } };
       if (player.loanId !== null) return { error: { code: 400, body: { error: "A player on loan cannot renew his contract" } } };
       const seasons = parsed.data.length;
-      const demand = contractDemand(player);
+      if (seasons < 1 || seasons > gameConfig.maxContractSeasons) {
+        return { error: { code: 400, body: { error: `Contract length must be between 1 and ${gameConfig.maxContractSeasons} seasons` } } };
+      }
+      const demand = contractDemand(player, seasons);
       if (parsed.data.salary < demand) {
         return { error: { code: 400, body: { error: "Salary offer rejected", demand } } };
       }
+      // A renewal replaces the existing contract (new term starts now).
+      settlePlayerPayroll(world, player);
+      resetPayrollPeriod(player, world.dayIndex);
       player.salary = parsed.data.salary;
       player.contractDays = seasons * gameConfig.seasonDays;
+      player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
       player.morale = Math.min(100, player.morale + 5);
       world.news.push({ dayIndex: world.dayIndex, text: `${player.name} signed a new contract`, kind: "contract" });
       return { value: { ok: true, demand } };
@@ -476,7 +478,16 @@ export async function gameRoutes(app: FastifyInstance) {
     const player = loaded?.world.players.find((p) => p.id === playerId);
     if (!loaded) return reply.code(404).send({ error: "Save not found" });
     if (!player) return reply.code(404).send({ error: "Player not found" });
-    return { demand: contractDemand(player), salary: player.salary, contractDays: player.contractDays };
+    const maxSeasons = gameConfig.maxContractSeasons;
+    const demandBySeason = Object.fromEntries(
+      Array.from({ length: maxSeasons }, (_, i) => [i + 1, contractDemand(player, i + 1)])
+    );
+    return {
+      demand: demandBySeason[1] ?? player.salary,
+      demandsBySeason: demandBySeason,
+      salary: player.salary,
+      contractDays: player.contractDays,
+    };
   });
 
   app.post("/players/:id/academy", async (req, reply) => {
@@ -558,7 +569,7 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!loaded) return reply.code(404).send({ error: "Save not found" });
     const club = loaded.world.clubs.find((c) => c.id === loaded.world.humanClubId);
     if (!club) return reply.code(400).send({ error: "Save not started" });
-    const reference = TICKET_PRICES[Math.min(5, club.reputation)].map((x) => Math.max(1, Math.round(x / 200)));
+    const reference = TICKET_PRICES[Math.min(5, Math.round(club.level / 5))].map((x) => Math.max(1, Math.round(x / 200)));
     return {
       ticketPrices: loaded.world.ticketPrices[club.id] ?? reference,
       ticketBounds: reference.map((x) => ({ min: Math.max(1, Math.round(x * 0.5)), max: Math.round(x * 2.5) })),
@@ -583,7 +594,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const res = await withWorld(app, saveId, req.user!.id, async (world) => {
       const club = world.clubs.find((c) => c.id === world.humanClubId);
       if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
-      const reference = TICKET_PRICES[Math.min(5, club.reputation)].map((x) => Math.max(1, Math.round(x / 200)));
+      const reference = TICKET_PRICES[Math.min(5, Math.round(club.level / 5))].map((x) => Math.max(1, Math.round(x / 200)));
       const valid = parsed.data.prices.every((price, i) => price >= Math.max(1, Math.round(reference[i] * 0.5)) && price <= Math.round(reference[i] * 2.5));
       if (!valid) return { error: { code: 400, body: { error: "Ticket prices are outside the allowed range" } } };
       world.ticketPrices[club.id] = parsed.data.prices as [number, number, number, number];
@@ -641,6 +652,7 @@ export async function gameRoutes(app: FastifyInstance) {
       if (parsed.data.action === "take") {
         if (loan.toClubId !== null || loan.fromClubId === human.id) return { error: { code: 400, body: { error: "Loan is not available" } } };
         if (!loanFitsContract(world.dayIndex, loan.endDay, player.contractDays)) return { error: { code: 400, body: { error: "Loan duration exceeds the player's remaining contract" } } };
+        settlePlayerPayroll(world, player);
         loan.toClubId = human.id;
         player.clubId = human.id;
         player.loanId = loan.id;

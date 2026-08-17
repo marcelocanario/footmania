@@ -138,7 +138,9 @@ describe("worldgen", () => {
       const bill = wageBills.get(club.id) ?? 0;
       if (bill > 0) {
         expect(paid).toBeGreaterThanOrEqual(bill * 0.6);
-        expect(paid).toBeLessThanOrEqual(bill * 1.05);
+        // Transfers and rollover squad top-ups can add players during the
+        // season, so the initial roster bill is only a lower-bound baseline.
+        expect(paid).toBeLessThanOrEqual(bill * 1.5);
       }
     }
     const league = world.competitions.find((c) => c.kind === "league")!;
@@ -153,6 +155,32 @@ describe("worldgen", () => {
 });
 
 describe("game config validation", () => {
+  const economyFields = {
+    playerValueBase: 9000,
+    playerValueOverallReference: 50,
+    playerValueOverallExponent: 3.5,
+    playerValueMultiplier: 1,
+    playerValueAgeCurve: { 16: 0.65, 22: 1.1, 30: 0.9 },
+    playerValueContractNeutralSeasons: 3,
+    playerValueContractWeight: 0.05,
+    playerValueContractMinMultiplier: 0.9,
+    playerValueContractMaxMultiplier: 1.1,
+    salaryBase: 2500,
+    salaryOverallReference: 50,
+    salaryOverallExponent: 2.5,
+    salaryMultiplier: 1,
+    salaryAgeCurve: { 16: 0.5, 22: 1.1, 30: 0.95 },
+    salaryFloor: 500,
+    academySalaryMultiplier: 0.1,
+    maxContractSeasons: 5,
+    renewalMinRaise: 0.02,
+    renewalSkillRaiseWeight: 0.08,
+    renewalSkillExponent: 1.6,
+    renewalMaxRaise: 0.15,
+    renewalAgeCurve: { 20: 1.3, 28: 1 },
+    releaseClauseRemainingValuePct: 0.5,
+  };
+
   it("accepts the derived league math from the shipped config", () => {
     const cfg = parseGameConfig({
       seasonDays: 30,
@@ -165,6 +193,7 @@ describe("game config validation", () => {
       stadiumUpgradeDays: 15,
       contractWarningSeasons: 2,
       humanMatchDurationMinutes: 10,
+      ...economyFields,
     });
     expect(cfg.league.teams).toBe(8);
   });
@@ -182,6 +211,7 @@ describe("game config validation", () => {
         stadiumUpgradeDays: 15,
         contractWarningSeasons: 2,
         humanMatchDurationMinutes: 10,
+        ...economyFields,
       })
     ).toThrow(/lastMatchDay/);
     expect(() =>
@@ -196,6 +226,7 @@ describe("game config validation", () => {
         stadiumUpgradeDays: 15,
         contractWarningSeasons: 2,
         humanMatchDurationMinutes: 10,
+        ...economyFields,
       })
     ).toThrow();
   });

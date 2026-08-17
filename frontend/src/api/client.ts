@@ -39,8 +39,6 @@ export interface PlayerView {
   contractDays: number;
   injuryDays: number;
   isYouth: boolean;
-  isStar: boolean;
-  worldClass: boolean;
   seasonGoals: number;
   seasonAssists: number;
   careerGoals: number;
@@ -74,7 +72,6 @@ export interface Snapshot {
     name: string;
     shortName: string;
     country: string;
-    reputation: number;
     level: number;
     cash: number;
     stadiumName: string;
@@ -317,6 +314,7 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
 
 export interface Settings {
   humanMatchDurationMinutes: number;
+  maxContractSeasons?: number;
 }
 
 export const api = {
@@ -394,7 +392,7 @@ export const api = {
   releasePlayer: (saveId: number, playerId: number) =>
     request<{ ok: boolean; cost: number }>(`/api/players/${playerId}/release?saveId=${saveId}`, { method: "POST" }),
   contractDemand: (saveId: number, playerId: number) =>
-    request<{ demand: number; salary: number; contractDays: number }>(`/api/players/${playerId}/contract?saveId=${saveId}`),
+    request<{ demand: number; demandsBySeason: Record<number, number>; salary: number; contractDays: number }>(`/api/players/${playerId}/contract?saveId=${saveId}`),
   records: (saveId: number) => request<{ records: CareerRecord[]; awards: SeasonAward[] }>(`/api/records?saveId=${saveId}`),
 
   settings: () => request<Settings>("/api/settings"),

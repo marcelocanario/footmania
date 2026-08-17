@@ -55,7 +55,7 @@ export function Competitions() {
       <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <ClubBadge name={r.clubName} primary={r.colors?.primary} secondary={r.colors?.secondary} size={26} />
         <span style={{ fontWeight: 600 }}>{r.clubName}</span>
-        {r.isHuman && <span className="flag-chip fc-star">YOU</span>}
+        {r.isHuman && <span className="flag-chip fc-accent">YOU</span>}
       </span>
     )} style={{ minWidth: 220 }} />,
     <Column key="p" field="played" header="P" style={{ width: 44 }} />,

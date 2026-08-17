@@ -8,6 +8,7 @@ import { Toast } from "primereact/toast";
 import { Dumbbell, ShieldCheck, Users, Clapperboard } from "lucide-react";
 import { api, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
+import { useSettings } from "../store/settings";
 import { strings } from "../strings";
 import { PlayerName } from "../components/PlayerName";
 import { RatingBar } from "../components/RatingBar";
@@ -46,11 +47,13 @@ type TrainingFocus = "assistant" | "primary" | "secondary";
 export function Squad() {
   const { snapshot, saveId, refresh } = useGame();
   const isMobile = useIsMobile();
+  const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
   const [selected, setSelected] = useState<PlayerView | null>(null);
   const [showRenew, setShowRenew] = useState(false);
   const [renewSeasons, setRenewSeasons] = useState(1);
   const [renewSalary, setRenewSalary] = useState(0);
   const [renewDemand, setRenewDemand] = useState(0);
+  const [renewDemandsBySeason, setRenewDemandsBySeason] = useState<Record<number, number>>({});
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
@@ -74,9 +77,11 @@ export function Squad() {
     setRenewSeasons(1);
     setRenewSalary(p.salary);
     setRenewDemand(p.salary);
+    setRenewDemandsBySeason({});
     if (saveId) void api.contractDemand(saveId, p.id).then((res) => {
-      setRenewDemand(res.demand);
-      setRenewSalary(res.demand);
+      setRenewDemandsBySeason(res.demandsBySeason ?? {});
+      setRenewDemand(res.demandsBySeason?.[1] ?? res.salary);
+      setRenewSalary(res.demandsBySeason?.[1] ?? res.salary);
     });
     setShowRenew(true);
   };
@@ -280,8 +285,6 @@ export function Squad() {
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.name}</h3>
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
                     {selectedPlayer.positionName} · {selectedPlayer.age} yrs · {selectedPlayer.country}
-                    {selectedPlayer.isStar ? " · ★ Star" : ""}
-                   {selectedPlayer.worldClass ? " · World Class" : ""}
                     {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
                   </div>
                 </div>
@@ -399,8 +402,14 @@ export function Squad() {
               <Dropdown
                 id="renew-seasons"
                 value={renewSeasons}
-                options={[1, 2, 3, 4, 5].map((s) => ({ label: s === 1 ? "1 season" : `${s} seasons`, value: s }))}
-                onChange={(e) => setRenewSeasons(e.value)}
+                options={Array.from({ length: maxContractSeasons }, (_, i) => i + 1).map((s) => ({ label: s === 1 ? "1 season" : `${s} seasons`, value: s }))}
+                onChange={(e) => {
+                  const v = e.value as number;
+                  setRenewSeasons(v);
+                  const demand = renewDemandsBySeason?.[v] ?? renewDemand;
+                  setRenewSalary(demand);
+                  setRenewDemand(demand);
+                }}
                 style={{ width: "100%" }}
               />
             </div>

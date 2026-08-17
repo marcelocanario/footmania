@@ -207,14 +207,14 @@ export function Transfers() {
 
       {tab === "sell" && (
         <div className="card">
-          {squad.filter((p) => !p.isStar).length === 0 ? (
+          {squad.length === 0 ? (
             <div className="empty-state">
               <span style={{ fontSize: 26 }}>📤</span>
               No players available to sell.
             </div>
           ) : (
             <div className="grid stagger">
-              {squad.filter((p) => !p.isStar && !p.onSale && !p.onLoan && !p.onLoanOut).map((p) => (
+              {squad.filter((p) => !p.onSale && !p.onLoan && !p.onLoanOut).map((p) => (
                 <div className="card hoverable" key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
                   <div>
                     <PlayerName player={p} />

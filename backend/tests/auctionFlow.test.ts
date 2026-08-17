@@ -19,7 +19,7 @@ describe("auction flow (engine)", () => {
     human.isHuman = true;
     world.humanClubId = human.id;
 
-    const player = world.players.find((p) => p.clubId === human.id && !p.isYouth && !p.isStar && !p.worldClass && p.position !== 0)!;
+    const player = world.players.find((p) => p.clubId === human.id && !p.isYouth && p.position !== 0)!;
     const sellDay = world.dayIndex;
 
     const cashBefore = new Map(world.clubs.map((c) => [c.id, c.cash]));
@@ -62,7 +62,7 @@ describe("auction flow (engine)", () => {
       human.isHuman = true;
       world.humanClubId = human.id;
       const seller = world.clubs.find((c) => !c.isHuman)!;
-      const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth && !p.isStar && !p.worldClass)!;
+      const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
       createAuction(world.rng, world, player.id, seller.id, world.dayIndex + 7);
       aiBidDuringWindow(world);
       const listing = world.auctions[0];

@@ -39,5 +39,105 @@
   // How long (in real time) a match involving the human player's club takes to
   // play out, used to pace the live-match ticker. AI-vs-AI matches always
   // resolve instantly with the same engine.
-  "humanMatchDurationMinutes": 10
+  "humanMatchDurationMinutes": 10,
+
+  // --- Player economy ---
+  //
+  // Player market value = base x (overall/reference)^exponent x ageMultiplier
+  //                       x contractMultiplier x multiplier
+  // Value is fully deterministic for a given overall / age / contract and never
+  // depends on hidden development, form, position, or club.
+  //
+  // Base monetary unit used to scale the whole value curve. Doubling it roughly
+  // doubles every player's market value.
+  "playerValueBase": 500000,
+  // The overall rating that produces a value multiplier of exactly 1.0 before
+  // age/contract are applied. Players rated above this get super-linear value;
+  // below it get sub-linear value.
+  "playerValueOverallReference": 50,
+  // Exponent applied to (overall / reference). Higher exponents make high-rated
+  // players disproportionately more expensive (super-linear growth).
+  "playerValueOverallExponent": 3.5,
+  // Global multiplier applied to the final value. A convenient single knob to
+  // scale all market values without touching the base or curves.
+  "playerValueMultiplier": 1,
+  // Age multiplier applied to base value (ages between keyframes interpolate).
+  // Below ~23 the multiplier grows with age (prospects appreciate), peaks in
+  // the mid-20s, then declines sharply past 30 as players depreciate.
+  "playerValueAgeCurve": {
+    "16": 0.65, "17": 0.72, "18": 0.8, "19": 0.88, "20": 0.95, "21": 1.03, "22": 1.1, "23": 1.14,
+    "24": 1.15, "25": 1.15, "26": 1.15, "27": 1.12, "28": 1.05, "29": 0.97, "30": 0.9, "31": 0.8,
+    "32": 0.7, "33": 0.6, "34": 0.5, "35": 0.4, "36": 0.3, "37": 0.22, "38": 0.15, "39": 0.1, "40": 0.08
+  },
+  // Contract length (in seasons) at which the contract multiplier is exactly
+  // 1.0. Shorter contracts are worth slightly less; longer ones slightly more.
+  "playerValueContractNeutralSeasons": 3,
+  // How much the value multiplier changes per season of difference from
+  // contractNeutralSeasons (e.g. 0.05 = 5% per season).
+  "playerValueContractWeight": 0.05,
+  // Lower bound for the contract multiplier (floor applied when contracts are
+  // very short). Prevents value from dropping too far on expiring contracts.
+  "playerValueContractMinMultiplier": 0.9,
+  // Upper bound for the contract multiplier (cap applied when contracts are
+  // very long). Prevents value from inflating too much on long contracts.
+  "playerValueContractMaxMultiplier": 1.1,
+
+  // Base salary = salaryBase x (overall/reference)^exponent x ageMultiplier x multiplier.
+  // Used only when a contract is first established; persisted salaries are fixed.
+  //
+  // Base monetary unit for the salary curve. Doubling it roughly doubles every
+  // player's suggested salary.
+  "salaryBase": 70000,
+  // The overall rating that produces a salary multiplier of exactly 1.0 before
+  // age is applied.
+  "salaryOverallReference": 50,
+  // Exponent applied to (overall / reference). Higher values make top players
+  // demand disproportionately higher wages.
+  "salaryOverallExponent": 2.5,
+  // Global multiplier applied to the final suggested salary. A convenient knob
+  // to scale all wages without touching the base or curves.
+  "salaryMultiplier": 1,
+  // Age multiplier applied to the suggested salary (ages between keyframes
+  // interpolate). Young prospects earn less, peak in their mid-to-late 20s,
+  // then decline after ~30 as players age.
+  "salaryAgeCurve": {
+    "16": 0.5, "17": 0.6, "18": 0.7, "19": 0.8, "20": 0.9, "21": 1, "22": 1.05, "23": 1.1,
+    "24": 1.1, "25": 1.1, "26": 1.1, "27": 1.1, "28": 1.05, "29": 1, "30": 0.95, "31": 0.9,
+    "32": 0.85, "33": 0.8, "34": 0.75, "35": 0.7, "36": 0.65, "37": 0.6, "38": 0.55, "39": 0.5, "40": 0.45
+  },
+  // Minimum salary a player can ever receive (per season). Guards against
+  // absurdly low wages for very low-rated or very old players.
+  "salaryFloor": 500,
+  // Academy players receive this fraction of their normal salary until promotion.
+  "academySalaryMultiplier": 0.1,
+
+  // --- Contracts & renewals ---
+  //
+  // Maximum contract length (in seasons) a player can be offered. Both the API
+  // validation and the frontend renewal dropdown honor this value.
+  "maxContractSeasons": 5,
+  // Minimum fractional raise a player expects per season of a new contract,
+  // regardless of how good he is (e.g. 0.02 = at least a 2% raise).
+  "renewalMinRaise": 0.02,
+  // How strongly a player's skill (overall) influences the raise he demands.
+  // Higher values make top players ask for much bigger raises than squad players.
+  "renewalSkillRaiseWeight": 0.08,
+  // Exponent applied to the normalized skill before weighting the raise. Values
+  // > 1 make the skill influence super-linear (only elite players get big raises).
+  "renewalSkillExponent": 1.6,
+  // Maximum fractional raise a player can demand per season, capping renewal
+  // demands even for the best players at their peak.
+  "renewalMaxRaise": 0.15,
+  // Age multiplier applied to the renewal raise (ages between keyframes
+  // interpolate). Young rising stars demand bigger raises; aging veterans accept
+  // smaller ones.
+  "renewalAgeCurve": {
+    "16": 1.15, "17": 1.2, "18": 1.3, "19": 1.35, "20": 1.3, "21": 1.2, "22": 1.1, "23": 1,
+    "24": 1, "25": 1, "26": 1, "27": 1, "28": 1, "29": 0.95, "30": 0.9, "31": 0.85, "32": 0.8,
+    "33": 0.75, "34": 0.7, "35": 0.65, "36": 0.6, "37": 0.55, "38": 0.5, "39": 0.45, "40": 0.4
+  },
+  // Release clause = salaryPerSeason x remainingSeasons x this percentage.
+  // Fraction of the remaining contract value (salary x seasons left) the club
+  // must pay to release the player early.
+  "releaseClauseRemainingValuePct": 0.5
 }

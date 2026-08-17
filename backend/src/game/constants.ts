@@ -103,7 +103,7 @@ export const LEAGUE_PRIZES: number[] = [8000000, 5000000, 3000000, 2000000, 1200
 
 export const TV_POSITION_BONUS: number[] = [3000000, 2000000, 1200000, 800000, 500000, 300000, 200000, 100000];
 
-// Indexed by reputation 1..5 (single value per reputation).
+// Indexed by club tier 1..5 (derived from level; single value per tier).
 export const SPONSORSHIP: number[] = [800000, 1500000, 3000000, 5000000, 8000000];
 
 export const STARTING_CASH: number[] = [3500000, 6000000, 9000000, 15000000, 25000000];

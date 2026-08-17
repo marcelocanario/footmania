@@ -149,7 +149,7 @@ export function advance(world: World, opts?: { maxDays?: number }): DayResult {
     processDayEvents(rng, world, events);
     const dayFixtures = fixturesForDay(world, world.dayIndex);
     if (dayFixtures.length === 0 && advanced < maxDays) {
-      if (allCompetitionsFinished(world)) {
+      if (allCompetitionsFinished(world) && world.dayIndex >= gameConfig.seasonDays) {
         seasonEnd(world, events);
         return buildDayResult(world, [], events, undefined, true);
       }
@@ -179,7 +179,7 @@ export function advance(world: World, opts?: { maxDays?: number }): DayResult {
 }
 
 function completeDay(rng: World["rng"], world: World, playedMatches: Match[], humanMatch: Match | undefined, events: string[]): DayResult {
-  if (allCompetitionsFinished(world)) {
+  if (allCompetitionsFinished(world) && world.dayIndex >= gameConfig.seasonDays) {
     seasonEnd(world, events);
     return buildDayResult(world, playedMatches, events, humanMatch, true);
   }
@@ -252,8 +252,8 @@ function updateConfidence(world: World, match: Match) {
   const aGoals = match.awayScore;
   const apply = (club: Club, opponent: Club, goals: number, conceded: number) => {
     let board = 0;
-    if (goals > conceded) board = club.reputation <= opponent.reputation ? 5 : 3;
-    else if (goals < conceded) board = club.reputation >= opponent.reputation ? -7 : -4;
+    if (goals > conceded) board = club.level <= opponent.level ? 5 : 3;
+    else if (goals < conceded) board = club.level >= opponent.level ? -7 : -4;
     club.boardConfidence = Math.max(0, Math.min(100, club.boardConfidence + board));
     let fan = board > 0 ? 3 : board < 0 ? -4 : 0;
     fan += Math.min(3, goals);
@@ -337,7 +337,7 @@ function spawnAuction(rng: World["rng"], world: World) {
   const sellers = world.clubs.filter((c) => !c.isHuman);
   if (sellers.length === 0) return;
   const seller = pick(rng, sellers);
-  const roster = world.players.filter((p) => p.clubId === seller.id && p.loanId === null && !p.isYouth && !p.isStar && !p.onSale);
+  const roster = world.players.filter((p) => p.clubId === seller.id && p.loanId === null && !p.isYouth && !p.onSale);
   if (roster.length === 0) return;
   const player = pick(rng, roster);
   createAuction(rng, world, player.id, seller.id, seasonEndDay(world.dayIndex, gameConfig.auctionDurationDays));

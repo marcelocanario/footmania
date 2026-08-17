@@ -2,8 +2,6 @@ import type { Club, Player, World } from "./types";
 import { chance, nextInt, pick } from "./rng";
 import {
   aging,
-  calcSalary,
-  calcValue,
   generatePlayer,
   potentialGrowth,
   shouldRetire,
@@ -14,6 +12,14 @@ import { squadNeeds } from "./transfers";
 import { generateName } from "./names";
 import { buildSeasonStructure } from "./worldgen";
 import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
+import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from "./payroll";
+import {
+  calculateBaseSalary,
+  calculateContractDemand,
+  calculatePlayerValue,
+  calculateReleaseClause,
+  remainingSeasons,
+} from "./economy";
 
 /** Latest day-of-season a deadline can resolve: the season rolls over on the
  * day after the final league round (LEAGUE_LAST_MATCH_DAY + 1), so any deadline
@@ -29,12 +35,12 @@ export function loanFitsContract(startDay: number, endDay: number, contractDays:
 export const SENIOR_SQUAD_LIMIT = 35;
 const ACADEMY_TARGET = 8;
 
-export function fairSalaryForPlayer(club: Club, player: Player): number {
-  return calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, false);
+export function fairSalaryForPlayer(player: Player): number {
+  return calculateBaseSalary(player.overall, player.age);
 }
 
-export function promotedYouthSalary(club: Club, player: Player): number {
-  return Math.max(500, Math.round(fairSalaryForPlayer(club, player) * 0.8));
+export function promotedYouthSalary(player: Player): number {
+  return Math.max(gameConfig.salaryFloor, Math.round(fairSalaryForPlayer(player) * 0.8));
 }
 
 export function promoteYouthPlayer(world: World, player: Player, reason: "manual" | "age" = "manual"): { ok: boolean; error?: string } {
@@ -43,11 +49,12 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
   const seniorCount = world.players.filter((p) => p.clubId === club.id && !p.isYouth).length;
   if (seniorCount >= SENIOR_SQUAD_LIMIT) return { ok: false, error: "Professional squad is full" };
 
+  settlePlayerPayroll(world, player);
   player.isYouth = false;
-  player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, false);
-  player.salary = promotedYouthSalary(club, player);
-  player.releaseClauseFactor = 0.25;
-  player.releaseClause = Math.round(player.value * 0.25);
+  resetPayrollPeriod(player, world.dayIndex);
+  player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
+  player.salary = promotedYouthSalary(player);
+  player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   player.tacPos = -1;
   player.starter = false;
   world.news.push({
@@ -62,6 +69,7 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
 export function dismissYouthPlayer(world: World, player: Player): { ok: boolean; error?: string } {
   const club = world.clubs.find((c) => c.id === player.clubId);
   if (!club || !player.isYouth) return { ok: false, error: "Player is not in the youth academy" };
+  settlePlayerPayroll(world, player);
   world.players = world.players.filter((p) => p.id !== player.id);
   world.news.push({ dayIndex: world.dayIndex, text: `${player.name} was released from the youth academy`, kind: "academy", clubId: club.id });
   return { ok: true };
@@ -207,21 +215,11 @@ function maybeFireManager(rng: World["rng"], world: World, club: Club) {
   }
 }
 
-/** Pays wages in installments: Player.salary is the wage for the whole season. The
- * season runs days 1..LEAGUE_LAST_MATCH_DAY+1 (28 days with the shipped config), and
- * payrollIntervalDay installments of round(salary * interval / seasonDays) cover that
- * window pro-rata (4 payments on days 7/14/21/28). */
+/** Pays wages accrued since the previous payroll boundary. */
 export function settlePayroll(rng: World["rng"], world: World) {
-  const { payrollIntervalDays, seasonDays } = gameConfig;
+  const salaries = settlePayrollThrough(world);
   for (const club of world.clubs) {
-    let salaries = 0;
-    for (const player of world.players) {
-      if (player.clubId !== club.id) continue;
-      const installment = Math.round((player.salary * payrollIntervalDays) / seasonDays);
-      salaries += installment;
-    }
-    club.cash -= salaries;
-    club.ledger.expense.push({ code: 4, amount: salaries, day: world.dayIndex, label: "Player salaries" });
+    if (!salaries.has(club.id)) continue;
     if (club.cash < 0) {
       club.boardConfidence = Math.max(0, club.boardConfidence - 10);
       if (club.boardConfidence < 25) {
@@ -241,7 +239,8 @@ export function settlePayroll(rng: World["rng"], world: World) {
 
 export function yearlySponsorship(world: World) {
   for (const club of world.clubs) {
-    const amount = SPONSORSHIP[Math.max(0, Math.min(4, club.reputation - 1))];
+    const tier = Math.min(5, Math.max(1, Math.round(club.level / 5)));
+    const amount = SPONSORSHIP[tier - 1];
     world.tvDeals.push({ clubId: club.id, season: world.year, baseAmount: amount, positionBonus: 0 });
     club.cash += amount;
     club.ledger.income.push({ code: 6, amount, day: world.dayIndex, label: "TV deal (base)" });
@@ -419,10 +418,16 @@ export function contractCycle(rng: World["rng"], world: World) {
     if (!club || club.isHuman) continue;
     const warningThreshold = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
     if (player.contractDays <= warningThreshold) {
-      const demand = Math.round(player.salary * (1 + nextInt(rng, 50) / 100));
-      if (demand <= player.salary * 1.3 && club.cash > 0) {
+      const maxSeasons = gameConfig.maxContractSeasons;
+      const offerSeasons = 1 + nextInt(rng, maxSeasons);
+      const demand = calculateContractDemand(player.salary, player.overall, player.age, offerSeasons);
+      // AI renewal uses the same demand model as the human player; the club
+      // only decides whether it can afford it and for how long.
+      if (club.cash > demand && demand > player.salary) {
+        settlePlayerPayroll(world, player);
+        resetPayrollPeriod(player, world.dayIndex);
         player.salary = demand;
-        player.contractDays = DAYS_PER_YEAR * (1 + nextInt(rng, 3));
+        player.contractDays = DAYS_PER_YEAR * offerSeasons;
         player.morale = Math.min(100, player.morale + 5);
       } else if (chance(rng, 30)) {
         world.news.push({
@@ -437,10 +442,12 @@ export function contractCycle(rng: World["rng"], world: World) {
   }
 }
 
-export function contractDemand(player: Player): number {
-  const form = Math.min(100, player.overall + player.seasonGoals * 2 + player.seasonAssists);
-  const ageFactor = player.age <= 23 ? 1.12 : player.age >= 31 ? 0.92 : 1;
-  return Math.max(player.salary, Math.round(player.salary * (0.9 + form / 100) * ageFactor));
+/**
+ * Per-season salary the player requests for a renewal of `seasons` seasons,
+ * based on his current salary, overall, and age. Shared by human and AI clubs.
+ */
+export function contractDemand(player: Player, seasons: number): number {
+  return calculateContractDemand(player.salary, player.overall, player.age, seasons);
 }
 
 export function endLoan(world: World, loan: { id: number; playerId: number; fromClubId: number; toClubId: number | null }) {
@@ -448,6 +455,9 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
   const full = world.loans.find((l) => l.id === loan.id);
   if (full) full.recalled = true;
   if (p) {
+    if (p.clubId !== loan.fromClubId) {
+      settlePlayerPayroll(world, p);
+    }
     p.clubId = loan.fromClubId;
     p.loanId = null;
     p.tacPos = -1;
@@ -514,6 +524,7 @@ export function loanCycle(rng: World["rng"], world: World) {
     if (candidates.length === 0) continue;
     const loan = pick(rng, candidates);
     const p = world.players.find((x) => x.id === loan.playerId)!;
+    settlePlayerPayroll(world, p);
     loan.toClubId = club.id;
     p.loanId = loan.id;
     p.clubId = club.id;
@@ -562,18 +573,32 @@ export function startStadiumUpgrade(world: World, club: Club): { error?: string;
 }
 
 export function rolloverSeason(rng: World["rng"], world: World): void {
+  // The configured season can end between payroll intervals. Settle the
+  // remainder before resetting the day counter so every player earns one full
+  // season salary.
+  const salaries = settlePayrollThrough(world, gameConfig.seasonDays);
+  for (const club of world.clubs) {
+    if (!salaries.has(club.id)) continue;
+    if (club.cash < 0) {
+      club.boardConfidence = Math.max(0, club.boardConfidence - 10);
+      if (club.boardConfidence < 25) {
+        const penalty = Math.round(Math.abs(club.cash) * 0.02);
+        club.cash -= penalty;
+        club.ledger.expense.push({ code: 9, amount: penalty, day: world.dayIndex, label: "Overdraft penalty" });
+        world.news.push({ dayIndex: world.dayIndex, text: `The bank charged ${club.name} an overdraft penalty`, kind: "finance", clubId: club.id });
+      }
+    }
+  }
   const clubs = world.clubs;
   for (const player of world.players) {
     aging(rng, player, world.clubs.find((c) => c.id === player.clubId) ?? world.clubs[0]);
-    const club = world.clubs.find((c) => c.id === player.clubId);
-    if (club) {
-      player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, player.isYouth);
-      player.salary = calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, player.isYouth);
-    }
     if (player.contractDays > 0) player.contractDays = Math.max(0, player.contractDays - DAYS_PER_YEAR);
+    // Market value is recalculated as age / overall / contract change; the
+    // contract salary is fixed and is never recalculated at rollover.
+    player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
+    player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   }
   const retirees: number[] = [];
-  const retiringStars: Player[] = [];
   for (const player of world.players) {
     if (player.clubId !== null && !player.isYouth) {
       if (player.age >= 33 && chance(rng, 25)) {
@@ -587,16 +612,8 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
       }
       if (shouldRetire(rng, player)) {
         retirees.push(player.id);
-        if (player.isStar || player.worldClass) retiringStars.push(player);
       }
     }
-  }
-  for (const p of retiringStars) {
-    world.news.push({
-      dayIndex: world.dayIndex,
-      text: `${p.name} retires after a brilliant career with ${p.careerGoals} career goals`,
-      kind: "retirement",
-    });
   }
   world.players = world.players.filter((p) => !retirees.includes(p.id));
   for (const club of world.clubs) {
@@ -614,12 +631,14 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
     const need = Math.max(0, ACADEMY_TARGET - juniors.length);
     for (let i = 0; i < need; i++) {
       const youth = generatePlayer(rng, club, { isYouth: true, id: world.nextId++, seed: world.seed });
+      resetPayrollPeriod(youth, world.dayIndex);
       world.players.push(youth);
       world.news.push({ dayIndex: world.dayIndex, text: `${youth.name} joined the youth academy`, kind: "academy", clubId: club.id });
     }
     if (squad.length < 20) {
       for (let i = squad.length; i < 20; i++) {
         const p = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
+        resetPayrollPeriod(p, world.dayIndex);
         world.players.push(p);
       }
     }
@@ -629,6 +648,7 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
   world.year += 1;
   world.dayIndex = 0;
   world.dayOfWeek = 0;
+  for (const player of world.players) resetPayrollPeriod(player, 0);
   world.fixtures = [];
   world.matches = [];
   world.auctions = [];

@@ -12,8 +12,9 @@ import type {
 } from "../game/types";
 import { generateWorld } from "../game/worldgen";
 import { createRng } from "../game/rng";
-import { backfillDevelopmentProfile, calcSalary, calcValue, overallFromSkills } from "../game/player";
+import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
+import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
 
 type Tx = Prisma.TransactionClient;
 
@@ -76,19 +77,20 @@ function normalizePlayer(player: Player, club: Club | undefined): void {
   const acc = Array.isArray(player.skillAcc) ? player.skillAcc : [];
   const hasLegacyClickProgress = acc.some((value) => !Number.isFinite(value) || Math.abs(value) >= 1);
   player.skillAcc = hasLegacyClickProgress ? [0, 0, 0, 0, 0, 0, 0] : Array.from({ length: 7 }, (_, i) => Number(acc[i] ?? 0));
-  if (!Number.isFinite(player.releaseClauseFactor)) {
-    player.releaseClauseFactor = player.value > 0 && player.releaseClause > 0
-      ? Math.min(0.5, Math.max(0.05, player.releaseClause / player.value))
-      : 0.2;
+  if (!Number.isFinite(player.contractDays) || player.contractDays < 0) player.contractDays = 0;
+  if (!Number.isFinite(player.payrollPaidThroughDay) || player.payrollPaidThroughDay < 0) player.payrollPaidThroughDay = 0;
+  if (!Number.isFinite(player.payrollPaidAmount) || player.payrollPaidAmount < 0) player.payrollPaidAmount = 0;
+  if (!Number.isFinite(player.payrollPeriodStartDay) || player.payrollPeriodStartDay < 0) player.payrollPeriodStartDay = 0;
+  // Preserve the persisted market value/salary when present and sane; only
+  // backfill them when missing. Salaries are contractual and are never
+  // recomputed on load.
+  if (!Number.isFinite(player.value) || player.value <= 0) {
+    player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
   }
-  if (club) {
-    if (!Number.isFinite(player.value)) {
-      player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, player.isYouth);
-    }
-    if (!Number.isFinite(player.salary)) {
-      player.salary = calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, player.isYouth);
-    }
+  if (!Number.isFinite(player.salary) || player.salary <= 0) {
+    player.salary = calculateBaseSalary(player.overall, player.age);
   }
+  player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
 }
 
 /** Normalize a save written by the old single-column worldJson format. */
@@ -309,7 +311,6 @@ function clubRow(c: Club, saveId: number) {
     name: c.name,
     shortName: c.shortName,
     country: c.country,
-    reputation: c.reputation,
     level: c.level,
     cash: c.cash,
     stadiumName: c.stadiumName,
@@ -348,13 +349,14 @@ function playerRow(p: Player, saveId: number) {
     characteristic2: p.characteristic2,
     energy: p.energy,
     salary: p.salary,
+    payrollPaidThroughDay: p.payrollPaidThroughDay,
+    payrollPaidAmount: p.payrollPaidAmount,
+    payrollPeriodStartDay: p.payrollPeriodStartDay,
     value: p.value,
     releaseClause: p.releaseClause,
     injuryDays: p.injuryDays,
     contractDays: p.contractDays,
     isYouth: p.isYouth,
-    isStar: p.isStar,
-    worldClass: p.worldClass,
     starter: p.starter,
     growthAcc: p.growthAcc,
     potentialAcc: p.potentialAcc,
@@ -483,7 +485,6 @@ async function rebuildWorld(
     name: r.name,
     shortName: r.shortName,
     country: r.country,
-    reputation: r.reputation,
     level: r.level,
     cash: r.cash,
     stadiumName: r.stadiumName,
@@ -534,13 +535,14 @@ async function rebuildWorld(
       characteristic2: r.characteristic2,
       energy: r.energy,
       salary: r.salary,
+      payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
+      payrollPaidAmount: (r as typeof r & { payrollPaidAmount?: number }).payrollPaidAmount ?? 0,
+      payrollPeriodStartDay: (r as typeof r & { payrollPeriodStartDay?: number }).payrollPeriodStartDay ?? 0,
       value: r.value,
       releaseClause: r.releaseClause,
       injuryDays: r.injuryDays,
       contractDays: r.contractDays,
       isYouth: r.isYouth,
-      isStar: r.isStar,
-      worldClass: r.worldClass,
       starter: r.starter,
       growthAcc: r.growthAcc,
       potentialAcc: r.potentialAcc,
@@ -560,9 +562,6 @@ async function rebuildWorld(
       loanId: r.loanId,
       developmentProfile: profile,
       recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
-      releaseClauseFactor: r.releaseClause > 0 && r.value > 0
-        ? Math.min(0.5, Math.max(0.05, r.releaseClause / r.value))
-        : 0.2,
     };
   });
 

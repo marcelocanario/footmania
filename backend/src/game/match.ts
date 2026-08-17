@@ -592,7 +592,7 @@ function shotResolution(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half
   let damp = GOAL_DAMPING[Math.min(6, Math.max(0, lm.scores[attSide]))] ?? GOAL_DAMPING[0];
   const defClub = defSide === 0 ? lm.home : lm.away;
   const attClub = attSide === 0 ? lm.home : lm.away;
-  if (lm.scores[attSide] >= 2 && defClub.reputation - attClub.reputation >= 2) {
+  if (lm.scores[attSide] >= 2 && defClub.level - attClub.level >= 8) {
     damp = GOAL_DAMPING[5];
   }
   if (d6 < 0.2) d6 = 0.2;
@@ -818,8 +818,8 @@ function runtimeFromState(st: LiveMatchState, home: Club, away: Club, allPlayers
   const awayXI = resolve(st.awayXI);
   const ctx: RatingContext = {
     kind: st.compKind ?? "league",
-    homeRep: home.reputation,
-    awayRep: away.reputation,
+    homeRep: Math.min(5, Math.max(1, Math.round(home.level / 5))),
+    awayRep: Math.min(5, Math.max(1, Math.round(away.level / 5))),
     awayClubId: away.id,
   };
   return {

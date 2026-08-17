@@ -298,6 +298,11 @@ const ATTENDANCE_BY_COMP: Record<string, number[][]> = {
   ],
 };
 
+/** Club tier 1..5 derived from level (replaces the removed reputation). */
+export function clubTier(club: Club): number {
+  return Math.min(5, Math.max(1, Math.round(club.level / 5)));
+}
+
 export function calcGate(
   rng: RngState,
   home: Club,
@@ -305,11 +310,13 @@ export function calcGate(
   compKind: string,
   configuredPrices?: [number, number, number, number]
 ): TicketCalc {
+  const homeTier = clubTier(home);
+  const awayTier = clubTier(away);
   const sectors = sectorCapacity(home.stadiumCapacity);
-  const reference = TICKET_PRICES[Math.min(5, home.reputation)].map((x) => Math.max(1, Math.round(x / 200)));
+  const reference = TICKET_PRICES[Math.min(5, homeTier)].map((x) => Math.max(1, Math.round(x / 200)));
   let prices = configuredPrices ? [...configuredPrices] : [...reference] as number[];
   if (!configuredPrices && (compKind === "state" || compKind === "cup")) prices = prices.map((x) => Math.max(1, Math.round(x * 0.7)));
-  const noise = TICKET_PRICE_NOISE[Math.min(4, home.reputation)];
+  const noise = TICKET_PRICE_NOISE[Math.min(4, homeTier)];
   if (!configuredPrices) {
     for (let i = 0; i < 4; i++) prices[i] += nextInt(rng, Math.max(1, Math.round(noise[i] / 10)) + 1);
   }
@@ -317,15 +324,15 @@ export function calcGate(
   if (compKind === "league") demand += 0.15;
   if (compKind === "state" || compKind === "cup") demand += 0.3;
   for (let i = 0; i < 4; i++) prices[i] = Math.max(1, Math.round(prices[i] * (1 + demand)));
-  const diff = Math.min(5, Math.abs(away.reputation - home.reputation));
+  const diff = Math.min(5, Math.abs(awayTier - homeTier));
   const factor = [0, 0.05, 0.1, 0.15, 0.2, 0.25][diff];
   for (let i = 0; i < 4; i++) {
     const adj = Math.round(prices[i] * factor);
-    prices[i] = away.reputation > home.reputation ? prices[i] + adj : Math.max(1, prices[i] - adj);
+    prices[i] = awayTier > homeTier ? prices[i] + adj : Math.max(1, prices[i] - adj);
   }
   const fanFactor = Math.max(0.3, home.fanConfidence / 100);
   const table = ATTENDANCE_BY_COMP[compKind] ?? ATTENDANCE_BY_COMP.league;
-  const attIdx = Math.min(4, Math.max(0, home.reputation - 1));
+  const attIdx = Math.min(4, Math.max(0, homeTier - 1));
   const attPct = table[attIdx] ?? table[0];
   let attendance = 0;
   let revenue = 0;
@@ -338,12 +345,4 @@ export function calcGate(
     revenue += tickets * prices[i];
   }
   return { attendance, revenue, sectors };
-}
-
-export function recalcValues(club: Club, allPlayers: Player[]) {
-  for (const p of allPlayers) {
-    if (p.clubId === club.id) {
-      p.value = Math.max(60, p.value);
-    }
-  }
 }

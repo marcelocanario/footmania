@@ -59,28 +59,26 @@ function pickCountry(rng: ReturnType<typeof createRng>): string {
   return pool[0].code;
 }
 
-const REP_POOL = [1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5];
+const LEVEL_POOL = [5, 10, 10, 15, 15, 15, 15, 20, 20, 20, 25];
 
 function makeClub(
   rng: ReturnType<typeof createRng>,
   id: number,
   country: string,
-  reputation: number,
+  level: number,
   city: string,
   name: string,
   shortName: string
 ): Club {
-  const level = Math.max(1, Math.min(25, reputation * 4 + nextInt(rng, 7)));
-  const capacity = Math.max(10000, Math.min(60000, reputation * 11000 + nextInt(rng, 15000)));
+  const capacity = Math.max(10000, Math.min(60000, (level / 5) * 11000 + nextInt(rng, 15000)));
   const [primary, secondary] = pick(rng, COLORS);
   return {
     id,
     name,
     shortName,
     country,
-    reputation,
     level,
-    cash: STARTING_CASH[Math.max(0, Math.min(4, reputation - 1))],
+    cash: STARTING_CASH[Math.max(0, Math.min(4, Math.round(level / 5) - 1))],
     stadiumName: `${city} Stadium`,
     stadiumCapacity: capacity,
     primaryColor: primary,
@@ -197,14 +195,14 @@ export function generateWorld(seed: number): World {
   const clubs: Club[] = [];
   for (let i = 0; i < gameConfig.league.teams; i++) {
     const country = pickCountry(rng);
-    const reputation = REP_POOL[nextInt(rng, REP_POOL.length)];
+    const level = LEVEL_POOL[nextInt(rng, LEVEL_POOL.length)];
     const { name, short, city } = makeClubName(rng, usedNames);
-    const club = makeClub(rng, world.nextId++, country, reputation, city, name, short);
+    const club = makeClub(rng, world.nextId++, country, level, city, name, short);
     clubs.push(club);
   }
   world.clubs = clubs;
   for (const club of clubs) {
-    const base = TICKET_PRICES[Math.min(5, club.reputation)].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];
+    const base = TICKET_PRICES[Math.min(5, Math.round(club.level / 5))].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];
     world.ticketPrices[club.id] = base;
   }
   for (const club of clubs) {

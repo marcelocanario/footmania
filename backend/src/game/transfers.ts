@@ -2,6 +2,7 @@ import type { Club, Player, RngState, World } from "./types";
 import { chance, nextInt, pick } from "./rng";
 import { positionCount } from "./club";
 import { DAYS_PER_YEAR } from "./constants";
+import { resetPayrollPeriod, settlePlayerPayroll } from "./payroll";
 
 const MIN_SQUAD = [3, 4, 4, 5, 4];
 const SURPLUS_MARKUP = [0.5, 0.2, 0.2, 0.2, 0.5, 1.0];
@@ -46,12 +47,6 @@ export function evaluateBid(
   allPlayers: Player[]
 ): { accepted: boolean; counter: number } {
   if (player.releaseClause > 0 && bid >= player.releaseClause) {
-    return { accepted: true, counter: bid };
-  }
-  if (player.isStar || player.worldClass) {
-    if (bid < counterOffer(seller, player, allPlayers)) {
-      return { accepted: false, counter: Math.round(counterOffer(seller, player, allPlayers) * 1.3) };
-    }
     return { accepted: true, counter: bid };
   }
   if (seller.isHuman) {
@@ -134,9 +129,6 @@ export function isEligibleAuctionBidder(
   club: Club
 ): boolean {
   if (club.isHuman) return false;
-  // Auction bidding requires the financial sophistication of a rep >= 3 club;
-  // lower-reputation clubs shop the free-agent market instead (aiBuyGaps).
-  if (club.reputation < 3) return false;
   if (listing.sellerClubId !== null && club.id === listing.sellerClubId) return false;
   if (listing.bids.some((b) => b.clubId === club.id)) return false;
   return true;
@@ -170,6 +162,7 @@ export function resolveAuction(world: World, listingId: number): number | null {
 
 export function transferPlayer(world: World, player: Player, toClub: Club, fee: number): boolean {
   if (player.loanId !== null || !Number.isFinite(fee) || fee < 0 || toClub.cash < fee) return false;
+  settlePlayerPayroll(world, player);
   const from = world.clubs.find((c) => c.id === player.clubId);
   if (from) {
     from.cash += fee;
@@ -198,11 +191,13 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
   if (player.loanId !== null) return { ok: false, error: "A player on loan cannot be released", cost: 0 };
   const cost = player.isYouth ? 0 : Math.max(0, player.releaseClause);
   if (cost > club.cash) return { ok: false, error: "The club cannot afford to release this player", cost };
+  settlePlayerPayroll(world, player);
   club.cash -= cost;
   if (cost > 0) {
     club.ledger.expense.push({ code: 2, amount: cost, day: world.dayIndex, label: `Release clause: ${player.name}` });
   }
   player.clubId = null;
+  resetPayrollPeriod(player, world.dayIndex);
   player.contractDays = FREE_AGENT_DAYS;
   player.tacPos = -1;
   player.starter = false;
@@ -218,7 +213,7 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
 }
 
 export function aiSellSurplus(rng: RngState, world: World, club: Club) {
-  const roster = world.players.filter((p) => p.clubId === club.id && p.loanId === null && !p.isStar && !p.worldClass && !p.onSale);
+  const roster = world.players.filter((p) => p.clubId === club.id && p.loanId === null && !p.onSale);
   const counts = positionCount(club, world.players);
   for (const p of roster) {
     if (counts[p.position] > MIN_SQUAD[p.position] + 1) {
@@ -248,9 +243,6 @@ function findBuyer(rng: RngState, world: World, player: Player): Club | null {
 }
 
 export function aiBuyGaps(rng: RngState, world: World, club: Club) {
-  // Free-agent signings are open to rep >= 2 clubs; the single rep-1 minnow
-  // rebuilds via academy and the free rollover squad top-up instead.
-  if (club.reputation < 2) return;
   const seasonalWages = world.players
     .filter((p) => p.clubId === club.id)
     .reduce((s, p) => s + p.salary, 0);

@@ -3,6 +3,7 @@ import { aiBid, auctionAvailableCash, createAuction, freeAgentSigningBonus, isEl
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
+import { gameConfig } from "../src/config";
 
 function makeClub(id: number, overrides: Partial<Club> = {}): Club {
   return {
@@ -10,7 +11,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     name: `Club ${id}`,
     shortName: `C${id}`,
     country: "BRA",
-    reputation: 4,
     level: 20,
     cash: 10_000_000,
     stadiumName: "St",
@@ -148,7 +148,7 @@ describe("auction resolution", () => {
     world.auctions[0].bids.push({ clubId: buyer.id, amount: 100_000 });
     const winner = resolveAuction(world, listingId);
     expect(winner).toBe(buyer.id);
-    expect(seller.cash).toBe(10_000_000 + 100_000);
+    expect(seller.cash).toBe(10_000_000 + 100_000 - Math.round(player.salary * 5 / gameConfig.seasonDays));
     expect(buyer.cash).toBe(20_000_000 - 100_000);
     expect(player.clubId).toBe(buyer.id);
     expect(player.onSale).toBe(false);
@@ -181,7 +181,7 @@ describe("releasePlayer", () => {
     const result = releasePlayer(world, player, club);
     expect(result.ok).toBe(true);
     expect(result.cost).toBe(1_000_000);
-    expect(club.cash).toBe(4_000_000);
+    expect(club.cash).toBe(4_000_000 - Math.round(player.salary * 5 / gameConfig.seasonDays));
     expect(club.ledger.expense.filter((e) => e.code === 2 && e.label.includes(player.name))).toHaveLength(1);
     expect(player.clubId).toBeNull();
     expect(player.onSale).toBe(false);
@@ -268,9 +268,8 @@ describe("releasePlayer", () => {
 describe("isEligibleAuctionBidder", () => {
   const listing = { sellerClubId: 10, bids: [] as { clubId: number }[] };
 
-  it("excludes the human club, low-reputation clubs, the seller, and clubs already bidding", () => {
+  it("excludes the human club, the seller, and clubs already bidding", () => {
     expect(isEligibleAuctionBidder(listing, makeClub(1, { isHuman: true }))).toBe(false);
-    expect(isEligibleAuctionBidder(listing, makeClub(2, { reputation: 1 }))).toBe(false);
     expect(isEligibleAuctionBidder(listing, makeClub(10))).toBe(false);
     const taken = makeClub(20);
     expect(isEligibleAuctionBidder({ sellerClubId: 10, bids: [{ clubId: 20 }] }, taken)).toBe(false);
@@ -278,6 +277,6 @@ describe("isEligibleAuctionBidder", () => {
 
   it("allows an eligible club that has not bid yet", () => {
     expect(isEligibleAuctionBidder(listing, makeClub(20))).toBe(true);
-    expect(isEligibleAuctionBidder({ sellerClubId: null, bids: [] }, makeClub(20, { reputation: 4 }))).toBe(true);
+    expect(isEligibleAuctionBidder({ sellerClubId: null, bids: [] }, makeClub(20))).toBe(true);
   });
 });

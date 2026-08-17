@@ -130,6 +130,7 @@ export async function savesRoutes(app: FastifyInstance) {
 
   app.get("/settings", async () => ({
     humanMatchDurationMinutes: gameConfig.humanMatchDurationMinutes,
+    maxContractSeasons: gameConfig.maxContractSeasons,
   }));
 
   app.put("/settings", async (req, reply) => {

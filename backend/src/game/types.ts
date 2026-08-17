@@ -34,13 +34,14 @@ export interface Player {
   characteristic2: number;
   energy: number;
   salary: number;
+  payrollPaidThroughDay: number;
+  payrollPaidAmount: number;
+  payrollPeriodStartDay: number;
   value: number;
   releaseClause: number;
   injuryDays: number;
   contractDays: number;
   isYouth: boolean;
-  isStar: boolean;
-  worldClass: boolean;
   starter: boolean;
   growthAcc: number;
   potentialAcc: number;
@@ -60,9 +61,6 @@ export interface Player {
   loanId: number | null;
   developmentProfile: PlayerDevelopmentProfile;
   recentMinutes: number[];
-  // In-memory per-player clause multiplier (derived from clause/value on load,
-  // set at generation); refreshPlayerDerived keeps the clause proportional.
-  releaseClauseFactor: number;
 }
 
 export interface LedgerEntry {
@@ -97,7 +95,6 @@ export interface Club {
   // TODO(multiplayer): a future `ownerUserId: number | null` (or UserClub join)
   // will land with the multiplayer model. `isHuman` remains for now.
   country: string;
-  reputation: number;
   level: number;
   cash: number;
   stadiumName: string;

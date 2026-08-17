@@ -78,7 +78,6 @@ model Club {
   name             String
   shortName        String
   country          String
-  reputation       Int
   level            Int
   cash             Int
   stadiumName      String
@@ -119,13 +118,14 @@ model Player {
   characteristic2 Int
   energy          Int
   salary          Int
+  payrollPaidThroughDay Int @default(0)
+  payrollPaidAmount Int @default(0)
+  payrollPeriodStartDay Int @default(0)
   value           Int
   releaseClause   Int
   injuryDays      Int
   contractDays    Int
   isYouth         Boolean
-  isStar          Boolean
-  worldClass      Boolean
   starter         Boolean
   growthAcc       Float
   potentialAcc    Float

@@ -691,8 +691,7 @@ a { color: var(--grass-2); text-decoration: none; }
   padding: 1px 6px;
 }
 
-.fc-star { background: rgba(240, 180, 41, 0.2); color: var(--gold-2); }
-.fc-wc { background: rgba(240, 180, 41, 0.32); color: var(--gold-2); }
+.fc-accent { background: rgba(240, 180, 41, 0.2); color: var(--gold-2); }
 .fc-sus { background: rgba(229, 72, 77, 0.22); color: var(--red-2); }
 .fc-inj { background: rgba(229, 72, 77, 0.15); color: var(--red-2); }
 .fc-loan { background: rgba(120, 150, 190, 0.2); color: #9fb8d8; }
@@ -1519,8 +1518,6 @@ a { color: var(--grass-2); text-decoration: none; }
 }
 
 /* ---------- misc ---------- */
-
-.star { color: var(--gold); }
 
 .kicker, .muted { color: var(--text-3); }
 .muted { color: var(--text-3); }

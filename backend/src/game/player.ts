@@ -1,9 +1,9 @@
 import type { Club, Player, PlayerDevelopmentProfile, Position, RngState, SkillSet } from "./types";
-import { beta, chance, chanceDenom, createRng, nextInt, truncatedNormal } from "./rng";
+import { beta, chance, createRng, nextInt, truncatedNormal } from "./rng";
 import { generateName } from "./names";
-import { COUNTRIES } from "./countries";
 import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
 import { overallFromSkills, SKILL_KEYS, trainingWeights } from "./rating";
+import { calculateAcademySalary, calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
 
 export { overallFromSkills } from "./rating";
 
@@ -35,7 +35,7 @@ function tierFromBounds(rng: RngState, bounds: number[]): number {
 }
 
 function tierForClub(rng: RngState, club: Club): number {
-  if (club.level >= 19 || club.reputation > 3) return tierFromBounds(rng, TIER_BOUNDS_HIGH);
+  if (club.level >= 19) return tierFromBounds(rng, TIER_BOUNDS_HIGH);
   if (club.level >= 15) return tierFromBounds(rng, TIER_BOUNDS_MID);
   return tierFromBounds(rng, TIER_BOUNDS_LOW);
 }
@@ -57,15 +57,18 @@ function levelFactor(level: number): number {
   }
 }
 
-function repFactor(club: Club): [number, number] {
-  const rep = Math.max(1, Math.min(5, club.reputation));
-  switch (rep) {
-    case 5: return [20, 7];
-    case 4: return [15, 4];
-    case 3: return [12, 3];
-    case 2: return [8, 2];
-    default: return [5, 1];
-  }
+/** Club strength tier 1..5 derived from level (replaces the old reputation). */
+function clubStrength(club: Club): number {
+  return Math.min(5, Math.max(1, Math.round(club.level / 5)));
+}
+
+/** Overall generation boost from club level (replaces the reputation factor). */
+function overallBoost(level: number): number {
+  if (level <= 5) return 5;
+  if (level <= 10) return 8;
+  if (level <= 15) return 12;
+  if (level <= 20) return 15;
+  return 20;
 }
 
 function sideVariant(position: Position, c1: number, c2: number): number {
@@ -94,9 +97,8 @@ function sideVariant(position: Position, c1: number, c2: number): number {
 }
 
 // Faithful port of best/F.java j(int, int) — individual skills on Brasfoot's scale.
-function generateSkills(rng: RngState, position: Position, c1: number, c2: number, overall: number, lvl: number, rep: number): SkillSet {
+function generateSkills(rng: RngState, position: Position, c1: number, c2: number, overall: number, lvl: number, n3: number): SkillSet {
   const n2 = Math.max(1, levelFactor(lvl) - 4);
-  const n3 = rep;
   const n4 = Math.round(n2 / 3);
   let s: SkillSet = { gol: 1, vel: 1, tec: 1, pas: 1, des: 1, arm: 1, fin: 1 };
   const variant = sideVariant(position, c1, c2);
@@ -217,12 +219,9 @@ function generateSkills(rng: RngState, position: Position, c1: number, c2: numbe
   }
   return s;
 }
-export function calcOverall(rng: RngState, club: Club, tier: number, isStar: boolean, isYouth: boolean): number {
-  const [rep] = repFactor(club);
-  let base = levelFactor(club.level) + rep + nextInt(rng, 3);
-  if (isStar || (club.reputation >= 4 && chance(rng, 30))) {
-    base = base + 9 + nextInt(rng, 3);
-  }
+
+export function calcOverall(rng: RngState, club: Club, tier: number, isYouth: boolean): number {
+  let base = levelFactor(club.level) + overallBoost(club.level) + nextInt(rng, 3);
   if (isYouth) {
     base -= 23;
     if (base < 5) base = 10;
@@ -256,46 +255,6 @@ function calcPotential(rng: RngState, age: number, overall: number): number {
   return n2;
 }
 
-export function calcValue(club: Club, overall: number, age: number, tier: number, isStar: boolean, worldClass: boolean, isYouth: boolean): number {
-  const level = club.level;
-  let clubFactor = level >= 21 ? 750 : level >= 20 ? 600 : level >= 18 ? 500 : level >= 12 ? 400 : 366;
-  if (isStar) {
-    clubFactor = level >= 22 ? Math.round(clubFactor * 3) : level >= 21 ? Math.round(clubFactor * 2) : Math.round(clubFactor * 1.7);
-  }
-  if (worldClass) clubFactor = Math.round(clubFactor * 1.6);
-  let base = overall * 2;
-  base *= base;
-  let ageTerm = 0;
-  if (age < 20) ageTerm = (32 - age) * 27;
-  else if (age <= 25) ageTerm = (32 - age) * 22;
-  else if (age < 32) ageTerm = (32 - age) * 15;
-  else if (age < 34) ageTerm = (34 - age) * 10;
-  else ageTerm = -(age - 34) * 50;
-  clubFactor += ageTerm;
-  if (clubFactor <= 0) clubFactor = 60;
-  let value = base * clubFactor;
-  if (isYouth) value = Math.round(value * 0.03) * tier;
-  else if (isStar && tier === 10) value = Math.round(value * 1.5);
-  return value;
-}
-
-export function calcSalary(club: Club, overall: number, age: number, isStar: boolean, worldClass: boolean, isYouth: boolean): number {
-  // Salary is the full wage for one season (1 season = 1 in-game year).
-  const SALARY_FACTORS = [0, 300, 450, 650, 900, 1200];
-  const rep = Math.max(1, Math.min(5, club.reputation));
-  let factor = SALARY_FACTORS[rep];
-  if (club.level > 20) factor += 50;
-  if (isStar || worldClass) factor = Math.round(factor * 0.5) * 2;
-  factor = Math.round(factor * 0.5);
-  let salary = overall * 2 * factor;
-  if (isStar || worldClass) salary += overall * 250;
-  if (age >= 32) salary = Math.max(500, salary - (age - 32) * 300);
-  if (salary < 500) salary = 500;
-  if (worldClass) salary = Math.round(salary * 1.4);
-  if (isYouth) salary = Math.round(salary * 0.1);
-  return salary;
-}
-
 export function generateDevelopmentProfile(rng: RngState): PlayerDevelopmentProfile {
   const declineStartAge = truncatedNormal(rng, DEVELOPMENT.declineAge.mean, DEVELOPMENT.declineAge.stdDev, DEVELOPMENT.declineAge.min, DEVELOPMENT.declineAge.max);
   const developmentRate = DEVELOPMENT.developmentRate.min + (DEVELOPMENT.developmentRate.max - DEVELOPMENT.developmentRate.min) * beta(rng, DEVELOPMENT.developmentRate.alpha, DEVELOPMENT.developmentRate.beta);
@@ -320,8 +279,6 @@ export function backfillDevelopmentProfile(worldSeed: number, playerId: number):
 export function generatePlayer(rng: RngState, club: Club, opts: { position?: Position; isYouth?: boolean; id: number; seed?: number }): Player {
   const isYouth = opts.isYouth ?? false;
   const tier = isYouth ? Math.max(1, tierForClub(rng, club) - 1) : tierForClub(rng, club);
-  const isStar = tier === 10 && chance(rng, 10);
-  const worldClass = isStar && chance(rng, 5);
   const position = opts.position ?? (() => {
     const roll = nextInt(rng, 100);
     if (roll < 10) return 0;
@@ -335,25 +292,14 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
   const pair = pairs[nextInt(rng, pairs.length)];
   const c1 = pair[0];
   const c2 = pair[1];
-  let country = club.country;
-  if (isStar && club.level >= 18 && chance(rng, 50)) {
-    // Weighted pick over all countries by strength (nivel 11-20).
-    const pool = COUNTRIES.filter((c) => c.code !== country);
-    let total = 0;
-    for (const c of pool) total += c.strength - 10;
-    let roll = nextInt(rng, Math.max(1, total));
-    for (const c of pool) {
-      roll -= c.strength - 10;
-      if (roll < 0) {
-        country = c.code;
-        break;
-      }
-    }
-  }
-  const seedOverall = calcOverall(rng, club, tier, isStar, isYouth);
-  const [ovrRep, skillRep] = repFactor(club);
+  const country = club.country;
+  const seedOverall = calcOverall(rng, club, tier, isYouth);
+  const skillRep = clubStrength(club);
   const skills = generateSkills(rng, position, c1, c2, seedOverall, club.level, skillRep);
   const overall = overallFromSkills(position, skills);
+  const contractDays = isYouth ? DAYS_PER_YEAR * 4 : DAYS_PER_YEAR * (1 + nextInt(rng, 3));
+  const salary = isYouth ? calculateAcademySalary(overall, age) : calculateBaseSalary(overall, age);
+  const value = calculatePlayerValue(overall, age, remainingSeasons(contractDays));
   const player: Player = {
     id: opts.id,
     name: generateName(rng, country),
@@ -368,14 +314,15 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     characteristic1: c1,
     characteristic2: c2,
     energy: 100,
-    salary: calcSalary(club, overall, age, isStar, worldClass, isYouth),
-    value: calcValue(club, overall, age, tier, isStar, worldClass, isYouth),
+    salary,
+    payrollPaidThroughDay: 0,
+    payrollPaidAmount: 0,
+    payrollPeriodStartDay: 0,
+    value,
     releaseClause: 0,
     injuryDays: 0,
-    contractDays: isYouth ? DAYS_PER_YEAR * 4 : DAYS_PER_YEAR * (1 + nextInt(rng, 3)),
+    contractDays,
     isYouth,
-    isStar,
-    worldClass,
     starter: false,
     growthAcc: 0,
     potentialAcc: 0,
@@ -395,27 +342,22 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     loanId: null,
     developmentProfile: { declineStartAge: 30, developmentRate: 1, developmentVolatility: 0.1 },
     recentMinutes: [],
-    releaseClauseFactor: 0.2,
   };
-  const releaseFactor = isYouth ? 0.35 : 0.12 + nextInt(rng, 24) / 100;
-  player.releaseClause = Math.round(player.value * releaseFactor);
-  player.releaseClauseFactor = releaseFactor;
+  player.releaseClause = calculateReleaseClause(salary, remainingSeasons(contractDays));
   player.developmentProfile = backfillDevelopmentProfile(opts.seed ?? club.id, opts.id);
   player.recentMinutes = [];
   return player;
 }
 
 export function overallCap(club: Club): number {
-  let cap = 100;
   const group = 0;
-  if (group === 0) cap = 100;
-  else if (group === 1) cap = 90;
-  else if (group === 2) cap = 75;
-  else if (group === 3) cap = 70;
-  else if (group === 4) cap = 65;
-  else if (group === 5) cap = 55;
-  if (club.reputation < 3 && cap > 70) cap = 70;
-  return cap;
+  if (group === 0) return 100;
+  else if (group === 1) return 90;
+  else if (group === 2) return 75;
+  else if (group === 3) return 70;
+  else if (group === 4) return 65;
+  else if (group === 5) return 55;
+  return 100;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -543,20 +485,21 @@ function developmentCeiling(player: Player, club: Club): number {
   return Math.max(player.overall, Math.min(100, overallCap(club), player.potential));
 }
 
+/**
+ * Refreshes derived values. Player market value follows overall/age/contract;
+ * the contract salary is contractual and is NOT recalculated here. The release
+ * clause is derived from salary and remaining contract length.
+ */
 export function refreshPlayerDerived(club: Club, player: Player): void {
   player.overall = overallFromSkills(player.position, player.skills);
   player.potential = Math.max(player.overall, Math.min(100, player.potential));
-  player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, player.isYouth);
-  player.salary = calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, player.isYouth);
-  // Keep the clause proportional to the player's own randomized factor instead
-  // of overwriting it with a flat 0.2 on every development tick.
-  player.releaseClause = Math.round(player.value * (Number.isFinite(player.releaseClauseFactor) ? player.releaseClauseFactor : player.isYouth ? 0.35 : 0.2));
+  player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
+  player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
 }
 
 export function shouldRetire(rng: RngState, player: Player): boolean {
   if (player.age <= 32) return false;
   let age = player.age;
-  if (player.isStar) age -= 1;
   if (player.position === 0) age -= 3;
   const roll = nextInt(rng, 100) + 1;
   if (age < 32) return false;

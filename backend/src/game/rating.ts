@@ -42,8 +42,8 @@ export const TACTICAL_RATING_WEIGHTS: Record<number, Readonly<WeightedSkills>> =
 export const SKILL_KEYS: SkillKey[] = ["gol", "vel", "tec", "pas", "des", "arm", "fin"];
 
 // Calibration: the position's key attributes are generated near the seed
-// overall, but supporting attributes are generated from club level/reputation
-// and sit well below it, which compresses a plain weighted mean. These factors
+// overall, but supporting attributes are generated from club level and sit
+// well below it, which compresses a plain weighted mean. These factors
 // lift the aggregate back onto the same 1-100 scale the rest of the game
 // (economy, transfers, thresholds) was tuned for. Sampled over full worlds.
 export const OVERALL_SCALE: Record<Position, number> = { 0: 1.15, 1: 1.25, 2: 1.17, 3: 1.3, 4: 1.2 };

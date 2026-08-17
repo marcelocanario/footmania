@@ -74,7 +74,7 @@ export function Matchday() {
           <div className="result-card" style={{ borderColor: "rgba(240,180,41,0.3)", background: "rgba(240,180,41,0.06)" }}>
             <div className="side">
               {snapshot.nextFixture.home}
-              {snapshot.nextFixture.isHome && <span className="flag-chip fc-star">HOME</span>}
+              {snapshot.nextFixture.isHome && <span className="flag-chip fc-accent">HOME</span>}
             </div>
             <div className="score" style={{ fontSize: "1.05rem", color: "var(--gold-2)" }}>vs</div>
             <div className="side right">{snapshot.nextFixture.away}</div>

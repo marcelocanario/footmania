@@ -23,6 +23,7 @@ function write(n: number) {
 
 interface SettingsState {
   matchDurationMinutes: number;
+  maxContractSeasons: number;
   loading: boolean;
   load: () => Promise<void>;
   setMatchDurationMinutes: (n: number) => Promise<void>;
@@ -30,6 +31,7 @@ interface SettingsState {
 
 export const useSettings = create<SettingsState>((set) => ({
   matchDurationMinutes: typeof window !== "undefined" ? read() : 10,
+  maxContractSeasons: 5,
   loading: false,
 
   load: async () => {
@@ -40,6 +42,10 @@ export const useSettings = create<SettingsState>((set) => ({
       if (Number.isFinite(n) && n >= 1 && n <= 60) {
         write(n);
         set({ matchDurationMinutes: n });
+      }
+      const maxSeasons = Math.round(res.maxContractSeasons ?? 5);
+      if (Number.isFinite(maxSeasons) && maxSeasons >= 1) {
+        set({ maxContractSeasons: maxSeasons });
       }
     } catch {
       /* keep local value */

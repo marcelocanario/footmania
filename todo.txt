@@ -1,9 +1,9 @@
 create a pro type of account
 
 Game engine
--player development/decay
---make players who have played a game this week develop more. players who have not played should receive a small debuff in development. similarly, not playing should negatively affect players who are decaying
---make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
+[DONE] player development/decay
+	[DONE] make players who have played a game this week develop more. players who have not played should receive a small debuff in development. similarly, not playing should negatively affect players who are decaying
+	[DONE] make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
 
 
 
@@ -12,14 +12,14 @@ Multiplayer
 -think of tournment structure
 -players create teams, choose team color, jerseys, country, stadium name, etc.
 --allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
--initial player names for that team should match the chosen country, same as youth-generated players
+[DONE] initial player names for that team should match the chosen country, same as youth-generated players
 -push notifications for match started and match ended
 --pros can see match goals and other events and also get their league results as push
 -invite players should give some in-game advantage or give free pro
 -let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
 -spawn small leagues; human players automatically promoted over AI teams
 
-Implement a format to see the match happening (based on globoesporte?)
+[DONE, needs improvement] Implement a format to see the match happening (based on globoesporte?)
 
 Balance economy
 -also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
@@ -37,3 +37,5 @@ Questions/multiplayer:
 -how many teams per league so that a season will take around 1 month with a game every other day?
 
 validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime
+
+create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.

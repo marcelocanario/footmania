@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../src/game/rng";
-import { calcSalary, generatePlayer } from "../src/game/player";
+import { generatePlayer } from "../src/game/player";
 import { dismissYouthPlayer, promoteYouthPlayer, promotedYouthSalary, rolloverSeason } from "../src/game/season";
+import { calculateBaseSalary } from "../src/game/economy";
 import type { Club, Player, World } from "../src/game/types";
 
 function makeClub(): Club {
@@ -10,7 +11,6 @@ function makeClub(): Club {
     name: "Academy FC",
     shortName: "AFC",
     country: "BRA",
-    reputation: 4,
     level: 20,
     cash: 10_000_000,
     stadiumName: "Academy Ground",
@@ -66,11 +66,11 @@ describe("youth academy", () => {
     const youth = generatePlayer(rng, club, { isYouth: true, id: 1 });
     youth.age = 20;
     const world = makeWorld(club, [youth]);
-    const fair = calcSalary(club, youth.overall, youth.age, youth.isStar, youth.worldClass, false);
+    const fair = calculateBaseSalary(youth.overall, youth.age);
 
     expect(promoteYouthPlayer(world, youth).ok).toBe(true);
     expect(youth.isYouth).toBe(false);
-    expect(youth.salary).toBe(promotedYouthSalary(club, youth));
+    expect(youth.salary).toBe(promotedYouthSalary(youth));
     expect(youth.salary).toBe(Math.max(500, Math.round(fair * 0.8)));
     expect(world.news.at(-1)?.kind).toBe("academy");
   });

@@ -8,6 +8,16 @@ export const PORT = Number(process.env.PORT ?? 3001);
 export const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS ?? 30);
 export const COOKIE_NAME = "fm_session";
 
+const nonNegativeNumber = z.number().min(0);
+
+const ageCurveSchema = z.record(z.string(), z.number()).refine(
+  (obj) => {
+    const keys = Object.keys(obj);
+    return keys.every((k) => Number.isFinite(Number(k)));
+  },
+  { message: "age curve keys must be numeric ages" }
+);
+
 const gameConfigSchema = z
   .object({
     seasonDays: z.number().int().min(2),
@@ -25,6 +35,29 @@ const gameConfigSchema = z
     stadiumUpgradeDays: z.number().int().min(1),
     contractWarningSeasons: z.number().int().min(1),
     humanMatchDurationMinutes: z.number().int().min(1).max(60),
+    playerValueBase: nonNegativeNumber,
+    playerValueOverallReference: z.number().min(1),
+    playerValueOverallExponent: nonNegativeNumber,
+    playerValueMultiplier: nonNegativeNumber,
+    playerValueAgeCurve: ageCurveSchema,
+    playerValueContractNeutralSeasons: nonNegativeNumber,
+    playerValueContractWeight: z.number(),
+    playerValueContractMinMultiplier: nonNegativeNumber,
+    playerValueContractMaxMultiplier: nonNegativeNumber,
+    salaryBase: nonNegativeNumber,
+    salaryOverallReference: z.number().min(1),
+    salaryOverallExponent: nonNegativeNumber,
+    salaryMultiplier: nonNegativeNumber,
+    salaryAgeCurve: ageCurveSchema,
+    salaryFloor: nonNegativeNumber,
+    academySalaryMultiplier: nonNegativeNumber,
+    maxContractSeasons: z.number().int().min(1),
+    renewalMinRaise: nonNegativeNumber,
+    renewalSkillRaiseWeight: nonNegativeNumber,
+    renewalSkillExponent: nonNegativeNumber,
+    renewalMaxRaise: nonNegativeNumber,
+    renewalAgeCurve: ageCurveSchema,
+    releaseClauseRemainingValuePct: nonNegativeNumber,
   })
   .superRefine((cfg, ctx) => {
     const matchDays = cfg.league.turns * (cfg.league.teams - 1);
@@ -51,6 +84,41 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   stadiumUpgradeDays: 15,
   contractWarningSeasons: 2,
   humanMatchDurationMinutes: 10,
+  playerValueBase: 500000,
+  playerValueOverallReference: 50,
+  playerValueOverallExponent: 3.5,
+  playerValueMultiplier: 1,
+  playerValueAgeCurve: {
+    16: 0.65, 17: 0.72, 18: 0.8, 19: 0.88, 20: 0.95, 21: 1.03, 22: 1.1, 23: 1.14,
+    24: 1.15, 25: 1.15, 26: 1.15, 27: 1.12, 28: 1.05, 29: 0.97, 30: 0.9, 31: 0.8,
+    32: 0.7, 33: 0.6, 34: 0.5, 35: 0.4, 36: 0.3, 37: 0.22, 38: 0.15, 39: 0.1, 40: 0.08,
+  },
+  playerValueContractNeutralSeasons: 3,
+  playerValueContractWeight: 0.05,
+  playerValueContractMinMultiplier: 0.9,
+  playerValueContractMaxMultiplier: 1.1,
+  salaryBase: 70000,
+  salaryOverallReference: 50,
+  salaryOverallExponent: 2.5,
+  salaryMultiplier: 1,
+  salaryAgeCurve: {
+    16: 0.5, 17: 0.6, 18: 0.7, 19: 0.8, 20: 0.9, 21: 1, 22: 1.05, 23: 1.1,
+    24: 1.1, 25: 1.1, 26: 1.1, 27: 1.1, 28: 1.05, 29: 1, 30: 0.95, 31: 0.9,
+    32: 0.85, 33: 0.8, 34: 0.75, 35: 0.7, 36: 0.65, 37: 0.6, 38: 0.55, 39: 0.5, 40: 0.45,
+  },
+  salaryFloor: 500,
+  academySalaryMultiplier: 0.1,
+  maxContractSeasons: 5,
+  renewalMinRaise: 0.02,
+  renewalSkillRaiseWeight: 0.08,
+  renewalSkillExponent: 1.6,
+  renewalMaxRaise: 0.15,
+  renewalAgeCurve: {
+    16: 1.15, 17: 1.2, 18: 1.3, 19: 1.35, 20: 1.3, 21: 1.2, 22: 1.1, 23: 1,
+    24: 1, 25: 1, 26: 1, 27: 1, 28: 1, 29: 0.95, 30: 0.9, 31: 0.85, 32: 0.8,
+    33: 0.75, 34: 0.7, 35: 0.65, 36: 0.6, 37: 0.55, 38: 0.5, 39: 0.45, 40: 0.4,
+  },
+  releaseClauseRemainingValuePct: 0.5,
 };
 
 /** Validates a raw config object against the game config schema (throws on failure). */
