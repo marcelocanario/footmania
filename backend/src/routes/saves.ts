@@ -3,7 +3,9 @@ import { z } from "zod";
 import { createSaveRecord, loadWorld, persistWorld } from "../services/saveService";
 import { buildSnapshot } from "../services/snapshot";
 import { advance } from "../game/world";
+import { assignHumanClub } from "../game/worldgen";
 import { dayInfo } from "../game/calendar";
+import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import { withSaveLock } from "../services/lock";
 import type { DayResult, World } from "../game/types";
 
@@ -13,7 +15,8 @@ const createSchema = z.object({
 });
 
 const startSchema = z.object({
-  clubId: z.number().int(),
+  country: z.string().min(2).max(3),
+  name: z.string().min(1).max(60).optional(),
 });
 
 export async function savesRoutes(app: FastifyInstance) {
@@ -70,7 +73,11 @@ export async function savesRoutes(app: FastifyInstance) {
     const loaded = await loadWorld(app.prisma, id, req.user!.id);
     if (!loaded) return reply.code(404).send({ error: "Save not found" });
     if (loaded.world.humanClubId === null) {
-      return { started: false as const, clubOptions: loaded.world.clubs.filter((c) => c.division === 1).map((c) => ({ id: c.id, name: c.name, shortName: c.shortName, primaryColor: c.primaryColor, secondaryColor: c.secondaryColor, reputation: c.reputation, level: c.level, division: c.division })) };
+      return {
+        started: false as const,
+        featuredCountries: FEATURED_COUNTRIES.map((c) => ({ code: c.code, name: c.name, strength: c.strength, featured: c.featured })),
+        allCountries: COUNTRIES.map((c) => ({ code: c.code, name: c.name, strength: c.strength, featured: c.featured })),
+      };
     }
     return { started: true as const, snapshot: buildSnapshot(loaded.world, loaded.world.humanClubId) };
   });
@@ -81,13 +88,10 @@ export async function savesRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const loaded = await loadWorld(app.prisma, id, req.user!.id);
     if (!loaded) return reply.code(404).send({ error: "Save not found" });
-    const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
-    if (!club) return reply.code(400).send({ error: "Club not found" });
-    club.isHuman = true;
-    loaded.world.humanClubId = club.id;
-    loaded.world.news.push({ dayIndex: loaded.world.dayIndex, text: `You took charge of ${club.name}`, kind: "season" });
+    const result = assignHumanClub(loaded.world, parsed.data.country, parsed.data.name);
+    if (!result.ok) return reply.code(400).send({ error: result.error ?? "Unable to start save" });
     await persistWorld(app.prisma, id, req.user!.id, loaded.world);
-    return { ok: true, clubId: club.id };
+    return { ok: true, clubId: result.clubId };
   });
 
   app.post("/saves/:id/advance", async (req, reply) => {

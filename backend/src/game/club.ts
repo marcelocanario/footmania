@@ -1,5 +1,7 @@
 import type { Club, Player, RngState } from "./types";
 import { nextInt, shuffle } from "./rng";
+import { tacticalSkillRating } from "./rating";
+import { DAYS_PER_YEAR } from "./constants";
 import {
   BENCH_ORDER,
   FORMATION_POSITIONS,
@@ -55,12 +57,17 @@ export function pickForTacPos(players: Player[], tacPos: number, excluded: Set<n
     const bySide = candidates.filter((p) => p.tacPos >= 0);
     const pool = bySide.length > 0 ? bySide : candidates;
     const sorted = [...pool].sort((a, b) => {
+      const tacticalDifference = tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos);
+      if (tacticalDifference !== 0) return tacticalDifference;
       if (a.overall !== b.overall) return b.overall - a.overall;
       return b.energy - a.energy;
     });
     return sorted[0];
   }
-  const sorted = [...candidates].sort((a, b) => b.overall - a.overall || b.energy - a.energy);
+  const sorted = [...candidates].sort((a, b) => {
+    const tacticalDifference = tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos);
+    return tacticalDifference || b.overall - a.overall || b.energy - a.energy;
+  });
   return sorted[0];
 }
 
@@ -105,6 +112,11 @@ export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
   };
 }
 
+// Match-squad eligibility policy: youth players are eligible for senior match
+// squads (worldgen guarantees every club can field 11 only when youth may
+// fill gaps). All lineup paths must agree (buildLineup, lineupValid,
+// applySavedLineup, /club/lineup picker): benched youth are eligible
+// 0-minute squad members for activity tracking (spec section 15).
 export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const roster = allPlayers.filter((p) => p.clubId === club.id && !p.onSale);
   for (const player of allPlayers) {
@@ -147,7 +159,8 @@ export interface SavedLineupInput {
 }
 
 export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedLineupInput): string | null {
-  const roster = allPlayers.filter((p) => p.clubId === club.id && !p.isYouth);
+  // Youth are squad-eligible (see buildLineup policy note) and may be saved.
+  const roster = allPlayers.filter((p) => p.clubId === club.id);
   const byId = new Map(roster.map((p) => [p.id, p]));
   const all = [...input.starters, ...input.subs];
   const seen = new Set<number>();
@@ -244,15 +257,16 @@ export function positionCount(club: Club, allPlayers: Player[]): number[] {
 export function weeklySalary(club: Club, allPlayers: Player[]): number {
   let total = 0;
   for (const p of allPlayers) {
-    if (p.clubId === club.id) total += Math.round(p.salary / 52);
+    if (p.clubId === club.id) total += Math.round((p.salary * 7) / DAYS_PER_YEAR);
   }
   return total;
 }
 
-export function monthlySalary(club: Club, allPlayers: Player[]): number {
+/** Total seasonal wage bill (Player.salary is the wage for one season). */
+export function seasonSalary(club: Club, allPlayers: Player[]): number {
   let total = 0;
   for (const p of allPlayers) {
-    if (p.clubId === club.id) total += Math.round(p.salary / 12);
+    if (p.clubId === club.id) total += p.salary;
   }
   return total;
 }
@@ -311,7 +325,7 @@ export function calcGate(
   }
   const fanFactor = Math.max(0.3, home.fanConfidence / 100);
   const table = ATTENDANCE_BY_COMP[compKind] ?? ATTENDANCE_BY_COMP.league;
-  const attIdx = Math.min(4, Math.max(0, compKind === "league" ? home.division : home.reputation - 1));
+  const attIdx = Math.min(4, Math.max(0, home.reputation - 1));
   const attPct = table[attIdx] ?? table[0];
   let attendance = 0;
   let revenue = 0;

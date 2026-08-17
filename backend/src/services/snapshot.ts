@@ -1,9 +1,9 @@
 import type { Competition, World } from "../game/types";
 import { dayInfo, weekdayName } from "../game/calendar";
 import { sortedStandings, getPosition } from "../game/league";
-import { findCupWinner } from "../game/cup";
-import { groupStandingsFor } from "../game/stateChampionship";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
+import { freeAgentSigningBonus } from "../game/transfers";
+import { gameConfig } from "../config";
 
 export function playerView(p: World["players"][number]) {
   return {
@@ -60,9 +60,8 @@ export function buildSnapshot(world: World, clubId: number) {
       name: c.name,
       stage: c.stage,
       round: c.round,
-      division: c.division,
       position,
-      winnerId: c.kind === "cup" ? findCupWinner(c) : c.winners[0] ?? null,
+      winnerId: c.winners[0] ?? null,
     };
   });
 
@@ -89,6 +88,7 @@ export function buildSnapshot(world: World, clubId: number) {
       overall: p?.overall ?? 0,
       position: p?.position ?? 0,
       age: p?.age ?? 0,
+      salary: p?.salary ?? 0,
       skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
       minBid: a.minBid,
       deadlineDay: a.deadlineDay,
@@ -103,7 +103,7 @@ export function buildSnapshot(world: World, clubId: number) {
     .filter((p) => p.clubId === null)
     .sort((a, b) => b.overall - a.overall)
     .slice(0, 30)
-    .map(playerView);
+    .map((p) => ({ ...playerView(p), signingBonus: freeAgentSigningBonus(p) }));
 
   return {
     save: {
@@ -111,15 +111,12 @@ export function buildSnapshot(world: World, clubId: number) {
       dayIndex: world.dayIndex,
       dateLabel: info.label,
       dayOfWeek: weekdayName(info.dayOfWeek),
+      seasonDays: gameConfig.seasonDays,
     },
     seasonSummary: world.seasonSummary
       ? {
           leagueChampion: world.seasonSummary.leagueChampionId !== null ? world.clubs.find((c) => c.id === world.seasonSummary!.leagueChampionId)?.name ?? null : null,
           leagueRunnerUp: world.seasonSummary.leagueRunnerUpId !== null ? world.clubs.find((c) => c.id === world.seasonSummary!.leagueRunnerUpId)?.name ?? null : null,
-          cupChampion: world.seasonSummary.cupChampionId !== null ? world.clubs.find((c) => c.id === world.seasonSummary!.cupChampionId)?.name ?? null : null,
-          stateChampion: world.seasonSummary.stateChampionId !== null ? world.clubs.find((c) => c.id === world.seasonSummary!.stateChampionId)?.name ?? null : null,
-          promoted: world.seasonSummary.promoted.map((id) => world.clubs.find((c) => c.id === id)?.name ?? ""),
-          relegated: world.seasonSummary.relegated.map((id) => world.clubs.find((c) => c.id === id)?.name ?? ""),
         }
       : null,
     club: club
@@ -127,8 +124,7 @@ export function buildSnapshot(world: World, clubId: number) {
           id: club.id,
           name: club.name,
           shortName: club.shortName,
-          stateCode: club.stateCode,
-          division: club.division,
+          country: club.country,
           reputation: club.reputation,
           level: club.level,
           cash: club.cash,
@@ -140,6 +136,7 @@ export function buildSnapshot(world: World, clubId: number) {
           coachName: club.coachName,
           boardConfidence: club.boardConfidence,
           fanConfidence: club.fanConfidence,
+          trainingFocus: club.trainingFocus,
           tactics: club.tactics
             ? {
                 formation: club.tactics.formation,
@@ -181,23 +178,6 @@ export function buildSnapshot(world: World, clubId: number) {
 }
 
 export function competitionTable(world: World, competition: Competition) {
-  if (competition.kind === "state" && competition.groupStandings.length > 0) {
-    return competition.groupStandings.map((g) => ({
-      groupName: g.groupName,
-      rows: Object.values(g.rows)
-        .sort((a, b) => b.points - a.points || (b.goalsFor - b.goalsAgainst) - (a.goalsFor - a.goalsAgainst))
-        .map((r) => ({
-          ...r,
-          clubName: world.clubs.find((c) => c.id === r.clubId)?.name ?? "",
-          clubShort: world.clubs.find((c) => c.id === r.clubId)?.shortName ?? "",
-          colors: {
-            primary: world.clubs.find((c) => c.id === r.clubId)?.primaryColor ?? "",
-            secondary: world.clubs.find((c) => c.id === r.clubId)?.secondaryColor ?? "",
-          },
-          isHuman: r.clubId === world.humanClubId,
-        })),
-    }));
-  }
   const rows = sortedStandings(competition);
   return rows.map((r) => ({
     ...r,

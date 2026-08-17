@@ -18,7 +18,7 @@ async function main() {
     console.log("Created demo user");
   }
   const save = await createSaveRecord(prisma, user.id, "Demo Career", world.seed);
-  console.log(`Created save #${save.id} with ${save.clubOptions.length} division-1 club options`);
+  console.log(`Created save #${save.id}`);
 
   const loaded = await loadWorld(prisma, save.id, user.id);
   console.log(loaded ? `Round-trip load OK: ${loaded.world.clubs.length} clubs` : "Round-trip load FAILED");

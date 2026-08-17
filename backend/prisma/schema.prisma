@@ -77,8 +77,7 @@ model Club {
   save             Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
   name             String
   shortName        String
-  stateCode        String
-  division         Int
+  country          String
   reputation       Int
   level            Int
   cash             Int
@@ -97,6 +96,7 @@ model Club {
   tacticsStyle     Int
   tacticsPressing  Int
   tacticsDirection Int
+  trainingFocus   String @default("assistant")
   savedLineupJson  String?
 
   @@id([saveId, id])
@@ -150,6 +150,10 @@ model Player {
   skillArm        Int
   skillFin        Int
   skillAccJson    String
+  declineStartAge Float?
+  developmentRate Float?
+  developmentVolatility Float?
+  recentMinutesJson String?
 
   @@id([saveId, id])
   @@index([saveId, clubId])
@@ -174,8 +178,6 @@ model Competition {
   saveId              Int
   save                Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
   kind                String
-  division            Int
-  stateCode           String
   name                String
   round               Int
   stage               String

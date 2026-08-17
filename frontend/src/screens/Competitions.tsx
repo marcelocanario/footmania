@@ -40,9 +40,7 @@ export function Competitions() {
 
   const rankClass = (i: number) => {
     if (!isLeague) return "";
-    const total = leagueRows?.length ?? 20;
-    if (i < 4) return "gold";
-    if (i >= total - 4) return "red";
+    if (i === 0) return "gold";
     return "";
   };
 
@@ -78,12 +76,11 @@ export function Competitions() {
           </div>
           <Dropdown
             value={compId}
-            options={comps.map((c) => ({ label: `${c.kind === "cup" ? "🏆 " : c.kind === "state" ? "🗺️ " : "🏟️ "}${c.name}`, value: c.id }))}
+            options={comps.map((c) => ({ label: c.name, value: c.id }))}
             onChange={(e) => setCompId(e.value)}
             style={{ minWidth: 240 }}
             aria-label="Competition"
-          />
-        </div>
+          />        </div>
       </div>
 
       <TabView activeIndex={tab} onTabChange={(e) => setTab(e.index)}>
@@ -95,14 +92,6 @@ export function Competitions() {
                   {tableColumns()}
                 </DataTable>
               </div>
-              {isLeague && (
-                <div className="zone-note">
-                  <span className="swatch" style={{ background: "linear-gradient(180deg, var(--gold-2), var(--gold))" }} />
-                  Top 4 — promotion zone
-                  <span className="swatch" style={{ background: "rgba(229,72,77,0.4)", marginLeft: 14 }} />
-                  Bottom 4 — relegation zone
-                </div>
-              )}
             </div>
           ) : isGrouped ? (
             <div className="grid">

@@ -3,11 +3,14 @@ import { livePhase } from "../game/match";
 import { dayInfo } from "../game/calendar";
 
 export interface LiveEventView {
+  sequence: number;
   minute: number;
   half: number;
   type: number;
   subtype: number;
   clubId: number;
+  playerId: number | null;
+  player2Id: number | null;
   player: string;
   player2: string;
 }
@@ -29,8 +32,12 @@ export interface LiveStateView {
   competitionId: number;
   competitionName: string;
   dateLabel: string;
+  homeClubId: number;
+  awayClubId: number;
   home: string;
   away: string;
+  homeKit: { primary: string; secondary: string };
+  awayKit: { primary: string; secondary: string };
   homeScore: number;
   awayScore: number;
   minute: number;
@@ -74,12 +81,15 @@ export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
     };
   };
   const toPlayers = (ids: number[]): LivePlayerView[] => ids.map(pv).filter((p): p is LivePlayerView => !!p);
-  const events: LiveEventView[] = st.events.map((e) => ({
+  const events: LiveEventView[] = st.events.map((e, sequence) => ({
+    sequence,
     minute: e.minute,
     half: e.half,
     type: e.type,
     subtype: e.subtype,
     clubId: e.clubId,
+    playerId: e.playerId,
+    player2Id: e.player2Id,
     player: e.playerId ? byId.get(e.playerId)?.name ?? "" : "",
     player2: e.player2Id ? byId.get(e.player2Id)?.name ?? "" : "",
   }));
@@ -90,8 +100,12 @@ export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
     competitionId: st.competitionId,
     competitionName: comp?.name ?? "",
     dateLabel: dayInfo(world.dayIndex).label,
+    homeClubId: st.homeClubId,
+    awayClubId: st.awayClubId,
     home: home?.name ?? "",
     away: away?.name ?? "",
+    homeKit: { primary: home?.primaryColor ?? "#23a55a", secondary: home?.secondaryColor ?? "#14693c" },
+    awayKit: { primary: away?.primaryColor ?? "#f0b429", secondary: away?.secondaryColor ?? "#8c6510" },
     homeScore: st.scores[0],
     awayScore: st.scores[1],
     minute: st.minute,

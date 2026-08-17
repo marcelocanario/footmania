@@ -7,15 +7,60 @@ import {
   generatePlayer,
   potentialGrowth,
   shouldRetire,
-  weeklyDecline,
-  weeklyGrowth,
 } from "./player";
-import { LEAGUE_PRIZES, LOAN_LIMITS, STATE_PRIZES, CUP_PRIZES, SPONSORSHIP, TV_POSITION_BONUS } from "./constants";
-import { getPosition, promotionRelegation, sortedStandings } from "./league";
-import { findCupWinner } from "./cup";
+import { LEAGUE_PRIZES, LOAN_LIMITS, SPONSORSHIP, TV_POSITION_BONUS, DAYS_PER_YEAR } from "./constants";
+import { getPosition, sortedStandings } from "./league";
 import { generateFreeAgents, squadNeeds } from "./transfers";
 import { generateName } from "./names";
 import { buildSeasonStructure } from "./worldgen";
+import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
+
+/** Latest day-of-season a deadline can resolve: the season rolls over on the
+ * day after the final league round (LEAGUE_LAST_MATCH_DAY + 1), so any deadline
+ * beyond that would be unreachable after dayIndex resets. */
+export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
+  return Math.min(LEAGUE_LAST_MATCH_DAY + 1, dayIndex + daysFromNow);
+}
+export const SENIOR_SQUAD_LIMIT = 35;
+const ACADEMY_TARGET = 8;
+
+export function fairSalaryForPlayer(club: Club, player: Player): number {
+  return calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, false);
+}
+
+export function promotedYouthSalary(club: Club, player: Player): number {
+  return Math.max(500, Math.round(fairSalaryForPlayer(club, player) * 0.8));
+}
+
+export function promoteYouthPlayer(world: World, player: Player, reason: "manual" | "age" = "manual"): { ok: boolean; error?: string } {
+  const club = world.clubs.find((c) => c.id === player.clubId);
+  if (!club || !player.isYouth) return { ok: false, error: "Player is not in the youth academy" };
+  const seniorCount = world.players.filter((p) => p.clubId === club.id && !p.isYouth).length;
+  if (seniorCount >= SENIOR_SQUAD_LIMIT) return { ok: false, error: "Professional squad is full" };
+
+  player.isYouth = false;
+  player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, false);
+  player.salary = promotedYouthSalary(club, player);
+  player.releaseClauseFactor = 0.25;
+  player.releaseClause = Math.round(player.value * 0.25);
+  player.tacPos = -1;
+  player.starter = false;
+  world.news.push({
+    dayIndex: world.dayIndex,
+    text: reason === "age" ? `${player.name} was automatically promoted from the youth academy at age ${player.age}` : `${player.name} was promoted from the youth academy to the senior squad`,
+    kind: "academy",
+    clubId: club.id,
+  });
+  return { ok: true };
+}
+
+export function dismissYouthPlayer(world: World, player: Player): { ok: boolean; error?: string } {
+  const club = world.clubs.find((c) => c.id === player.clubId);
+  if (!club || !player.isYouth) return { ok: false, error: "Player is not in the youth academy" };
+  world.players = world.players.filter((p) => p.id !== player.id);
+  world.news.push({ dayIndex: world.dayIndex, text: `${player.name} was released from the youth academy`, kind: "academy", clubId: club.id });
+  return { ok: true };
+}
 
 export function clubLastMatch(world: World, clubId: number) {
   for (let i = world.matches.length - 1; i >= 0; i--) {
@@ -62,8 +107,6 @@ export function weeklyUpdate(rng: World["rng"], world: World) {
       if (player.clubId !== club.id) continue;
       if (player.injuryDays > 0) player.injuryDays--;
       if (player.energy < 100) player.energy += nextInt(rng, 6);
-      if (player.age < 32) weeklyGrowth(rng, player, club);
-      else weeklyDecline(rng, player, club);
       potentialGrowth(rng, player);
       if (won) player.morale = Math.min(100, player.morale + 2);
       if (lost) player.morale = Math.max(0, player.morale - 2);
@@ -99,10 +142,10 @@ export function weeklyUpdate(rng: World["rng"], world: World) {
   }
   const human = world.humanClubId !== null ? world.clubs.find((c) => c.id === world.humanClubId) : null;
   if (human) {
-    const league = world.competitions.find((c) => c.kind === "league" && c.division === human.division);
+    const league = world.competitions.find((c) => c.kind === "league");
     if (league && league.standings[human.id]) {
       const pos = getPosition(league, human.id);
-      const expectation = human.division === 1 ? 6 : human.division === 2 ? 4 : 2;
+      const expectation = 4;
       if (pos <= expectation) human.boardConfidence = Math.min(100, human.boardConfidence + 1);
       else human.boardConfidence = Math.max(0, human.boardConfidence - 1);
     }
@@ -153,23 +196,29 @@ function maybeFireManager(rng: World["rng"], world: World, club: Club) {
       kind: "manager",
       clubId: club.id,
     });
-    club.coachName = generateName(rng, "BRA");
+    club.coachName = generateName(rng, club.country);
     club.boardConfidence = 60;
     club.fanConfidence = Math.max(0, club.fanConfidence - 3);
   }
 }
 
-export function monthlyFinances(rng: World["rng"], world: World) {
+/** Pays wages in installments: Player.salary is the wage for the whole season. The
+ * season runs days 1..LEAGUE_LAST_MATCH_DAY+1 (28 days with the shipped config), and
+ * payrollIntervalDay installments of round(salary * interval / seasonDays) cover that
+ * window pro-rata (4 payments on days 7/14/21/28). */
+export function settlePayroll(rng: World["rng"], world: World) {
+  const { payrollIntervalDays, seasonDays } = gameConfig;
   for (const club of world.clubs) {
     let salaries = 0;
     for (const player of world.players) {
       if (player.clubId !== club.id) continue;
-      salaries += player.salary;
+      const installment = Math.round((player.salary * payrollIntervalDays) / seasonDays);
+      salaries += installment;
     }
     club.cash -= salaries;
     club.ledger.expense.push({ code: 4, amount: salaries, day: world.dayIndex, label: "Player salaries" });
     if (club.loanBalance > 0) {
-      const interest = Math.round(club.loanBalance * 0.03);
+      const interest = Math.round(club.loanBalance * (gameConfig.payrollLoanInterestPercent / 100));
       club.cash -= interest;
       club.ledger.expense.push({ code: 8, amount: interest, day: world.dayIndex, label: "Loan interest" });
     }
@@ -188,7 +237,7 @@ export function monthlyFinances(rng: World["rng"], world: World) {
       }
     }
     if (!club.isHuman) {
-      const limit = LOAN_LIMITS[Math.min(4, club.division)];
+      const limit = LOAN_LIMITS[Math.max(0, Math.min(4, club.reputation - 1))];
       if (club.cash < salaries && club.loanBalance < limit) {
         const take = Math.min(limit - club.loanBalance, Math.round((salaries - club.cash) * 1.2));
         if (take > 0) {
@@ -210,8 +259,7 @@ export function monthlyFinances(rng: World["rng"], world: World) {
 
 export function yearlySponsorship(world: World) {
   for (const club of world.clubs) {
-    const division = Math.min(4, club.division);
-    const amount = SPONSORSHIP[division >= 3 ? 1 : division][0];
+    const amount = SPONSORSHIP[Math.max(0, Math.min(4, club.reputation - 1))];
     world.tvDeals.push({ clubId: club.id, season: world.year, baseAmount: amount, positionBonus: 0 });
     club.cash += amount;
     club.ledger.income.push({ code: 6, amount, day: world.dayIndex, label: "TV deal (base)" });
@@ -222,9 +270,8 @@ export function awardTvPositionBonuses(world: World) {
   for (const comp of world.competitions) {
     if (comp.kind !== "league") continue;
     const sorted = sortedStandings(comp);
-    const bonuses = TV_POSITION_BONUS[Math.min(4, comp.division)] ?? [];
     for (let i = 0; i < sorted.length; i++) {
-      const bonus = bonuses[i];
+      const bonus = TV_POSITION_BONUS[i];
       if (!bonus || bonus <= 0) continue;
       const club = world.clubs.find((c) => c.id === sorted[i].clubId);
       if (!club) continue;
@@ -240,45 +287,13 @@ export function awardLeaguePrizes(world: World) {
   for (const comp of world.competitions) {
     if (comp.kind !== "league") continue;
     const sorted = sortedStandings(comp);
-    const prizes = LEAGUE_PRIZES[Math.min(4, comp.division)] ?? [];
-    for (let i = 0; i < Math.min(prizes.length, sorted.length); i++) {
-      const prize = prizes[i];
+    for (let i = 0; i < Math.min(LEAGUE_PRIZES.length, sorted.length); i++) {
+      const prize = LEAGUE_PRIZES[i];
       if (prize <= 0) continue;
       const club = world.clubs.find((c) => c.id === sorted[i].clubId);
       if (club) {
         club.cash += prize;
         club.ledger.income.push({ code: 5, amount: prize, day: world.dayIndex, label: `League prize (${comp.name})` });
-      }
-    }
-  }
-}
-
-export function awardStatePrizes(world: World) {
-  for (const comp of world.competitions) {
-    if (comp.kind !== "state" || comp.stage !== "finished") continue;
-    if (comp.winners.length > 0) {
-      const club = world.clubs.find((c) => c.id === comp.winners[0]);
-      if (club) {
-        const prize = STATE_PRIZES[0];
-        club.cash += prize;
-        club.ledger.income.push({ code: 5, amount: prize, day: world.dayIndex, label: `State title (${comp.name})` });
-        club.trophies[comp.name] = (club.trophies[comp.name] ?? 0) + 1;
-      }
-    }
-  }
-}
-
-export function awardCupPrizes(world: World) {
-  for (const comp of world.competitions) {
-    if (comp.kind !== "cup" || comp.stage !== "finished") continue;
-    const winner = findCupWinner(comp);
-    if (winner !== null) {
-      const club = world.clubs.find((c) => c.id === winner);
-      if (club) {
-        const prize = CUP_PRIZES[1][5];
-        club.cash += prize;
-        club.ledger.income.push({ code: 5, amount: prize, day: world.dayIndex, label: `Cup title (${comp.name})` });
-        club.trophies[comp.name] = (club.trophies[comp.name] ?? 0) + 1;
       }
     }
   }
@@ -395,6 +410,7 @@ export function computeSeasonAwards(world: World) {
 }
 
 export function contractCycle(rng: World["rng"], world: World) {
+  const freeAgentDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
   for (const player of [...world.players]) {
     if (player.clubId === null) continue;
     if (player.contractDays <= 0) {
@@ -404,7 +420,7 @@ export function contractCycle(rng: World["rng"], world: World) {
         if (loan) endLoan(world, loan);
       }
       player.clubId = null;
-      player.contractDays = 180;
+      player.contractDays = freeAgentDays;
       player.tacPos = -1;
       player.starter = false;
       world.news.push({
@@ -417,11 +433,12 @@ export function contractCycle(rng: World["rng"], world: World) {
     }
     const club = world.clubs.find((c) => c.id === player.clubId);
     if (!club || club.isHuman) continue;
-    if (player.contractDays <= 60) {
+    const warningThreshold = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
+    if (player.contractDays <= warningThreshold) {
       const demand = Math.round(player.salary * (1 + nextInt(rng, 50) / 100));
       if (demand <= player.salary * 1.3 && club.cash > 0) {
         player.salary = demand;
-        player.contractDays = 365;
+        player.contractDays = DAYS_PER_YEAR * (1 + nextInt(rng, 3));
         player.morale = Math.min(100, player.morale + 5);
       } else if (chance(rng, 30)) {
         world.news.push({
@@ -481,7 +498,7 @@ export function loanCycle(rng: World["rng"], world: World) {
       fromClubId: club.id,
       toClubId: null,
       startDay: world.dayIndex,
-      endDay: world.dayIndex + 300,
+      endDay: seasonEndDay(world.dayIndex, DAYS_PER_YEAR * gameConfig.loanDurationSeasons),
       recalled: false,
     });
     world.news.push({
@@ -540,7 +557,7 @@ export function stadiumCycle(world: World) {
 }
 
 export function startStadiumUpgrade(world: World, club: Club): { error?: string; upgrade?: World["stadiumUpgrades"][number] } {
-  if (world.stadiumUpgrades.some((u) => u.clubId === club.id && u.startedDay >= world.dayIndex - 363)) {
+  if (world.stadiumUpgrades.some((u) => u.clubId === club.id && u.startedDay >= world.dayIndex - (DAYS_PER_YEAR - 1))) {
     return { error: "Only one stadium upgrade is allowed per season" };
   }
   if (world.stadiumUpgrades.some((u) => u.clubId === club.id && !u.completed)) {
@@ -551,40 +568,14 @@ export function startStadiumUpgrade(world: World, club: Club): { error?: string;
   if (club.cash < cost) return { error: "Not enough cash for this upgrade" };
   club.cash -= cost;
   club.ledger.expense.push({ code: 12, amount: cost, day: world.dayIndex, label: "Stadium expansion" });
-  const upgrade = { clubId: club.id, startedDay: world.dayIndex, completesDay: world.dayIndex + 30, newCapacity, cost, completed: false };
+  const upgrade = { clubId: club.id, startedDay: world.dayIndex, completesDay: seasonEndDay(world.dayIndex, gameConfig.stadiumUpgradeDays), newCapacity, cost, completed: false };
   world.stadiumUpgrades.push(upgrade);
   world.news.push({ dayIndex: world.dayIndex, text: `${club.name} began a stadium expansion to ${newCapacity} seats`, kind: "stadium", clubId: club.id });
   return { upgrade };
 }
 
-export function rolloverSeason(rng: World["rng"], world: World): { promoted: number[]; relegated: number[]; cupChampionId: number | null; stateChampionId: number | null } {
+export function rolloverSeason(rng: World["rng"], world: World): void {
   const clubs = world.clubs;
-  const promotedAll: number[] = [];
-  const relegatedAll: number[] = [];
-  for (const comp of world.competitions) {
-    if (comp.kind === "league") {
-      const { promoted, relegated } = promotionRelegation(comp, clubs);
-      if (comp.division === 1) {
-        for (const cid of relegated) relegatedAll.push(cid);
-      } else {
-        for (const cid of promoted) promotedAll.push(cid);
-      }
-    }
-  }
-  for (const cid of promotedAll) {
-    const club = clubs.find((c) => c.id === cid);
-    if (club && club.division > 1) {
-      club.division--;
-      club.reputation = Math.min(5, club.reputation + 1);
-    }
-  }
-  for (const cid of relegatedAll) {
-    const club = clubs.find((c) => c.id === cid);
-    if (club && club.division < 2) {
-      club.division++;
-      club.reputation = Math.max(1, club.reputation - 1);
-    }
-  }
   for (const player of world.players) {
     aging(rng, player, world.clubs.find((c) => c.id === player.clubId) ?? world.clubs[0]);
     const club = world.clubs.find((c) => c.id === player.clubId);
@@ -592,12 +583,12 @@ export function rolloverSeason(rng: World["rng"], world: World): { promoted: num
       player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, player.isYouth);
       player.salary = calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, player.isYouth);
     }
-    if (player.contractDays > 0) player.contractDays = Math.max(0, player.contractDays - 365);
+    if (player.contractDays > 0) player.contractDays = Math.max(0, player.contractDays - DAYS_PER_YEAR);
   }
   const retirees: number[] = [];
   const retiringStars: Player[] = [];
   for (const player of world.players) {
-    if (player.clubId !== null) {
+    if (player.clubId !== null && !player.isYouth) {
       if (player.age >= 33 && chance(rng, 25)) {
         const club = world.clubs.find((c) => c.id === player.clubId);
         world.news.push({
@@ -622,21 +613,26 @@ export function rolloverSeason(rng: World["rng"], world: World): { promoted: num
   }
   world.players = world.players.filter((p) => !retirees.includes(p.id));
   for (const club of world.clubs) {
-    const squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
-    const juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
-    const juniorsToPromote = juniors.filter((p) => p.age >= 19);
+    let squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+    let juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
+    const juniorsToPromote = juniors.filter((p) => p.age >= 21);
     for (const j of juniorsToPromote) {
-      j.isYouth = false;
-      j.salary = calcSalary(club, j.overall, j.age, j.isStar, j.worldClass, false);
+      const result = promoteYouthPlayer(world, j, "age");
+      if (!result.ok) {
+        world.news.push({ dayIndex: world.dayIndex, text: `${j.name} reached 21 but could not be promoted because the professional squad is full`, kind: "academy", clubId: club.id });
+      }
     }
-    const need = Math.max(0, 8 - juniors.length);
+    juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
+    squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+    const need = Math.max(0, ACADEMY_TARGET - juniors.length);
     for (let i = 0; i < need; i++) {
-      const youth = generatePlayer(rng, club, { isYouth: true, id: world.nextId++ });
+      const youth = generatePlayer(rng, club, { isYouth: true, id: world.nextId++, seed: world.seed });
       world.players.push(youth);
+      world.news.push({ dayIndex: world.dayIndex, text: `${youth.name} joined the youth academy`, kind: "academy", clubId: club.id });
     }
     if (squad.length < 20) {
       for (let i = squad.length; i < 20; i++) {
-        const p = generatePlayer(rng, club, { id: world.nextId++ });
+        const p = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
         world.players.push(p);
       }
     }
@@ -646,24 +642,13 @@ export function rolloverSeason(rng: World["rng"], world: World): { promoted: num
   world.year += 1;
   world.dayIndex = 0;
   world.dayOfWeek = 0;
-  const summary = {
-    promoted: promotedAll,
-    relegated: relegatedAll,
-    cupChampionId: findCupWinner(world.competitions.find((c) => c.kind === "cup")!) ?? null,
-    stateChampionId: world.competitions.find((c) => c.kind === "state")?.winners[0] ?? null,
-  };
-  for (const comp of world.competitions) {
-    comp.stage = comp.kind === "cup" || comp.kind === "state" ? "group" : "group";
-    comp.round = 0;
-    comp.winners = [];
-    comp.standings = {};
-    comp.groupStandings = [];
-    comp.knockouts = [];
-  }
   world.fixtures = [];
   world.matches = [];
   world.auctions = [];
-  world.news = [];
+  const academyNews = world.news
+    .filter((item) => item.kind === "academy")
+    .map((item) => ({ ...item, dayIndex: 0 }));
+  world.news = academyNews;
   for (const player of world.players) {
     player.seasonGoals = 0;
     player.seasonAssists = 0;
@@ -675,5 +660,4 @@ export function rolloverSeason(rng: World["rng"], world: World): { promoted: num
     player.morale = Math.max(30, Math.min(100, player.morale));
   }
   buildSeasonStructure(world);
-  return summary;
 }

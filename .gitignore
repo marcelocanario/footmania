@@ -5,6 +5,9 @@ Elifoot/
 
 node_modules/
 
+# TypeScript build metadata
+*.tsbuildinfo
+
 # Build output
 backend/dist/
 frontend/dist/

@@ -13,6 +13,12 @@ export interface SkillSet {
   fin: number;
 }
 
+export interface PlayerDevelopmentProfile {
+  declineStartAge: number;
+  developmentRate: number;
+  developmentVolatility: number;
+}
+
 export interface Player {
   id: number;
   name: string;
@@ -52,6 +58,11 @@ export interface Player {
   suspendedGames: number;
   morale: number;
   loanId: number | null;
+  developmentProfile: PlayerDevelopmentProfile;
+  recentMinutes: number[];
+  // In-memory per-player clause multiplier (derived from clause/value on load,
+  // set at generation); refreshPlayerDerived keeps the clause proportional.
+  releaseClauseFactor: number;
 }
 
 export interface LedgerEntry {
@@ -83,8 +94,9 @@ export interface Club {
   id: number;
   name: string;
   shortName: string;
-  stateCode: string;
-  division: number;
+  // TODO(multiplayer): a future `ownerUserId: number | null` (or UserClub join)
+  // will land with the multiplayer model. `isHuman` remains for now.
+  country: string;
   reputation: number;
   level: number;
   cash: number;
@@ -97,6 +109,7 @@ export interface Club {
   boardConfidence: number;
   fanConfidence: number;
   tactics: Tactics;
+  trainingFocus: "assistant" | "primary" | "secondary";
   captainId: number | null;
   penaltyTakerId: number | null;
   savedLineup?: SavedLineup | null;
@@ -124,8 +137,6 @@ export interface GroupStandings {
 export interface Competition {
   id: number;
   kind: "league" | "cup" | "state";
-  division: number;
-  stateCode: string;
   name: string;
   round: number;
   stage: "group" | "knockout" | "finished";
@@ -216,6 +227,8 @@ export interface Match {
   stats: MatchStats;
   extraTime?: boolean;
   minuteEvents: MatchEvent[][];
+  // not persisted — used for activity tracking
+  minutes?: Record<number, number>;
 }
 
 export interface SubSlots {
@@ -254,6 +267,7 @@ export interface LiveMatchState {
   playerYellows: Record<number, number>;
   subSlots: SubSlots;
   suspensionClears: number[];
+  playerMinutes: Record<number, number>;
   shootout?: { scores: [number, number]; winner: number };
   ended: boolean;
 }
@@ -328,10 +342,6 @@ export interface TvDeal {
 export interface SeasonSummary {
   leagueChampionId: number | null;
   leagueRunnerUpId: number | null;
-  cupChampionId: number | null;
-  stateChampionId: number | null;
-  promoted: number[];
-  relegated: number[];
 }
 
 export interface World {

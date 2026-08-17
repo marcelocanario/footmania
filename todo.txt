@@ -1,5 +1,13 @@
 create a pro type of account
 
+Game engine
+-player development/decay
+--make players who have played a game this week develop more. players who have not played should receive a small debuff in development. similarly, not playing should negatively affect players who are decaying
+--make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
+
+
+
+
 Multiplayer
 -think of tournment structure
 -players create teams, choose team color, jerseys, country, stadium name, etc.
@@ -9,6 +17,7 @@ Multiplayer
 --pros can see match goals and other events and also get their league results as push
 -invite players should give some in-game advantage or give free pro
 -let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
+-spawn small leagues; human players automatically promoted over AI teams
 
 Implement a format to see the match happening (based on globoesporte?)
 
@@ -25,3 +34,4 @@ Questions:
 Questions/multiplayer:
 -how do we structure leagues/cups when players are coming/dropping? i thought of a seasons system, where a season is roughly a month in real life (with matches every other day or so). but i want some cups and periodically world cups with best teams from multiple leagues
 -how can we replace teams whose players are inactive/dropped? do we even need to do that? study how other games like Hattrick solve for that?
+-how many teams per league so that a season will take around 1 month with a game every other day?

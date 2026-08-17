@@ -1,20 +1,8 @@
-import { execSync } from "node:child_process";
-import { beforeAll, describe, expect, it } from "vitest";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 
 process.env.DATABASE_URL = "file:./test-live.db";
 process.env.NODE_ENV = "test";
-
-const here = dirname(fileURLToPath(import.meta.url));
-beforeAll(() => {
-  execSync("npx prisma db push --skip-generate --force-reset", {
-    cwd: join(here, ".."),
-    env: { ...process.env, DATABASE_URL: "file:./test-live.db" },
-    stdio: "ignore",
-  });
-}, 30_000);
 
 import { buildServer } from "../src/server";
 import type { FastifyInstance } from "fastify";
@@ -38,7 +26,7 @@ async function setupCareer(app: FastifyInstance, username: string) {
     method: "POST",
     url: `/api/saves/${saveId}/start`,
     headers: { cookie },
-    payload: { clubId: create.json().clubOptions[0].id },
+    payload: { country: "BRA" },
   });
   return { cookie, saveId };
 }
@@ -67,6 +55,10 @@ describe("live match over REST", () => {
     const s0 = live0.json().state;
     expect(s0.phase).toBe("pregame");
     expect(s0.minute).toBe(0);
+    expect(s0.homeClubId).toBeTypeOf("number");
+    expect(s0.awayClubId).toBeTypeOf("number");
+    expect(s0.homeKit.primary).toBeTypeOf("string");
+    expect(s0.awayKit.secondary).toBeTypeOf("string");
     expect(s0.homeOn.length).toBe(11);
     expect(s0.homeBench.length).toBeGreaterThan(0);
 
@@ -85,6 +77,11 @@ describe("live match over REST", () => {
     }
     expect(state.ended).toBe(true);
     expect(state.events.length).toBeGreaterThanOrEqual(0);
+    for (let i = 0; i < state.events.length; i++) {
+      expect(state.events[i].sequence).toBe(i);
+      expect(state.events[i]).toHaveProperty("playerId");
+      expect(state.events[i]).toHaveProperty("player2Id");
+    }
     expect(state.phase).toBe("fulltime");
 
     const finish = await app.inject({ method: "POST", url: `/api/matches/${matchId}/finish?saveId=${saveId}`, headers: { cookie } });

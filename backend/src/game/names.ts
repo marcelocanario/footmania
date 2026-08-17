@@ -8,31 +8,44 @@ const here = dirname(fileURLToPath(import.meta.url));
 const ASSETS = join(here, "..", "..", "assets");
 
 const nameCache: Record<string, string[]> = {};
+const poolSource: Record<string, "file" | "fallback"> = {};
+
+const FALLBACK_NAMES = ["Alex", "João", "Marco", "Luca", "James", "Ken", "Ivan", "Diego", "Omar", "Yuki"];
+const FALLBACK_SURNAMES = ["Silva", "Rossi", "Smith", "Khan", "Sato", "Nakamura", "Ferreira", "Muller", "Garcia", "Kim"];
 
 function loadPool(kind: "names" | "surnames", country: string): string[] {
   const key = `${kind}:${country}`;
   if (nameCache[key]) return nameCache[key];
+  let lines: string[] = [];
   try {
     const file = join(ASSETS, "namepools", kind, `${country}.txt`);
-    const lines = readFileSync(file, "utf8")
+    lines = readFileSync(file, "utf8")
       .split(/\r?\n/)
       .map((l) => l.trim())
       .filter((l) => l.length > 0 && !l.includes(".") && !/\d/.test(l));
-    nameCache[key] = lines;
   } catch {
-    nameCache[key] = [];
+    lines = [];
   }
+  // Sparse/empty pools fall back to a small generic pool so every country can
+  // still generate names.
+  if (lines.length === 0) {
+    lines = kind === "names" ? [...FALLBACK_NAMES] : [...FALLBACK_SURNAMES];
+    poolSource[key] = "fallback";
+  } else {
+    poolSource[key] = "file";
+  }
+  nameCache[key] = lines;
   return nameCache[key];
 }
 
 export function hasNamePool(country: string): boolean {
-  return loadPool("names", country).length > 0;
+  loadPool("names", country);
+  return poolSource[`names:${country}`] === "file";
 }
 
 export function generateName(rng: RngState, country: string): string {
   const names = loadPool("names", country);
   const surnames = loadPool("surnames", country);
-  if (names.length === 0) return "Player " + nextInt(rng, 999);
   let idx = nextInt(rng, names.length);
   if (idx === 0) idx = 1;
   let name = names[idx];

@@ -3,12 +3,21 @@ import { chance, nextInt, pick } from "./rng";
 import { positionCount } from "./club";
 import { generatePlayer } from "./player";
 import { generateName } from "./names";
+import { DAYS_PER_YEAR } from "./constants";
 
 const MIN_SQUAD = [3, 4, 4, 5, 4];
 const SURPLUS_MARKUP = [0.5, 0.2, 0.2, 0.2, 0.5, 1.0];
 const RARE_MARKUP = [1.5, 1.5, 1.5, 1.5, 2.0, 1.0];
 const NORMAL_MARKUP = [1.0, 1.0, 1.0, 1.0, 1.5, 2.0];
 const SURPLUS_DISCOUNT = [15, 20, 20, 10, 10, 2];
+
+/** Brasfoot free agents do not have a transfer fee; they ask for a one-time
+ * signing bonus based on their salary, with better players asking for more. */
+export function freeAgentSigningBonus(player: Pick<Player, "salary" | "overall">): number {
+  const overall = Math.max(0, Math.min(100, player.overall));
+  const multiplier = 1.5 + overall / 40;
+  return Math.max(1, Math.round(player.salary * multiplier));
+}
 
 export function squadNeeds(club: Club, allPlayers: Player[]): number[] {
   const counts = positionCount(club, allPlayers);
@@ -127,7 +136,9 @@ export function isEligibleAuctionBidder(
   club: Club
 ): boolean {
   if (club.isHuman) return false;
-  if (club.division > 2) return false;
+  // Auction bidding requires the financial sophistication of a rep >= 3 club;
+  // lower-reputation clubs shop the free-agent market instead (aiBuyGaps).
+  if (club.reputation < 3) return false;
   if (listing.sellerClubId !== null && club.id === listing.sellerClubId) return false;
   if (listing.bids.some((b) => b.clubId === club.id)) return false;
   return true;
@@ -178,13 +189,13 @@ export function transferPlayer(world: World, player: Player, toClub: Club, fee: 
 
 export function generateFreeAgents(rng: RngState, world: World, count: number) {
   for (let i = 0; i < count; i++) {
-    const club = pick(rng, world.clubs.filter((c) => c.division === 1 || c.division === 2));
-    const player = generatePlayer(rng, club, { id: world.nextId++ });
+    const club = pick(rng, world.clubs);
+    const player = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
     player.clubId = null;
-    player.contractDays = 180;
+    player.contractDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
     player.age = 18 + nextInt(rng, 12);
     player.isYouth = false;
-    player.name = generateName(rng, "BRA");
+    player.name = generateName(rng, club.country);
     world.players.push(player);
   }
 }
@@ -220,19 +231,23 @@ function findBuyer(rng: RngState, world: World, player: Player): Club | null {
 }
 
 export function aiBuyGaps(rng: RngState, world: World, club: Club) {
-  if (club.division > 2) return;
-  const monthlySalaries = world.players
+  // Free-agent signings are open to rep >= 2 clubs; the single rep-1 minnow
+  // rebuilds via academy and the free rollover squad top-up instead.
+  if (club.reputation < 2) return;
+  const seasonalWages = world.players
     .filter((p) => p.clubId === club.id)
     .reduce((s, p) => s + p.salary, 0);
   const needs = squadNeeds(club, world.players);
   for (let pos = 0; pos < 5; pos++) {
     if (needs[pos] > 0 && chance(rng, 40)) {
-      const candidates = world.players.filter((p) => p.clubId === null && p.position === pos && p.value < club.cash * 0.5);
+      const candidates = world.players.filter(
+        (p) => p.clubId === null && p.position === pos && freeAgentSigningBonus(p) < club.cash * 0.5
+      );
       if (candidates.length > 0) {
         const sorted = candidates.sort((a, b) => b.overall - a.overall);
         const target = sorted[0];
-        const price = Math.max(1, Math.round(target.value * 0.9));
-        if (club.cash - price < monthlySalaries) continue;
+        const price = freeAgentSigningBonus(target);
+        if (club.cash - price < seasonalWages) continue;
         if (transferPlayer(world, target, club, price)) {
           world.news.push({ dayIndex: world.dayIndex, text: `${club.name} signed ${target.name}`, kind: "transfer" });
         }

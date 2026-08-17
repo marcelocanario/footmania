@@ -50,3 +50,50 @@ export function shuffle<T>(rng: RngState, arr: T[]): T[] {
 export function chanceDenom(rng: RngState, denominator: number): boolean {
   return nextUint(rng) % denominator === 0;
 }
+
+// Box–Muller transform. nextDouble yields [0, 1); the zero guard keeps log() finite.
+export function normal(rng: RngState, mean: number, stdDev: number): number {
+  let u = nextDouble(rng);
+  if (u === 0) u = Number.EPSILON;
+  const v = nextDouble(rng);
+  const z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  return mean + z * stdDev;
+}
+
+// Rejection sampling with a hard iteration cap; falls back to clamping the mean.
+export function truncatedNormal(rng: RngState, mean: number, stdDev: number, min: number, max: number): number {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  if (stdDev <= 0) return Math.max(lo, Math.min(hi, mean));
+  for (let i = 0; i < 1000; i++) {
+    const x = normal(rng, mean, stdDev);
+    if (x >= lo && x <= hi) return x;
+  }
+  return Math.max(lo, Math.min(hi, mean));
+}
+
+// Marsaglia–Tsang gamma sampler (valid for shape >= 1).
+function gammaSample(rng: RngState, shape: number): number {
+  const d = shape - 1 / 3;
+  const c = 1 / Math.sqrt(9 * d);
+  for (;;) {
+    let x: number;
+    let v: number;
+    do {
+      x = normal(rng, 0, 1);
+      v = 1 + c * x;
+    } while (v <= 0);
+    v = v * v * v;
+    const u = nextDouble(rng);
+    if (u < 1 - 0.0331 * x * x * x * x || Math.log(u) < 0.5 * x * x + d * (1 - v + Math.log(v))) {
+      return d * v;
+    }
+  }
+}
+
+// Beta via the gamma-ratio method (alpha, beta >= 1).
+export function beta(rng: RngState, alpha: number, betaParam: number): number {
+  const a = gammaSample(rng, alpha);
+  const b = gammaSample(rng, betaParam);
+  return a / (a + b);
+}

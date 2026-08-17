@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { Trophy, ArrowDown, ArrowUp, PartyPopper, Medal } from "lucide-react";
+import { Trophy, PartyPopper, Medal } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 
@@ -8,8 +8,6 @@ export function SeasonEnd() {
   const navigate = useNavigate();
   const summary = snapshot?.seasonSummary;
   const clubName = snapshot?.club?.name;
-  const promoted = summary?.promoted.includes(clubName ?? "") ?? false;
-  const relegated = summary?.relegated.includes(clubName ?? "") ?? false;
 
   if (!summary) {
     return (
@@ -30,9 +28,8 @@ export function SeasonEnd() {
   }
 
   const champions = [
-    { label: "National Champion", value: summary.leagueChampion, icon: <Trophy size={18} /> },
-    { label: "National Cup", value: summary.cupChampion, icon: <Medal size={18} /> },
-    { label: "State Champion", value: summary.stateChampion, icon: <Medal size={18} /> },
+    { label: strings.seasonEnd.champion, value: summary.leagueChampion, icon: <Trophy size={18} /> },
+    { label: strings.seasonEnd.runnerUp, value: summary.leagueRunnerUp, icon: <Medal size={18} /> },
   ];
 
   return (
@@ -61,26 +58,14 @@ export function SeasonEnd() {
         <div style={{ fontFamily: "var(--font-display)", fontSize: "1.7rem", fontWeight: 800, letterSpacing: "0.05em" }}>
           {clubName}
         </div>
-        {promoted && (
-          <span className="chip" style={{ marginTop: 12, borderColor: "rgba(61,220,132,0.5)", color: "var(--grass-2)", background: "rgba(35,165,90,0.16)", fontWeight: 800, fontSize: "0.9rem", padding: "8px 18px" }}>
-            <ArrowUp size={14} /> PROMOTED!
-          </span>
-        )}
-        {relegated && (
-          <span className="chip" style={{ marginTop: 12, borderColor: "rgba(229,72,77,0.5)", color: "var(--red-2)", background: "rgba(229,72,77,0.14)", fontWeight: 800, fontSize: "0.9rem", padding: "8px 18px" }}>
-            <ArrowDown size={14} /> RELEGATED
-          </span>
-        )}
-        {!promoted && !relegated && (
-          <div style={{ color: "var(--text-2)", fontSize: "0.92rem", marginTop: 12 }}>
-            {summary.leagueChampion === clubName
-              ? "You are the National Champions!"
-              : "Another year in the books. See you next season, manager."}
-          </div>
-        )}
+        <div style={{ color: "var(--text-2)", fontSize: "0.92rem", marginTop: 12 }}>
+          {summary.leagueChampion === clubName
+            ? "You are the National Champions!"
+            : "Another year in the books. See you next season, manager."}
+        </div>
       </div>
 
-      <div className="grid cols-3 stagger">
+      <div className="grid cols-2 stagger">
         {champions.map((c) => (
           <div className="card" key={c.label} style={{ textAlign: "center", padding: "22px 16px" }}>
             <div style={{ color: "var(--gold-2)", marginBottom: 8, display: "flex", justifyContent: "center" }}>{c.icon}</div>
@@ -90,35 +75,6 @@ export function SeasonEnd() {
             </div>
           </div>
         ))}
-      </div>
-
-      <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
-        <div className="card">
-          <h2 className="card-title" style={{ color: "var(--grass-2)" }}>
-            <ArrowUp size={17} /> {strings.seasonEnd.promoted}
-          </h2>
-          <div className="news-list">
-            {summary.promoted.length === 0 && <div className="empty-state" style={{ padding: "20px 10px" }}>No promotions</div>}
-            {summary.promoted.map((name) => (
-              <div className="news-item" key={name}>
-                <span className="day" style={{ color: "var(--grass-2)" }}>↑</span> {name}
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="card">
-          <h2 className="card-title" style={{ color: "var(--red-2)" }}>
-            <ArrowDown size={17} /> {strings.seasonEnd.relegated}
-          </h2>
-          <div className="news-list">
-            {summary.relegated.length === 0 && <div className="empty-state" style={{ padding: "20px 10px" }}>No relegations</div>}
-            {summary.relegated.map((name) => (
-              <div className="news-item" key={name}>
-                <span className="day" style={{ color: "var(--red-2)" }}>↓</span> {name}
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
 
       {snapshot?.seasonAwards && snapshot.seasonAwards.length > 0 && (

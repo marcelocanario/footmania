@@ -1,4 +1,8 @@
 import type { Position } from "./types";
+import { gameConfig } from "../config";
+
+/** One season = one in-game year. */
+export const DAYS_PER_YEAR = gameConfig.seasonDays;
 
 export const POSITION_NAMES = ["GK", "FB", "CB", "MF", "FW"];
 
@@ -94,49 +98,17 @@ export const COUNTRY_GROUPS: Record<string, number> = {
   COL: 1,
 };
 
-export const LEAGUE_PRIZES: number[][] = [
-  [0, 0, 0, 0, 0, 0],
-  [5000000, 3500000, 2000000, 1500000, 1000000, 500000],
-  [2500000, 2000000, 1000000, 500000, 250000, 100000],
-  [1500000, 1000000, 500000, 300000, 150000, 75000],
-  [750000, 500000, 300000, 200000, 100000, 50000],
-];
+// Single flat league: prizes by final position (1..8), paid once per season.
+export const LEAGUE_PRIZES: number[] = [8000000, 5000000, 3000000, 2000000, 1200000, 800000, 500000, 300000];
 
-export const STATE_PRIZES = [700000, 500000, 300000, 100000];
+export const TV_POSITION_BONUS: number[] = [3000000, 2000000, 1200000, 800000, 500000, 300000, 200000, 100000];
 
-export const TV_POSITION_BONUS: number[][] = [
-  [0, 0, 0, 0, 0, 0],
-  [3000000, 2000000, 1500000, 1000000, 750000, 500000],
-  [1500000, 1000000, 750000, 500000, 250000, 150000],
-  [750000, 500000, 300000, 200000, 100000, 75000],
-  [400000, 250000, 150000, 100000, 75000, 50000],
-];
+// Indexed by reputation 1..5 (single value per reputation).
+export const SPONSORSHIP: number[] = [800000, 1500000, 3000000, 5000000, 8000000];
 
-export const CUP_PRIZES: number[][] = [
-  [0, 0, 0, 0, 0, 0],
-  [100000, 100000, 400000, 500000, 700000, 700000, 700000, 700000],
-  [100000, 100000, 400000, 500000, 700000, 700000, 700000, 700000],
-  [100000, 100000, 400000, 500000, 700000, 700000, 700000, 700000],
-  [100000, 100000, 400000, 500000, 700000, 700000, 700000, 700000],
-];
+export const STARTING_CASH: number[] = [3500000, 6000000, 9000000, 15000000, 25000000];
 
-export const SPONSORSHIP: number[][] = [
-  [3500000, 3500000],
-  [6000000, 6000000],
-  [4500000, 4500000],
-  [2500000, 2500000],
-  [2000000, 2000000],
-];
-
-export const STARTING_CASH: number[][] = [
-  [3500000, 2000000],
-  [15000000, 12000000],
-  [12000000, 10000000],
-  [10000000, 7000000],
-  [3500000, 3000000],
-];
-
-export const LOAN_LIMITS = [1000000, 5000000, 3000000, 2000000, 1500000];
+export const LOAN_LIMITS: number[] = [1000000, 1500000, 2000000, 3000000, 5000000];
 
 export const TICKET_PRICES: number[][] = [
   [200, 500, 50, 0],
@@ -228,9 +200,24 @@ export const GOAL_DAMPING: Record<number, number[]> = {
   6: [0.5, 40.55, 15.0],
 };
 
-export const DAYS_PER_YEAR = 364;
-
-export const MONTH_NAMES = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
+// Player development & decay system (spec: player-evelopment.md §31/§55).
+export const DEVELOPMENT = {
+  declineAge: { mean: 30.0, stdDev: 2.0, min: 24.0, max: 38.0 },
+  developmentRate: { alpha: 5.0, beta: 5.0, min: 0.6, max: 1.4 },
+  volatility: { alpha: 2.0, beta: 5.0, min: 0.03, max: 0.2 },
+  growthCurve: { referenceAge: 18.0, maxSeasonalGrowth: 3.0, exponent: 1.35 },
+  declineCurve: { initialDecline: 0.3, coefficient: 0.37, exponent: 1.5 },
+  activity: {
+    weights: [1.0, 0.75, 0.55, 0.4, 0.3],
+    regulationMinutes: 90,
+    defaultActivity: 0.7,
+    transferActivity: 0.7,
+    inactiveGrowthMultiplier: 0.65,
+    inactiveDeclineMultiplier: 1.4,
+  },
+  randomFactor: { mean: 1.0, min: 0.8, max: 1.2 },
+  developmentEpsilon: 0.000001,
+  tickFraction: 1 / DAYS_PER_YEAR,
+  recentMatchWindow: 5,
+  backfillVersion: "development-profile-v1",
+} as const;

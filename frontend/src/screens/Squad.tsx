@@ -41,18 +41,26 @@ const TRAITS = [
 ];
 
 type Tab = "seniors" | "juniors" | "tactics";
+type TrainingFocus = "assistant" | "primary" | "secondary";
 
 export function Squad() {
   const { snapshot, saveId, refresh } = useGame();
   const isMobile = useIsMobile();
   const [selected, setSelected] = useState<PlayerView | null>(null);
   const [showRenew, setShowRenew] = useState(false);
-  const [renewMonths, setRenewMonths] = useState(12);
+  const [renewSeasons, setRenewSeasons] = useState(1);
   const [renewSalary, setRenewSalary] = useState(0);
   const [renewDemand, setRenewDemand] = useState(0);
   const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
   const [tab, setTab] = useState<Tab>("seniors");
+  const [trainingFocus, setTrainingFocus] = useState<TrainingFocus>(snapshot?.club?.trainingFocus ?? "assistant");
   const toast = useRef<Toast>(null);
+  const seasonsOf = (days: number) => {
+    const per = snapshot?.save.seasonDays;
+    if (!per) return `${days}d`;
+    const s = Math.round(days / per);
+    return `${s} season${s === 1 ? "" : "s"}`;
+  };
 
   const club = snapshot?.club;
   const seniors = snapshot?.squad ?? [];
@@ -61,7 +69,7 @@ export function Squad() {
 
   const openRenew = (p: PlayerView) => {
     setSelected(p);
-    setRenewMonths(12);
+    setRenewSeasons(1);
     setRenewSalary(p.salary);
     setRenewDemand(p.salary);
     if (saveId) void api.contractDemand(saveId, p.id).then((res) => {
@@ -74,7 +82,7 @@ export function Squad() {
   const renew = async () => {
     if (!saveId || !selected) return;
     try {
-      await api.renewContract(saveId, selected.id, renewMonths, renewSalary);
+      await api.renewContract(saveId, selected.id, renewSeasons, renewSalary);
       toast.current?.show({ severity: "success", summary: strings.squad.contractDone });
       setShowRenew(false);
       refresh();
@@ -83,16 +91,13 @@ export function Squad() {
     }
   };
 
-  const train = async (p: PlayerView) => {
+  const saveTrainingFocus = async (focus: TrainingFocus) => {
     if (!saveId) return;
     try {
-      const res = await api.trainPlayer(saveId, p.id);
-      toast.current?.show({
-        severity: res.ok ? "success" : "info",
-        summary: res.ok ? strings.squad.trainDone : "No improvement this week",
-        detail: res.improved ? `Improved: ${res.improved}` : undefined,
-      });
-      refresh();
+      await api.setTrainingFocus(saveId, focus);
+      setTrainingFocus(focus);
+      toast.current?.show({ severity: "success", summary: "Training focus saved" });
+      await refresh();
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     }
@@ -115,6 +120,19 @@ export function Squad() {
     try {
       await api.loanPlayer(saveId, p.id, action);
       toast.current?.show({ severity: "success", summary: action === "offer" ? "Player listed for loan" : "Player recalled" });
+      await refresh();
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    }
+  };
+
+  const academyAction = async (p: PlayerView, action: "promote" | "dismiss") => {
+    if (!saveId) return;
+    const message = action === "promote" ? `Promote ${p.name} to the senior squad?` : `Release ${p.name} from the youth academy?`;
+    if (!window.confirm(message)) return;
+    try {
+      await api.academyAction(saveId, p.id, action);
+      toast.current?.show({ severity: "success", summary: action === "promote" ? "Player promoted" : "Player released" });
       await refresh();
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
@@ -172,6 +190,23 @@ export function Squad() {
             <button className="btn" onClick={saveTactics} style={{ width: "100%" }}>
               {strings.common.save}
             </button>
+            <div className="form-group" style={{ marginTop: 18 }}>
+              <label htmlFor="training-focus">{strings.squad.trainingFocus}</label>
+              <Dropdown
+                id="training-focus"
+                value={trainingFocus}
+                options={[
+                  { label: strings.squad.trainingAssistant, value: "assistant" },
+                  { label: strings.squad.trainingPrimary, value: "primary" },
+                  { label: strings.squad.trainingSecondary, value: "secondary" },
+                ]}
+                onChange={(e) => void saveTrainingFocus(e.value as TrainingFocus)}
+                style={{ width: "100%" }}
+              />
+              <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
+                {strings.squad.trainingHint}
+              </div>
+            </div>
             <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 12, lineHeight: 1.5 }}>
               Style, pressing and direction apply to every match. The starting eleven, bench and set-piece takers are saved with the lineup above.
             </div>
@@ -197,7 +232,7 @@ export function Squad() {
                 <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} />} style={{ width: 120 }} />
                 {!isMobile && <Column header="Morale" body={(p: PlayerView) => <RatingBar value={p.morale} />} style={{ width: 110 }} />}
                 {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} style={{ width: 90 }} />}
-                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => `${money(p.salary)}/mo`} style={{ width: 100 }} />}
+                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => `${money(p.salary)}/season`} style={{ width: 100 }} />}
               </DataTable>
             </div>
           </div>
@@ -248,6 +283,9 @@ export function Squad() {
               <div style={{ margin: "14px 0", padding: "12px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
                 <div className="section-label" style={{ marginBottom: 2 }}>Skill profile</div>
                 <PlayerSkillsRadar skills={selectedPlayer.skills} />
+                <div style={{ color: "var(--text-3)", fontSize: "0.78rem", lineHeight: 1.45, marginTop: 6 }}>
+                  {strings.squad.overallHint}
+                </div>
               </div>
 
               <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 14 }}>
@@ -266,7 +304,7 @@ export function Squad() {
                 </div>
                 <div className="stat">
                   <div className="label">{strings.squad.contract}</div>
-                  <div className="value" style={{ fontSize: "1.15rem" }}>{Math.round(selectedPlayer.contractDays / 30)} mo</div>
+                  <div className="value" style={{ fontSize: "1.15rem" }}>{seasonsOf(selectedPlayer.contractDays)}</div>
                 </div>
                 <div className="stat">
                   <div className="label">Season</div>
@@ -275,18 +313,19 @@ export function Squad() {
               </div>
 
               <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>
-                  {strings.squad.renew}
-                </button>
-                <button className="btn ghost" style={{ flex: 1 }} onClick={() => train(selectedPlayer)}>
-                  <Dumbbell size={14} /> {strings.squad.train}
-                </button>
-                {selectedPlayer.age <= 23 && !selectedPlayer.isYouth && (
+                {!selectedPlayer.isYouth && <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>{strings.squad.renew}</button>}
+                {selectedPlayer.isYouth ? (
+                  <>
+                    <button className="btn" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "promote")}>{strings.squad.promoteYouth}</button>
+                    <button className="btn ghost" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "dismiss")}>{strings.squad.dismissYouth}</button>
+                  </>
+                ) : selectedPlayer.age <= 23 && (
                   <button className="btn ghost" style={{ flex: 1 }} onClick={() => loanAction(selectedPlayer)}>
                     {selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
                   </button>
                 )}
               </div>
+              {selectedPlayer.isYouth && <div className="hint" style={{ marginTop: 10 }}>Automatic promotion is attempted when this player reaches age 21.</div>}
             </div>
           )}
         </div>
@@ -297,15 +336,15 @@ export function Squad() {
           <>
             <h3 style={{ marginBottom: 4 }}>{selectedPlayer.name}</h3>
             <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 16 }}>
-              Current salary {money(selectedPlayer.salary)}/mo · Demand {money(renewDemand)}/mo · Contract {Math.round(selectedPlayer.contractDays / 30)} mo left
+              Current salary {money(selectedPlayer.salary)}/season · Demand {money(renewDemand)}/season · Contract {seasonsOf(selectedPlayer.contractDays)} left
             </div>
             <div className="form-group">
-              <label htmlFor="renew-months">{strings.squad.contractMonths}</label>
+              <label htmlFor="renew-seasons">{strings.squad.contractMonths}</label>
               <Dropdown
-                id="renew-months"
-                value={renewMonths}
-                options={[6, 12, 24, 36].map((m) => ({ label: m === 6 ? "6 months" : `${m / 12} years`, value: m }))}
-                onChange={(e) => setRenewMonths(e.value)}
+                id="renew-seasons"
+                value={renewSeasons}
+                options={[1, 2, 3, 4, 5].map((s) => ({ label: s === 1 ? "1 season" : `${s} seasons`, value: s }))}
+                onChange={(e) => setRenewSeasons(e.value)}
                 style={{ width: "100%" }}
               />
             </div>

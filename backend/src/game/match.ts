@@ -1,4 +1,4 @@
-import type { Club, LiveMatchState, Match, MatchEvent, MatchStats, Player, RngState, SkillSet, SubSlots, World } from "./types";
+import type { Club, LiveMatchState, Match, MatchEvent, MatchStats, Player, RngState, SubSlots, World } from "./types";
 import { chanceDenom, nextInt, shuffle } from "./rng";
 import { lineupForMatch, tacPosToBasePosition } from "./club";
 import {
@@ -8,6 +8,7 @@ import {
   CARD_YELLOW,
   CARD_YELLOW_PRESSING,
   CARD_YELLOW_SECOND,
+  DEVELOPMENT,
   EVENT_CODES,
   GOAL_DAMPING,
   GOAL_SUBTYPES,
@@ -18,6 +19,7 @@ import {
   SHOTTER_WEIGHTS,
 } from "./constants";
 import { injuryDays } from "./player";
+import { TACTICAL_RATING_WEIGHTS, tacticalSkillRating } from "./rating";
 
 export interface RatingContext {
   kind: "league" | "cup" | "state";
@@ -26,35 +28,6 @@ export interface RatingContext {
   awayClubId: number;
 }
 
-// Brasfoot c/b.java B() — per-tacPos skill weights (individual ability always on).
-const RATING_WEIGHTS: Record<number, [keyof SkillSet, number][]> = {
-  1: [["gol", 0.6], ["tec", 0.15], ["vel", 0.15], ["pas", 0.1]],
-  2: [["des", 0.4], ["vel", 0.1], ["tec", 0.1], ["pas", 0.3], ["arm", 0.05], ["fin", 0.05]],
-  3: [["des", 0.5], ["tec", 0.1], ["vel", 0.25], ["pas", 0.1], ["arm", 0.05]],
-  4: [["des", 0.5], ["tec", 0.1], ["vel", 0.25], ["pas", 0.1], ["arm", 0.05]],
-  5: [["des", 0.5], ["tec", 0.1], ["vel", 0.25], ["pas", 0.1], ["arm", 0.05]],
-  6: [["des", 0.5], ["tec", 0.1], ["vel", 0.25], ["pas", 0.1], ["arm", 0.05]],
-  7: [["des", 0.5], ["tec", 0.1], ["vel", 0.25], ["pas", 0.1], ["arm", 0.05]],
-  8: [["des", 0.5], ["tec", 0.1], ["vel", 0.25], ["pas", 0.1], ["arm", 0.05]],
-  9: [["des", 0.4], ["vel", 0.1], ["tec", 0.1], ["pas", 0.3], ["arm", 0.05], ["fin", 0.05]],
-  10: [["des", 0.05], ["vel", 0.25], ["tec", 0.15], ["pas", 0.25], ["arm", 0.2], ["fin", 0.1]],
-  11: [["des", 0.4], ["vel", 0.15], ["tec", 0.1], ["pas", 0.2], ["arm", 0.1], ["fin", 0.05]],
-  12: [["des", 0.4], ["vel", 0.15], ["tec", 0.1], ["pas", 0.2], ["arm", 0.1], ["fin", 0.05]],
-  13: [["des", 0.4], ["vel", 0.15], ["tec", 0.1], ["pas", 0.2], ["arm", 0.1], ["fin", 0.05]],
-  14: [["des", 0.05], ["vel", 0.1], ["tec", 0.1], ["pas", 0.25], ["arm", 0.4], ["fin", 0.1]],
-  15: [["des", 0.05], ["vel", 0.1], ["tec", 0.1], ["pas", 0.25], ["arm", 0.4], ["fin", 0.1]],
-  16: [["des", 0.05], ["vel", 0.1], ["tec", 0.1], ["pas", 0.25], ["arm", 0.4], ["fin", 0.1]],
-  17: [["des", 0.05], ["vel", 0.25], ["tec", 0.15], ["pas", 0.25], ["arm", 0.2], ["fin", 0.1]],
-  18: [["vel", 0.25], ["tec", 0.15], ["pas", 0.15], ["arm", 0.05], ["fin", 0.4]],
-  19: [["vel", 0.25], ["tec", 0.25], ["pas", 0.05], ["arm", 0.05], ["fin", 0.4]],
-  20: [["vel", 0.25], ["tec", 0.25], ["pas", 0.05], ["arm", 0.05], ["fin", 0.4]],
-  21: [["vel", 0.25], ["tec", 0.25], ["pas", 0.05], ["arm", 0.05], ["fin", 0.4]],
-  22: [["vel", 0.25], ["tec", 0.25], ["pas", 0.05], ["arm", 0.05], ["fin", 0.4]],
-  23: [["vel", 0.25], ["tec", 0.25], ["pas", 0.05], ["arm", 0.05], ["fin", 0.4]],
-  24: [["vel", 0.25], ["tec", 0.25], ["pas", 0.05], ["arm", 0.05], ["fin", 0.4]],
-  25: [["vel", 0.25], ["tec", 0.15], ["pas", 0.15], ["arm", 0.05], ["fin", 0.4]],
-};
-
 // Brasfoot aq.sS — picker position ranges for cards/injuries.
 const POSITION_RANGES = [
   [10, 13], [14, 17], [3, 8], [2, 3], [8, 9], [19, 24], [1, 1],
@@ -62,10 +35,10 @@ const POSITION_RANGES = [
 
 export function matchRating(p: Player, ctx: RatingContext): number {
   if (p.injuryDays > 0) return 1;
-  const weights = RATING_WEIGHTS[p.tacPos];
+  const weights = TACTICAL_RATING_WEIGHTS[p.tacPos];
   let n = 0;
   if (weights) {
-    for (const [key, w] of weights) n += Math.round(p.skills[key] * w);
+    n = tacticalSkillRating(p.skills, p.tacPos);
   }
   if (p.tacPos <= 0) n = Math.round(n * 0.5);
   if (n <= 0) n = 1;
@@ -297,6 +270,7 @@ interface LiveRuntime {
   ctx: RatingContext;
   playerYellows: Record<number, number>;
   subSlots: SubSlots;
+  playerMinutes: Record<number, number>;
 }
 
 function event(type: number, subtype: number, minute: number, half: number, clubId: number, playerId: number | null, player2Id: number | null, goalType: number): MatchEvent {
@@ -305,13 +279,19 @@ function event(type: number, subtype: number, minute: number, half: number, club
 
 function bestBenchForTacPos(bench: Player[], tacPos: number, outIsGK: boolean): Player | null {
   if (outIsGK) {
-    const gks = bench.filter((p) => p.position === 0).sort((a, b) => b.overall - a.overall || b.energy - a.energy);
+    const gks = bench
+      .filter((p) => p.position === 0)
+      .sort((a, b) => tacticalSkillRating(b.skills, 1) - tacticalSkillRating(a.skills, 1) || b.overall - a.overall || b.energy - a.energy);
     return gks[0] ?? null;
   }
   const base = tacPosToBasePosition(tacPos);
-  const same = bench.filter((p) => p.position === base).sort((a, b) => b.overall - a.overall || b.energy - a.energy);
+  const same = bench
+    .filter((p) => p.position === base)
+    .sort((a, b) => tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos) || b.overall - a.overall || b.energy - a.energy);
   if (same.length > 0) return same[0];
-  const others = bench.filter((p) => p.position !== 0).sort((a, b) => b.overall - a.overall);
+  const others = bench
+    .filter((p) => p.position !== 0)
+    .sort((a, b) => tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos) || b.overall - a.overall);
   return others[0] ?? null;
 }
 
@@ -778,6 +758,9 @@ export function createLiveMatchState(
   const setup = setupMatch(home, away, allPlayers);
   const homeXI = setup.homeXI.length === 11 ? setup.homeXI : setup.homeSubs.slice(0, 11).concat(setup.homeXI).slice(0, 11);
   const awayXI = setup.awayXI.length === 11 ? setup.awayXI : setup.awaySubs.slice(0, 11).concat(setup.awayXI).slice(0, 11);
+  const squad = [...homeXI, ...awayXI, ...setup.homeSubs, ...setup.awaySubs];
+  const playerMinutes: Record<number, number> = {};
+  for (const p of squad) playerMinutes[p.id] = 0;
   const suspensionClears = allPlayers
     .filter((p) => (p.clubId === home.id || p.clubId === away.id) && p.suspendedGames > 0)
     .map((p) => p.id);
@@ -812,8 +795,21 @@ export function createLiveMatchState(
     playerYellows: {},
     subSlots: rollSubSlots(rng),
     suspensionClears,
+    playerMinutes,
     ended: false,
   };
+}
+
+/** Reconstruct the eligible-squad minute map when an older saved live state
+ * lacks playerMinutes (pre-feature saves): every XI + bench member gets a 0
+ * entry so they record an eligible match, exactly like a fresh kickoff. */
+function seededPlayerMinutes(st: LiveMatchState): Record<number, number> {
+  if (st.playerMinutes) return st.playerMinutes;
+  const seeded: Record<number, number> = {};
+  for (const id of [...st.homeXI, ...st.awayXI, ...st.homeSubs, ...st.awaySubs]) {
+    if (seeded[id] === undefined) seeded[id] = 0;
+  }
+  return seeded;
 }
 
 function runtimeFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[]): LiveRuntime {
@@ -856,6 +852,7 @@ function runtimeFromState(st: LiveMatchState, home: Club, away: Club, allPlayers
     ctx,
     playerYellows: st.playerYellows ?? {},
     subSlots: st.subSlots ?? { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] },
+    playerMinutes: seededPlayerMinutes(st),
   };
 }
 
@@ -881,6 +878,7 @@ function writeBackState(lm: LiveRuntime, st: LiveMatchState) {
   st.withBall = lm.withBall;
   st.possessionCounts = lm.possessionCounts;
   st.playerYellows = lm.playerYellows;
+  st.playerMinutes = lm.playerMinutes;
 }
 
 export interface LiveTickResult {
@@ -945,6 +943,9 @@ function tickRuntime(rng: RngState, st: LiveMatchState, lm: LiveRuntime, minutes
     }
     const ev = resolveMinute(rng, lm, st.half, st.minute);
     if (ev) newEvents.push(ev);
+    for (const p of [...lm.homeOn, ...lm.awayOn]) {
+      lm.playerMinutes[p.id] = (lm.playerMinutes[p.id] ?? 0) + 1;
+    }
     st.minute++;
     remaining--;
   }
@@ -1035,6 +1036,7 @@ function matchFromRuntime(st: LiveMatchState, lm: LiveRuntime, opts: { competiti
     stats,
     extraTime: st.extraTimePlayed,
     minuteEvents: [],
+    minutes: { ...st.playerMinutes },
   };
 }
 
@@ -1113,6 +1115,11 @@ export function rebuildLiveHumanLineup(st: LiveMatchState, humanClub: Club, allP
   const xi = setup.starters.length === 11 ? setup.starters : setup.subs.slice(0, 11).concat(setup.starters).slice(0, 11);
   const xiIds = xi.map((p) => p.id);
   const subIds = setup.subs.map((p) => p.id);
+  // A rebuilt pregame squad must be tracked from 0: any newly added squad
+  // member is an eligible 0-minute participant when the match finishes.
+  for (const id of [...xiIds, ...subIds]) {
+    if (st.playerMinutes[id] === undefined) st.playerMinutes[id] = 0;
+  }
   if (st.homeClubId === humanClub.id) {
     st.homeXI = xiIds;
     st.homeOn = xiIds.slice();
@@ -1139,6 +1146,13 @@ export function tribunalSuspension(rng: RngState): number {
 
 export function applyMatchToPlayers(match: Match, world: World) {
   const byId = new Map(world.players.map((p) => [p.id, p]));
+  if (match.minutes) {
+    for (const [id, minutes] of Object.entries(match.minutes)) {
+      const p = byId.get(Number(id));
+      if (!p) continue;
+      p.recentMinutes = [minutes, ...(p.recentMinutes ?? [])].slice(0, DEVELOPMENT.recentMatchWindow);
+    }
+  }
   for (const ev of match.events) {
     const p = ev.playerId ? byId.get(ev.playerId) : null;
     if (!p) continue;

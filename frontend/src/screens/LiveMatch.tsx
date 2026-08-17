@@ -4,6 +4,7 @@ import { FastForward, Flag, Play, RefreshCw, Subscript } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { LineupPicker } from "../components/LineupPicker";
+import { MatchPitch } from "../components/MatchPitch";
 
 const EVENT_LABELS: Record<number, string> = {
   1: "Goal!",
@@ -337,6 +338,13 @@ export function LiveMatch() {
           </div>
           <LineupPicker mode="match" matchId={state.matchId} />
         </div>
+        <MatchPitch
+          home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn }}
+          away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn }}
+          events={state.events}
+          phase={state.phase}
+          minute={state.minute}
+        />
       </div>
     );
   }
@@ -383,6 +391,14 @@ export function LiveMatch() {
           {barRow("On target", stats.onGoal[0], stats.onGoal[1])}
         </div>
       </div>
+
+      <MatchPitch
+        home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn }}
+        away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn }}
+        events={state.events}
+        phase={state.phase}
+        minute={state.minute}
+      />
 
       {state.phase === "halftime" && (
         <div className="card" style={{ borderColor: "rgba(240,180,41,0.4)", marginBottom: 16, textAlign: "center", padding: "18px 14px" }}>

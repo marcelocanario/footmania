@@ -1,7 +1,11 @@
-import type { Club, Player, Position, RngState, SkillSet } from "./types";
-import { chance, chanceDenom, nextInt } from "./rng";
+import type { Club, Player, PlayerDevelopmentProfile, Position, RngState, SkillSet } from "./types";
+import { beta, chance, chanceDenom, createRng, nextInt, truncatedNormal } from "./rng";
 import { generateName } from "./names";
-import { COUNTRY_GROUPS } from "./constants";
+import { COUNTRIES } from "./countries";
+import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
+import { overallFromSkills, SKILL_KEYS, trainingWeights } from "./rating";
+
+export { overallFromSkills } from "./rating";
 
 export const CHARACTERISTIC_NAMES = [
   "Positioning", "Penalty Save", "Reflexes", "Off the Line", "Playmaking",
@@ -54,12 +58,14 @@ function levelFactor(level: number): number {
 }
 
 function repFactor(club: Club): [number, number] {
-  if (club.division === 1) return [20, 7];
-  if (club.division === 2) return [15, 3];
-  if (club.division === 3) return [5, 1];
-  if (club.reputation === 5) return [22, 7];
-  if (club.reputation === 4) return [15, 4];
-  return [5, 1];
+  const rep = Math.max(1, Math.min(5, club.reputation));
+  switch (rep) {
+    case 5: return [20, 7];
+    case 4: return [15, 4];
+    case 3: return [12, 3];
+    case 2: return [8, 2];
+    default: return [5, 1];
+  }
 }
 
 function sideVariant(position: Position, c1: number, c2: number): number {
@@ -257,7 +263,6 @@ export function calcValue(club: Club, overall: number, age: number, tier: number
     clubFactor = level >= 22 ? Math.round(clubFactor * 3) : level >= 21 ? Math.round(clubFactor * 2) : Math.round(clubFactor * 1.7);
   }
   if (worldClass) clubFactor = Math.round(clubFactor * 1.6);
-  if (club.division === 4) clubFactor = Math.round(clubFactor * 1.3);
   let base = overall * 2;
   base *= base;
   let ageTerm = 0;
@@ -275,11 +280,10 @@ export function calcValue(club: Club, overall: number, age: number, tier: number
 }
 
 export function calcSalary(club: Club, overall: number, age: number, isStar: boolean, worldClass: boolean, isYouth: boolean): number {
-  let factor = 350;
-  if (club.division === 1) factor = 750;
-  else if (club.division === 2) factor = 550;
-  else if (club.division === 3) factor = 500;
-  else if (club.division >= 4) factor = 450;
+  // Salary is the full wage for one season (1 season = 1 in-game year).
+  const SALARY_FACTORS = [0, 300, 450, 650, 900, 1200];
+  const rep = Math.max(1, Math.min(5, club.reputation));
+  let factor = SALARY_FACTORS[rep];
   if (club.level > 20) factor += 50;
   if (isStar || worldClass) factor = Math.round(factor * 0.5) * 2;
   factor = Math.round(factor * 0.5);
@@ -289,10 +293,31 @@ export function calcSalary(club: Club, overall: number, age: number, isStar: boo
   if (salary < 500) salary = 500;
   if (worldClass) salary = Math.round(salary * 1.4);
   if (isYouth) salary = Math.round(salary * 0.1);
-  return salary * 4;
+  return salary;
 }
 
-export function generatePlayer(rng: RngState, club: Club, opts: { position?: Position; isYouth?: boolean; id: number }): Player {
+export function generateDevelopmentProfile(rng: RngState): PlayerDevelopmentProfile {
+  const declineStartAge = truncatedNormal(rng, DEVELOPMENT.declineAge.mean, DEVELOPMENT.declineAge.stdDev, DEVELOPMENT.declineAge.min, DEVELOPMENT.declineAge.max);
+  const developmentRate = DEVELOPMENT.developmentRate.min + (DEVELOPMENT.developmentRate.max - DEVELOPMENT.developmentRate.min) * beta(rng, DEVELOPMENT.developmentRate.alpha, DEVELOPMENT.developmentRate.beta);
+  const developmentVolatility = DEVELOPMENT.volatility.min + (DEVELOPMENT.volatility.max - DEVELOPMENT.volatility.min) * beta(rng, DEVELOPMENT.volatility.alpha, DEVELOPMENT.volatility.beta);
+  return { declineStartAge, developmentRate, developmentVolatility };
+}
+
+function fnv1a(str: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+export function backfillDevelopmentProfile(worldSeed: number, playerId: number): PlayerDevelopmentProfile {
+  const hash = fnv1a(`${worldSeed}|${playerId}|${DEVELOPMENT.backfillVersion}`);
+  return generateDevelopmentProfile(createRng(hash));
+}
+
+export function generatePlayer(rng: RngState, club: Club, opts: { position?: Position; isYouth?: boolean; id: number; seed?: number }): Player {
   const isYouth = opts.isYouth ?? false;
   const tier = isYouth ? Math.max(1, tierForClub(rng, club) - 1) : tierForClub(rng, club);
   const isStar = tier === 10 && chance(rng, 10);
@@ -310,14 +335,25 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
   const pair = pairs[nextInt(rng, pairs.length)];
   const c1 = pair[0];
   const c2 = pair[1];
-  let country = club.stateCode === "SP" ? "BRA" : "BRA";
+  let country = club.country;
   if (isStar && club.level >= 18 && chance(rng, 50)) {
-    const foreign = ["ARG", "URU", "COL", "POR", "ESP", "ITA", "FRA", "ING", "ALE"];
-    country = foreign[nextInt(rng, foreign.length)];
+    // Weighted pick over all countries by strength (nivel 11-20).
+    const pool = COUNTRIES.filter((c) => c.code !== country);
+    let total = 0;
+    for (const c of pool) total += c.strength - 10;
+    let roll = nextInt(rng, Math.max(1, total));
+    for (const c of pool) {
+      roll -= c.strength - 10;
+      if (roll < 0) {
+        country = c.code;
+        break;
+      }
+    }
   }
-  const overall = calcOverall(rng, club, tier, isStar, isYouth);
+  const seedOverall = calcOverall(rng, club, tier, isStar, isYouth);
   const [ovrRep, skillRep] = repFactor(club);
-  const skills = generateSkills(rng, position, c1, c2, overall, club.level, skillRep);
+  const skills = generateSkills(rng, position, c1, c2, seedOverall, club.level, skillRep);
+  const overall = overallFromSkills(position, skills);
   const player: Player = {
     id: opts.id,
     name: generateName(rng, country),
@@ -336,7 +372,7 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     value: calcValue(club, overall, age, tier, isStar, worldClass, isYouth),
     releaseClause: 0,
     injuryDays: 0,
-    contractDays: isYouth ? 365 * 4 : 365 * (1 + nextInt(rng, 3)),
+    contractDays: isYouth ? DAYS_PER_YEAR * 4 : DAYS_PER_YEAR * (1 + nextInt(rng, 3)),
     isYouth,
     isStar,
     worldClass,
@@ -357,9 +393,15 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     suspendedGames: 0,
     morale: 70,
     loanId: null,
+    developmentProfile: { declineStartAge: 30, developmentRate: 1, developmentVolatility: 0.1 },
+    recentMinutes: [],
+    releaseClauseFactor: 0.2,
   };
-  player.releaseClause = Math.round(player.value * (0.12 + nextInt(rng, 24) / 100));
-  if (isYouth) player.releaseClause = Math.round(player.value * 0.35);
+  const releaseFactor = isYouth ? 0.35 : 0.12 + nextInt(rng, 24) / 100;
+  player.releaseClause = Math.round(player.value * releaseFactor);
+  player.releaseClauseFactor = releaseFactor;
+  player.developmentProfile = backfillDevelopmentProfile(opts.seed ?? club.id, opts.id);
+  player.recentMinutes = [];
   return player;
 }
 
@@ -376,66 +418,101 @@ export function overallCap(club: Club): number {
   return cap;
 }
 
-export function weeklyGrowth(rng: RngState, player: Player, club: Club) {
-  const cap = overallCap(club);
-  let rate = 0;
-  let base = 50;
-  let nivel = club.level;
-  if (club.reputation >= 4) nivel = 20;
-  else if (club.reputation === 3) nivel = 18;
-  else if (club.reputation <= 2) nivel = 12;
-  if (nivel >= 19) rate = player.age < 20 ? 8 / base : player.age < 23 ? 6 / base : player.age < 29 ? 5 / base : 4 / base;
-  else if (nivel >= 15) rate = player.age < 18 ? 6 / base : player.age < 21 ? 5 / base : player.age < 29 ? 4 / base : 3 / base;
-  else if (nivel >= 11) rate = player.age < 18 ? 5 / base : player.age < 21 ? 4 / base : player.age < 29 ? 3 / base : 2 / base;
-  else rate = player.age < 18 ? 4 / base : player.age < 21 ? 3 / base : player.age < 29 ? 2 / base : 1 / base;
-  if (player.starter) rate += 0.04;
-  if (player.overall >= 30 && player.overall <= 40) rate -= 0.02;
-  else if (player.overall >= 41 && player.overall <= 50) rate -= 0.03;
-  else if (player.overall >= 51 && player.overall <= 70) rate -= 0.04;
-  else if (player.overall >= 71) rate -= 0.05;
-  if (player.tier >= 9) rate += 0.07;
-  else if (player.tier >= 7) rate += 0.05;
-  if (rate < 0.01) rate = 0.01;
-  player.growthAcc += rate;
-  if (player.growthAcc > 1 && player.overall < 100) {
-    if (player.overall < cap) {
-      player.overall += 1;
-      player.growthAcc -= 1;
-    } else {
-      player.growthAcc = 1;
-    }
-  }
-  if (player.overall > 100) player.overall = 100;
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
 }
 
-export function weeklyDecline(rng: RngState, player: Player, club: Club) {
-  let d5 = player.age - 31;
-  const nivel = club.level;
-  let division = club.division;
-  if (club.reputation >= 4) division = 1;
-  else if (club.reputation >= 3) division = 2;
-  else division = 3;
-  if (nivel >= 20) d5 -= 2;
-  let factor = 0;
-  if (player.overall <= 50) factor = 0.7 * d5;
-  else if (player.overall <= 70) factor = 1.0 * d5;
-  else factor = 1.2 * d5;
-  if (factor > 0) {
-    const rate = factor / 50;
-    let floor = 10;
-    if (division === 1) floor = 35;
-    else if (division === 2) floor = 25;
-    else floor = 10;
-    player.growthAcc += rate;
-    if (player.growthAcc > 1 && player.overall > floor) {
-      player.overall -= 1;
-      player.growthAcc -= 1;
+export function calculatePreciseAge(player: Player, dayIndex: number): number {
+  return player.age + dayIndex / DAYS_PER_YEAR;
+}
+
+export function calculateAgeDevelopment(age: number, declineStartAge: number): number {
+  if (age < declineStartAge) {
+    const span = declineStartAge - DEVELOPMENT.growthCurve.referenceAge;
+    const p = span > 0 ? clamp((age - DEVELOPMENT.growthCurve.referenceAge) / span, 0, 1) : 0;
+    return DEVELOPMENT.growthCurve.maxSeasonalGrowth * Math.pow(1 - p, DEVELOPMENT.growthCurve.exponent);
+  }
+  const t = age - declineStartAge;
+  return -(DEVELOPMENT.declineCurve.initialDecline + DEVELOPMENT.declineCurve.coefficient * Math.pow(t, DEVELOPMENT.declineCurve.exponent));
+}
+
+export function calculateRecentActivity(player: Player): number {
+  const minutes = player.recentMinutes ?? [];
+  if (minutes.length === 0) return DEVELOPMENT.activity.defaultActivity;
+  const weights = DEVELOPMENT.activity.weights;
+  let weighted = 0;
+  let totalWeight = 0;
+  const count = Math.min(minutes.length, weights.length);
+  for (let i = 0; i < count; i++) {
+    const ratio = clamp(minutes[i] / DEVELOPMENT.activity.regulationMinutes, 0, 1);
+    weighted += ratio * weights[i];
+    totalWeight += weights[i];
+  }
+  return totalWeight > 0 ? weighted / totalWeight : DEVELOPMENT.activity.defaultActivity;
+}
+
+export function calculateGrowthActivityModifier(activity: number): number {
+  return DEVELOPMENT.activity.inactiveGrowthMultiplier + (1 - DEVELOPMENT.activity.inactiveGrowthMultiplier) * clamp(activity, 0, 1);
+}
+
+export function calculateDeclineActivityModifier(activity: number): number {
+  return 1 + (DEVELOPMENT.activity.inactiveDeclineMultiplier - 1) * (1 - clamp(activity, 0, 1));
+}
+
+export function calculateActivityModifier(careerAdjusted: number, activity: number): number {
+  if (Math.abs(careerAdjusted) < DEVELOPMENT.developmentEpsilon) return 1;
+  return careerAdjusted > 0 ? calculateGrowthActivityModifier(activity) : calculateDeclineActivityModifier(activity);
+}
+
+export function generateDevelopmentRandomFactor(rng: RngState, player: Player): number {
+  return truncatedNormal(
+    rng,
+    DEVELOPMENT.randomFactor.mean,
+    player.developmentProfile.developmentVolatility,
+    DEVELOPMENT.randomFactor.min,
+    DEVELOPMENT.randomFactor.max
+  );
+}
+
+export function applyDevelopment(rng: RngState, player: Player, club: Club, dayIndex: number): void {
+  const age = calculatePreciseAge(player, dayIndex);
+  const base = calculateAgeDevelopment(age, player.developmentProfile.declineStartAge);
+  if (Math.abs(base) < DEVELOPMENT.developmentEpsilon) return;
+  const career = base * player.developmentProfile.developmentRate;
+  const activity = calculateRecentActivity(player);
+  const modifier = calculateActivityModifier(career, activity);
+  let budget = career * modifier * DEVELOPMENT.tickFraction;
+  budget *= generateDevelopmentRandomFactor(rng, player);
+  const weights = trainingWeights(player.position, club.trainingFocus ?? "assistant", player.skills);
+  const ceiling = developmentCeiling(player, club);
+  ensureSkillAcc(player);
+  for (const [i, key] of SKILL_KEYS.entries()) {
+    player.skillAcc[i] += budget * weights[key];
+    if (budget >= 0) {
+      while (player.skillAcc[i] >= 1) {
+        if (player.skills[key] >= 100 || overallFromSkills(player.position, { ...player.skills, [key]: player.skills[key] + 1 }) > ceiling) {
+          player.skillAcc[i] = Math.min(player.skillAcc[i], 0.999999);
+          break;
+        }
+        player.skills[key] += 1;
+        player.skillAcc[i] -= 1;
+      }
+    } else {
+      while (player.skillAcc[i] <= -1) {
+        if (player.skills[key] <= 1) {
+          player.skillAcc[i] = -0.999999;
+          break;
+        }
+        player.skills[key] -= 1;
+        player.skillAcc[i] += 1;
+      }
     }
   }
-  if (player.overall < 1) player.overall = 1;
+  refreshPlayerDerived(club, player);
 }
 
 export function potentialGrowth(rng: RngState, player: Player) {
+  if (player.potential < player.overall) player.potential = player.overall;
   if (player.age > 20) return;
   let rate = 0.01;
   if (player.age <= 17) rate = 20 / 40;
@@ -453,6 +530,27 @@ export function potentialGrowth(rng: RngState, player: Player) {
     player.potentialAcc -= 1;
   }
   if (player.potential > 100) player.potential = 100;
+}
+
+function ensureSkillAcc(player: Player): void {
+  player.skillAcc = SKILL_KEYS.map((_, i) => {
+    const value = Number(player.skillAcc?.[i] ?? 0);
+    return Number.isFinite(value) ? Math.max(-0.999999, Math.min(0.999999, value)) : 0;
+  });
+}
+
+function developmentCeiling(player: Player, club: Club): number {
+  return Math.max(player.overall, Math.min(100, overallCap(club), player.potential));
+}
+
+export function refreshPlayerDerived(club: Club, player: Player): void {
+  player.overall = overallFromSkills(player.position, player.skills);
+  player.potential = Math.max(player.overall, Math.min(100, player.potential));
+  player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, player.isYouth);
+  player.salary = calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, player.isYouth);
+  // Keep the clause proportional to the player's own randomized factor instead
+  // of overwriting it with a flat 0.2 on every development tick.
+  player.releaseClause = Math.round(player.value * (Number.isFinite(player.releaseClauseFactor) ? player.releaseClauseFactor : player.isYouth ? 0.35 : 0.2));
 }
 
 export function shouldRetire(rng: RngState, player: Player): boolean {
@@ -490,18 +588,11 @@ export function injuryDays(rng: RngState, player: Player): number {
   if (bonus === 1) n += 70;
   else if (bonus < 4) n += 40;
   else if (bonus < 10) n += 20;
-  if (player.age >= 35) player.overall -= 5;
-  if (player.overall < 1) player.overall = 1;
   return n;
 }
 
 export function aging(rng: RngState, player: Player, club: Club) {
   player.age += 1;
-  if (player.age > 35) {
-    player.age = 18 + nextInt(rng, 10);
-    player.name = generateName(rng, player.country);
-    player.tier = Math.max(1, player.tier - 3);
-  }
   player.seasonGoals = 0;
   player.seasonAssists = 0;
   player.yellows = 0;

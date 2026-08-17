@@ -1,0 +1,17 @@
+{
+  "seasonDays": 30,
+  "league": {
+    "teams": 8,
+    "turns": 2,
+    "startDay": 1,
+    "matchIntervalDays": 2
+  },
+  "payrollIntervalDays": 7,
+  "weeklyIntervalDays": 7,
+  "transferIntervalDays": 1,
+  "auctionDurationDays": 7,
+  "loanDurationSeasons": 1,
+  "payrollLoanInterestPercent": 3,
+  "stadiumUpgradeDays": 15,
+  "contractWarningSeasons": 2
+}

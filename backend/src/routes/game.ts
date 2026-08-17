@@ -1,11 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadWorld, persistWorld } from "../services/saveService";
-import { bracketView, buildSnapshot, competitionTable } from "../services/snapshot";
+import { bracketView, buildSnapshot, competitionTable, playerView } from "../services/snapshot";
 import { liveStateView } from "../services/liveView";
 import { dayInfo } from "../game/calendar";
 import { withSaveLock } from "../services/lock";
-import { counterOffer, evaluateBid, createAuction, auctionAvailableCash } from "../game/transfers";
+import { counterOffer, evaluateBid, createAuction, auctionAvailableCash, freeAgentSigningBonus } from "../game/transfers";
 import { performLiveSub, tickLiveMatch, isPregame, rebuildLiveHumanLineup } from "../game/match";
 import { finalizeLiveMatch, roundLabelFor } from "../game/world";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
@@ -13,7 +13,8 @@ import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
 import { serializeDayResult } from "./saves";
 import type { World } from "../game/types";
 import { LOAN_LIMITS, TICKET_PRICES } from "../game/constants";
-import { contractDemand, endLoan, startStadiumUpgrade } from "../game/season";
+import { contractDemand, dismissYouthPlayer, endLoan, promoteYouthPlayer, seasonEndDay, startStadiumUpgrade } from "../game/season";
+import { gameConfig } from "../config";
 
 const sellSchema = z.object({
   playerId: z.number().int(),
@@ -23,7 +24,7 @@ const sellSchema = z.object({
 
 const bidSchema = z.object({
   playerId: z.number().int(),
-  bid: z.number().int(),
+  bid: z.number().int().min(0),
 });
 
 const auctionBidSchema = z.object({
@@ -31,7 +32,7 @@ const auctionBidSchema = z.object({
 });
 
 const contractSchema = z.object({
-  length: z.number().int().min(6).max(36),
+  length: z.number().int().min(1).max(5), // contract length in seasons
   salary: z.number().int().min(0),
 });
 
@@ -47,11 +48,10 @@ const loanSchema = z.object({
 });
 
 const playerLoanSchema = z.object({ action: z.enum(["offer", "take", "recall"]) });
+const academyActionSchema = z.object({ action: z.enum(["promote", "dismiss"]) });
 const ticketSchema = z.object({ prices: z.array(z.number().int().min(1)).length(4) });
 
-const trainSchema = z.object({
-  focus: z.enum(["gol", "vel", "tec", "pas", "des", "arm", "fin"]).optional(),
-});
+const trainingSchema = z.object({ focus: z.enum(["assistant", "primary", "secondary"]) });
 
 const lineupSchema = z.object({
   formation: z.number().int().min(0).max(12),
@@ -249,7 +249,9 @@ export async function gameRoutes(app: FastifyInstance) {
       { ...club, savedLineup: auto ? null : club.savedLineup, tactics: { ...club.tactics, formation } },
       loaded.world.players
     );
-    const players = loaded.world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+    // Squad-eligible list matches the engine policy (youth included, see
+    // buildLineup note in club.ts) so the manager can manage AI-selected youth.
+    const players = loaded.world.players.filter((p) => p.clubId === club.id);
     const view = (id: number) => {
       const p = players.find((x) => x.id === id);
       return p
@@ -320,7 +322,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const player = world.players.find((p) => p.id === parsed.data.playerId);
       if (!club || !player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in squad" } } };
       if (parsed.data.mode === "auction") {
-        const listingId = createAuction(world.rng, world, player.id, club.id, world.dayIndex + 7);
+        const listingId = createAuction(world.rng, world, player.id, club.id, seasonEndDay(world.dayIndex, 7));
         player.onSale = true;
         world.news.push({ dayIndex: world.dayIndex, text: `You put ${player.name} up for auction`, kind: "auction" });
         return { value: { ok: true, listingId } };
@@ -344,17 +346,20 @@ export async function gameRoutes(app: FastifyInstance) {
       if (!buyer || !player) return { error: { code: 400, body: { error: "Invalid player" } } };
       if (parsed.data.bid > buyer.cash) return { error: { code: 400, body: { error: "Not enough cash" } } };
       if (player.clubId === null) {
-        const minSalary = player.salary * 0.8;
-        if (parsed.data.bid < Math.round(player.value * 0.8)) {
-          return { value: { accepted: false, counter: Math.round(player.value * 0.8) } };
+        const signingBonus = freeAgentSigningBonus(player);
+        if (parsed.data.bid < signingBonus) {
+          return { value: { accepted: false, counter: signingBonus } };
         }
         buyer.cash -= parsed.data.bid;
+        buyer.ledger.expense.push({ code: 1, amount: parsed.data.bid, day: world.dayIndex, label: `Signing bonus: ${player.name}` });
         player.clubId = buyer.id;
         player.tacPos = -1;
-        player.contractDays = Math.max(player.contractDays, 365);
-        player.salary = Math.max(player.salary, minSalary);
+        player.starter = false;
+        player.contractDays = Math.max(player.contractDays, gameConfig.seasonDays);
+        player.onSale = false;
+        player.salePrice = null;
         world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed free agent ${player.name}`, kind: "transfer" });
-        return { value: { accepted: true, price: parsed.data.bid } };
+        return { value: { accepted: true, price: parsed.data.bid, signingBonus } };
       }
       const seller = world.clubs.find((c) => c.id === player.clubId);
       if (!seller) return { error: { code: 400, body: { error: "Player has no club" } } };
@@ -377,7 +382,7 @@ export async function gameRoutes(app: FastifyInstance) {
         seller.cash += parsed.data.bid;
         player.clubId = buyer.id;
         player.tacPos = -1;
-        player.contractDays = Math.max(player.contractDays, 365);
+        player.contractDays = Math.max(player.contractDays, gameConfig.seasonDays);
         world.news.push({ dayIndex: world.dayIndex, text: `${buyer.name} signed ${player.name} for ${parsed.data.bid}`, kind: "transfer" });
         return { value: { accepted: true, price: parsed.data.bid } };
       }
@@ -399,6 +404,7 @@ export async function gameRoutes(app: FastifyInstance) {
         overall: p?.overall ?? 0,
         position: p?.position ?? 0,
         age: p?.age ?? 0,
+        salary: p?.salary ?? 0,
         skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
         minBid: a.minBid,
         deadlineDay: a.deadlineDay,
@@ -446,13 +452,13 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((c) => c.id === world.humanClubId);
       const player = world.players.find((p) => p.id === playerId);
       if (!club || !player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in squad" } } };
-      const months = parsed.data.length;
+      const seasons = parsed.data.length;
       const demand = contractDemand(player);
       if (parsed.data.salary < demand) {
         return { error: { code: 400, body: { error: "Salary offer rejected", demand } } };
       }
       player.salary = parsed.data.salary;
-      player.contractDays = Math.round(months / 12 * 365);
+      player.contractDays = seasons * gameConfig.seasonDays;
       player.morale = Math.min(100, player.morale + 5);
       world.news.push({ dayIndex: world.dayIndex, text: `${player.name} signed a new contract`, kind: "contract" });
       return { value: { ok: true, demand } };
@@ -470,25 +476,18 @@ export async function gameRoutes(app: FastifyInstance) {
     return { demand: contractDemand(player), salary: player.salary, contractDays: player.contractDays };
   });
 
-  app.post("/players/:id/train", async (req, reply) => {
+  app.post("/players/:id/academy", async (req, reply) => {
     const saveId = parseSaveId(req);
     const playerId = Number((req.params as { id: string }).id);
-    const parsed = trainSchema.safeParse(req.body ?? {});
+    const parsed = academyActionSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, saveId, req.user!.id, async (world) => {
       const club = world.clubs.find((c) => c.id === world.humanClubId);
       const player = world.players.find((p) => p.id === playerId);
-      if (!club || !player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in squad" } } };
-      const skillKeys = ["gol", "vel", "tec", "pas", "des", "arm", "fin"] as const;
-      const idx = parsed.data.focus ? skillKeys.indexOf(parsed.data.focus) : nextSkillIndex(player);
-      const key = skillKeys[idx];
-      if (player.skills[key] < 100 && player.overall < 100) {
-        player.skills[key] = Math.min(100, player.skills[key] + 1);
-        player.skillAcc[idx] += 2;
-        world.news.push({ dayIndex: world.dayIndex, text: `${player.name} improved in training`, kind: "training" });
-        return { value: { ok: true, improved: key } };
-      }
-      return { value: { ok: false } };
+      if (!club || !player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in your youth academy" } } };
+      const result = parsed.data.action === "promote" ? promoteYouthPlayer(world, player) : dismissYouthPlayer(world, player);
+      if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
+      return { value: { ok: true } };
     });
     return replyFrom(res, reply);
   });
@@ -510,6 +509,19 @@ export async function gameRoutes(app: FastifyInstance) {
     return replyFrom(res, reply);
   });
 
+  app.post("/club/training", async (req, reply) => {
+    const saveId = parseSaveId(req);
+    const parsed = trainingSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid training focus" });
+    const res = await withWorld(app, saveId, req.user!.id, async (world) => {
+      const club = world.clubs.find((c) => c.id === world.humanClubId);
+      if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
+      club.trainingFocus = parsed.data.focus;
+      return { value: { ok: true, trainingFocus: club.trainingFocus } };
+    });
+    return replyFrom(res, reply);
+  });
+
   app.get("/club/finances", async (req, reply) => {
     const saveId = parseSaveId(req);
     const loaded = await loadWorld(app.prisma, saveId, req.user!.id);
@@ -519,7 +531,8 @@ export async function gameRoutes(app: FastifyInstance) {
     return {
       cash: club.cash,
       loanBalance: club.loanBalance,
-      loanLimit: loanLimitFor(club.division),
+      loanLimit: loanLimitFor(club.reputation),
+      loanInterestPercent: gameConfig.payrollLoanInterestPercent,
       income: club.ledger.income.slice(-30).reverse(),
       expense: club.ledger.expense.slice(-30).reverse(),
     };
@@ -585,7 +598,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const player = loaded.world.players.find((p) => p.id === loan.playerId);
       const from = loaded.world.clubs.find((c) => c.id === loan.fromClubId);
       const to = loan.toClubId === null ? null : loaded.world.clubs.find((c) => c.id === loan.toClubId);
-      return { ...loan, player: player ? { id: player.id, name: player.name, age: player.age, overall: player.overall, position: player.position, salary: player.salary } : null, fromClub: from?.name ?? "", toClub: to?.name ?? null, available: loan.toClubId === null && loan.fromClubId !== loaded.world.humanClubId };
+      return { ...loan, player: player ? playerView(player) : null, fromClub: from?.name ?? "", toClub: to?.name ?? null, available: loan.toClubId === null && loan.fromClubId !== loaded.world.humanClubId };
     });
     return { loans };
   });
@@ -601,7 +614,7 @@ export async function gameRoutes(app: FastifyInstance) {
       if (!human || !player) return { error: { code: 404, body: { error: "Player not found" } } };
       if (parsed.data.action === "offer") {
         if (player.clubId !== human.id || player.loanId !== null || player.age > 23 || player.isYouth) return { error: { code: 400, body: { error: "Player is not eligible for a loan" } } };
-        const loan = { id: world.nextId++, playerId, fromClubId: human.id, toClubId: null, startDay: world.dayIndex, endDay: world.dayIndex + (364 - (world.dayIndex % 364)), recalled: false };
+        const loan = { id: world.nextId++, playerId, fromClubId: human.id, toClubId: null, startDay: world.dayIndex, endDay: seasonEndDay(world.dayIndex, gameConfig.seasonDays - (world.dayIndex % gameConfig.seasonDays)), recalled: false };
         world.loans.push(loan);
         player.loanId = loan.id;
         world.news.push({ dayIndex: world.dayIndex, text: `${human.name} listed ${player.name} for loan`, kind: "loan", clubId: human.id });
@@ -632,7 +645,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((c) => c.id === world.humanClubId);
       if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
       if (parsed.data.action === "take") {
-        const limit = loanLimitFor(club.division);
+        const limit = loanLimitFor(club.reputation);
         if (club.loanBalance >= limit) return { error: { code: 400, body: { error: "Loan limit reached" } } };
         const amount = Math.min(500000, limit - club.loanBalance);
         club.loanBalance += amount;
@@ -651,22 +664,8 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 }
 
-function loanLimitFor(division: number): number {
-  if (division >= 1 && division <= 4) return LOAN_LIMITS[division];
-  return LOAN_LIMITS[0];
-}
-
-function nextSkillIndex(player: { skillAcc: number[] }): number {
-  let min = Infinity;
-  let idx = 0;
-  for (let i = 0; i < 7; i++) {
-    if (player.skillAcc[i] < min) {
-      min = player.skillAcc[i];
-      idx = i;
-    }
-  }
-  player.skillAcc[idx] += 1;
-  return idx;
+function loanLimitFor(reputation: number): number {
+  return LOAN_LIMITS[Math.max(0, Math.min(4, reputation - 1))];
 }
 
 function replyFrom(res: { error?: { code: number; body: unknown }; value?: unknown }, reply: import("fastify").FastifyReply) {

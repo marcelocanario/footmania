@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Dialog } from "primereact/dialog";
+import { Dropdown } from "primereact/dropdown";
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
-import { Plus, Play, Trash2, Flag, Save } from "lucide-react";
-import { api, type ClubOption } from "../api/client";
+import { Plus, Play, Trash2, Flag, Save, Palette, Home, Info } from "lucide-react";
+import { api, type CountryOption } from "../api/client";
 import { strings } from "../strings";
-import { ClubBadge } from "../components/ClubBadge";
 import { useGame } from "../store/game";
 
 interface SaveRow {
@@ -18,15 +18,23 @@ interface SaveRow {
   updatedAt: string;
 }
 
+interface CountryGroup {
+  label: string;
+  items: CountryOption[];
+}
+
 export function Saves() {
   const [saves, setSaves] = useState<SaveRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
-  const [clubOptions, setClubOptions] = useState<ClubOption[]>([]);
-  const [pickClub, setPickClub] = useState(false);
+  const [countries, setCountries] = useState<CountryOption[]>([]);
+  const [featured, setFeatured] = useState<CountryOption[]>([]);
+  const [createTeam, setCreateTeam] = useState(false);
   const [pickSaveId, setPickSaveId] = useState<number | null>(null);
-  const [toStart, setToStart] = useState<number | null>(null);
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
+  const [teamName, setTeamName] = useState("");
+  const [starting, setStarting] = useState(false);
   const toast = useRef<Toast>(null);
   const navigate = useNavigate();
   const enterSave = useGame((s) => s.enterSave);
@@ -46,14 +54,28 @@ export function Saves() {
     refresh();
   }, []);
 
+  const openCreateTeam = async (saveId: number) => {
+    try {
+      const res = await api.saveState(saveId);
+      if (!res.started) {
+        setPickSaveId(saveId);
+        setFeatured(res.featuredCountries ?? []);
+        setCountries(res.allCountries ?? []);
+        setSelectedCountry(null);
+        setTeamName("");
+        setCreateTeam(true);
+      }
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    }
+  };
+
   const create = async () => {
     setCreating(true);
     try {
       const res = await api.createSave(newName || "New Career");
-      setPickSaveId(res.id);
-      setClubOptions(res.clubOptions);
-      setPickClub(true);
       setNewName("");
+      await openCreateTeam(res.id);
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     } finally {
@@ -62,27 +84,20 @@ export function Saves() {
   };
 
   const startExisting = async (saveId: number) => {
-    try {
-      const res = await api.saveState(saveId);
-      if (res.clubOptions) {
-        setPickSaveId(saveId);
-        setClubOptions(res.clubOptions);
-        setPickClub(true);
-      }
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
-    }
+    await openCreateTeam(saveId);
   };
 
   const start = async () => {
-    if (toStart === null || pickSaveId === null) return;
+    if (pickSaveId === null || selectedCountry === null) return;
+    setStarting(true);
     try {
-      await api.startSave(pickSaveId, toStart);
+      await api.startSave(pickSaveId, selectedCountry, teamName.trim() || undefined);
       enterSave(pickSaveId);
-      setPickClub(false);
+      setCreateTeam(false);
       navigate("/dashboard");
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      setStarting(false);
     }
   };
 
@@ -95,6 +110,14 @@ export function Saves() {
     await api.deleteSave(id);
     refresh();
   };
+
+  const countryGroups: CountryGroup[] = [
+    { label: "Featured", items: featured },
+    { label: "All countries", items: countries },
+  ];
+  const countryOptions = countryGroups
+    .map((g) => ({ label: g.label, items: g.items.map((c) => ({ label: c.name, value: c.code })) }))
+    .filter((g) => g.items.length > 0);
 
   return (
     <div>
@@ -154,7 +177,7 @@ export function Saves() {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <span className="chip">Year {s.year}</span>
                   <span className="chip">Day {s.dayIndex}</span>
-                  {!s.hasHuman && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.4)", color: "var(--gold-2)" }}>No club chosen</span>}
+                  {!s.hasHuman && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.4)", color: "var(--gold-2)" }}>No team created</span>}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -164,7 +187,7 @@ export function Saves() {
                   </button>
                 ) : (
                   <button className="btn gold" onClick={() => startExisting(s.id)}>
-                    <Flag size={15} /> {strings.saves.pickClub}
+                    <Flag size={15} /> {strings.saves.createTeam}
                   </button>
                 )}
                 <button className="icon-btn danger" onClick={() => del(s.id)} title={strings.saves.delete} aria-label={strings.saves.delete}>
@@ -176,42 +199,70 @@ export function Saves() {
         </div>
       )}
 
-      <Dialog header={strings.saves.pickClub} visible={pickClub} onHide={() => { setPickClub(false); setToStart(null); refresh(); }} style={{ width: 660 }}>
-        <p style={{ color: "var(--text-2)", marginTop: 0 }}>{strings.saves.pickClubHint}</p>
-        <div className="grid cols-2" style={{ maxHeight: 460, overflowY: "auto", paddingRight: 4 }}>
-          {clubOptions.map((c) => (
-            <div
-              key={c.id}
-              onClick={() => setToStart(c.id)}
-              className="card hoverable"
-              role="radio"
-              aria-checked={toStart === c.id}
-              tabIndex={0}
-              onKeyDown={(e) => e.key === "Enter" && setToStart(c.id)}
-              style={{
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: 14,
-                borderColor: toStart === c.id ? "rgba(240,180,41,0.7)" : "var(--line)",
-                boxShadow: toStart === c.id ? "0 0 0 3px rgba(240,180,41,0.18)" : "none",
-              }}
-            >
-              <ClubBadge name={c.name} primary={c.primaryColor} secondary={c.secondaryColor} size={46} />
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>{c.name}</div>
-                <div style={{ color: "var(--text-3)", fontSize: "0.84rem", marginTop: 2 }}>
-                  Rep {c.reputation} · Level {c.level}
-                </div>
-              </div>
+      <Dialog header={strings.saves.createTeam} visible={createTeam} onHide={() => { setCreateTeam(false); refresh(); }} style={{ width: 560 }}>
+        <p style={{ color: "var(--text-2)", marginTop: 0 }}>{strings.saves.createTeamHint}</p>
+
+        <label className="field-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>
+          {strings.saves.country}
+        </label>
+        <Dropdown
+          value={selectedCountry}
+          options={countryOptions}
+          optionGroupLabel="label"
+          optionGroupChildren="items"
+          onChange={(e) => setSelectedCountry(e.value)}
+          filter
+          filterBy="label"
+          showClear
+          placeholder="Select country"
+          style={{ width: "100%" }}
+          aria-label={strings.saves.country}
+        />
+
+        <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
+          <div>
+            <label className="field-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>
+              {strings.saves.teamName}
+            </label>
+            <span className="p-input-icon-left" style={{ width: "100%" }}>
+              <Flag size={15} />
+              <InputText
+                value={teamName}
+                onChange={(e) => setTeamName(e.target.value)}
+                placeholder={strings.saves.teamNamePlaceholder}
+                style={{ width: "100%" }}
+              />
+            </span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label className="field-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>
+                {strings.saves.colors}
+              </label>
+              <span className="p-input-icon-left" style={{ width: "100%" }}>
+                <Palette size={15} />
+                <InputText placeholder={strings.saves.colorsPlaceholder} disabled style={{ width: "100%", opacity: 0.65 }} />
+              </span>
             </div>
-          ))}
+            <div>
+              <label className="field-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>
+                {strings.saves.stadium}
+              </label>
+              <span className="p-input-icon-left" style={{ width: "100%" }}>
+                <Home size={15} />
+                <InputText placeholder={strings.saves.stadiumPlaceholder} disabled style={{ width: "100%", opacity: 0.65 }} />
+              </span>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-3)", fontSize: "0.85rem" }}>
+            <Info size={14} /> {strings.saves.multiplayerHint}
+          </div>
         </div>
+
         <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button className="btn ghost" onClick={() => setPickClub(false)}>{strings.common.cancel}</button>
-          <button className="btn" onClick={start} disabled={toStart === null}>
-            <Play size={15} /> {strings.saves.continue}
+          <button className="btn ghost" onClick={() => setCreateTeam(false)}>{strings.common.cancel}</button>
+          <button className="btn" onClick={start} disabled={selectedCountry === null || starting}>
+            <Play size={15} /> {starting ? strings.common.loading : strings.saves.continue}
           </button>
         </div>
       </Dialog>

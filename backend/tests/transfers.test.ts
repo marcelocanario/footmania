@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { aiBid, auctionAvailableCash, createAuction, isEligibleAuctionBidder, resolveAuction } from "../src/game/transfers";
+import { aiBid, auctionAvailableCash, createAuction, freeAgentSigningBonus, isEligibleAuctionBidder, resolveAuction } from "../src/game/transfers";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
@@ -9,8 +9,7 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     id,
     name: `Club ${id}`,
     shortName: `C${id}`,
-    stateCode: "SP",
-    division: 1,
+    country: "BRA",
     reputation: 4,
     level: 20,
     cash: 10_000_000,
@@ -23,6 +22,7 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     boardConfidence: 50,
     fanConfidence: 70,
     tactics: { formation: 4, style: 0, pressing: 0, direction: 0 },
+    trainingFocus: "assistant",
     captainId: null,
     penaltyTakerId: null,
     isHuman: false,
@@ -109,6 +109,16 @@ describe("aiBid", () => {
   });
 });
 
+describe("free-agent compensation", () => {
+  it("uses salary rather than market value and increases with overall", () => {
+    const low = freeAgentSigningBonus({ salary: 100_000, overall: 50 });
+    const high = freeAgentSigningBonus({ salary: 100_000, overall: 80 });
+    expect(low).toBe(275_000);
+    expect(high).toBe(350_000);
+    expect(freeAgentSigningBonus({ salary: 200_000, overall: 50 })).toBe(low * 2);
+  });
+});
+
 describe("auction resolution", () => {
   it("does not count cash committed to another auction twice", () => {
     const club = makeClub(1, { cash: 1_000_000 });
@@ -164,9 +174,9 @@ describe("auction resolution", () => {
 describe("isEligibleAuctionBidder", () => {
   const listing = { sellerClubId: 10, bids: [] as { clubId: number }[] };
 
-  it("excludes the human club, division 3+, the seller, and clubs already bidding", () => {
+  it("excludes the human club, low-reputation clubs, the seller, and clubs already bidding", () => {
     expect(isEligibleAuctionBidder(listing, makeClub(1, { isHuman: true }))).toBe(false);
-    expect(isEligibleAuctionBidder(listing, makeClub(2, { division: 3 }))).toBe(false);
+    expect(isEligibleAuctionBidder(listing, makeClub(2, { reputation: 1 }))).toBe(false);
     expect(isEligibleAuctionBidder(listing, makeClub(10))).toBe(false);
     const taken = makeClub(20);
     expect(isEligibleAuctionBidder({ sellerClubId: 10, bids: [{ clubId: 20 }] }, taken)).toBe(false);
@@ -174,6 +184,6 @@ describe("isEligibleAuctionBidder", () => {
 
   it("allows an eligible club that has not bid yet", () => {
     expect(isEligibleAuctionBidder(listing, makeClub(20))).toBe(true);
-    expect(isEligibleAuctionBidder({ sellerClubId: null, bids: [] }, makeClub(20, { division: 2 }))).toBe(true);
+    expect(isEligibleAuctionBidder({ sellerClubId: null, bids: [] }, makeClub(20, { reputation: 4 }))).toBe(true);
   });
 });

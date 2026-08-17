@@ -121,17 +121,6 @@ export function getPosition(competition: Competition, clubId: number): number {
   return idx < 0 ? 0 : idx + 1;
 }
 
-export function promotionRelegation(competition: Competition, allClubs: Club[]): { promoted: number[]; relegated: number[] } {
-  const sorted = sortedStandings(competition);
-  const promoted: number[] = [];
-  const relegated: number[] = [];
-  const nProm = competition.config.promoted ?? 0;
-  const nRel = competition.config.relegated ?? 0;
-  for (let i = 0; i < Math.min(nProm, sorted.length); i++) promoted.push(sorted[i].clubId);
-  for (let i = 0; i < Math.min(nRel, sorted.length); i++) relegated.push(sorted[sorted.length - 1 - i].clubId);
-  return { promoted, relegated };
-}
-
 export function isLeagueFinished(competition: Competition, fixtures: Fixture[]): boolean {
   const clubs = competition.config.clubs;
   if (clubs.length === 0) return false;

@@ -4,7 +4,7 @@ import { simulateMatch, createLiveMatchState, tickLiveMatch, performLiveSub, bui
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import { calcValue, calcSalary } from "../src/game/player";
-import type { Club, Player } from "../src/game/types";
+import type { Club, Player, Position } from "../src/game/types";
 import type { RatingContext } from "../src/game/match";
 import type { RngState } from "../src/game/rng";
 
@@ -13,8 +13,7 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
     id: 1,
     name: "Test",
     shortName: "TST",
-    stateCode: "SP",
-    division: 1,
+    country: "BRA",
     reputation: 4,
     level: 20,
     cash: 10000000,
@@ -27,6 +26,7 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
     boardConfidence: 50,
     fanConfidence: 70,
     tactics: { formation: 4, style: 0, pressing: 0, direction: 0 },
+    trainingFocus: "assistant",
     captainId: null,
     penaltyTakerId: null,
     isHuman: false,
@@ -38,8 +38,14 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
 
 function makeSquad(rng: RngState, club: Club, count: number, offset = 0) {
   const players = [];
+  // Balanced positions (3 GK, 6 FB, 6 CB, 9 MF, 6 FW per 30) so every squad
+  // can always field a legal 11 for any formation.
+  const balanced: Position[] = [
+    0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4,
+  ];
   for (let i = 0; i < count; i++) {
-    const p = generatePlayer(rng, club, { id: offset + i + 1 });
+    const p = generatePlayer(rng, club, { id: offset + i + 1, position: balanced[i % balanced.length] });
     players.push(p);
   }
   return players;
@@ -293,13 +299,10 @@ describe("player economy", () => {
     expect(max).toBeLessThanOrEqual(100);
     const min = Math.min(...overalls);
     expect(min).toBeGreaterThanOrEqual(1);
-    const d1Seniors = world.players.filter((p) => {
-      const club = world.clubs.find((c) => c.id === p.clubId);
-      return club && club.division === 1 && !p.isYouth;
-    });
-    const d1Avg = d1Seniors.reduce((s, p) => s + p.overall, 0) / d1Seniors.length;
-    expect(d1Avg).toBeGreaterThan(30);
-    expect(d1Avg).toBeLessThan(80);
+    const seniors = world.players.filter((p) => !p.isYouth);
+    const seniorAvg = seniors.reduce((s, p) => s + p.overall, 0) / seniors.length;
+    expect(seniorAvg).toBeGreaterThan(15);
+    expect(seniorAvg).toBeLessThan(80);
     const gks = world.players.filter((p) => p.position === 0);
     expect(gks.length).toBeGreaterThan(0);
   });

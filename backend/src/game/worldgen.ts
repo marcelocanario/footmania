@@ -1,32 +1,28 @@
 import type { Club, Player, World } from "../game/types";
 import { createRng } from "../game/rng";
-import { nextInt, pick, shuffle } from "../game/rng";
+import { nextInt, pick } from "../game/rng";
 import { generatePlayer } from "../game/player";
 import { tacticsForClub } from "../game/club";
 import { createLeagueFixtures, emptyStandingsRow } from "../game/league";
-import { createCup, scheduleCupRound } from "../game/cup";
-import { createStateChampionship, createStateGroupFixtures } from "../game/stateChampionship";
 import { STARTING_CASH, TICKET_PRICES } from "../game/constants";
 import { generateName } from "../game/names";
 import { generateFreeAgents } from "../game/transfers";
+import { COUNTRIES, COUNTRY_BY_CODE, FEATURED_COUNTRIES } from "../game/countries";
+import { gameConfig } from "../config";
 
-const CITIES_SP = [
-  "São Paulo", "Santos", "Campinas", "Guarulhos", "São Bernardo", "Santo André", "Osasco",
-  "Ribeirão Preto", "Sorocaba", "Mauá", "Jundiaí", "Piracicaba", "Bauru", "Carapicuíba",
-  "Itaquaquecetuba", "Franca", "São Vicente", "Praia Grande", "Guarujá", "Limeira",
-  "Taubaté", "Suzano", "Barueri", "Embu", "Sumaré", "Taboão", "Marília", "São Carlos",
-  "Presidente Prudente", "Araraquara", "Americana", "Rio Claro", "Itu", "Mogi das Cruzes",
-  "Indaiatuba", "Cotia", "Bragança Paulista", "Salto", "Atibaia", "Águas de Lindóia",
-  "Hortolândia", "Santa Bárbara", "Sertãozinho", "Ourinhos", "Assis", "Itapetininga",
-  "Botucatu", "Araçatuba", "Lorena", "Pindamonhangaba",
-];
-
-const CITIES_OTHER = [
-  "Belo Horizonte", "Rio de Janeiro", "Porto Alegre", "Curitiba", "Salvador", "Fortaleza",
-  "Recife", "Goiânia", "Manaus", "Belém", "Florianópolis", "Vitória", "João Pessoa",
-  "Natal", "Campo Grande", "Cuiabá", "Maceió", "Aracaju", "Teresina", "São Luís",
-  "São José dos Campos", "Blumenau", "Caxias do Sul", "Pelotas", "Londrina", "Maringá",
-  "Uberlândia", "Juiz de Fora", "Ribeirão das Neves",
+const CITIES = [
+  "London", "Manchester", "Liverpool", "Madrid", "Barcelona", "Seville", "Milan", "Rome",
+  "Turin", "Munich", "Hamburg", "Berlin", "Paris", "Lyon", "Marseille", "Lisbon",
+  "Porto", "Amsterdam", "Rotterdam", "Brussels", "Antwerp", "Vienna", "Salzburg", "Zurich",
+  "Geneva", "Stockholm", "Oslo", "Copenhagen", "Helsinki", "Dublin", "Warsaw", "Krakow",
+  "Prague", "Budapest", "Bucharest", "Belgrade", "Zagreb", "Athens", "Istanbul", "Moscow",
+  "Saint Petersburg", "Kyiv", "Buenos Aires", "Rosario", "Montevideo", "Santiago", "Lima",
+  "Asuncion", "Bogota", "Medellin", "Quito", "Caracas", "La Paz", "Mexico City", "Guadalajara",
+  "Monterrey", "New York", "Los Angeles", "Chicago", "Miami", "Toronto", "Vancouver",
+  "Montreal", "Tokyo", "Osaka", "Kyoto", "Seoul", "Shanghai", "Beijing", "Guangzhou",
+  "Hong Kong", "Bangkok", "Kuala Lumpur", "Jakarta", "Singapore", "Mumbai", "Delhi",
+  "Dubai", "Riyadh", "Tel Aviv", "Cairo", "Casablanca", "Tunis", "Algiers", "Lagos",
+  "Accra", "Nairobi", "Johannesburg", "Cape Town", "Durban",
 ];
 
 const CLUB_SUFFIXES = ["FC", "Athletic", "United", "Sport", "Club"];
@@ -37,20 +33,12 @@ const COLORS: [string, string][] = [
   ["#006633", "#ffffff"], ["#990000", "#ffffff"], ["#333333", "#ffffff"], ["#663300", "#ffffff"],
 ];
 
-const STATE_DISTRIBUTION = [
-  "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP", "SP",
-  "MG", "MG", "RJ", "RJ", "RS", "PR", "BA", "CE", "PE", "GO", "SC", "DF",
-];
-
-const DIVISION_1_REP = [3, 3, 4, 4, 5, 3, 3, 4, 4, 3, 3, 4, 3, 3, 3, 4, 3, 3, 2, 3];
-const DIVISION_2_REP = [2, 2, 3, 3, 2, 2, 3, 2, 2, 2, 3, 2, 2, 2, 3, 2, 2, 2, 3, 2];
-
-function makeClubName(rng: ReturnType<typeof createRng>, cities: string[], used: Set<string>): { name: string; short: string; city: string } {
-  let city = pick(rng, cities);
+function makeClubName(rng: ReturnType<typeof createRng>, used: Set<string>): { name: string; short: string; city: string } {
+  let city = pick(rng, CITIES);
   let attempts = 0;
   let name = "";
   do {
-    city = pick(rng, cities);
+    city = pick(rng, CITIES);
     const suffix = pick(rng, CLUB_SUFFIXES);
     name = `${city} ${suffix}`;
     attempts++;
@@ -59,43 +47,89 @@ function makeClubName(rng: ReturnType<typeof createRng>, cities: string[], used:
   return { name, short: name, city };
 }
 
+function pickCountry(rng: ReturnType<typeof createRng>): string {
+  const featured = nextInt(rng, 100) < 70;
+  const pool = featured ? FEATURED_COUNTRIES : COUNTRIES;
+  let total = 0;
+  for (const c of pool) total += c.strength - 10;
+  let roll = nextInt(rng, Math.max(1, total));
+  for (const c of pool) {
+    roll -= c.strength - 10;
+    if (roll < 0) return c.code;
+  }
+  return pool[0].code;
+}
+
+const REP_POOL = [1, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5];
+
 function makeClub(
   rng: ReturnType<typeof createRng>,
   id: number,
-  division: number,
+  country: string,
   reputation: number,
   city: string,
-  stateCode: string,
   name: string,
   shortName: string
 ): Club {
-  const level = Math.max(1, Math.min(25, reputation * 4 + nextInt(rng, 7) - (division - 1) * 2));
+  const level = Math.max(1, Math.min(25, reputation * 4 + nextInt(rng, 7)));
   const capacity = Math.max(10000, Math.min(60000, reputation * 11000 + nextInt(rng, 15000)));
   const [primary, secondary] = pick(rng, COLORS);
   return {
     id,
     name,
     shortName,
-    stateCode,
-    division,
+    country,
     reputation,
     level,
-    cash: STARTING_CASH[Math.min(4, division)][0],
+    cash: STARTING_CASH[Math.max(0, Math.min(4, reputation - 1))],
     loanBalance: 0,
     stadiumName: `${city} Stadium`,
     stadiumCapacity: capacity,
     primaryColor: primary,
     secondaryColor: secondary,
-    coachName: generateName(rng, "BRA"),
+    coachName: generateName(rng, country),
     boardConfidence: 50,
     fanConfidence: 50,
     tactics: tacticsForClub(rng),
+    trainingFocus: "assistant",
     captainId: null,
     penaltyTakerId: null,
     isHuman: false,
     ledger: { income: [], expense: [] },
     trophies: {},
   };
+}
+
+/** Generates a club's senior + youth squads and position top-ups. */
+function populateClubPlayers(rng: ReturnType<typeof createRng>, world: World, club: Club) {
+  const seniorCount = 25 + nextInt(rng, 6);
+  const juniorCount = 8 + nextInt(rng, 5);
+  for (let i = 0; i < seniorCount; i++) {
+    const p = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
+    world.players.push(p);
+  }
+  for (let i = 0; i < juniorCount; i++) {
+    const p = generatePlayer(rng, club, { isYouth: true, id: world.nextId++, seed: world.seed });
+    world.players.push(p);
+  }
+  const squad = () => world.players.filter((p) => p.clubId === club.id);
+  const byPos = (pos: number) => squad().filter((p) => p.position === pos);
+  if (byPos(0).length === 0) {
+    const p = generatePlayer(rng, club, { position: 0, id: world.nextId++, seed: world.seed });
+    world.players.push(p);
+  }
+  if (byPos(2).length === 0) {
+    const p = generatePlayer(rng, club, { position: 2, id: world.nextId++, seed: world.seed });
+    world.players.push(p);
+  }
+  if (byPos(1).length === 0) {
+    const p = generatePlayer(rng, club, { position: 1, id: world.nextId++, seed: world.seed });
+    world.players.push(p);
+  }
+  const gks = byPos(0).sort((a, b) => b.overall - a.overall);
+  if (gks.length > 0) club.captainId = gks[0].id;
+  club.penaltyTakerId =
+    byPos(4).sort((a, b) => b.overall - a.overall)[0]?.id ?? gks[0]?.id ?? null;
 }
 
 export function buildSeasonStructure(world: World) {
@@ -105,83 +139,32 @@ export function buildSeasonStructure(world: World) {
   world.matches = [];
   world.auctions = [];
 
-  const d1 = world.clubs.filter((c) => c.division === 1).map((c) => c.id);
-  const d2 = world.clubs.filter((c) => c.division === 2).map((c) => c.id);
-
-  const league1 = {
+  const clubIds = world.clubs.map((c) => c.id);
+  const league = {
     id: world.nextId++,
     kind: "league" as const,
-    division: 1,
-    stateCode: "",
-    name: "National League Division 1",
+    name: "National League",
     round: 0,
     stage: "group" as const,
     config: {
-      clubs: d1,
-      turns: 2,
+      clubs: clubIds,
+      turns: gameConfig.league.turns,
       groups: [],
       bracket: [],
-      promoted: 4,
-      relegated: 4,
-      groupQualifiers: 0,
-    },
-    standings: Object.fromEntries(d1.map((c) => [c, emptyStandingsRow(c)])),
-    groupStandings: [],
-    winners: [],
-    knockouts: [],
-  };
-  const league2 = {
-    id: world.nextId++,
-    kind: "league" as const,
-    division: 2,
-    stateCode: "",
-    name: "National League Division 2",
-    round: 0,
-    stage: "group" as const,
-    config: {
-      clubs: d2,
-      turns: 2,
-      groups: [],
-      bracket: [],
-      promoted: 4,
+      promoted: 0,
       relegated: 0,
       groupQualifiers: 0,
     },
-    standings: Object.fromEntries(d2.map((c) => [c, emptyStandingsRow(c)])),
+    standings: Object.fromEntries(clubIds.map((c) => [c, emptyStandingsRow(c)])),
     groupStandings: [],
     winners: [],
     knockouts: [],
   };
-  world.competitions.push(league1, league2);
+  world.competitions.push(league);
 
-  const spClubs = world.clubs.filter((c) => c.stateCode === "SP");
-  const stateTeams = shuffle(rng, spClubs)
-    .slice(0, 16)
-    .map((c) => c.id);
-  const stateComp = createStateChampionship(rng, world.nextId++, "São Paulo State Championship", "SP", stateTeams);
-  stateComp.config.knockoutDays = [28, 31, 42, 45, 56, 59];
-  world.competitions.push(stateComp);
-
-  const cupTeams = [...shuffle(rng, d1).slice(0, 12), ...shuffle(rng, d2).slice(0, 4)];
-  const cup = createCup(rng, world.nextId++, "National Cup", cupTeams);
-  cup.config.knockoutDays = [108, 111, 124, 127, 140, 143, 156, 159];
-  world.competitions.push(cup);
-
-  const stateGroupFixtures = createStateGroupFixtures(rng, stateComp, 7, 7);
-  for (const f of stateGroupFixtures) f.id = world.nextId++;
-  world.fixtures.push(...stateGroupFixtures);
-
-  const league1Fixtures = createLeagueFixtures(rng, league1.id, d1, 105, 5);
-  for (const f of league1Fixtures) f.id = world.nextId++;
-  world.fixtures.push(...league1Fixtures);
-
-  const league2Fixtures = createLeagueFixtures(rng, league2.id, d2, 105, 5);
-  for (const f of league2Fixtures) f.id = world.nextId++;
-  world.fixtures.push(...league2Fixtures);
-
-  const cupRound0 = scheduleCupRound(rng, cup, 0, cup.config.knockoutDays[0], 3);
-  for (const f of cupRound0) f.id = world.nextId++;
-  world.fixtures.push(...cupRound0);
+  const leagueFixtures = createLeagueFixtures(rng, league.id, clubIds, gameConfig.league.startDay, gameConfig.league.matchIntervalDays);
+  for (const f of leagueFixtures) f.id = world.nextId++;
+  world.fixtures.push(...leagueFixtures);
 }
 
 export function generateWorld(seed: number): World {
@@ -214,27 +197,11 @@ export function generateWorld(seed: number): World {
 
   const usedNames = new Set<string>();
   const clubs: Club[] = [];
-  for (let i = 0; i < 20; i++) {
-    const state = STATE_DISTRIBUTION[i % STATE_DISTRIBUTION.length];
-    const cities = state === "SP" ? CITIES_SP : CITIES_OTHER;
-    const { name, short, city } = makeClubName(rng, cities, usedNames);
-    const club = makeClub(rng, world.nextId++, 1, DIVISION_1_REP[i], city, state, name, short);
-    clubs.push(club);
-  }
-  for (let i = 0; i < 20; i++) {
-    const state = STATE_DISTRIBUTION[(i + 8) % STATE_DISTRIBUTION.length];
-    const cities = state === "SP" ? CITIES_SP : CITIES_OTHER;
-    const { name, short, city } = makeClubName(rng, cities, usedNames);
-    const club = makeClub(rng, world.nextId++, 2, DIVISION_2_REP[i], city, state, name, short);
-    clubs.push(club);
-  }
-  const spClubs = clubs.filter((c) => c.stateCode === "SP");
-  const stateClubs = spClubs.slice(0, 12);
-  const extraClubs: Club[] = [];
-  for (let i = 0; i < 12; i++) {
-    const { name, short, city } = makeClubName(rng, CITIES_SP, usedNames);
-    const club = makeClub(rng, world.nextId++, 3, 1 + nextInt(rng, 3), city, "SP", name, short);
-    extraClubs.push(club);
+  for (let i = 0; i < gameConfig.league.teams; i++) {
+    const country = pickCountry(rng);
+    const reputation = REP_POOL[nextInt(rng, REP_POOL.length)];
+    const { name, short, city } = makeClubName(rng, usedNames);
+    const club = makeClub(rng, world.nextId++, country, reputation, city, name, short);
     clubs.push(club);
   }
   world.clubs = clubs;
@@ -242,45 +209,35 @@ export function generateWorld(seed: number): World {
     const base = TICKET_PRICES[Math.min(5, club.reputation)].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];
     world.ticketPrices[club.id] = base;
   }
-
-  const statePool = [...stateClubs, ...extraClubs];
   for (const club of clubs) {
-    const isStateOnly = club.division >= 3;
-    const seniorCount = isStateOnly ? 18 + nextInt(rng, 4) : 25 + nextInt(rng, 6);
-    const juniorCount = isStateOnly ? 6 + nextInt(rng, 3) : 8 + nextInt(rng, 5);
-    for (let i = 0; i < seniorCount; i++) {
-      const p = generatePlayer(rng, club, { id: world.nextId++ });
-      world.players.push(p);
-    }
-    for (let i = 0; i < juniorCount; i++) {
-      const p = generatePlayer(rng, club, { isYouth: true, id: world.nextId++ });
-      world.players.push(p);
-    }
-    const gkCount = world.players.filter((p) => p.clubId === club.id && p.position === 0).length;
-    if (gkCount === 0) {
-      const p = generatePlayer(rng, club, { position: 0, id: world.nextId++ });
-      world.players.push(p);
-    }
-    const cbs = world.players.filter((p) => p.clubId === club.id && p.position === 2).length;
-    if (cbs === 0) {
-      const p = generatePlayer(rng, club, { position: 2, id: world.nextId++ });
-      world.players.push(p);
-    }
-    const fbs = world.players.filter((p) => p.clubId === club.id && p.position === 1).length;
-    if (fbs === 0) {
-      const p = generatePlayer(rng, club, { position: 1, id: world.nextId++ });
-      world.players.push(p);
-    }
-    const gk = world.players.find((p) => p.clubId === club.id && p.position === 0 && p.overall >= 60);
-    if (gk) club.penaltyTakerId = gk.id;
-    const gks = world.players.filter((p) => p.clubId === club.id && p.position === 0).sort((a, b) => b.overall - a.overall);
-    if (gks.length > 0) club.captainId = gks[0].id;
-    club.penaltyTakerId = world.players
-      .filter((p) => p.clubId === club.id && p.position === 4)
-      .sort((a, b) => b.overall - a.overall)[0]?.id ?? gks[0]?.id ?? null;
+    populateClubPlayers(rng, world, club);
   }
 
   buildSeasonStructure(world);
   generateFreeAgents(rng, world, 15);
   return world;
+}
+
+/**
+ * Turns the first AI club into the human's club: applies the chosen country,
+ * regenerates its squad (names follow the country's pools) and optionally
+ * renames it. Invalid country codes fall back to the club's generated country.
+ */
+export function assignHumanClub(world: World, country: string, name?: string): { ok: boolean; clubId: number; error?: string } {
+  const club = world.clubs[0];
+  if (!club) return { ok: false, clubId: -1, error: "No clubs available" };
+  if (world.humanClubId !== null) return { ok: false, clubId: club.id, error: "Save already started" };
+  const finalCountry = COUNTRY_BY_CODE[country] ? country : club.country;
+  club.country = finalCountry;
+  club.isHuman = true;
+  world.humanClubId = club.id;
+  if (name && name.trim().length > 0) {
+    club.name = name.trim();
+    club.shortName = name.trim();
+  }
+  world.players = world.players.filter((p) => p.clubId !== club.id);
+  club.coachName = generateName(world.rng, club.country);
+  populateClubPlayers(world.rng, world, club);
+  world.news.push({ dayIndex: world.dayIndex, text: `You took charge of ${club.name}`, kind: "season" });
+  return { ok: true, clubId: club.id };
 }

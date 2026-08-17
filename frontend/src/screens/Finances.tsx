@@ -12,6 +12,7 @@ export function Finances() {
   const [expense, setExpense] = useState<LedgerEntry[]>([]);
   const [loanBalance, setLoanBalance] = useState(0);
   const [loanLimit, setLoanLimit] = useState(1000000);
+  const [loanInterestPercent, setLoanInterestPercent] = useState(3);
   const [busy, setBusy] = useState(false);
   const [details, setDetails] = useState<FinanceDetails | null>(null);
   const [prices, setPrices] = useState<number[]>([]);
@@ -25,6 +26,7 @@ export function Finances() {
       setExpense(res.expense);
       setLoanBalance(res.loanBalance);
       setLoanLimit(res.loanLimit);
+      setLoanInterestPercent(res.loanInterestPercent);
       const financeDetails = await api.financeDetails(saveId);
       setDetails(financeDetails);
       setPrices([...financeDetails.ticketPrices]);
@@ -120,7 +122,7 @@ export function Finances() {
           <div style={{ height: 7, background: "rgba(228,245,235,0.1)", borderRadius: 999, marginTop: 10, overflow: "hidden" }}>
             <div style={{ height: "100%", width: `${loanPct}%`, background: loanPct > 70 ? "var(--red)" : "linear-gradient(90deg, var(--gold), var(--gold-2))", borderRadius: 999, transition: "width .4s ease" }} />
           </div>
-          <div className="hint">Limit {money(loanLimit)} · 3% monthly interest</div>
+          <div className="hint">Limit {money(loanLimit)} · {loanInterestPercent}% interest per payroll</div>
           <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button className="btn sm" disabled={busy || loanBalance >= loanLimit} onClick={() => doLoan("take")}>
               <Landmark size={14} /> {strings.finances.takeLoan}

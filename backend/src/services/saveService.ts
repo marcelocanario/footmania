@@ -12,6 +12,8 @@ import type {
 } from "../game/types";
 import { generateWorld } from "../game/worldgen";
 import { createRng } from "../game/rng";
+import { backfillDevelopmentProfile, calcSalary, calcValue, overallFromSkills } from "../game/player";
+import { DEVELOPMENT } from "../game/constants";
 
 type Tx = Prisma.TransactionClient;
 
@@ -48,6 +50,47 @@ function jsonOr<T>(raw: string | null | undefined, fallback: T): T {
   }
 }
 
+/** Trust no persisted JSON: keep finite minutes, clamp, and cap the window. */
+function sanitizeRecentMinutes(raw: string | null | undefined): number[] {
+  const parsed = jsonOr<unknown>(raw, []);
+  if (!Array.isArray(parsed)) return [];
+  return parsed
+    .map((v) => (typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.min(300, Math.round(v))) : null))
+    .filter((v): v is number => v !== null)
+    .slice(0, DEVELOPMENT.recentMatchWindow);
+}
+
+function normalizePlayer(player: Player, club: Club | undefined): void {
+  player.skills ??= { gol: 1, vel: 1, tec: 1, pas: 1, des: 1, arm: 1, fin: 1 };
+  for (const key of ["gol", "vel", "tec", "pas", "des", "arm", "fin"] as const) {
+    const value = Number(player.skills?.[key] ?? 1);
+    player.skills[key] = Number.isFinite(value) ? Math.max(1, Math.min(100, Math.round(value))) : 1;
+  }
+  // Migration rule (spec §27): existing saves keep their stored attributes and
+  // OVR. Only derive from skills when the stored value is absent or corrupt.
+  if (!Number.isFinite(player.overall)) {
+    player.overall = overallFromSkills(player.position, player.skills);
+  }
+  player.overall = Math.max(1, Math.min(100, Math.round(player.overall)));
+  player.potential = Math.max(player.overall, Math.min(100, Number(player.potential) || player.overall));
+  const acc = Array.isArray(player.skillAcc) ? player.skillAcc : [];
+  const hasLegacyClickProgress = acc.some((value) => !Number.isFinite(value) || Math.abs(value) >= 1);
+  player.skillAcc = hasLegacyClickProgress ? [0, 0, 0, 0, 0, 0, 0] : Array.from({ length: 7 }, (_, i) => Number(acc[i] ?? 0));
+  if (!Number.isFinite(player.releaseClauseFactor)) {
+    player.releaseClauseFactor = player.value > 0 && player.releaseClause > 0
+      ? Math.min(0.5, Math.max(0.05, player.releaseClause / player.value))
+      : 0.2;
+  }
+  if (club) {
+    if (!Number.isFinite(player.value)) {
+      player.value = calcValue(club, player.overall, player.age, player.tier, player.isStar, player.worldClass, player.isYouth);
+    }
+    if (!Number.isFinite(player.salary)) {
+      player.salary = calcSalary(club, player.overall, player.age, player.isStar, player.worldClass, player.isYouth);
+    }
+  }
+}
+
 /** Normalize a save written by the old single-column worldJson format. */
 export function deserializeWorld(json: string): World {
   const world = JSON.parse(json) as World;
@@ -79,6 +122,8 @@ export function deserializeWorld(json: string): World {
   for (const club of world.clubs) {
     club.ledger ??= { income: [], expense: [] };
     club.trophies ??= {};
+    club.trainingFocus ??= "assistant";
+    club.country ??= "BRA"; // defensive: pre-country legacy rows would otherwise violate the NOT NULL column
   }
   for (const player of world.players) {
     const legacy = player as Player & { suspended?: boolean };
@@ -86,6 +131,11 @@ export function deserializeWorld(json: string): World {
     player.suspendedGames ??= legacy.suspended ? 1 : 0;
     player.morale ??= 50;
     player.loanId ??= null;
+    if (!player.developmentProfile) {
+      player.developmentProfile = backfillDevelopmentProfile(world.seed, player.id);
+    }
+    player.recentMinutes ??= [];
+    normalizePlayer(player, world.clubs.find((club) => club.id === player.clubId));
   }
   for (const match of world.matches) {
     match.events ??= [];
@@ -113,7 +163,7 @@ export async function createSaveRecord(
   userId: number,
   name: string,
   seed?: number
-): Promise<{ id: number; clubOptions: { id: number; name: string; shortName: string; primaryColor: string; secondaryColor: string; reputation: number; level: number; division: number }[] }> {
+): Promise<{ id: number }> {
   const world = generateWorld(seed ?? Math.floor(Math.random() * 0x7fffffff));
   const save = await prisma.save.create({
     data: {
@@ -127,19 +177,7 @@ export async function createSaveRecord(
     },
   });
   await persistWorld(prisma, save.id, userId, world);
-  const options = world.clubs
-    .filter((c) => c.division === 1)
-    .map((c) => ({
-      id: c.id,
-      name: c.name,
-      shortName: c.shortName,
-      primaryColor: c.primaryColor,
-      secondaryColor: c.secondaryColor,
-      reputation: c.reputation,
-      level: c.level,
-      division: c.division,
-    }));
-  return { id: save.id, clubOptions: options };
+  return { id: save.id };
 }
 
 export async function loadWorld(prisma: PrismaClient, saveId: number, userId: number): Promise<{ save: { id: number; name: string }; world: World } | null> {
@@ -270,8 +308,7 @@ function clubRow(c: Club, saveId: number) {
     saveId,
     name: c.name,
     shortName: c.shortName,
-    stateCode: c.stateCode,
-    division: c.division,
+    country: c.country,
     reputation: c.reputation,
     level: c.level,
     cash: c.cash,
@@ -290,6 +327,7 @@ function clubRow(c: Club, saveId: number) {
     tacticsStyle: c.tactics.style,
     tacticsPressing: c.tactics.pressing,
     tacticsDirection: c.tactics.direction,
+    trainingFocus: c.trainingFocus,
     savedLineupJson: c.savedLineup ? JSON.stringify(c.savedLineup) : null,
   };
 }
@@ -341,6 +379,10 @@ function playerRow(p: Player, saveId: number) {
     skillArm: p.skills.arm,
     skillFin: p.skills.fin,
     skillAccJson: JSON.stringify(p.skillAcc),
+    declineStartAge: p.developmentProfile?.declineStartAge ?? null,
+    developmentRate: p.developmentProfile?.developmentRate ?? null,
+    developmentVolatility: p.developmentProfile?.developmentVolatility ?? null,
+    recentMinutesJson: JSON.stringify(p.recentMinutes ?? []),
   };
 }
 
@@ -349,8 +391,6 @@ function competitionRow(c: Competition, saveId: number) {
     id: c.id,
     saveId,
     kind: c.kind,
-    division: c.division,
-    stateCode: c.stateCode,
     name: c.name,
     round: c.round,
     stage: c.stage,
@@ -443,8 +483,7 @@ async function rebuildWorld(
     id: r.id,
     name: r.name,
     shortName: r.shortName,
-    stateCode: r.stateCode,
-    division: r.division,
+    country: r.country,
     reputation: r.reputation,
     level: r.level,
     cash: r.cash,
@@ -457,6 +496,7 @@ async function rebuildWorld(
     boardConfidence: r.boardConfidence,
     fanConfidence: r.fanConfidence,
     tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
+    trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
     captainId: r.captainId,
     penaltyTakerId: r.penaltyTakerId,
     savedLineup: jsonOr<Club["savedLineup"]>(r.savedLineupJson, null),
@@ -465,52 +505,76 @@ async function rebuildWorld(
     trophies: {},
   }));
 
-  const players: Player[] = playerRows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    country: r.country,
-    age: r.age,
-    position: r.position as Player["position"],
-    side: r.side,
-    skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
-    overall: r.overall,
-    potential: r.potential,
-    tier: r.tier,
-    characteristic1: r.characteristic1,
-    characteristic2: r.characteristic2,
-    energy: r.energy,
-    salary: r.salary,
-    value: r.value,
-    releaseClause: r.releaseClause,
-    injuryDays: r.injuryDays,
-    contractDays: r.contractDays,
-    isYouth: r.isYouth,
-    isStar: r.isStar,
-    worldClass: r.worldClass,
-    starter: r.starter,
-    growthAcc: r.growthAcc,
-    potentialAcc: r.potentialAcc,
-    skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
-    careerGoals: r.careerGoals,
-    careerAssists: r.careerAssists,
-    seasonGoals: r.seasonGoals,
-    seasonAssists: r.seasonAssists,
-    yellows: r.yellows,
-    reds: r.reds,
-    clubId: r.clubId,
-    tacPos: r.tacPos,
-    onSale: r.onSale,
-    salePrice: r.salePrice,
-    suspendedGames: r.suspendedGames,
-    morale: r.morale,
-    loanId: r.loanId,
-  }));
+  const players: Player[] = playerRows.map((r) => {
+    const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
+    // Backfill deterministically unless the whole profile is present and sane;
+    // never silently substitute arbitrary defaults for a partial profile.
+    const profileValid =
+      saved.declineStartAge !== null && saved.declineStartAge !== undefined &&
+      saved.developmentRate !== null && saved.developmentRate !== undefined &&
+      saved.developmentVolatility !== null && saved.developmentVolatility !== undefined &&
+      Number.isFinite(saved.declineStartAge) && Number.isFinite(saved.developmentRate) && Number.isFinite(saved.developmentVolatility);
+    const profile = profileValid
+      ? {
+          declineStartAge: saved.declineStartAge as number,
+          developmentRate: saved.developmentRate as number,
+          developmentVolatility: saved.developmentVolatility as number,
+        }
+      : backfillDevelopmentProfile(saveRow.seed, r.id);
+    return {
+      id: r.id,
+      name: r.name,
+      country: r.country,
+      age: r.age,
+      position: r.position as Player["position"],
+      side: r.side,
+      skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
+      overall: r.overall,
+      potential: r.potential,
+      tier: r.tier,
+      characteristic1: r.characteristic1,
+      characteristic2: r.characteristic2,
+      energy: r.energy,
+      salary: r.salary,
+      value: r.value,
+      releaseClause: r.releaseClause,
+      injuryDays: r.injuryDays,
+      contractDays: r.contractDays,
+      isYouth: r.isYouth,
+      isStar: r.isStar,
+      worldClass: r.worldClass,
+      starter: r.starter,
+      growthAcc: r.growthAcc,
+      potentialAcc: r.potentialAcc,
+      skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
+      careerGoals: r.careerGoals,
+      careerAssists: r.careerAssists,
+      seasonGoals: r.seasonGoals,
+      seasonAssists: r.seasonAssists,
+      yellows: r.yellows,
+      reds: r.reds,
+      clubId: r.clubId,
+      tacPos: r.tacPos,
+      onSale: r.onSale,
+      salePrice: r.salePrice,
+      suspendedGames: r.suspendedGames,
+      morale: r.morale,
+      loanId: r.loanId,
+      developmentProfile: profile,
+      recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
+      releaseClauseFactor: r.releaseClause > 0 && r.value > 0
+        ? Math.min(0.5, Math.max(0.05, r.releaseClause / r.value))
+        : 0.2,
+    };
+  });
+
+  for (const player of players) {
+    normalizePlayer(player, clubs.find((club) => club.id === player.clubId));
+  }
 
   const competitions: Competition[] = competitionRows.map((r) => ({
     id: r.id,
     kind: r.kind as Competition["kind"],
-    division: r.division,
-    stateCode: r.stateCode,
     name: r.name,
     round: r.round,
     stage: r.stage as Competition["stage"],

@@ -23,9 +23,16 @@ export function Transfers() {
   const [sellPrice, setSellPrice] = useState(0);
   const [bidTarget, setBidTarget] = useState<PlayerView | null>(null);
   const [bidAmount, setBidAmount] = useState(0);
+  const [loanTarget, setLoanTarget] = useState<LoanView | null>(null);
   const [auctionBidTarget, setAuctionBidTarget] = useState<AuctionView | null>(null);
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
   const toast = useRef<Toast>(null);
+  const seasonsOf = (days: number) => {
+    const per = snapshot?.save.seasonDays;
+    if (!per) return `${days}d`;
+    const s = Math.round(days / per);
+    return `${s} season${s === 1 ? "" : "s"}`;
+  };
 
   const loadAuctions = async () => {
     if (!saveId) return;
@@ -90,6 +97,7 @@ export function Transfers() {
       toast.current?.show({ severity: "success", summary: "Loan agreed" });
       await refresh();
       setLoans((await api.listLoans(saveId)).loans);
+      setLoanTarget(null);
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     }
@@ -136,7 +144,7 @@ export function Transfers() {
                       <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.15rem", color: "var(--grass-2)" }}>{a.overall}</span>
                     </div>
                     <div style={{ color: "var(--text-3)", fontSize: "0.86rem", marginTop: 5 }}>
-                      {a.age} yrs · Min bid <b style={{ color: "var(--text-2)" }}>{money(a.minBid)}</b> · Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentBid)}</b>
+                      {a.age} yrs · Salary <b style={{ color: "var(--text-2)" }}>{money(a.salary)}/season</b> · Min bid <b style={{ color: "var(--text-2)" }}>{money(a.minBid)}</b> · Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentBid)}</b>
                     </div>
                     <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>Ends {a.deadlineLabel}</div>
                     {a.myBid > 0 && <div style={{ color: "var(--grass-2)", fontSize: "0.84rem", marginTop: 4 }}>Your bid: {money(a.myBid)}</div>}
@@ -165,10 +173,10 @@ export function Transfers() {
                   <div>
                     <PlayerName player={p} />
                     <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5 }}>
-                      OVR <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · {p.age} yrs · Value {money(p.value)}
+                      OVR <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · {p.age} yrs · Salary {money(p.salary)}/season · Signing bonus <b style={{ color: "var(--gold-2)" }}>{money(p.signingBonus ?? 0)}</b>
                     </div>
                   </div>
-                   <button className="btn" onClick={() => { setBidTarget(p); setBidAmount(p.value); }}>
+                   <button className="btn" onClick={() => { setBidTarget(p); setBidAmount(p.signingBonus ?? p.value); }}>
                     {strings.transfers.sign}
                   </button>
                 </div>
@@ -186,9 +194,9 @@ export function Transfers() {
                 <div className="card hoverable" key={loan.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontWeight: 700 }}>{loan.player.name}</div>
-                    <div className="hint">{loan.player.overall} OVR · {loan.player.age} yrs · From {loan.fromClub}</div>
+                    <div className="hint">{loan.player.overall} OVR · {loan.player.age} yrs · Salary {money(loan.player.salary)}/season · From {loan.fromClub}</div>
                   </div>
-                  {loan.available && <button className="btn" onClick={() => takeLoan(loan)}>Take on loan</button>}
+                  {loan.available && <button className="btn" onClick={() => setLoanTarget(loan)}>View profile & take</button>}
                   {!loan.available && loan.toClub && <span className="chip">At {loan.toClub}</span>}
                 </div>
               ))}
@@ -260,9 +268,16 @@ export function Transfers() {
             <PlayerSkillsRadar skills={bidTarget.skills} />
           </>
         )}
-        <p style={{ color: "var(--text-2)", marginTop: 0 }}>
-          Market value: <b style={{ color: "var(--gold-2)" }}>{money(bidTarget?.value ?? 0)}</b>
-        </p>
+        <div style={{ color: "var(--text-2)", marginTop: 0 }}>
+          <div style={{ display: "grid", gap: 4, color: "var(--text-2)" }}>
+            <span>Salary: <b>{money(bidTarget?.salary ?? 0)}/season</b></span>
+            {bidTarget?.signingBonus !== undefined ? (
+              <span>Requested signing bonus: <b style={{ color: "var(--gold-2)" }}>{money(bidTarget.signingBonus)}</b></span>
+            ) : (
+              <span>Market value: <b style={{ color: "var(--gold-2)" }}>{money(bidTarget?.value ?? 0)}</b></span>
+            )}
+          </div>
+        </div>
         <div className="form-group">
           <label htmlFor="bid-amount">{strings.transfers.yourBid}</label>
           <InputNumber id="bid-amount" value={bidAmount} onValueChange={(e) => setBidAmount(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
@@ -284,6 +299,7 @@ export function Transfers() {
               <span className="transfer-overall">{auctionBidTarget.overall}</span>
             </div>
             <PlayerSkillsRadar skills={auctionBidTarget.skills} />
+            <div style={{ color: "var(--text-2)", marginTop: 8 }}>Salary: <b>{money(auctionBidTarget.salary)}/season</b></div>
           </>
         )}
         <div className="form-group">
@@ -294,6 +310,31 @@ export function Transfers() {
           <button className="btn ghost" style={{ flex: 1 }} onClick={() => setAuctionBidTarget(null)}>{strings.common.cancel}</button>
           <button className="btn" style={{ flex: 1 }} onClick={submitAuctionBid}>{strings.common.confirm}</button>
         </div>
+      </Dialog>
+
+      <Dialog header={`Loan — ${loanTarget?.player?.name ?? ""}`} visible={loanTarget !== null} onHide={() => setLoanTarget(null)} style={{ width: 430 }}>
+        {loanTarget?.player && (
+          <>
+            <div className="transfer-player-summary">
+              <div>
+                <div className="kicker">Player profile</div>
+                <h3>{loanTarget.player.positionName} · {loanTarget.player.age} yrs</h3>
+                <div style={{ color: "var(--text-2)", marginTop: 4 }}>From {loanTarget.fromClub} · Salary {money(loanTarget.player.salary)}/season</div>
+              </div>
+              <span className="transfer-overall">{loanTarget.player.overall}</span>
+            </div>
+            <PlayerSkillsRadar skills={loanTarget.player.skills} />
+            <div className="stats-row" style={{ marginTop: 14 }}>
+              <div className="stat"><div className="label">Potential</div><div className="value">{loanTarget.player.potential}</div></div>
+              <div className="stat"><div className="label">Value</div><div className="value">{money(loanTarget.player.value)}</div></div>
+              <div className="stat"><div className="label">Contract</div><div className="value">{seasonsOf(loanTarget.player.contractDays)}</div></div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+              <button className="btn ghost" style={{ flex: 1 }} onClick={() => setLoanTarget(null)}>{strings.common.cancel}</button>
+              <button className="btn" style={{ flex: 1 }} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>
+            </div>
+          </>
+        )}
       </Dialog>
     </div>
   );

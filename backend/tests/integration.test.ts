@@ -1,19 +1,7 @@
-import { execSync } from "node:child_process";
-import { beforeAll, describe, expect, it } from "vitest";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { describe, expect, it } from "vitest";
 
 process.env.DATABASE_URL = "file:./test.db";
 process.env.NODE_ENV = "test";
-
-const here = dirname(fileURLToPath(import.meta.url));
-beforeAll(() => {
-  execSync("npx prisma db push --skip-generate --force-reset", {
-    cwd: join(here, ".."),
-    env: { ...process.env, DATABASE_URL: "file:./test.db" },
-    stdio: "ignore",
-  });
-}, 30_000);
 
 import { buildServer } from "../src/server";
 
@@ -43,14 +31,13 @@ describe("API flow", () => {
     });
     expect(create.statusCode).toBe(200);
     const created = create.json();
-    expect(created.clubOptions.length).toBe(20);
     const saveId = created.id;
 
     const start = await app.inject({
       method: "POST",
       url: `/api/saves/${saveId}/start`,
       headers: { cookie },
-      payload: { clubId: created.clubOptions[0].id },
+      payload: { country: "BRA" },
     });
     expect(start.statusCode).toBe(200);
 
@@ -73,7 +60,7 @@ describe("API flow", () => {
 
     const state1 = await app.inject({ method: "GET", url: `/api/saves/${saveId}/state`, headers: { cookie } });
     expect(state1.statusCode).toBe(200);
-    expect(state1.json().snapshot.competitions.length).toBe(4);
+    expect(state1.json().snapshot.competitions.length).toBe(1);
 
     await app.close();
   });
@@ -113,7 +100,7 @@ describe("API flow", () => {
       method: "POST",
       url: `/api/saves/${saveId}/start`,
       headers: { cookie },
-      payload: { clubId: create.json().clubOptions[0].id },
+      payload: { country: "BRA" },
     });
     expect(start.statusCode).toBe(200);
 

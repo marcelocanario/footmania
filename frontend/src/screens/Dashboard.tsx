@@ -24,10 +24,9 @@ export function Dashboard() {
     );
   }
 
-  const league = snapshot.competitions.find((c) => c.kind === "league" && c.division === 1)
-    ?? snapshot.competitions.find((c) => c.kind === "league");
+  const league = snapshot.competitions.find((c) => c.kind === "league");
   const position = league?.position ?? null;
-  const posClass = position !== null ? (position <= 4 ? "gold" : position >= 17 ? "red" : "") : "";
+  const posClass = position !== null ? (position === 1 ? "gold" : "") : "";
   const results = dayResult;
 
   return (
@@ -35,13 +34,13 @@ export function Dashboard() {
       <div className="page-head">
         <div>
           <div className="kicker">
-            {snapshot.save.dateLabel} · {snapshot.save.dayOfWeek} · Year {snapshot.save.year}
+            {snapshot.save.dateLabel} · Year {snapshot.save.year}
           </div>
           <h1>{club.name}</h1>
           <div className="head-chips">
             <span className="chip"><span className={`dot ${confidenceDot(club.boardConfidence)}`} /> Board {club.boardConfidence}%</span>
             <span className="chip"><span className={`dot ${confidenceDot(club.fanConfidence)}`} /> Fans {club.fanConfidence}%</span>
-            {league && <span className="chip">Division {league.division}</span>}
+            <span className="chip">{strings.team.country} {club.country}</span>
           </div>
         </div>
         <button className="btn gold" style={{ fontSize: "1.05rem", minHeight: 50, padding: "14px 34px" }} onClick={() => run()} disabled={busy}>
@@ -74,11 +73,13 @@ export function Dashboard() {
         <div className="card">
           <div className="stat" style={{ border: "none", background: "transparent", padding: 0 }}>
             <div className="label"><TrendingUp size={12} /> {strings.dashboard.position}</div>
-            <div className="value" style={{ fontSize: "2.6rem", color: posClass === "gold" ? "var(--gold-2)" : posClass === "red" ? "var(--red-2)" : undefined }}>
+            <div className="value" style={{ fontSize: "2.6rem", color: posClass === "gold" ? "var(--gold-2)" : undefined }}>
               {position ? `#${position}` : "—"}
             </div>
           </div>
-          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>{league?.name ?? "League"}</div>
+          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>
+            {position === 1 ? "Champion" : league?.name ?? "League"}
+          </div>
         </div>
 
         <div className="card">

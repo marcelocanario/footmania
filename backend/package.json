@@ -12,6 +12,7 @@
     "db:generate": "prisma generate",
     "db:upgrade": "prisma db push",
     "db:push": "prisma db push",
+    "db:reset": "prisma db push --force-reset",
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
