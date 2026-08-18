@@ -49,7 +49,7 @@ export function evaluateBid(
   if (player.releaseClause > 0 && bid >= player.releaseClause) {
     return { accepted: true, counter: bid };
   }
-  if (seller.isHuman) {
+  if (seller.isHuman || seller.ownerUserId !== null) {
     const target = counterOffer(seller, player, allPlayers);
     return { accepted: bid >= target, counter: target };
   }
@@ -61,16 +61,20 @@ export function evaluateBid(
   return { accepted: false, counter: Math.round(target * 0.85) };
 }
 
-export function createAuction(rng: RngState, world: World, playerId: number, sellerClubId: number | null, deadlineDay: number): number {
+export function createAuction(rng: RngState, world: World, playerId: number, sellerClubId: number | null, deadlineDay: number, endsAt?: number): number {
   const player = world.players.find((p) => p.id === playerId);
   if (!player || player.loanId !== null) return -1;
   player.onSale = true;
   player.salePrice = null;
+  // Production multiplayer call sites pass an absolute deadline. Omitting it
+  // keeps direct legacy engine callers on the day-based API.
   const listing = {
     id: world.nextId++,
     playerId,
     minBid: Math.max(1, Math.round(player.value * 0.5)),
     deadlineDay,
+    ...(endsAt !== undefined ? { startsAt: Date.now() } : {}),
+    ...(endsAt !== undefined ? { endsAt } : {}),
     sellerClubId,
     bids: [] as { clubId: number; amount: number }[],
   };
@@ -128,7 +132,7 @@ export function isEligibleAuctionBidder(
   listing: { sellerClubId: number | null; bids: { clubId: number }[] },
   club: Club
 ): boolean {
-  if (club.isHuman) return false;
+  if (club.isHuman || club.ownerUserId !== null) return false;
   if (listing.sellerClubId !== null && club.id === listing.sellerClubId) return false;
   if (listing.bids.some((b) => b.clubId === club.id)) return false;
   return true;
@@ -236,7 +240,7 @@ export function aiSellSurplus(rng: RngState, world: World, club: Club) {
 function findBuyer(rng: RngState, world: World, player: Player): Club | null {
   const candidates = world.clubs.filter((c) => {
     const needs = squadNeeds(c, world.players);
-    return needs[player.position] > 0 && c.cash > player.value * 0.7;
+    return c.ownerUserId === null && !c.isHuman && needs[player.position] > 0 && c.cash > player.value * 0.7;
   });
   if (candidates.length === 0) return null;
   return pick(rng, candidates);
@@ -272,7 +276,7 @@ export function aiBuyListings(rng: RngState, world: World) {
     if (!seller) continue;
     const buyers = world.clubs.filter((c) => {
       const needs = squadNeeds(c, world.players);
-      return c.id !== seller.id && needs[player.position] > 0 && c.cash >= player.salePrice!;
+      return c.ownerUserId === null && !c.isHuman && c.id !== seller.id && needs[player.position] > 0 && c.cash >= player.salePrice!;
     });
     if (buyers.length === 0) continue;
     const buyer = pick(rng, buyers);

@@ -49,16 +49,16 @@ const gameConfigSchema = z
     salaryOverallExponent: nonNegativeNumber,
     salaryMultiplier: nonNegativeNumber,
     salaryAgeCurve: ageCurveSchema,
-    salaryFloor: nonNegativeNumber,
-    academySalaryMultiplier: nonNegativeNumber,
-    maxContractSeasons: z.number().int().min(1),
-    renewalMinRaise: nonNegativeNumber,
-    renewalSkillRaiseWeight: nonNegativeNumber,
-    renewalSkillExponent: nonNegativeNumber,
-    renewalMaxRaise: nonNegativeNumber,
-    renewalAgeCurve: ageCurveSchema,
-    releaseClauseRemainingValuePct: nonNegativeNumber,
-  })
+  salaryFloor: nonNegativeNumber,
+  academySalaryMultiplier: nonNegativeNumber,
+  maxContractSeasons: z.number().int().min(1),
+  renewalMinRaise: nonNegativeNumber,
+  renewalSkillRaiseWeight: nonNegativeNumber,
+  renewalSkillExponent: nonNegativeNumber,
+  renewalMaxRaise: nonNegativeNumber,
+  renewalAgeCurve: ageCurveSchema,
+  releaseClauseRemainingValuePct: nonNegativeNumber,
+})
   .superRefine((cfg, ctx) => {
     const matchDays = cfg.league.turns * (cfg.league.teams - 1);
     const lastMatchDay = cfg.league.startDay + (matchDays - 1) * cfg.league.matchIntervalDays;
@@ -70,6 +70,36 @@ const gameConfigSchema = z
       });
     }
   });
+
+// Multiplayer settings, all tunable without code changes. Kept out of the
+// strict game.config schema because they may not exist in older config files.
+export const MP_CONFIG = {
+  // Fraction of rounds after which no new humans may join the current season.
+  joinThresholdPercent: 0.5,
+  // UTC hour at which every scheduled round kicks off (GLOBAL_FIXED mode).
+  matchKickoffHourUtc: 20,
+  // Scheduling supports both the globally synchronized kickoff and a fixed
+  // local hour for each division.  Fixture timestamps are always persisted in
+  // UTC, so changing this setting affects only newly generated schedules.
+  matchTimeMode: "DIVISION_LOCAL_KICKOFF" as "GLOBAL_FIXED_KICKOFF" | "DIVISION_LOCAL_KICKOFF",
+  // Real minutes a scheduled live league match takes to play out. This paces
+  // how quickly the worker advances in-progress live matches.
+  matchDurationMinutes: 10,
+  // How often (ms) the worker loop wakes up.
+  workerIntervalMs: 5000,
+  // How many match-minutes to advance per worker tick for an in-progress match.
+  liveAdvanceMinutesPerTick: 1,
+  // Idempotency guard: only one UTC day's daily tick runs per key.
+  dailyTickHourUtc: 0,
+  // Season budget economy (plans/multiplayer.md §17A).
+  minimumTierBudgetRatio: 0.3,
+  tierBudgetDecayRate: 0.55,
+  // Inactivity thresholds by tier (days), per plan §41.
+  inactivityThresholds: { 1: 42, 2: 35, default: 28 },
+  // Multiplayer club/player generation baselines used to seed budgets.
+  expectedSeniorSquadSize: 25,
+  expectedMeaningfulSigningsPerSeason: 2,
+} as const;
 
 export type GameConfig = z.infer<typeof gameConfigSchema>;
 

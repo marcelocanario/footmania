@@ -1,13 +1,12 @@
 import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
-import { loadWorld, persistWorld } from "../services/saveService";
+import { loadGlobalWorld, persistWorld } from "../services/saveService";
 import { liveStateView } from "../services/liveView";
-import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
-import { finalizeLiveMatch } from "../game/world";
-import { withSaveLock } from "../services/lock";
+import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
+import { advanceLiveMatches } from "../game/world";
+import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
-import { serializeDayResult } from "../routes/saves";
-import type { World } from "../game/types";
+import { StaleWorldError } from "../services/saveService";
 
 const COOKIE_NAME = "fm_session";
 const conns = new Map<number, Set<WebSocket>>();
@@ -26,12 +25,14 @@ function send(ws: WebSocket, msg: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
-function broadcastState(saveId: number, world: World) {
-  const st = world.liveMatch;
-  if (!st) return;
-  const view = liveStateView(world, st);
-  for (const ws of conns.get(saveId) ?? []) {
-    send(ws, { type: "state", state: view });
+function broadcastState(world: import("../game/types").World) {
+  for (const st of world.liveMatches) {
+    for (const ws of conns.get(st.matchId) ?? []) {
+      const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
+      const viewerClub = meta ? world.clubs.find((club) => club.ownerUserId === meta.userId) : undefined;
+      if (!meta || !viewerClub || (viewerClub.id !== st.homeClubId && viewerClub.id !== st.awayClubId)) continue;
+      send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
+    }
   }
 }
 
@@ -56,12 +57,7 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
     const pathMatch = url.pathname.match(/^\/api\/matches\/(\d+)\/ws$/);
     if (!pathMatch) return;
     const matchId = Number(pathMatch[1]);
-    const saveId = Number(url.searchParams.get("saveId") ?? "0");
     const netSocket = socket as import("node:net").Socket;
-    if (!saveId) {
-      reject(netSocket);
-      return;
-    }
     const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
     void (async () => {
       if (!token) {
@@ -75,17 +71,17 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
       }
       const userId = session.userId;
       wss.handleUpgrade(req, socket, head, (ws) => {
-        const meta = { saveId, matchId, userId } as { saveId: number; matchId: number; userId: number };
+        const meta = { matchId, userId } as { matchId: number; userId: number };
         (ws as WebSocket & { meta?: typeof meta }).meta = meta;
-        let set = conns.get(saveId);
+        let set = conns.get(matchId);
         if (!set) {
           set = new Set();
-          conns.set(saveId, set);
+          conns.set(matchId, set);
         }
         set.add(ws);
         ws.on("close", () => {
           set?.delete(ws);
-          if (set && set.size === 0) conns.delete(saveId);
+          if (set && set.size === 0) conns.delete(matchId);
         });
         ws.on("message", (raw) => {
           void handleMessage(app, ws, meta, raw.toString());
@@ -98,7 +94,7 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
 async function handleMessage(
   app: FastifyInstance,
   ws: WebSocket,
-  meta: { saveId: number; matchId: number; userId: number },
+  meta: { matchId: number; userId: number },
   raw: string
 ) {
   let msg: { type?: string; minutes?: number; outId?: number; inId?: number; resume?: boolean; formation?: number; starters?: number[]; subs?: number[]; penaltyTakerId?: number | null; freeKickTakerId?: number | null };
@@ -120,16 +116,18 @@ async function handleMessage(
     send(ws, { type: "error", message: "Unknown message type" });
     return;
   }
-  await withSaveLock(meta.saveId, async () => {
-    const loaded = await loadWorld(app.prisma, meta.saveId, meta.userId);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await withGlobalLock(async () => {
+    const loaded = await loadGlobalWorld(app.prisma);
     if (!loaded) {
-      send(ws, { type: "error", message: "Save not found" });
+      send(ws, { type: "error", message: "World not found" });
       return;
     }
     const world = loaded.world;
-    const st = world.liveMatch;
-    if (!st || st.matchId !== meta.matchId) {
-      send(ws, { type: "error", message: "No live match for this save" });
+    const st = world.liveMatches.find((s) => s.matchId === meta.matchId);
+    if (!st) {
+      send(ws, { type: "error", message: "No live match for this match id" });
       return;
     }
     const home = world.clubs.find((c) => c.id === st.homeClubId);
@@ -138,13 +136,31 @@ async function handleMessage(
       send(ws, { type: "error", message: "Match clubs missing" });
       return;
     }
-    try {
-      if (msg.type === "tick") {
-        const minutes = Math.max(1, Math.min(10, Math.round(msg.minutes ?? 1)));
-        const res = tickLiveMatch(world.rng, home, away, world.players, st, minutes, { resume: msg.resume === true });
-        await persistWorld(app.prisma, meta.saveId, meta.userId, world);
-        send(ws, { type: "tick", events: res.events, atHalfTime: res.atHalfTime, state: liveStateView(world, st) });
-        broadcastState(meta.saveId, world);
+      const humanClub = world.clubs.find((c) => c.ownerUserId === meta.userId);
+      try {
+        const isParticipant = humanClub !== undefined && (st.homeClubId === humanClub.id || st.awayClubId === humanClub.id);
+        if (msg.type === "state" && !isParticipant) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
+          return;
+        }
+        if (msg.type === "tick") {
+          if (!isParticipant) {
+            send(ws, { type: "error", message: "You are not a participant in this match" });
+            return;
+          }
+        const beforeEvents = st.events.length;
+        advanceLiveMatches(world, Date.now());
+        const res = {
+          events: st.events.slice(beforeEvents),
+          atHalfTime: st.half === 1 && st.minute === 0 && !st.ended,
+        };
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        send(ws, { type: "tick", events: res.events, atHalfTime: res.atHalfTime, state: liveStateView(world, st, meta.userId) });
+        if (st.ended || !world.liveMatches.some((match) => match.matchId === meta.matchId)) {
+          for (const ws2 of conns.get(meta.matchId) ?? []) send(ws2, { type: "finished", matchId: meta.matchId });
+        } else {
+          broadcastState(world);
+        }
         return;
       }
       if (msg.type === "sub") {
@@ -152,15 +168,19 @@ async function handleMessage(
           send(ws, { type: "error", message: "Match already finished" });
           return;
         }
-        const humanSide = st.homeClubId === world.humanClubId ? 0 : 1;
-        const res = performLiveSub(world.rng, home, away, world.players, st, humanSide, msg.outId ?? -1, msg.inId ?? -1);
-        if (res.error) {
-          send(ws, { type: "sub", error: res.error, state: liveStateView(world, st) });
+        if (!humanClub || (st.homeClubId !== humanClub.id && st.awayClubId !== humanClub.id)) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
           return;
         }
-        await persistWorld(app.prisma, meta.saveId, meta.userId, world);
-        send(ws, { type: "sub", event: res.event, state: liveStateView(world, st) });
-        broadcastState(meta.saveId, world);
+        const humanSide = st.homeClubId === humanClub.id ? 0 : 1;
+        const res = performLiveSub(world.rng, home, away, world.players, st, humanSide, msg.outId ?? -1, msg.inId ?? -1);
+        if (res.error) {
+          send(ws, { type: "sub", error: res.error, state: liveStateView(world, st, meta.userId) });
+          return;
+        }
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        send(ws, { type: "sub", event: res.event, state: liveStateView(world, st, meta.userId) });
+        broadcastState(world);
         return;
       }
       if (msg.type === "lineup") {
@@ -172,6 +192,10 @@ async function handleMessage(
           send(ws, { type: "error", message: "Invalid lineup" });
           return;
         }
+        if (!humanClub || (st.homeClubId !== humanClub.id && st.awayClubId !== humanClub.id)) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
+          return;
+        }
         const input = {
           formation: msg.formation ?? 4,
           starters: msg.starters,
@@ -179,35 +203,48 @@ async function handleMessage(
           penaltyTakerId: msg.penaltyTakerId ?? null,
           freeKickTakerId: msg.freeKickTakerId ?? null,
         };
-        const humanClub = st.homeClubId === world.humanClubId ? home : away;
         const err = applySavedLineup(humanClub, world.players, input);
         if (err) {
-          send(ws, { type: "lineup", error: err, state: liveStateView(world, st) });
+          send(ws, { type: "lineup", error: err, state: liveStateView(world, st, meta.userId) });
           return;
         }
         rebuildLiveHumanLineup(st, humanClub, world.players);
-        await persistWorld(app.prisma, meta.saveId, meta.userId, world);
-        send(ws, { type: "lineup", state: liveStateView(world, st) });
-        broadcastState(meta.saveId, world);
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        send(ws, { type: "lineup", state: liveStateView(world, st, meta.userId) });
+        broadcastState(world);
         return;
       }
       if (msg.type === "finish") {
-        if (!st.ended) {
-          tickLiveMatch(world.rng, home, away, world.players, st, 200, { ignoreHalfTime: true });
+        if (!isParticipant) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
+          return;
         }
-        const dayResult = finalizeLiveMatch(world);
-        await persistWorld(app.prisma, meta.saveId, meta.userId, world);
-        const payload = serializeDayResult(world, dayResult);
-        for (const ws2 of conns.get(meta.saveId) ?? []) {
-          send(ws2, { type: "finished", dayResult: payload });
+        advanceLiveMatches(world, Date.now());
+        if (!st.ended) {
+          send(ws, { type: "error", message: "Match is still in progress" });
+          return;
+        }
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        for (const ws2 of conns.get(meta.matchId) ?? []) {
+          send(ws2, { type: "finished", matchId: meta.matchId });
         }
         return;
       }
-      send(ws, { type: "state", state: liveStateView(world, st) });
+      send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
     } catch (e) {
+      if (e instanceof StaleWorldError) throw e;
       send(ws, { type: "error", message: (e as Error).message });
     }
-  });
+      });
+      return;
+    } catch (e) {
+      if (!(e instanceof StaleWorldError) || attempt === 2) {
+        send(ws, { type: "error", message: (e as Error).message });
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
 }
 
 export default wsPlugin;

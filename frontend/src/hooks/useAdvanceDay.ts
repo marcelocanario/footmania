@@ -3,12 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../store/game";
 
 /**
- * Shared "advance to next match day" flow used by the Dashboard button
- * and the mobile play FAB. When a live match is already in progress it
- * resumes it; otherwise it advances to the next match day.
+ * Live-match flow used by the Dashboard and mobile resume button: checks for an
+ * in-progress live match and navigates to it if one exists.
  */
-export function useAdvanceDay() {
-  const { advance, checkLiveMatch } = useGame();
+export function useLiveMatch() {
+  const { checkLiveMatch } = useGame();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
 
@@ -16,26 +15,16 @@ export function useAdvanceDay() {
     if (busy) return false;
     setBusy(true);
     try {
-      const live = await checkLiveMatch();
-      if (live) {
+      const id = await checkLiveMatch();
+      if (id) {
         navigate("/live-match");
         return true;
       }
-      const result = await advance();
-      if (!result) return false;
-      if (result.seasonEnded) {
-        navigate("/season-end");
-        return true;
-      }
-      if (result.humanMatch || result.matchPending) {
-        navigate("/live-match");
-        return true;
-      }
-      return true;
+      return false;
     } finally {
       setBusy(false);
     }
-  }, [advance, navigate, busy, checkLiveMatch]);
+  }, [checkLiveMatch, navigate, busy]);
 
   return { busy, run };
 }

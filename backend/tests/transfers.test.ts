@@ -2,14 +2,21 @@ import { describe, it, expect } from "vitest";
 import { aiBid, auctionAvailableCash, createAuction, freeAgentSigningBonus, isEligibleAuctionBidder, releasePlayer, resolveAuction, transferPlayer } from "../src/game/transfers";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
-import type { Club, Player, World } from "../src/game/types";
+import type { Club } from "../src/game/types";
 import { gameConfig } from "../src/config";
+import { makeWorld } from "./helpers";
 
 function makeClub(id: number, overrides: Partial<Club> = {}): Club {
   return {
     id,
     name: `Club ${id}`,
     shortName: `C${id}`,
+    ownerUserId: null,
+    timezone: null,
+    competitionState: "ACTIVE",
+    lastMeaningfulActivityAt: null,
+    abandonmentEligibleAt: null,
+    liveMatchAt: null,
     country: "BRA",
     level: 20,
     cash: 10_000_000,
@@ -28,35 +35,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     ledger: { income: [], expense: [] },
     trophies: {},
     ...overrides,
-  };
-}
-
-function makeWorld(clubs: Club[], players: Player[]): World {
-  return {
-    seed: 1,
-    year: 2026,
-    dayIndex: 5,
-    dayOfWeek: 0,
-    nextId: 1000,
-    clubs,
-    players,
-    competitions: [],
-    fixtures: [],
-    matches: [],
-    news: [],
-    auctions: [],
-    loans: [],
-    seasonAwards: [],
-    records: [],
-    managerHistory: [],
-    ticketPrices: {},
-    stadiumUpgrades: [],
-    tvDeals: [],
-    humanClubId: null,
-    seasonSummary: null,
-    rng: createRng(42),
-    contractWarnings: [],
-    liveMatch: null,
   };
 }
 
@@ -125,7 +103,7 @@ describe("auction resolution", () => {
     const rng = createRng(5);
     const playerA = generatePlayer(rng, other, { id: 1 });
     const playerB = generatePlayer(rng, other, { id: 2 });
-    const world = makeWorld([club, other], [playerA, playerB]);
+    const world = makeWorld([club, other], [playerA, playerB], { dayIndex: 5 });
     const first = createAuction(rng, world, playerA.id, other.id, world.dayIndex + 7);
     const second = createAuction(rng, world, playerB.id, other.id, world.dayIndex + 7);
     world.auctions.find((a) => a.id === first)!.bids.push({ clubId: club.id, amount: 700_000 });
@@ -138,7 +116,7 @@ describe("auction resolution", () => {
     const buyer = makeClub(20, { cash: 20_000_000 });
     const rng = createRng(5);
     const player = generatePlayer(rng, seller, { id: 1 });
-    const world = makeWorld([seller, buyer], [player]);
+    const world = makeWorld([seller, buyer], [player], { dayIndex: 5 });
 
     const listingId = createAuction(rng, world, player.id, seller.id, world.dayIndex + 7);
     expect(listingId).toBeGreaterThan(0);
@@ -161,7 +139,7 @@ describe("auction resolution", () => {
     const seller = makeClub(10);
     const rng = createRng(5);
     const player = generatePlayer(rng, seller, { id: 1 });
-    const world = makeWorld([seller], [player]);
+    const world = makeWorld([seller], [player], { dayIndex: 5 });
     const listingId = createAuction(rng, world, player.id, seller.id, world.dayIndex + 7);
     expect(player.onSale).toBe(true);
     expect(resolveAuction(world, listingId)).toBeNull();
@@ -176,7 +154,7 @@ describe("releasePlayer", () => {
     const rng = createRng(9);
     const player = generatePlayer(rng, club, { id: 1 });
     player.releaseClause = 1_000_000;
-    const world = makeWorld([club], [player]);
+    const world = makeWorld([club], [player], { dayIndex: 5 });
 
     const result = releasePlayer(world, player, club);
     expect(result.ok).toBe(true);
@@ -194,7 +172,7 @@ describe("releasePlayer", () => {
     const rng = createRng(9);
     const player = generatePlayer(rng, club, { id: 1 });
     player.releaseClause = 1_000_000;
-    const world = makeWorld([club], [player]);
+    const world = makeWorld([club], [player], { dayIndex: 5 });
 
     const result = releasePlayer(world, player, club);
     expect(result.ok).toBe(false);
@@ -206,7 +184,7 @@ describe("releasePlayer", () => {
     const club = makeClub(1, { cash: 0 });
     const rng = createRng(9);
     const player = generatePlayer(rng, club, { id: 1, isYouth: true });
-    const world = makeWorld([club], [player]);
+    const world = makeWorld([club], [player], { dayIndex: 5 });
 
     const result = releasePlayer(world, player, club);
     expect(result.ok).toBe(true);
@@ -219,7 +197,7 @@ describe("releasePlayer", () => {
     const other = makeClub(2);
     const rng = createRng(9);
     const player = generatePlayer(rng, other, { id: 1 });
-    const world = makeWorld([club, other], [player]);
+    const world = makeWorld([club, other], [player], { dayIndex: 5 });
 
     const result = releasePlayer(world, player, club);
     expect(result.ok).toBe(false);
@@ -234,7 +212,7 @@ describe("releasePlayer", () => {
     player.clubId = receiving.id;
     player.loanId = 10;
     player.releaseClause = 1_000_000;
-    const world = makeWorld([owner, receiving], [player]);
+    const world = makeWorld([owner, receiving], [player], { dayIndex: 5 });
     world.loans.push({ id: 10, playerId: player.id, fromClubId: owner.id, toClubId: receiving.id, startDay: 1, endDay: 20, recalled: false });
 
     const result = releasePlayer(world, player, receiving);
@@ -253,7 +231,7 @@ describe("releasePlayer", () => {
     const rng = createRng(9);
     const player = generatePlayer(rng, owner, { id: 1 });
     player.loanId = 10;
-    const world = makeWorld([owner, buyer], [player]);
+    const world = makeWorld([owner, buyer], [player], { dayIndex: 5 });
 
     expect(transferPlayer(world, player, buyer, 500_000)).toBe(false);
     expect(createAuction(rng, world, player.id, owner.id, world.dayIndex + 7)).toBe(-1);

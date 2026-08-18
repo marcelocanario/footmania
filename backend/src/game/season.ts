@@ -10,7 +10,6 @@ import { LEAGUE_PRIZES, SPONSORSHIP, TV_POSITION_BONUS, DAYS_PER_YEAR } from "./
 import { getPosition, sortedStandings } from "./league";
 import { squadNeeds } from "./transfers";
 import { generateName } from "./names";
-import { buildSeasonStructure } from "./worldgen";
 import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
 import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from "./payroll";
 import {
@@ -34,6 +33,10 @@ export function loanFitsContract(startDay: number, endDay: number, contractDays:
 
 export const SENIOR_SQUAD_LIMIT = 35;
 const ACADEMY_TARGET = 8;
+
+function humanControlled(club: Club): boolean {
+  return club.isHuman || club.ownerUserId !== null;
+}
 
 export function fairSalaryForPlayer(player: Player): number {
   return calculateBaseSalary(player.overall, player.age);
@@ -107,7 +110,8 @@ function clamp(v: number, lo: number, hi: number): number {
 
 export function weeklyUpdate(rng: World["rng"], world: World) {
   for (const club of world.clubs) {
-    const last = clubLastMatch(world, club.id);
+    const participates = club.competitionState === "ACTIVE";
+    const last = participates ? clubLastMatch(world, club.id) : null;
     const won =
       last !== null &&
       ((last.homeClubId === club.id && last.homeScore > last.awayScore) ||
@@ -121,11 +125,11 @@ export function weeklyUpdate(rng: World["rng"], world: World) {
       if (player.injuryDays > 0) player.injuryDays--;
       if (player.energy < 100) player.energy += nextInt(rng, 6);
       potentialGrowth(rng, player);
-      if (won) player.morale = Math.min(100, player.morale + 2);
-      if (lost) player.morale = Math.max(0, player.morale - 2);
-      if (player.starter) player.morale = Math.min(100, player.morale + 1);
-      else if (player.injuryDays === 0 && !player.isYouth) player.morale = Math.max(0, player.morale - 3);
-      if (player.morale < 25 && !player.onSale && !player.isYouth) {
+      if (participates && won) player.morale = Math.min(100, player.morale + 2);
+      if (participates && lost) player.morale = Math.max(0, player.morale - 2);
+      if (participates && player.starter) player.morale = Math.min(100, player.morale + 1);
+      else if (participates && player.injuryDays === 0 && !player.isYouth) player.morale = Math.max(0, player.morale - 3);
+      if (participates && player.morale < 25 && !player.onSale && !player.isYouth) {
         player.onSale = true;
         player.salePrice = Math.round(player.value * 0.8);
         world.news.push({
@@ -151,11 +155,12 @@ export function weeklyUpdate(rng: World["rng"], world: World) {
         }
       }
     }
-    if (!club.isHuman) maybeFireManager(rng, world, club);
+    if (!humanControlled(club)) maybeFireManager(rng, world, club);
   }
-  const human = world.humanClubId !== null ? world.clubs.find((c) => c.id === world.humanClubId) : null;
-  if (human) {
-    const league = world.competitions.find((c) => c.kind === "league");
+  const humans = world.clubs.filter((club) => humanControlled(club));
+  for (const human of humans) {
+    const league = world.competitions.find((c) => c.kind === "league" && c.standings[human.id])
+      ?? world.competitions.find((c) => c.kind === "division" && c.seasonId === world.mp.seasonId && c.standings[human.id]);
     if (league && league.standings[human.id]) {
       const pos = getPosition(league, human.id);
       const expectation = 4;
@@ -239,6 +244,7 @@ export function settlePayroll(rng: World["rng"], world: World) {
 
 export function yearlySponsorship(world: World) {
   for (const club of world.clubs) {
+    if (club.competitionState !== "ACTIVE") continue;
     const tier = Math.min(5, Math.max(1, Math.round(club.level / 5)));
     const amount = SPONSORSHIP[tier - 1];
     world.tvDeals.push({ clubId: club.id, season: world.year, baseAmount: amount, positionBonus: 0 });
@@ -249,7 +255,7 @@ export function yearlySponsorship(world: World) {
 
 export function awardTvPositionBonuses(world: World) {
   for (const comp of world.competitions) {
-    if (comp.kind !== "league") continue;
+    if (comp.kind !== "league" && comp.kind !== "division") continue;
     const sorted = sortedStandings(comp);
     for (let i = 0; i < sorted.length; i++) {
       const bonus = TV_POSITION_BONUS[i];
@@ -266,7 +272,7 @@ export function awardTvPositionBonuses(world: World) {
 
 export function awardLeaguePrizes(world: World) {
   for (const comp of world.competitions) {
-    if (comp.kind !== "league") continue;
+    if (comp.kind !== "league" && comp.kind !== "division") continue;
     const sorted = sortedStandings(comp);
     for (let i = 0; i < Math.min(LEAGUE_PRIZES.length, sorted.length); i++) {
       const prize = LEAGUE_PRIZES[i];
@@ -394,8 +400,9 @@ export function contractCycle(rng: World["rng"], world: World) {
   const freeAgentDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
   for (const player of [...world.players]) {
     if (player.clubId === null) continue;
+    const club = world.clubs.find((c) => c.id === player.clubId);
+    if (!club || club.competitionState !== "ACTIVE") continue;
     if (player.contractDays <= 0) {
-      const club = world.clubs.find((c) => c.id === player.clubId);
       if (player.loanId !== null && player.loanId !== undefined) {
         const loan = world.loans.find((l) => l.id === player.loanId);
         if (loan) endLoan(world, loan);
@@ -414,8 +421,7 @@ export function contractCycle(rng: World["rng"], world: World) {
       });
       continue;
     }
-    const club = world.clubs.find((c) => c.id === player.clubId);
-    if (!club || club.isHuman) continue;
+    if (humanControlled(club)) continue;
     const warningThreshold = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
     if (player.contractDays <= warningThreshold) {
       const maxSeasons = gameConfig.maxContractSeasons;
@@ -476,7 +482,7 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
 
 export function loanCycle(rng: World["rng"], world: World) {
   for (const club of world.clubs) {
-    if (club.isHuman || !chance(rng, 15)) continue;
+    if (humanControlled(club) || !chance(rng, 15)) continue;
     const roster = world.players.filter(
       (p) =>
         p.clubId === club.id && !p.isYouth && !p.onSale && p.loanId === null && p.injuryDays === 0 && p.overall < 70
@@ -514,7 +520,7 @@ export function loanCycle(rng: World["rng"], world: World) {
     }
   }
   for (const club of world.clubs) {
-    if (club.isHuman || !chance(rng, 12)) continue;
+    if (humanControlled(club) || !chance(rng, 12)) continue;
     const needs = squadNeeds(club, world.players);
     const candidates = world.loans.filter((l) => {
       if (l.toClubId !== null || l.recalled) return false;
@@ -592,7 +598,12 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
   const clubs = world.clubs;
   for (const player of world.players) {
     aging(rng, player, world.clubs.find((c) => c.id === player.clubId) ?? world.clubs[0]);
-    if (player.contractDays > 0) player.contractDays = Math.max(0, player.contractDays - DAYS_PER_YEAR);
+    // Contracts elapse only for clubs participating in the season (plan
+    // §18/§45): provisional and dormant clubs keep their contract time frozen.
+    const club = player.clubId !== null ? world.clubs.find((c) => c.id === player.clubId) : undefined;
+    if (player.contractDays > 0 && (!club || club.competitionState === "ACTIVE")) {
+      player.contractDays = Math.max(0, player.contractDays - DAYS_PER_YEAR);
+    }
     // Market value is recalculated as age / overall / contract change; the
     // contract salary is fixed and is never recalculated at rollover.
     player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
@@ -645,13 +656,19 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
     club.boardConfidence = 50;
     club.fanConfidence = 50;
   }
-  world.year += 1;
+  // Multiplayer seasons are calendar months, not an abstract annual counter.
+  // `mp.seasonYear` has already been advanced by the rollover coordinator.
+  world.year = world.mp.seasonYear;
   world.dayIndex = 0;
   world.dayOfWeek = 0;
   for (const player of world.players) resetPayrollPeriod(player, 0);
-  world.fixtures = [];
-  world.matches = [];
-  world.auctions = [];
+  // Season structure (fixtures, standings reset, promotions) is owned by the
+  // multiplayer engine during season rollover, not here. Completed matches
+  // remain available through archived fixture history.
+  // Multiplayer auctions use absolute deadlines and may legitimately cross a
+  // month boundary. Keep all listings alive; the worker settles timestamped
+  // listings, while legacy rows continue through the day-based compatibility
+  // path.
   const academyNews = world.news
     .filter((item) => item.kind === "academy")
     .map((item) => ({ ...item, dayIndex: 0 }));
@@ -666,5 +683,4 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
     player.salePrice = null;
     player.morale = Math.max(30, Math.min(100, player.morale));
   }
-  buildSeasonStructure(world);
 }

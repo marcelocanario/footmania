@@ -16,61 +16,7 @@ import { contractCycle, promoteYouthPlayer, rolloverSeason } from "../src/game/s
 import { settlePayroll } from "../src/game/season";
 import { transferPlayer } from "../src/game/transfers";
 import { gameConfig } from "../src/config";
-import type { Club, Player, World } from "../src/game/types";
-
-function makeClub(): Club {
-  return {
-    id: 1,
-    name: "Test FC",
-    shortName: "TFC",
-    country: "BRA",
-    level: 20,
-    cash: 100_000_000,
-    stadiumName: "St",
-    stadiumCapacity: 40000,
-    primaryColor: "#000",
-    secondaryColor: "#fff",
-    coachName: "Coach",
-    boardConfidence: 50,
-    fanConfidence: 70,
-    tactics: { formation: 4, style: 0, pressing: 0, direction: 0 },
-    trainingFocus: "assistant",
-    captainId: null,
-    penaltyTakerId: null,
-    isHuman: true,
-    ledger: { income: [], expense: [] },
-    trophies: {},
-  };
-}
-
-function makeWorld(club: Club, players: Player[]): World {
-  return {
-    seed: 1,
-    year: 2026,
-    dayIndex: 0,
-    dayOfWeek: 0,
-    nextId: 1000,
-    clubs: [club],
-    players,
-    competitions: [],
-    fixtures: [],
-    matches: [],
-    news: [],
-    auctions: [],
-    loans: [],
-    seasonAwards: [],
-    records: [],
-    managerHistory: [],
-    ticketPrices: {},
-    stadiumUpgrades: [],
-    tvDeals: [],
-    humanClubId: club.id,
-    seasonSummary: null,
-    rng: createRng(42),
-    contractWarnings: [],
-    liveMatch: null,
-  };
-}
+import { makeClub, makeWorld } from "./helpers";
 
 describe("removed concepts", () => {
   it("players no longer carry isStar, worldClass, or a releaseClauseFactor", () => {
@@ -284,7 +230,7 @@ describe("salary persistence", () => {
     const rng = createRng(13);
     const p = generatePlayer(rng, club, { id: 1 });
     const salaryBefore = p.salary;
-    const world = makeWorld(club, [p]);
+    const world = makeWorld([club], [p]);
     const contractBefore = p.contractDays;
     rolloverSeason(world.rng, world);
     expect(p.age).toBeGreaterThan(0);
@@ -301,7 +247,7 @@ describe("season timing", () => {
     const rng = createRng(17);
     const p = generatePlayer(rng, club, { id: 1 });
     const salaryPerSeason = p.salary;
-    const world = makeWorld(club, [p]);
+    const world = makeWorld([club], [p]);
 
     let simulated = 0;
     for (let day = gameConfig.payrollIntervalDays; day <= gameConfig.seasonDays; day += gameConfig.payrollIntervalDays) {
@@ -323,7 +269,7 @@ describe("season timing", () => {
     p.salary = 100_000;
     p.payrollPaidThroughDay = 0;
     p.payrollPaidAmount = 0;
-    const world = { ...makeWorld(seller, [p]), clubs: [seller, buyer] };
+    const world = makeWorld([seller, buyer], [p]);
     world.dayIndex = 7;
     settlePayroll(world.rng, world);
     const sellerAfterCycle = seller.cash;
@@ -349,7 +295,7 @@ describe("AI contract renewals", () => {
     const p = generatePlayer(rng, club, { id: 1 });
     p.salary = 100_000;
     p.contractDays = gameConfig.seasonDays * 1; // within the warning window
-    const world = makeWorld(club, [p]);
+    const world = makeWorld([club], [p]);
     world.news = [];
     contractCycle(world.rng, world);
     // If renewed, salary must equal the canonical demand for some 1..max term;

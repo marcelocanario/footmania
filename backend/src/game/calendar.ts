@@ -20,6 +20,11 @@ export function dateLabel(dayIndex: number): string {
   return dayInfo(dayIndex).label;
 }
 
+/** Display label for the multiplayer calendar, whose day index is 1-based. */
+export function multiplayerDayLabel(dayIndex: number): string {
+  return `Day ${Math.max(1, Math.trunc(dayIndex))}`;
+}
+
 export function weekdayName(dayOfWeek: number): string {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dayOfWeek];
 }

@@ -1,31 +1,30 @@
 import { PrismaClient } from "@prisma/client";
 import { generateWorld } from "../src/game/worldgen";
-import { createSaveRecord, loadWorld, persistWorld } from "../src/services/saveService";
+import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
+import { ensureSeasonRow } from "../src/services/mpService";
+import { initSeason } from "../src/game/multiplayer";
+import { seasonRefFor } from "../src/game/clock";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  const save = await ensureGlobalSave(prisma);
+  const loaded = await loadGlobalWorld(prisma);
+  if (!loaded) throw new Error("Global save could not be loaded");
+
   const world = generateWorld(20260815);
+  const ref = seasonRefFor(new Date());
+  const season = await ensureSeasonRow(prisma, ref);
+  initSeason(world, ref, season.seasonId);
+
   console.log(
-    `Generated world: ${world.clubs.length} clubs, ${world.players.length} players, ${world.competitions.length} competitions, ${world.fixtures.length} fixtures`
+    `Generated world: ${world.clubs.length} clubs, ${world.players.length} players, ${world.competitions.length} competitions, ${world.fixtures.length} fixtures`,
   );
+  await persistWorld(prisma, save.id, save.id, world, loaded.save.revision);
+  console.log(`Global save #${save.id} seeded for ${ref.year}-${String(ref.month).padStart(2, "0")}`);
 
-  let user = await prisma.user.findUnique({ where: { username: "demo" } });
-  if (!user) {
-    user = await prisma.user.create({
-      data: { username: "demo", passwordHash: "$2b$10$not.real.password.hash.placeholder.0000000000000000000000000" },
-    });
-    console.log("Created demo user");
-  }
-  const save = await createSaveRecord(prisma, user.id, "Demo Career", world.seed);
-  console.log(`Created save #${save.id}`);
-
-  const loaded = await loadWorld(prisma, save.id, user.id);
-  console.log(loaded ? `Round-trip load OK: ${loaded.world.clubs.length} clubs` : "Round-trip load FAILED");
-
-  world.year = 3;
-  await persistWorld(prisma, save.id, user.id, world);
-  console.log("persistWorld OK");
+  const roundTrip = await loadGlobalWorld(prisma);
+  console.log(roundTrip ? `Round-trip load OK: ${roundTrip.world.clubs.length} clubs` : "Round-trip load FAILED");
 }
 
 main()

@@ -63,16 +63,16 @@ interface Props {
 }
 
 export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
-  const { saveId } = useGame();
+  const {} = useGame();
   const [data, setData] = useState<LineupView | null>(null);
   const [ed, setEd] = useState<Ed | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ kind: "ok" | "err" | "idle"; text: string }>({ kind: "idle", text: "" });
 
   useEffect(() => {
-    if (!saveId) return;
+    if (false) return;
     api
-      .getLineup(saveId)
+      .getLineup()
       .then((res) => {
         setData(res);
         const live = mode === "match" && liveState?.matchId === matchId ? liveState : null;
@@ -95,7 +95,7 @@ export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
         });
       })
       .catch((e) => setStatus({ kind: "err", text: (e as Error).message }));
-  }, [saveId, mode, matchId, liveState?.matchId]);
+  }, [mode, matchId, liveState?.matchId]);
 
   const byId = useMemo(() => {
     const m = new Map<number, { id: number; name: string; position: number; overall: number; injuryDays: number; suspended: boolean }>();
@@ -107,7 +107,7 @@ export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
 
   const save = useCallback(
     async (next: Ed) => {
-      if (!saveId) return;
+      if (false) return;
       setSaving(true);
       try {
         const payload = {
@@ -118,11 +118,11 @@ export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
           freeKickTakerId: next.freeKickTakerId,
         };
         if (mode === "club") {
-          await api.setLineup(saveId, payload);
+          await api.setLineup(payload);
           setStatus({ kind: "ok", text: "Saved" });
           onSaved?.();
         } else if (matchId) {
-          const res = await api.matchLineup(saveId, matchId, payload);
+          const res = await api.matchLineup(matchId, payload);
           setStatus({ kind: "ok", text: "Saved" });
           onSaved?.(res.state);
         }
@@ -132,7 +132,7 @@ export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
         setSaving(false);
       }
     },
-    [saveId, mode, matchId, onSaved]
+    [mode, matchId, onSaved]
   );
 
   const commit = (next: Ed) => {
@@ -181,10 +181,10 @@ export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
   };
 
   const changeFormation = async (formation: number) => {
-    if (!saveId) return;
+    if (false) return;
     setSaving(true);
     try {
-      const res = await api.getLineup(saveId, true, formation);
+      const res = await api.getLineup(true, formation);
       if (mode === "match" && ed) {
         // During a live match, changing shape must not replace the current
         // XI with the club's saved XI (which may contain subbed-off players).
@@ -209,14 +209,14 @@ export function LineupPicker({ mode, matchId, liveState, onSaved }: Props) {
   };
 
   const autoFill = async () => {
-    if (!saveId) return;
+    if (false) return;
     if (mode === "match" && liveState?.phase === "halftime") {
       setStatus({ kind: "err", text: "Auto lineup is unavailable at halftime; choose players manually." });
       return;
     }
     setSaving(true);
     try {
-      const res = await api.getLineup(saveId, true, ed?.formation);
+      const res = await api.getLineup(true, ed?.formation);
       setData(res);
       const next: Ed = {
         formation: ed?.formation ?? res.formation,

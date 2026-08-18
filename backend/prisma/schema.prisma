@@ -11,9 +11,12 @@ model User {
   id           Int      @id @default(autoincrement())
   username     String   @unique
   passwordHash String
+  timezone     String?
+  isAdmin      Boolean  @default(false)
   createdAt    DateTime @default(now())
   sessions     Session[]
   saves        Save[]
+  club         Club?    @relation("ClubOwner")
 }
 
 model Session {
@@ -41,8 +44,23 @@ model Save {
   humanClubId Int?
   seed        Int      @default(0)
   rngState    BigInt   @default(0)
+  // Multiplayer: exactly one global Save row exists (isGlobal = true). It holds
+  // the shared world all users play in. Regular per-user saves are retired.
+  isGlobal    Boolean  @default(false)
+  // Nullable so legacy per-user saves can coexist; GLOBAL is reserved for the
+  // singleton multiplayer world and is database-unique.
+  globalKey   String?  @unique
   worldJson   String?
+  // Optimistic concurrency: bumped on every persist; conditional updates use
+  // it to detect lost updates when multiple processes write the global world.
+  revision    Int      @default(0)
+  // Multiplayer runtime state (current season id, join state, etc.) persisted
+  // as JSON so it survives reloads. Mirrors World.mp.
+  mpStateJson String?
   seasonSummaryJson  String?
+  // Final standings snapshots for completed seasons (plan §70). JSON because
+  // history is write-once and never queried relationally.
+  seasonHistoryJson String?
   pendingEventsJson  String?
   pendingMatchIdsJson String?
   createdAt   DateTime @default(now())
@@ -68,13 +86,31 @@ model Save {
   ticketPrices   ClubTicketPrices[]
   stadiumUpgrades StadiumUpgrade[]
   tvDeals        TvDeal[]
-  liveMatch      LiveMatch?
+  liveMatches    LiveMatch[]
+  dailyExecutions DailyExecution[]
 }
 
 model Club {
   id               Int
   saveId           Int
   save             Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  // Multiplayer: the user who owns this club, null for filler AI clubs.
+  ownerUserId      Int?   @unique
+  ownerUser        User?  @relation("ClubOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  // Multiplayer: IANA timezone of the owner (clustering target).
+  timezone         String?
+  // Multiplayer: NEW | PROVISIONAL | ACTIVE | DORMANT
+  competitionState String @default("ACTIVE")
+  // Multiplayer: epoch ms of the last meaningful activity.
+  lastMeaningfulActivityAt BigInt?
+  // Multiplayer: epoch ms when the club became abandonment-eligible (inactivity
+  // threshold exceeded). Removal only happens at season rollover.
+  abandonmentEligibleAt BigInt?
+  inactivityWarningStage Int @default(0)
+  // Multiplayer: real timestamp (epoch ms) of the human's live league match
+  // kickoff. Null when the club has no upcoming live match. Once the scheduled
+  // kickoff passes, the match auto-plays to completion.
+  liveMatchAt      BigInt?
   name             String
   shortName        String
   country          String
@@ -99,6 +135,8 @@ model Club {
 
   @@id([saveId, id])
   @@index([saveId])
+  @@index([saveId, ownerUserId])
+  @@unique([saveId, ownerUserId])
 }
 
 model Player {
@@ -180,6 +218,14 @@ model Competition {
   name                String
   round               Int
   stage               String
+  // Multiplayer: a Competition with kind "division" represents one division of
+  // the pyramid. These fields identify where in the pyramid it sits.
+  seasonId            Int?
+  season              MpSeason? @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  tier                Int    @default(1)
+  groupIndex          Int    @default(0)
+  referenceTimezone   String?
+  status              String @default("ACTIVE")
   configJson          String
   winnersJson         String
   knockoutsJson       String
@@ -187,6 +233,8 @@ model Competition {
 
   @@id([saveId, id])
   @@index([saveId])
+  @@index([saveId, seasonId, tier])
+  @@unique([saveId, seasonId, tier, groupIndex])
 }
 
 model StandingsRow {
@@ -219,6 +267,10 @@ model Fixture {
   played        Boolean
   leg           Int?
   tie           Int?
+  // Multiplayer: real kickoff timestamp (epoch ms). Null for legacy rows.
+  kickoffAt     BigInt?
+  homeClubNameSnapshot String?
+  awayClubNameSnapshot String?
 
   @@id([saveId, id])
   @@index([saveId, competitionId])
@@ -242,6 +294,7 @@ model Match {
 
   @@id([saveId, id])
   @@index([saveId])
+  @@unique([saveId, fixtureId])
 }
 
 model MatchStat {
@@ -322,9 +375,13 @@ model Auction {
   playerId     Int
   minBid       Int
   deadlineDay  Int
+  // Multiplayer: absolute epoch-ms deadline (plan §51). Null for legacy rows.
+  startsAt     BigInt?
+  endsAt       BigInt?
   sellerClubId Int?
 
   @@id([saveId, id])
+  @@index([saveId, endsAt])
 }
 
 model AuctionBid {
@@ -336,6 +393,7 @@ model AuctionBid {
   amount    Int
 
   @@index([saveId, auctionId])
+  @@unique([saveId, auctionId, clubId])
 }
 
 model Trophy {
@@ -423,7 +481,162 @@ model TvDeal {
 }
 
 model LiveMatch {
-  saveId    Int    @id
+  saveId    Int
   save      Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  // Multiplayer: multiple live matches can run concurrently. The runtime key
+  // is the match's id (the engine's Match id for the live fixture).
+  matchId   Int
   stateJson String
+
+  @@id([saveId, matchId])
+}
+
+// ---------------------------------------------------------------------------
+// Multiplayer league system
+// ---------------------------------------------------------------------------
+
+// One synchronized season = one calendar month. All divisions share the same
+// global season. See plans/multiplayer.md.
+model MpSeason {
+  id                 Int      @id @default(autoincrement())
+  year               Int
+  month              Int
+  startsAt           DateTime
+  endsAt             DateTime
+  // Round after which no new humans may join the current season.
+  joinLockRound      Int
+  joinThresholdPercent Float
+  // PREPARATION | ACTIVE | INTERSEASON | ROLLOVER | COMPLETE
+  status             String   @default("ACTIVE")
+  completedRounds    Int      @default(0)
+  // OPEN | LOCKED — the authoritative join gate (set transactionally).
+  joinState          String   @default("OPEN")
+  createdAt          DateTime @default(now())
+
+  divisions          Competition[]
+  clubSeasons        MpClubSeason[]
+  allocations        MpAllocation[]
+
+  @@unique([year, month])
+}
+
+// Per-division membership for a season. Memberships are disposable between
+// seasons; tiers are the persistent competitive level.
+model MpMembership {
+  id           Int      @id @default(autoincrement())
+  divisionId   Int
+  clubId       Int
+  slotNumber   Int
+  isFillerAI   Boolean  @default(false)
+  replacedClubId Int?
+  joinedAt     DateTime @default(now())
+
+  @@unique([divisionId, clubId])
+  @@unique([divisionId, slotNumber])
+  @@index([divisionId])
+}
+
+// Per-club-per-season competition record. Standings live in StandingsRow
+// (keyed by competition/division id); this row tracks eligibility + movement.
+model MpClubSeason {
+  id               Int      @id @default(autoincrement())
+  clubId           Int
+  seasonId         Int
+  season           MpSeason @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  divisionId       Int?
+  tier             Int      @default(1)
+  played           Int      @default(0)
+  wins             Int      @default(0)
+  draws            Int      @default(0)
+  losses           Int      @default(0)
+  goalsFor         Int      @default(0)
+  goalsAgainst     Int      @default(0)
+  points           Int      @default(0)
+  promotionStatus  String   @default("NONE")
+  relegationStatus String   @default("NONE")
+
+  @@unique([clubId, seasonId])
+  @@index([seasonId])
+}
+
+// Clubs waiting for the next season (post join-lock joins, returning dormant
+// clubs). Queue ordering is by queuedAt ascending.
+model MpQueue {
+  id                 Int      @id @default(autoincrement())
+  clubId             Int      @unique
+  queuedAt           DateTime @default(now())
+  // NEW_CLUB | RETURNING_CLUB
+  source             String
+  preferredSeasonId  Int
+}
+
+// Idempotent per-club-per-season economic allocations. The unique constraint
+// prevents double-payment across retries / race conditions.
+model MpAllocation {
+  id       Int      @id @default(autoincrement())
+  clubId   Int
+  seasonId Int
+  season   MpSeason @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  // ACTIVE_FULL | ACTIVE_PRORATED | PROVISIONAL_NEXT_SEASON
+  type     String
+  amount   Int
+  issuedAt DateTime @default(now())
+
+  @@unique([clubId, seasonId, type])
+  @@index([seasonId])
+}
+
+// Audit trail of meaningful activity used for abandonment detection.
+model MpActivity {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  clubId       Int
+  activityType String
+  occurredAt   DateTime @default(now())
+  metadata     String?
+
+  @@index([clubId, occurredAt])
+  @@index([userId, occurredAt])
+}
+
+// Structured audit trail for disputes and operational diagnosis. Unlike
+// MpActivity (which is user activity for abandonment), this records league
+// state transitions and worker decisions.
+model MpAudit {
+  id          Int      @id @default(autoincrement())
+  seasonId    Int?
+  clubId      Int?
+  userId      Int?
+  eventType   String
+  occurredAt  DateTime @default(now())
+  metadata    String?
+
+  @@index([seasonId, occurredAt])
+  @@index([clubId, occurredAt])
+}
+
+// Simple key/value store for admin-tunable multiplayer settings
+// (e.g. FIRST_DIVISION_SEASON_BUDGET, MINIMUM_TIER_BUDGET_RATIO,
+// TIER_BUDGET_DECAY_RATE, JOIN_THRESHOLD_PERCENT).
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// Idempotency ledger for recurring worker jobs (plan §5 of the worker plan).
+// A row exists once a scheduled job has run for a given (seasonId, date,
+// executionType). The unique constraint makes duplicate execution impossible
+// even across concurrent processes / crash-retry cycles.
+model DailyExecution {
+  id            Int      @id @default(autoincrement())
+  saveId        Int
+  save          Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  seasonId      Int
+  date          String // YYYY-MM-DD (UTC)
+  executionType String // DAILY_TICK | PAYROLL | WEEKLY | INACTIVITY | NOTIFICATIONS | ...
+  executedAt    DateTime @default(now())
+
+  @@unique([saveId, seasonId, date, executionType])
+  @@index([saveId, date])
 }

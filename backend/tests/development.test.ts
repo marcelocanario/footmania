@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../src/game/rng";
 import { generateWorld } from "../src/game/worldgen";
+import { initSeason } from "../src/game/multiplayer";
 import {
   applyDevelopment,
   backfillDevelopmentProfile,
@@ -24,6 +25,12 @@ function makePlayer(overrides: Partial<Player> = {}): Player {
     id: 1,
     name: "Test",
     shortName: "TST",
+    ownerUserId: null,
+    timezone: null,
+    competitionState: "ACTIVE" as const,
+    lastMeaningfulActivityAt: null,
+    abandonmentEligibleAt: null,
+    liveMatchAt: null,
     country: "BRA",
     level: 20,
     cash: 10000000,
@@ -181,6 +188,8 @@ describe("applyDevelopment", () => {
   it("is deterministic for a fixed seed and profile", () => {
     const world1 = generateWorld(777);
     const world2 = generateWorld(777);
+    initSeason(world1, { year: 2026, month: 1 }, 1);
+    initSeason(world2, { year: 2026, month: 1 }, 1);
     const club1 = world1.clubs[0];
     const club2 = world2.clubs[0];
     const p1 = world1.players.find((p) => p.clubId === club1.id && !p.isYouth)!;
@@ -207,6 +216,7 @@ describe("applyDevelopment", () => {
 
   it("accumulates fractional progress and bumps integer skills only on threshold crossing", () => {
     const world = generateWorld(31337);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     const club = world.clubs[0];
     const player = world.players.find((p) => p.clubId === club.id && !p.isYouth)!;
     player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
@@ -228,6 +238,12 @@ describe("applyDevelopment", () => {
       id: 1,
       name: "Test",
       shortName: "TST",
+      ownerUserId: null,
+      timezone: null,
+      competitionState: "ACTIVE" as const,
+      lastMeaningfulActivityAt: null,
+    abandonmentEligibleAt: null,
+      liveMatchAt: null,
       country: "BRA",
       level: 20,
       cash: 10000000,

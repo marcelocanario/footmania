@@ -1,5 +1,5 @@
 import type { Competition, World } from "../game/types";
-import { dayInfo, weekdayName } from "../game/calendar";
+import { dayInfo, multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { sortedStandings, getPosition } from "../game/league";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { freeAgentSigningBonus } from "../game/transfers";
@@ -67,12 +67,24 @@ function loanInfo(world: World, p: World["players"][number], clubId: number) {
 export function buildSnapshot(world: World, clubId: number) {
   const club = world.clubs.find((c) => c.id === clubId);
   const info = dayInfo(world.dayIndex);
+  const dayLabel = (day: number) => world.mp.seasonId === 0 ? dayInfo(day).label : multiplayerDayLabel(day);
+  const currentDateLabel = world.mp.seasonId === 0 ? info.label : multiplayerDayLabel(world.dayIndex);
+  const currentDayOfWeek = world.mp.seasonId === 0
+    ? info.dayOfWeek
+    : new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, world.dayIndex))).getUTCDay();
+  const currentSeasonDivisions = new Set(
+    world.competitions
+      .filter((c) => c.kind === "division" && c.seasonId === world.mp.seasonId)
+      .map((c) => c.id),
+  );
   const nextFixture = world.fixtures
-    .filter((f) => !f.played && f.dayIndex >= world.dayIndex && (f.homeClubId === clubId || f.awayClubId === clubId))
+    .filter((f) => !f.played && (world.mp.seasonId === 0 || f.competitionId < 0 || currentSeasonDivisions.has(f.competitionId)) && f.dayIndex >= world.dayIndex && (f.homeClubId === clubId || f.awayClubId === clubId))
     .sort((a, b) => a.dayIndex - b.dayIndex)[0];
 
-  const competitions = world.competitions.map((c) => {
-    const position = c.kind === "league" ? getPosition(c, clubId) : 0;
+  const competitions = world.competitions
+    .filter((c) => world.mp.seasonId === 0 || c.kind !== "division" || c.seasonId === world.mp.seasonId)
+    .map((c) => {
+    const position = c.kind === "league" || c.kind === "division" ? getPosition(c, clubId) : 0;
     return {
       id: c.id,
       kind: c.kind,
@@ -82,7 +94,7 @@ export function buildSnapshot(world: World, clubId: number) {
       position,
       winnerId: c.winners[0] ?? null,
     };
-  });
+    });
 
   const squad = world.players
     .filter((p) => p.clubId === clubId && !p.isYouth)
@@ -104,7 +116,7 @@ export function buildSnapshot(world: World, clubId: number) {
   const news = world.news
     .slice(-30)
     .reverse()
-    .map((n) => ({ dayIndex: n.dayIndex, dayLabel: dayInfo(n.dayIndex).label, text: n.text, kind: n.kind }));
+    .map((n) => ({ dayIndex: n.dayIndex, dayLabel: dayLabel(n.dayIndex), text: n.text, kind: n.kind }));
 
   const auctions = world.auctions.map((a) => {
     const p = world.players.find((x) => x.id === a.playerId);
@@ -119,7 +131,9 @@ export function buildSnapshot(world: World, clubId: number) {
       skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
       minBid: a.minBid,
       deadlineDay: a.deadlineDay,
-      deadlineLabel: dayInfo(a.deadlineDay).label,
+      deadlineLabel: dayLabel(a.deadlineDay),
+      startsAt: a.startsAt ?? null,
+      endsAt: a.endsAt ?? null,
       currentBid: a.bids.length > 0 ? Math.max(...a.bids.map((b) => b.amount)) : 0,
       sellerClubId: a.sellerClubId,
       myBid: a.bids.find((b) => b.clubId === clubId)?.amount ?? 0,
@@ -136,8 +150,8 @@ export function buildSnapshot(world: World, clubId: number) {
     save: {
       year: world.year,
       dayIndex: world.dayIndex,
-      dateLabel: info.label,
-      dayOfWeek: weekdayName(info.dayOfWeek),
+       dateLabel: currentDateLabel,
+       dayOfWeek: weekdayName(currentDayOfWeek),
       seasonDays: gameConfig.seasonDays,
     },
     seasonSummary: world.seasonSummary
@@ -162,6 +176,7 @@ export function buildSnapshot(world: World, clubId: number) {
           boardConfidence: club.boardConfidence,
           fanConfidence: club.fanConfidence,
           trainingFocus: club.trainingFocus,
+          competitionState: club.competitionState,
           tactics: club.tactics
             ? {
                 formation: club.tactics.formation,
@@ -186,7 +201,7 @@ export function buildSnapshot(world: World, clubId: number) {
           id: nextFixture.id,
           home: world.clubs.find((c) => c.id === nextFixture.homeClubId)?.name ?? "",
           away: world.clubs.find((c) => c.id === nextFixture.awayClubId)?.name ?? "",
-          dayLabel: dayInfo(nextFixture.dayIndex).label,
+          dayLabel: dayLabel(nextFixture.dayIndex),
           dayIndex: nextFixture.dayIndex,
           isHome: nextFixture.homeClubId === clubId,
         }
@@ -203,7 +218,7 @@ export function buildSnapshot(world: World, clubId: number) {
   };
 }
 
-export function competitionTable(world: World, competition: Competition) {
+export function competitionTable(world: World, competition: Competition, myClubId: number | null = null) {
   const rows = sortedStandings(competition);
   return rows.map((r) => ({
     ...r,
@@ -213,7 +228,7 @@ export function competitionTable(world: World, competition: Competition) {
       primary: world.clubs.find((c) => c.id === r.clubId)?.primaryColor ?? "",
       secondary: world.clubs.find((c) => c.id === r.clubId)?.secondaryColor ?? "",
     },
-    isHuman: r.clubId === world.humanClubId,
+    isHuman: r.clubId === myClubId,
   }));
 }
 

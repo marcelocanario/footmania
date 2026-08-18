@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateWorld } from "../src/game/worldgen";
+import { initSeason } from "../src/game/multiplayer";
 import { applyDevelopment, overallFromSkills } from "../src/game/player";
 import { OVERALL_WEIGHTS, trainingWeights, weightTotal } from "../src/game/rating";
 
@@ -20,6 +21,7 @@ describe("skill-based overall and training", () => {
 
   it("derives generated overall from the generated skills", () => {
     const world = generateWorld(12345);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     for (const player of world.players) {
       expect(player.overall).toBe(overallFromSkills(player.position, player.skills));
       expect(player.salary).toBeGreaterThan(0);
@@ -40,6 +42,7 @@ describe("skill-based overall and training", () => {
 
   it("changes skills through daily development while preserving caps and the overall invariant", () => {
     const world = generateWorld(9876);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     const club = world.clubs[0];
     const player = world.players.find((candidate) => candidate.clubId === club.id && !candidate.isYouth)!;
     player.skills = { gol: 10, vel: 10, tec: 10, pas: 10, des: 10, arm: 10, fin: 10 };

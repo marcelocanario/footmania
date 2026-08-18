@@ -19,4 +19,9 @@ export default function setup() {
     env: { ...process.env, DATABASE_URL: "file:./test-persist.db" },
     stdio: "ignore",
   });
+  execSync("npx prisma db push --skip-generate --force-reset", {
+    cwd,
+    env: { ...process.env, DATABASE_URL: "file:./test-worker.db" },
+    stdio: "ignore",
+  });
 }

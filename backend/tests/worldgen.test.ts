@@ -2,10 +2,9 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { generateWorld, assignHumanClub } from "../src/game/worldgen";
-import { advance, finalizeLiveMatch } from "../src/game/world";
+import { generateWorld, createHumanClub } from "../src/game/worldgen";
+import { initSeason } from "../src/game/multiplayer";
 import { buildLineup } from "../src/game/club";
-import { tickLiveMatch } from "../src/game/match";
 import { generateName, hasNamePool } from "../src/game/names";
 import { createRng } from "../src/game/rng";
 import { parseGameConfig } from "../src/config";
@@ -32,125 +31,46 @@ function nameMatchesPool(name: string, names: Set<string>, surnames: Set<string>
   return words.every((w) => names.has(w) || surnames.has(w) || NAME_STOPWORDS.has(w.toLowerCase()));
 }
 
-function finishLiveMatch(world: World, guard = 10): ReturnType<typeof finalizeLiveMatch> {
-  let result: ReturnType<typeof finalizeLiveMatch> | undefined;
-  let g = 0;
-  while (world.liveMatch && g++ < guard) {
-    const st = world.liveMatch;
-    const home = world.clubs.find((c) => c.id === st.homeClubId)!;
-    const away = world.clubs.find((c) => c.id === st.awayClubId)!;
-    tickLiveMatch(world.rng, home, away, world.players, st, 200, { ignoreHalfTime: true });
-    result = finalizeLiveMatch(world);
-  }
-  return result ?? { dayIndex: 0, dateLabel: "", playedMatches: [], news: [], events: [], humanMatch: undefined, matchPending: false, seasonEnded: false };
-}
-
 describe("worldgen", () => {
-  it("generates a single-league 8-club world", () => {
+  it("builds a Division 1 with 8 clubs and 56 fixtures after season init", () => {
     const world = generateWorld(12345);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     expect(world.clubs.length).toBe(8);
     expect(world.players.length).toBeGreaterThan(150);
-    expect(world.competitions.length).toBe(1);
-    const league = world.competitions[0];
-    expect(league.kind).toBe("league");
-    expect(league.config.clubs.length).toBe(8);
-    expect(Object.keys(league.standings).length).toBe(8);
-    expect(world.fixtures.length).toBe(56);
-    expect(world.fixtures.filter((f) => f.competitionId === league.id).length).toBe(56);
-    const matchDays = new Set(world.fixtures.map((f) => f.dayIndex));
+    const div = world.competitions.find((c) => c.kind === "division")!;
+    expect(div).toBeDefined();
+    expect(div.name).toBe("1");
+    expect(Object.keys(div.standings).length).toBe(8);
+    const fixtures = world.fixtures.filter((f) => f.competitionId === div.id);
+    expect(fixtures.length).toBe(56);
+    const matchDays = new Set(fixtures.map((f) => f.dayIndex));
     expect(matchDays.size).toBe(14);
-    for (const club of world.clubs) {
-      expect(club.country.length).toBe(3);
-    }
   });
 
   it("every club can build a legal 11", () => {
     const world = generateWorld(999);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     for (const club of world.clubs) {
       const lineup = buildLineup(club, world.players);
       expect(lineup?.starters.length, `${club.name} starters`).toBe(11);
     }
   });
 
-  it("advances into a live match within 2 game-days and finalizes it", () => {
-    const world = generateWorld(4242);
-    world.humanClubId = world.clubs[0].id;
-    world.clubs[0].isHuman = true;
-    let res = advance(world);
-    while (!res.matchPending && !res.seasonEnded && world.dayIndex < 5) {
-      res = advance(world);
-    }
-    expect(res.matchPending || res.seasonEnded).toBe(true);
-    finishLiveMatch(world);
-    const played = world.matches.length;
-    expect(played).toBeGreaterThan(0);
-    const playedFixtureCount = world.fixtures.filter((f) => f.played).length;
-    expect(playedFixtureCount).toBe(played);
-  });
-
-  it("runs a full season to rollover: year increments, all players age +1, summary is league-only", () => {
-    const world = generateWorld(4242);
-    world.humanClubId = world.clubs[0].id;
-    world.clubs[0].isHuman = true;
-    const agesBefore = new Map(world.players.map((p) => [p.id, p.age]));
-    let guard = 0;
-    let seasonEnded = false;
-    while (!seasonEnded && guard++ < 500) {
-      const res = advance(world);
-      if (res.matchPending) {
-        const fin = finishLiveMatch(world);
-        if (fin.seasonEnded) seasonEnded = true;
-      }
-      if (res.seasonEnded) seasonEnded = true;
-    }
-    expect(seasonEnded).toBe(true);
-    expect(world.year).toBe(2);
-    expect(world.dayIndex).toBe(0);
-    for (const p of world.players) {
-      const before = agesBefore.get(p.id);
-      if (before !== undefined) expect(p.age).toBe(before + 1);
-    }
-    expect(world.seasonSummary).not.toBeNull();
-    expect(Object.keys(world.seasonSummary!).sort()).toEqual(["leagueChampionId", "leagueRunnerUpId"]);
-  });
-
-  it("economy sim: no club goes bankrupt, payroll ≈ seasonal wage bill, prizes land", () => {
-    const world = generateWorld(4242);
-    world.humanClubId = world.clubs[0].id;
-    world.clubs[0].isHuman = true;
-    const wageBills = new Map(world.clubs.map((c) => [c.id, world.players.filter((p) => p.clubId === c.id).reduce((s, p) => s + p.salary, 0)]));
-    let guard = 0;
-    let seasonEnded = false;
-    while (!seasonEnded && guard++ < 500) {
-      const res = advance(world);
-      if (res.matchPending) {
-        const fin = finishLiveMatch(world);
-        if (fin.seasonEnded) seasonEnded = true;
-      }
-      if (res.seasonEnded) seasonEnded = true;
-      for (const club of world.clubs) {
-        expect(club.cash, `${club.name} cash on day ${world.dayIndex}`).toBeGreaterThanOrEqual(0);
-      }
-    }
-    expect(seasonEnded).toBe(true);
-    for (const club of world.clubs) {
-      const paid = club.ledger.expense.filter((e) => e.code === 4).reduce((s, e) => s + e.amount, 0);
-      const bill = wageBills.get(club.id) ?? 0;
-      if (bill > 0) {
-        expect(paid).toBeGreaterThanOrEqual(bill * 0.6);
-        // Transfers and rollover squad top-ups can add players during the
-        // season, so the initial roster bill is only a lower-bound baseline.
-        expect(paid).toBeLessThanOrEqual(bill * 1.5);
-      }
-    }
-    const league = world.competitions.find((c) => c.kind === "league")!;
-    const champion = world.seasonSummary!.leagueChampionId!;
-    const champ = world.clubs.find((c) => c.id === champion)!;
-    const prizeEntries = champ.ledger.income.filter((e) => e.code === 5);
-    expect(prizeEntries.reduce((s, e) => s + e.amount, 0)).toBeGreaterThanOrEqual(LEAGUE_PRIZES[0]);
-    const tvEntries = champ.ledger.income.filter((e) => e.code === 11);
-    expect(tvEntries.reduce((s, e) => s + e.amount, 0)).toBeGreaterThanOrEqual(TV_POSITION_BONUS[0]);
-    expect(league.config.clubs.length).toBe(8);
+  it("a created human club owns its own roster and finances", () => {
+    const world = generateWorld(555);
+    const club = createHumanClub(world, {
+      userId: 1,
+      clubName: "Marcelo FC",
+      country: "BRA",
+      timezone: "America/Sao_Paulo",
+    });
+    expect(club.ownerUserId).toBe(1);
+    expect(club.isHuman).toBe(true);
+    expect(club.competitionState).toBe("NEW");
+    expect(world.clubs.find((c) => c.id === club.id)).toBeDefined();
+    const squad = world.players.filter((p) => p.clubId === club.id);
+    expect(squad.length).toBeGreaterThan(20);
+    expect(buildLineup(club, world.players)?.starters.length).toBe(11);
   });
 });
 
@@ -256,11 +176,14 @@ describe("country name pools", () => {
 
   it("creates a team whose squad and coach match the chosen country pool", () => {
     const world = generateWorld(555);
-    const result = assignHumanClub(world, "JAP");
-    expect(result.ok).toBe(true);
-    const club = world.clubs.find((c) => c.id === result.clubId)!;
+    const club = createHumanClub(world, {
+      userId: 1,
+      clubName: "Tokyo FC",
+      country: "JAP",
+      timezone: "Asia/Tokyo",
+    });
+    expect(club.ownerUserId).toBe(1);
     expect(club.isHuman).toBe(true);
-    expect(world.humanClubId).toBe(club.id);
     expect(club.country).toBe("JAP");
     const names = poolLines("names", "JAP");
     const surnames = poolLines("surnames", "JAP");
@@ -271,32 +194,5 @@ describe("country name pools", () => {
       expect(nameMatchesPool(p.name, names, surnames), `${p.name}`).toBe(true);
     }
     expect(buildLineup(club, world.players)?.starters.length).toBe(11);
-  });
-
-  it("falls back to the club's generated country on an invalid selection", () => {
-    const world = generateWorld(556);
-    const result = assignHumanClub(world, "ZZZ");
-    expect(result.ok).toBe(true);
-    const club = world.clubs[0];
-    expect(club.country.length).toBe(3);
-    expect(hasNamePool(club.country)).toBe(true);
-  });
-});
-
-describe("season rollover shape", () => {
-  it("produces a league-only summary without promotion or cup fields", () => {
-    const world = generateWorld(777);
-    world.humanClubId = world.clubs[0].id;
-    world.clubs[0].isHuman = true;
-    let guard = 0;
-    while (guard++ < 500) {
-      const res = advance(world);
-      if (res.matchPending) finishLiveMatch(world);
-      if (res.seasonEnded) break;
-    }
-    const summary = world.seasonSummary!;
-    expect(Object.keys(summary).sort()).toEqual(["leagueChampionId", "leagueRunnerUpId"]);
-    const champion = world.clubs.find((c) => c.id === summary.leagueChampionId)!;
-    expect(champion.trophies["National League"]).toBeGreaterThanOrEqual(1);
   });
 });

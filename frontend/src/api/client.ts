@@ -1,6 +1,7 @@
 export interface User {
   id: number;
   username: string;
+  isAdmin?: boolean;
 }
 
 export interface CountryOption {
@@ -61,12 +62,40 @@ export interface PlayerView {
   signingBonus?: number;
 }
 
-export interface Snapshot {
-  save: { year: number; dayIndex: number; dateLabel: string; dayOfWeek: string; seasonDays: number };
-  seasonSummary: {
-    leagueChampion: string | null;
-    leagueRunnerUp: string | null;
-  } | null;
+export interface ClubView {
+  id: number;
+  name: string;
+  shortName: string;
+  country: string;
+  level: number;
+  cash: number;
+  stadiumName: string;
+  stadiumCapacity: number;
+  primaryColor: string;
+  secondaryColor: string;
+  coachName: string;
+  boardConfidence: number;
+  fanConfidence: number;
+  trainingFocus: "assistant" | "primary" | "secondary";
+  competitionState?: string;
+  tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string } | null;
+  trophies: Record<string, number>;
+  ledger: { income: LedgerEntry[]; expense: LedgerEntry[] };
+}
+
+export interface MpStatus {
+  ready: boolean;
+  saveId: number | null;
+  season: {
+    key: string;
+    year: number;
+    month: number;
+    status: string;
+    completedRounds: number;
+    joinLockRound: number;
+    joinState: "OPEN" | "LOCKED";
+  };
+  userClubId: number | null;
   club: {
     id: number;
     name: string;
@@ -74,18 +103,83 @@ export interface Snapshot {
     country: string;
     level: number;
     cash: number;
-    stadiumName: string;
-    stadiumCapacity: number;
-    primaryColor: string;
-    secondaryColor: string;
-    coachName: string;
-    boardConfidence: number;
-    fanConfidence: number;
-    trainingFocus: "assistant" | "primary" | "secondary";
-    tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string } | null;
-    trophies: Record<string, number>;
-    ledger: { income: LedgerEntry[]; expense: LedgerEntry[] };
+    competitionState: string;
+    timezone: string | null;
+    reservedNextSeasonAllocation: { seasonId: number; amount: number; issuedAt: number } | null;
+    inactivity: { eligible: boolean; removedAtRollover: boolean; note: string | null } | null;
   } | null;
+}
+
+export interface SeasonHistoryView {
+  seasonId: number;
+  seasonKey: string;
+  archivedAt: number;
+  divisions: {
+    divisionId: number;
+    divisionName: string;
+    tier: number;
+    groupIndex: number;
+    standings: {
+      clubId: number;
+      clubName: string;
+      played: number;
+      wins: number;
+      draws: number;
+      losses: number;
+      goalsFor: number;
+      goalsAgainst: number;
+      points: number;
+      isMine: boolean;
+    }[];
+  }[];
+}
+
+export interface PyramidTier {
+  tier: number;
+  divisions: { id: number; name: string; tier: number; groupIndex: number; humanCount: number; aiCount: number }[];
+}
+
+export interface StandingsRow {
+  clubId: number;
+  clubName: string;
+  clubShort: string;
+  colors: { primary: string; secondary: string };
+  isHuman: boolean;
+  clubType: "HUMAN" | "AI";
+  isMine: boolean;
+  humanPosition: number | null;
+  promotionStatus: "NONE" | "POSSIBLE" | "PROMOTED";
+  relegationStatus: "NONE" | "RELEGATED";
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  points: number;
+}
+
+export interface FixtureView {
+  id: number;
+  round: number;
+  home: string;
+  away: string;
+  homeClubId: number;
+  awayClubId: number;
+  kickoffAt: number | null;
+  played: boolean;
+  homeScore: number | null;
+  awayScore: number | null;
+  isHuman: boolean;
+}
+
+export interface Snapshot {
+  save: { year: number; dayIndex: number; dateLabel: string; dayOfWeek: string; seasonDays: number };
+  seasonSummary: {
+    leagueChampion: string | null;
+    leagueRunnerUp: string | null;
+  } | null;
+  club: ClubView | null;
   nextFixture: { id: number; home: string; away: string; dayLabel: string; dayIndex: number; isHome: boolean } | null;
   competitions: { id: number; kind: string; name: string; stage: string; round: number; position: number; winnerId: number | null }[];
   squad: PlayerView[];
@@ -156,28 +250,11 @@ export interface AuctionView {
   minBid: number;
   deadlineDay: number;
   deadlineLabel: string;
+  startsAt: number | null;
+  endsAt: number | null;
   currentBid: number;
   sellerClubId: number | null;
   myBid: number;
-}
-
-export interface DayResult {
-  dayIndex: number;
-  dateLabel: string;
-  events: string[];
-  news: { dayIndex: number; kind: string; text: string }[];
-  playedMatches: {
-    id: number;
-    home: string;
-    away: string;
-    homeScore: number;
-    awayScore: number;
-    competitionId: number;
-    isHuman: boolean;
-  }[];
-  humanMatch: { id: number; home: string; away: string; homeScore: number; awayScore: number } | null;
-  matchPending: boolean;
-  seasonEnded: boolean;
 }
 
 export interface LivePlayer {
@@ -274,19 +351,9 @@ export interface MatchEvents {
   events: LiveEvent[];
 }
 
-export interface TableRow {
-  clubId: number;
-  clubName: string;
-  clubShort: string;
-  colors: { primary: string; secondary: string };
-  isHuman: boolean;
-  played: number;
-  wins: number;
-  draws: number;
-  losses: number;
-  goalsFor: number;
-  goalsAgainst: number;
-  points: number;
+export interface Settings {
+  humanMatchDurationMinutes: number;
+  maxContractSeasons?: number;
 }
 
 async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -312,11 +379,6 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export interface Settings {
-  humanMatchDurationMinutes: number;
-  maxContractSeasons?: number;
-}
-
 export const api = {
   me: () => request<User>("/api/auth/me"),
   register: (username: string, password: string) =>
@@ -325,77 +387,92 @@ export const api = {
     request<{ user: User }>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
-  listSaves: () =>
-    request<{ id: number; name: string; year: number; dayIndex: number; hasHuman: boolean; updatedAt: string }[]>("/api/saves"),
-  createSave: (name: string, seed?: number) =>
-    request<{ id: number }>("/api/saves", { method: "POST", body: JSON.stringify({ name, seed }) }),
-  deleteSave: (id: number) => request<{ ok: boolean }>(`/api/saves/${id}`, { method: "DELETE" }),
-  saveSummary: (id: number) =>
-    request<{ id: number; name: string; year: number; dayIndex: number; dateLabel: string; hasHuman: boolean; clubName: string | null }>(`/api/saves/${id}/summary`),
-  saveState: (id: number) =>
-    request<{ started: boolean; snapshot?: Snapshot; featuredCountries?: CountryOption[]; allCountries?: CountryOption[] }>(`/api/saves/${id}/state`),
-  startSave: (id: number, country: string, name?: string) =>
-    request<{ ok: boolean; clubId: number }>(`/api/saves/${id}/start`, { method: "POST", body: JSON.stringify({ country, name }) }),
-  advance: (id: number) => request<DayResult>(`/api/saves/${id}/advance`, { method: "POST" }),
-  liveMatchInfo: (id: number) =>
-    request<{ match: { id: number; home: string; away: string } | null }>(`/api/saves/${id}/live`),
+  // Multiplayer
+  mpStatus: () => request<MpStatus>("/api/mp/status"),
+  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; stadiumName?: string }) =>
+    request<{ ok: boolean; clubId: number }>("/api/mp/join", { method: "POST", body: JSON.stringify(payload) }),
+  returnClub: () =>
+    request<{ ok: boolean }>("/api/mp/return", { method: "POST" }),
+  practice: () =>
+    request<{ homeGoals: number; awayGoals: number; events: number; opponentName: string }>("/api/mp/practice", { method: "POST" }),
+  myClub: () => request<{ snapshot: Snapshot }>("/api/mp/club"),
+  pyramid: () => request<{ seasonKey: string | null; tiers: PyramidTier[] }>("/api/mp/pyramid"),
+  divisionStandings: (id: number) =>
+    request<{ competition: { id: number; name: string; tier: number; groupIndex: number }; standings: StandingsRow[] }>(`/api/mp/divisions/${id}/standings`),
+  divisionFixtures: (id: number) => request<{ fixtures: FixtureView[] }>(`/api/mp/divisions/${id}/fixtures`),
+  countries: () => request<{ featuredCountries: CountryOption[]; allCountries: CountryOption[] }>("/api/mp/countries"),
+  history: () => request<{ seasons: SeasonHistoryView[] }>("/api/mp/history"),
 
-  matchEvents: (saveId: number, matchId: number) => request<MatchEvents>(`/api/matches/${matchId}/events?saveId=${saveId}`),
-  liveState: (saveId: number, matchId: number) => request<{ state: LiveState }>(`/api/matches/${matchId}/live?saveId=${saveId}`),
-  liveTick: (saveId: number, matchId: number, minutes: number, resume = false) =>
-    request<{ events: LiveEvent[]; state: LiveState }>(`/api/matches/${matchId}/tick?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ minutes, resume }) }),
-  liveSub: (saveId: number, matchId: number, outId: number, inId: number) =>
-    request<{ event: LiveEvent | null; state: LiveState }>(`/api/matches/${matchId}/sub?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ outId, inId }) }),
-  liveFinish: (saveId: number, matchId: number) =>
-    request<{ dayResult: DayResult }>(`/api/matches/${matchId}/finish?saveId=${saveId}`, { method: "POST" }),
-  liveWsUrl: (saveId: number, matchId: number) =>
-    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws?saveId=${saveId}`,
-  getLineup: (saveId: number, auto?: boolean, formation?: number) =>
-    request<LineupView>(`/api/club/lineup?saveId=${saveId}${auto ? "&auto=1" : ""}${formation !== undefined ? `&formation=${formation}` : ""}`),
-  setLineup: (saveId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
-    request<{ ok: boolean }>(`/api/club/lineup?saveId=${saveId}`, { method: "POST", body: JSON.stringify(lineup) }),
-  matchLineup: (saveId: number, matchId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
-    request<{ ok: boolean; state?: LiveState }>(`/api/matches/${matchId}/lineup?saveId=${saveId}`, { method: "POST", body: JSON.stringify(lineup) }),
-  competitionTable: (saveId: number, compId: number) =>
-    request<{ competition: { id: number; name: string; kind: string; stage: string }; table: TableRow[] | { groupName: string; rows: TableRow[] }[] }>(`/api/competitions/${compId}/table?saveId=${saveId}`),
-  competitionFixtures: (saveId: number, compId: number) =>
-    request<{ competition: { id: number; name: string }; fixtures: { id: number; round: number; roundLabel: string; leg: number; home: string; away: string; dayLabel: string; dayIndex: number; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[] }>(`/api/competitions/${compId}/fixtures?saveId=${saveId}`),
-  competitionBracket: (saveId: number, compId: number) =>
-    request<{ competition: { id: number; name: string }; bracket: { round: number; ties: { home: string; away: string; leg1: string | null; leg2: string | null; pen: string | null; winner: string; played: boolean }[] }[] }>(`/api/competitions/${compId}/bracket?saveId=${saveId}`),
+  liveMatchInfo: () => request<{ match: { id: number; home: string; away: string } | null }>("/api/mp/live-match"),
 
-  sellPlayer: (saveId: number, playerId: number, mode: "auction" | "fixed", price?: number) =>
-    request<{ ok: boolean; listingId?: number; price?: number }>(`/api/transfers/sell?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ playerId, mode, price }) }),
-  bidPlayer: (saveId: number, playerId: number, bid: number) =>
-    request<{ accepted: boolean; price?: number; counter?: number; signingBonus?: number }>(`/api/transfers/bid?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ playerId, bid }) }),
-  listAuctions: (saveId: number) => request<{ auctions: AuctionView[] }>(`/api/transfers/auctions?saveId=${saveId}`),
-  bidAuction: (saveId: number, listingId: number, amount: number) =>
-    request<{ ok: boolean; currentBid: number }>(`/api/auctions/${listingId}/bid?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ amount }) }),
+  matchEvents: (matchId: number) => request<MatchEvents>(`/api/matches/${matchId}/events`),
+  liveState: (matchId: number) => request<{ state: LiveState }>(`/api/matches/${matchId}/live`),
+  liveTick: (matchId: number, minutes: number, resume = false) =>
+    request<{ events: LiveEvent[]; state: LiveState }>(`/api/matches/${matchId}/tick`, { method: "POST", body: JSON.stringify({ minutes, resume }) }),
+  liveSub: (matchId: number, outId: number, inId: number) =>
+    request<{ event: LiveEvent | null; state: LiveState }>(`/api/matches/${matchId}/sub`, { method: "POST", body: JSON.stringify({ outId, inId }) }),
+  liveFinish: (matchId: number) =>
+    request<{ ok: boolean }>(`/api/matches/${matchId}/finish`, { method: "POST" }),
+  liveWsUrl: (matchId: number) =>
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws`,
+  getLineup: (auto?: boolean, formation?: number) =>
+    request<LineupView>(`/api/club/lineup${auto ? "?auto=1" : ""}${formation !== undefined ? `&formation=${formation}` : ""}`),
+  setLineup: (lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
+    request<{ ok: boolean }>("/api/club/lineup", { method: "POST", body: JSON.stringify(lineup) }),
+  matchLineup: (matchId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
+    request<{ ok: boolean; state?: LiveState }>(`/api/matches/${matchId}/lineup`, { method: "POST", body: JSON.stringify(lineup) }),
+  competitionTable: (compId: number) =>
+    request<{ competition: { id: number; name: string; kind: string; stage: string }; table: StandingsRow[] }>(`/api/competitions/${compId}/table`),
+  competitionFixtures: (compId: number) =>
+    request<{ competition: { id: number; name: string }; fixtures: { id: number; round: number; roundLabel: string; leg: number; home: string; away: string; dayLabel: string; dayIndex: number; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[] }>(`/api/competitions/${compId}/fixtures`),
 
-  renewContract: (saveId: number, playerId: number, length: number, salary: number) =>
-    request<{ ok: boolean }>(`/api/players/${playerId}/contract?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ length, salary }) }),
-  setTrainingFocus: (saveId: number, focus: "assistant" | "primary" | "secondary") =>
-    request<{ ok: boolean; trainingFocus: "assistant" | "primary" | "secondary" }>(`/api/club/training?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ focus }) }),
-  setTactics: (saveId: number, tactics: { style: number; pressing: number; direction: number }) =>
-    request<{ ok: boolean }>(`/api/club/tactics?saveId=${saveId}`, { method: "POST", body: JSON.stringify(tactics) }),
-  finances: (saveId: number) =>
-    request<{ cash: number; income: LedgerEntry[]; expense: LedgerEntry[] }>(`/api/club/finances?saveId=${saveId}`),
-  financeDetails: (saveId: number) => request<FinanceDetails>(`/api/club/finance-details?saveId=${saveId}`),
-  setTicketPrices: (saveId: number, prices: [number, number, number, number]) =>
-    request<{ ok: boolean; prices: [number, number, number, number] }>(`/api/club/tickets?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ prices }) }),
-  startStadiumUpgrade: (saveId: number) =>
-    request<{ ok: boolean; upgrade: FinanceDetails["stadiumUpgrade"] }>(`/api/club/stadium-upgrade?saveId=${saveId}`, { method: "POST" }),
-  listLoans: (saveId: number) => request<{ loans: LoanView[] }>(`/api/transfers/loans?saveId=${saveId}`),
-  loanPlayer: (saveId: number, playerId: number, action: "offer" | "take" | "recall") =>
-    request<{ ok: boolean }>(`/api/players/${playerId}/loan?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
-  academyAction: (saveId: number, playerId: number, action: "promote" | "dismiss") =>
-    request<{ ok: boolean }>(`/api/players/${playerId}/academy?saveId=${saveId}`, { method: "POST", body: JSON.stringify({ action }) }),
-  releasePlayer: (saveId: number, playerId: number) =>
-    request<{ ok: boolean; cost: number }>(`/api/players/${playerId}/release?saveId=${saveId}`, { method: "POST" }),
-  contractDemand: (saveId: number, playerId: number) =>
-    request<{ demand: number; demandsBySeason: Record<number, number>; salary: number; contractDays: number }>(`/api/players/${playerId}/contract?saveId=${saveId}`),
-  records: (saveId: number) => request<{ records: CareerRecord[]; awards: SeasonAward[] }>(`/api/records?saveId=${saveId}`),
+  sellPlayer: (playerId: number, mode: "auction" | "fixed", price?: number) =>
+    request<{ ok: boolean; listingId?: number; price?: number }>("/api/transfers/sell", { method: "POST", body: JSON.stringify({ playerId, mode, price }) }),
+  bidPlayer: (playerId: number, bid: number) =>
+    request<{ accepted: boolean; price?: number; counter?: number; signingBonus?: number }>("/api/transfers/bid", { method: "POST", body: JSON.stringify({ playerId, bid }) }),
+  listAuctions: () => request<{ auctions: AuctionView[] }>("/api/transfers/auctions"),
+  bidAuction: (listingId: number, amount: number) =>
+    request<{ ok: boolean; currentBid: number }>(`/api/auctions/${listingId}/bid`, { method: "POST", body: JSON.stringify({ amount }) }),
+
+  renewContract: (playerId: number, length: number, salary: number) =>
+    request<{ ok: boolean }>(`/api/players/${playerId}/contract`, { method: "POST", body: JSON.stringify({ length, salary }) }),
+  setTrainingFocus: (focus: "assistant" | "primary" | "secondary") =>
+    request<{ ok: boolean; trainingFocus: "assistant" | "primary" | "secondary" }>("/api/club/training", { method: "POST", body: JSON.stringify({ focus }) }),
+  setTactics: (tactics: { style: number; pressing: number; direction: number }) =>
+    request<{ ok: boolean }>("/api/club/tactics", { method: "POST", body: JSON.stringify(tactics) }),
+  finances: () =>
+    request<{ cash: number; income: LedgerEntry[]; expense: LedgerEntry[] }>("/api/club/finances"),
+  financeDetails: () => request<FinanceDetails>("/api/club/finance-details"),
+  setTicketPrices: (prices: [number, number, number, number]) =>
+    request<{ ok: boolean; prices: [number, number, number, number] }>("/api/club/tickets", { method: "POST", body: JSON.stringify({ prices }) }),
+  startStadiumUpgrade: () =>
+    request<{ ok: boolean; upgrade: FinanceDetails["stadiumUpgrade"] }>("/api/club/stadium-upgrade", { method: "POST" }),
+  listLoans: () => request<{ loans: LoanView[] }>("/api/transfers/loans"),
+  loanPlayer: (playerId: number, action: "offer" | "take" | "recall") =>
+    request<{ ok: boolean }>(`/api/players/${playerId}/loan`, { method: "POST", body: JSON.stringify({ action }) }),
+  academyAction: (playerId: number, action: "promote" | "dismiss") =>
+    request<{ ok: boolean }>(`/api/players/${playerId}/academy`, { method: "POST", body: JSON.stringify({ action }) }),
+  releasePlayer: (playerId: number) =>
+    request<{ ok: boolean; cost: number }>(`/api/players/${playerId}/release`, { method: "POST" }),
+  contractDemand: (playerId: number) =>
+    request<{ demand: number; demandsBySeason: Record<number, number>; salary: number; contractDays: number }>(`/api/players/${playerId}/contract`),
+  records: () => request<{ records: CareerRecord[]; awards: SeasonAward[] }>("/api/records"),
 
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (humanMatchDurationMinutes: number) =>
     request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify({ humanMatchDurationMinutes }) }),
+  updateTimezone: (timezone: string) =>
+    request<{ ok: boolean; timezone: string }>("/api/account/timezone", { method: "PUT", body: JSON.stringify({ timezone }) }),
+
+  // Admin (manual clock / settings)
+  adminStatus: () =>
+    request<{ world: { seasonKey: string; seasonStatus: string; completedRounds: number; joinState: string; joinLockRound: number; manualRound: number | null; realCompletedRounds: number; divisionCount: number; clubCount: number; humanClubCount: number; liveMatchCount: number } | null }>("/api/admin/status"),
+  adminAdvanceRound: (round: number) =>
+    request<{ ok: boolean; from: number; to: number; joinState: string; joinLockRound: number }>("/api/admin/advance-round", { method: "POST", body: JSON.stringify({ round }) }),
+  adminSetRound: (round: number) =>
+    request<{ ok: boolean; manualRound: number }>("/api/admin/set-round", { method: "POST", body: JSON.stringify({ round }) }),
+  adminClearManual: () =>
+    request<{ ok: boolean }>("/api/admin/clear-manual", { method: "POST" }),
+  adminRollover: () =>
+    request<{ ok: boolean; season: { seasonId: number; year: number; month: number } }>("/api/admin/rollover", { method: "POST" }),
 };

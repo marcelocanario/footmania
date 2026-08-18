@@ -92,8 +92,22 @@ export interface Club {
   id: number;
   name: string;
   shortName: string;
-  // TODO(multiplayer): a future `ownerUserId: number | null` (or UserClub join)
-  // will land with the multiplayer model. `isHuman` remains for now.
+  // Multiplayer: the user who owns this club, null for filler AI clubs.
+  ownerUserId: number | null;
+  // Multiplayer: IANA timezone of the owner (clustering target).
+  timezone: string | null;
+  // Multiplayer competition state: NEW | PROVISIONAL | ACTIVE | DORMANT.
+  competitionState: "NEW" | "PROVISIONAL" | "ACTIVE" | "DORMANT";
+  // Multiplayer: epoch ms of the last meaningful activity.
+  lastMeaningfulActivityAt: number | null;
+  // Multiplayer: epoch ms when the club became eligible for abandonment
+  // (inactivity threshold exceeded mid-season). Actual removal only happens at
+  // rollover (plan §42).
+  abandonmentEligibleAt: number | null;
+  // 0 = none, 1/2 = warning issued, 3 = removal-eligible at rollover.
+  inactivityWarningStage?: number;
+  // Multiplayer: epoch ms of the scheduled live-match kickoff (if any).
+  liveMatchAt: number | null;
   country: string;
   level: number;
   cash: number;
@@ -132,10 +146,19 @@ export interface GroupStandings {
 
 export interface Competition {
   id: number;
-  kind: "league" | "cup" | "state";
+  kind: "league" | "cup" | "state" | "division";
   name: string;
   round: number;
   stage: "group" | "knockout" | "finished";
+  // Multiplayer: pyramid position of a division competition.
+  seasonId?: number;
+  tier?: number;
+  groupIndex?: number;
+  // Fixed for the life of this season.  It is used only when the configured
+  // match-time mode is DIVISION_LOCAL_KICKOFF; changing an owner's timezone
+  // must never move already scheduled fixtures.
+  referenceTimezone?: string | null;
+  status?: string;
   config: {
     clubs: number[];
     turns: number;
@@ -181,6 +204,15 @@ export interface Fixture {
   played: boolean;
   leg?: number;
   tie?: number;
+  // Multiplayer: real kickoff timestamp (epoch ms). The match auto-plays at
+  // this time whether humans are present or not.
+  kickoffAt?: number;
+  // Identity at the time this fixture was scheduled/played.  Competition
+  // slots can change from filler AI to a human during a season, while the
+  // historical participant/result must remain renderable after the filler is
+  // retired.
+  homeClubNameSnapshot?: string;
+  awayClubNameSnapshot?: string;
 }
 
 export interface MatchEvent {
@@ -240,7 +272,7 @@ export interface LiveMatchState {
   awayClubId: number;
   homeNeutral: boolean;
   decider: boolean;
-  compKind: "league" | "cup" | "state";
+  compKind: "league" | "cup" | "state" | "division";
   year: number;
   homeXI: number[];
   awayXI: number[];
@@ -266,6 +298,10 @@ export interface LiveMatchState {
   playerMinutes: Record<number, number>;
   shootout?: { scores: [number, number]; winner: number };
   ended: boolean;
+  // Real clock (epoch ms) of the last time this match was advanced. Used to
+  // pace live matches at the configured real-world duration regardless of
+  // worker tick rate and across server downtime.
+  lastAdvancedAt: number;
 }
 
 export interface NewsItem {
@@ -280,6 +316,10 @@ export interface AuctionListing {
   playerId: number;
   minBid: number;
   deadlineDay: number;
+  // Multiplayer: absolute epoch-ms deadline (plan §51). Set from deadlineDay
+  // when created; the minute worker settles auctions whose endsAt has passed.
+  startsAt?: number;
+  endsAt?: number;
   sellerClubId: number | null;
   bids: { clubId: number; amount: number }[];
 }
@@ -340,6 +380,119 @@ export interface SeasonSummary {
   leagueRunnerUpId: number | null;
 }
 
+export type ClubCompetitionState = "NEW" | "PROVISIONAL" | "ACTIVE" | "DORMANT";
+
+export interface MpState {
+  // Current season identity (calendar month) and its DB row id.
+  seasonId: number;
+  seasonYear: number;
+  seasonMonth: number;
+  seasonStatus: "PREPARATION" | "ACTIVE" | "INTERSEASON" | "ROLLOVER" | "COMPLETE";
+  completedRounds: number;
+  joinLockRound: number;
+  joinState: "OPEN" | "LOCKED";
+  joinThresholdPercent: number;
+  inactivityThresholds: { 1: number; 2: number; default: number };
+  matchTimeMode: "GLOBAL_FIXED_KICKOFF" | "DIVISION_LOCAL_KICKOFF";
+  matchKickoffHour: number;
+  lastProcessedGameDay: number;
+  // idempotency: last UTC day (yyyymmdd) the daily tick ran for.
+  lastDailyTickDay: number;
+  // Robust daily-time marker (plan §2): the last processed UTC date as
+  // "YYYY-MM-DD". Null until the first daily tick runs. `lastDailyTickDay`
+  // above is retained for migration from older saves.
+  lastDailyTickDate: string | null;
+  // Admin manual clock override: when set, the game treats completedRounds as
+  // this value and simulates all rounds up to it instantly instead of waiting
+  // for real kickoffs. Null = real schedule.
+  manualRound: number | null;
+  // Resumable rollover phase (plan §58): null when no rollover is in progress.
+  rolloverPhase: string | null;
+}
+
+export interface MpQueueEntry {
+  clubId: number;
+  source: "NEW_CLUB" | "RETURNING_CLUB";
+  queuedAt: number;
+  preferredSeasonId: number;
+}
+
+export interface SeasonAllocation {
+  clubId: number;
+  seasonId: number;
+  type: "ACTIVE_FULL" | "ACTIVE_PRORATED" | "PROVISIONAL_NEXT_SEASON";
+  amount: number;
+  issuedAt: number;
+}
+
+export interface MpMembershipEntry {
+  divisionId: number;
+  clubId: number;
+  slotNumber: number;
+  isFillerAI: boolean;
+  replacedClubId: number | null;
+  joinedAt: number;
+}
+
+export interface MpClubSeasonEntry {
+  clubId: number;
+  seasonId: number;
+  divisionId: number | null;
+  tier: number;
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  points: number;
+  promotionStatus: string;
+  relegationStatus: string;
+}
+
+export interface MpActivityEntry {
+  userId: number;
+  clubId: number;
+  activityType: string;
+  occurredAt: number;
+  metadata: string | null;
+}
+
+export interface MpAuditEntry {
+  seasonId: number | null;
+  clubId: number | null;
+  userId: number | null;
+  eventType: string;
+  occurredAt: number;
+  metadata: string | null;
+}
+
+/** Final standings snapshot for a completed season (plan §70/§71). Captured at
+ *  rollover with club-name snapshots so later AI replacement, renaming or
+ *  dormancy never rewrites historical results. */
+export interface SeasonHistoryEntry {
+  seasonId: number;
+  seasonKey: string;
+  archivedAt: number;
+  divisions: {
+    divisionId: number;
+    divisionName: string;
+    tier: number;
+    groupIndex: number;
+    standings: {
+      clubId: number;
+      clubName: string;
+      played: number;
+      wins: number;
+      draws: number;
+      losses: number;
+      goalsFor: number;
+      goalsAgainst: number;
+      points: number;
+    }[];
+  }[];
+}
+
 export interface World {
   seed: number;
   year: number;
@@ -364,7 +517,26 @@ export interface World {
   seasonSummary: SeasonSummary | null;
   rng: RngState;
   contractWarnings: number[];
-  liveMatch?: LiveMatchState | null;
+  // Multiplayer state (see MpState).
+  mp: MpState;
+  // Multiplayer: clubs waiting for next season (post-lock joins, returning).
+  mpQueue: MpQueueEntry[];
+  // Multiplayer: multiple matches can be live at once. Each belongs to a
+  // scheduled fixture and auto-plays to completion on the worker.
+  liveMatches: LiveMatchState[];
+  // Multiplayer: season allocations issued this season (idempotent payments).
+  seasonAllocations: SeasonAllocation[];
+  // Multiplayer: normalized per-division memberships for the active season
+  // (mirror of MpMembership rows).
+  mpMemberships: MpMembershipEntry[];
+  // Multiplayer: per-club-per-season competition records (mirror of
+  // MpClubSeason rows).
+  mpClubSeasons: MpClubSeasonEntry[];
+  // Multiplayer: audit trail of meaningful activity (mirror of MpActivity).
+  mpActivities: MpActivityEntry[];
+  mpAudits: MpAuditEntry[];
+  // Multiplayer: final standings snapshots for completed seasons (plan §70).
+  seasonHistory: SeasonHistoryEntry[];
   pendingDayEvents?: string[];
   pendingDayMatchIds?: number[];
 }

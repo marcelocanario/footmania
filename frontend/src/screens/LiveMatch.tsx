@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { FastForward, Flag, Play, RefreshCw, Subscript, Users } from "lucide-react";
+import { Flag, Play, RefreshCw, Subscript, Users } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -52,13 +52,12 @@ interface WsMessage {
 }
 
 export function LiveMatch() {
-  const { saveId, dayResult, refresh, setDayResult, setLiveMatch } = useGame();
+  const { refresh, setLiveMatch } = useGame();
   const { matchDurationMinutes } = useSettings();
   const navigate = useNavigate();
   const [state, setState] = useState<LiveState | null>(null);
   const [wsMode, setWsMode] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
-  const [fast, setFast] = useState(false);
   const [showSubs, setShowSubs] = useState(false);
   const [showLineup, setShowLineup] = useState(false);
   const [subOut, setSubOut] = useState<LivePlayer | null>(null);
@@ -66,35 +65,29 @@ export function LiveMatch() {
   const [subBusy, setSubBusy] = useState(false);
   const [tickBusy, setTickBusy] = useState(false);
   const [noLive, setNoLive] = useState(false);
-  const [liveId, setLiveId] = useState<number | null>(dayResult?.humanMatch?.id ?? null);
+  const [liveId, setLiveId] = useState<number | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef<LiveState | null>(null);
-  const fastRef = useRef(false);
-  fastRef.current = fast;
 
   const matchId = liveId;
 
   useEffect(() => {
     if (noLive) {
       setLiveMatch(null);
+      void refresh();
       navigate("/matchday");
     }
-  }, [noLive, navigate, setLiveMatch]);
+  }, [noLive, navigate, refresh, setLiveMatch]);
 
   useEffect(() => {
-    if (!saveId) return;
-    if (dayResult?.humanMatch?.id) {
-      setLiveId(dayResult.humanMatch.id);
-      return;
-    }
     api
-      .liveMatchInfo(saveId)
+      .liveMatchInfo()
       .then((res) => {
         if (res.match) setLiveId(res.match.id);
         else setNoLive(true);
       })
       .catch(() => setNoLive(true));
-  }, [saveId, dayResult]);
+  }, []);
 
   const applyState = useCallback((s: LiveState) => {
     stateRef.current = s;
@@ -114,26 +107,25 @@ export function LiveMatch() {
   );
 
   const tick = useCallback(async () => {
-    if (!saveId || !matchId) return;
+    if (!matchId) return;
     if (tickBusy) return;
-    const minutes = fastRef.current ? 3 : 1;
-    const atHalfTime = stateRef.current?.phase === "halftime";
-    if (send({ type: "tick", minutes, resume: atHalfTime })) return;
+    if (send({ type: "state" })) return;
     setTickBusy(true);
     try {
-      const res = await api.liveTick(saveId, matchId, minutes, atHalfTime);
+      const res = await api.liveState(matchId);
       applyState(res.state);
-    } catch {
-      /* keep retrying */
+      if (res.state.ended) setNoLive(true);
+    } catch (e) {
+      if ((e as Error).message.includes("No live match")) setNoLive(true);
     } finally {
       setTickBusy(false);
     }
-  }, [saveId, matchId, send, applyState, tickBusy]);
+  }, [matchId, send, applyState, tickBusy]);
 
   const connectWs = useCallback(() => {
-    if (!saveId || !matchId) return;
+    if (!matchId) return;
     setReconnecting(true);
-    const ws = new WebSocket(api.liveWsUrl(saveId, matchId));
+    const ws = new WebSocket(api.liveWsUrl(matchId));
     wsRef.current = ws;
     ws.onopen = () => {
       setReconnecting(false);
@@ -153,6 +145,7 @@ export function LiveMatch() {
         applyState(msg.state);
       } else if (msg.type === "tick" && msg.state) {
         applyState(msg.state);
+        if (msg.state.ended) setNoLive(true);
       } else if (msg.type === "sub" && msg.state) {
         applyState(msg.state);
         setSubBusy(false);
@@ -164,8 +157,8 @@ export function LiveMatch() {
           setSubOut(null);
           setSubIn(null);
         }
-      } else if (msg.type === "finished" && msg.dayResult) {
-        handleFinished(msg.dayResult);
+      } else if (msg.type === "finished") {
+        setNoLive(true);
       } else if (msg.type === "error") {
         setReconnecting(false);
         setWsMode(false);
@@ -180,47 +173,44 @@ export function LiveMatch() {
     ws.onerror = () => {
       ws.close();
     };
-  }, [saveId, matchId, applyState]);
+  }, [matchId, applyState]);
 
   const handleFinished = useCallback(
-    (result?: unknown) => {
-      if (result) setDayResult(result as Parameters<typeof setDayResult>[0]);
+    (_result?: unknown) => {
       setLiveMatch(null);
       void (async () => {
         await refresh();
         navigate("/dashboard");
       })();
     },
-    [refresh, navigate, setDayResult, setLiveMatch]
+    [refresh, navigate, setLiveMatch]
   );
 
   const finish = useCallback(async () => {
-    if (!saveId || !matchId) return;
+    if (!matchId) return;
     if (send({ type: "finish" })) return;
     try {
-      const res = await api.liveFinish(saveId, matchId);
-      setDayResult(res.dayResult);
-      if (res.dayResult.seasonEnded) navigate("/season-end");
-      else await handleFinished();
+      await api.liveFinish(matchId);
+      await handleFinished();
     } catch (e) {
       console.error(e);
     }
-  }, [saveId, matchId, send, navigate, handleFinished, setDayResult]);
+  }, [matchId, send, handleFinished]);
 
   useEffect(() => {
-    if (!saveId || !matchId) return;
+    if (!matchId) return;
     connectWs();
     return () => {
       wsRef.current?.close();
       wsRef.current = null;
     };
-  }, [saveId, matchId, connectWs]);
+  }, [matchId, connectWs]);
 
   useEffect(() => {
-    if (!saveId || !matchId) return;
+    if (!matchId) return;
     if (!stateRef.current) {
       api
-        .liveState(saveId, matchId)
+        .liveState(matchId)
         .then((res) => applyState(res.state))
         .catch((e) => {
           if ((e as Error).message.includes("No live match")) setNoLive(true);
@@ -241,7 +231,7 @@ export function LiveMatch() {
       }
     }, delay);
     return () => clearInterval(iv);
-  }, [saveId, matchId, applyState, tick, wsMode, reconnecting, matchDurationMinutes]);
+  }, [matchId, applyState, tick, wsMode, reconnecting, matchDurationMinutes]);
 
   useEffect(() => {
     if (!wsMode && !reconnecting && stateRef.current && !stateRef.current.ended) {
@@ -251,11 +241,11 @@ export function LiveMatch() {
   }, [wsMode, reconnecting, connectWs]);
 
   const doSub = async () => {
-    if (!saveId || !matchId || !subOut || !subIn || subBusy) return;
+    if (!matchId || !subOut || !subIn || subBusy) return;
     setSubBusy(true);
     try {
       if (send({ type: "sub", outId: subOut.id, inId: subIn.id })) return;
-      const res = await api.liveSub(saveId, matchId, subOut.id, subIn.id);
+      const res = await api.liveSub(matchId, subOut.id, subIn.id);
       applyState(res.state);
       setShowSubs(false);
       setSubOut(null);
@@ -500,8 +490,8 @@ export function LiveMatch() {
         ) : (
           state.phase !== "halftime" && (
             <>
-              <button className="btn ghost" onClick={() => setFast((f) => !f)}>
-                <FastForward size={15} /> {fast ? "Normal" : "Fast"}
+              <button className="btn ghost" onClick={() => void tick()}>
+                <RefreshCw size={15} /> Refresh
               </button>
               <button className="btn ghost" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
                 <Subscript size={15} /> Subs ({subsLeft})

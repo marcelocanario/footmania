@@ -1,23 +1,34 @@
 import { describe, it, expect } from "vitest";
 import { generateWorld } from "../src/game/worldgen";
-import { advance, finalizeLiveMatch, aiBidDuringWindow } from "../src/game/world";
+import { settleDueAuctions, aiBidDuringWindow } from "../src/game/world";
 import { createAuction } from "../src/game/transfers";
+import { initSeason } from "../src/game/multiplayer";
 import type { World } from "../src/game/types";
 
-function runDays(world: World, targetDay: number) {
-  let guard = 0;
-  while (world.dayIndex < targetDay && guard++ < 200) {
-    const result = advance(world);
-    if (result.matchPending) finalizeLiveMatch(world);
-  }
-}
-
 describe("auction flow (engine)", () => {
+  it("keeps a production auction open for its absolute duration", () => {
+    const world = generateWorld(4243);
+    initSeason(world, { year: 2026, month: 1 }, 1);
+    const seller = world.clubs[0];
+    const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
+    const before = Date.now();
+    const duration = 7 * 24 * 60 * 60 * 1000;
+    const listingId = createAuction(world.rng, world, player.id, seller.id, 28, before + duration);
+
+    const listing = world.auctions.find((auction) => auction.id === listingId)!;
+    expect(listing.endsAt).toBeGreaterThanOrEqual(before + duration);
+    settleDueAuctions(world, before + duration - 1);
+    expect(world.auctions.some((auction) => auction.id === listingId)).toBe(true);
+    settleDueAuctions(world, before + duration + 1);
+    expect(world.auctions.some((auction) => auction.id === listingId)).toBe(false);
+  });
+
   it("resolves a human auction: player leaves squad, money moves exactly once", () => {
     const world = generateWorld(4242);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     const human = world.clubs[0];
     human.isHuman = true;
-    world.humanClubId = human.id;
+    human.ownerUserId = 1;
 
     const player = world.players.find((p) => p.clubId === human.id && !p.isYouth && p.position !== 0)!;
     const sellDay = world.dayIndex;
@@ -26,10 +37,12 @@ describe("auction flow (engine)", () => {
     const incomeBefore = new Map(world.clubs.map((c) => [c.id, c.ledger.income.reduce((s, e) => s + e.amount, 0)]));
     const expenseBefore = new Map(world.clubs.map((c) => [c.id, c.ledger.expense.reduce((s, e) => s + e.amount, 0)]));
 
-    const listingId = createAuction(world.rng, world, player.id, human.id, world.dayIndex + 7);
+    // Create the auction with a deadline on the current day so settlement runs
+    // immediately via the minute-resolution worker path.
+    const listingId = createAuction(world.rng, world, player.id, human.id, world.dayIndex);
     expect(player.onSale).toBe(true);
 
-    runDays(world, sellDay + 8);
+    settleDueAuctions(world, Date.now());
 
     expect(world.auctions.find((a) => a.id === listingId)).toBeUndefined();
     expect(player.clubId).not.toBe(human.id);
@@ -58,10 +71,11 @@ describe("auction flow (engine)", () => {
     let withBids = 0;
     for (let seed = 1; seed <= 40; seed++) {
       const world = generateWorld(seed);
+      initSeason(world, { year: 2026, month: 1 }, 1);
       const human = world.clubs[0];
       human.isHuman = true;
-      world.humanClubId = human.id;
-      const seller = world.clubs.find((c) => !c.isHuman)!;
+      human.ownerUserId = 1;
+      const seller = world.clubs.find((c) => c.ownerUserId === null)!;
       const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
       createAuction(world.rng, world, player.id, seller.id, world.dayIndex + 7);
       aiBidDuringWindow(world);

@@ -44,7 +44,7 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (!session || session.expiresAt < new Date()) {
       return reply.code(401).send({ error: "Session expired" });
     }
-    req.user = { id: session.userId, username: session.user.username };
+    req.user = { id: session.userId, username: session.user.username, isAdmin: session.user.isAdmin };
     req.sessionToken = token;
   });
 };

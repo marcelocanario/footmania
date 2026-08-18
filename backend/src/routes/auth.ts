@@ -28,7 +28,7 @@ export async function authRoutes(app: FastifyInstance) {
     const user = await app.prisma.user.create({ data: { username, passwordHash } });
     const token = await app.createSession(user.id);
     reply.setCookie(COOKIE_NAME, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 30 * 24 * 3600 });
-    return { user: { id: user.id, username: user.username } };
+    return { user: { id: user.id, username: user.username, isAdmin: user.isAdmin } };
   });
 
   app.post("/auth/login", async (req, reply) => {
@@ -43,7 +43,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const token = await app.createSession(user.id);
     reply.setCookie(COOKIE_NAME, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 30 * 24 * 3600 });
-    return { user: { id: user.id, username: user.username } };
+    return { user: { id: user.id, username: user.username, isAdmin: user.isAdmin } };
   });
 
   app.post("/auth/logout", async (req, reply) => {
@@ -64,6 +64,6 @@ export async function authRoutes(app: FastifyInstance) {
     if (!session || session.expiresAt < new Date()) {
       return reply.code(401).send({ error: "Session expired" });
     }
-    return { user: { id: session.userId, username: session.user.username } };
+    return { user: { id: session.userId, username: session.user.username, isAdmin: session.user.isAdmin } };
   });
 }

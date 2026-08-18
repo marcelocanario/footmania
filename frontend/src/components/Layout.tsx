@@ -1,11 +1,10 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Play, Home, Medal, Settings as SettingsIcon, Radio } from "lucide-react";
+import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, Settings as SettingsIcon, Radio, History as HistoryIcon } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { useAdvanceDay } from "../hooks/useAdvanceDay";
 import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
 
 const NAV = [
@@ -15,24 +14,28 @@ const NAV = [
   { to: "/matchday", label: "Matches", icon: <CalendarDays size={15} /> },
   { to: "/transfers", label: "Transfers", icon: <ArrowLeftRight size={15} /> },
   { to: "/finances", label: "Finances", icon: <Wallet size={15} /> },
+  { to: "/history", label: "History", icon: <HistoryIcon size={15} /> },
   { to: "/records", label: "Records", icon: <Medal size={15} /> },
   { to: "/settings", label: "Settings", icon: <SettingsIcon size={15} /> },
 ];
-
-const BOTTOM = NAV.filter((n) => n.to !== "/competitions");
 
 function confidenceDot(v: number): string {
   return v >= 65 ? "good" : v >= 40 ? "mid" : "bad";
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { snapshot, clear, setUser, liveMatchId } = useGame();
+  const { snapshot, clear, setUser, status, liveMatchId, checkLiveMatch, user } = useGame();
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobile();
-  const { busy: playBusy, run: playDay } = useAdvanceDay();
   useLiveMatchWatcher();
   const club = snapshot?.club;
+  const provisional = club?.competitionState === "PROVISIONAL" || status?.club?.competitionState === "PROVISIONAL";
+  const dormant = club?.competitionState === "DORMANT" || status?.club?.competitionState === "DORMANT";
+
+  const adminNav = user?.isAdmin
+    ? [...NAV, { to: "/admin", label: "Admin", icon: <SettingsIcon size={15} /> }]
+    : NAV;
 
   const logout = async () => {
     await api.logout();
@@ -42,7 +45,13 @@ export function Layout({ children }: { children: ReactNode }) {
   };
 
   const inMatch = location.pathname === "/live-match" || location.pathname === "/season-end";
-  const showFab = isMobile && snapshot && !inMatch;
+  const showResume = isMobile && snapshot && !inMatch && liveMatchId;
+
+  const resume = () => {
+    void checkLiveMatch().then((id) => {
+      if (id) navigate("/live-match");
+    });
+  };
 
   return (
     <div className="app-shell">
@@ -56,7 +65,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {!isMobile && (
           <nav className="top-nav">
-            {NAV.map((item) => (
+            {adminNav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -70,10 +79,11 @@ export function Layout({ children }: { children: ReactNode }) {
         )}
 
         <div className="top-right">
-          {snapshot && (
-            <span className="day-chip" title={`Day ${snapshot.save.dayIndex} of Year ${snapshot.save.year}`}>
+          {status?.season && (
+            <span className="day-chip" title={`Season ${status.season.key} · round ${status.season.completedRounds}`}>
               <CalendarDays size={13} />
-              <b>{snapshot.save.dayIndex}</b> · {snapshot.save.year}
+              <b>{status.season.key}</b>
+              {status.season.joinState === "OPEN" ? " · open" : " · locked"}
             </span>
           )}
           {club && (
@@ -95,6 +105,9 @@ export function Layout({ children }: { children: ReactNode }) {
                 {club.shortName.slice(0, 3).toUpperCase()}
               </span>
               {club.shortName}
+              {provisional && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.4)", color: "var(--gold-2)" }}>PROV</span>}
+              {dormant && <span className="chip" style={{ borderColor: "rgba(120,140,130,0.4)", color: "var(--text-3)" }}>DORMANT</span>}
+              {status?.club?.inactivity?.eligible && <span className="chip" style={{ borderColor: "rgba(220,120,60,0.5)", color: "var(--red-2)" }}>INACTIVE</span>}
               {club.boardConfidence !== undefined && (
                 <span className={`dot ${confidenceDot(club.boardConfidence)}`} title={`Board confidence ${club.boardConfidence}%`} />
               )}
@@ -112,7 +125,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
       {isMobile && (
         <nav className="bottom-bar" aria-label="Primary">
-          {BOTTOM.map((item) => (
+          {adminNav.filter((n) => n.to !== "/competitions").map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -125,15 +138,14 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
       )}
 
-      {showFab && (
+      {showResume && (
         <button
           className="fab"
-          onClick={() => playDay()}
-          disabled={playBusy}
-          title={liveMatchId ? strings.dashboard.resume : strings.dashboard.continue}
-          aria-label={liveMatchId ? strings.dashboard.resume : strings.dashboard.continue}
+          onClick={resume}
+          title={strings.dashboard.resume}
+          aria-label={strings.dashboard.resume}
         >
-          {liveMatchId ? <Radio size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}
+          <Radio size={22} fill="currentColor" />
         </button>
       )}
     </div>

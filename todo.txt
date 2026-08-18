@@ -5,9 +5,6 @@ Game engine
 	[DONE] make players who have played a game this week develop more. players who have not played should receive a small debuff in development. similarly, not playing should negatively affect players who are decaying
 	[DONE] make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
 
-
-
-
 Multiplayer
 -think of tournment structure
 -players create teams, choose team color, jerseys, country, stadium name, etc.
@@ -19,7 +16,7 @@ Multiplayer
 -let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
 -spawn small leagues; human players automatically promoted over AI teams
 
-[DONE, needs improvement] Implement a format to see the match happening (based on globoesporte?)
+[DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
 
 Balance economy
 -also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
@@ -27,15 +24,20 @@ Balance economy
 
 
 Questions:
--what does a player salary depend on? does it increase overtime or as they win prizes, etc.? do they demand higher wages when contracts renew?
--how are contract renewals processed?
--does the release clause adjust proportionally to the lenght of the contract? in real life, it is usually 1/2 of the wages they would receive until end of contract
+[DONE] what does a player salary depend on? does it increase overtime or as they win prizes, etc.? do they demand higher wages when contracts renew?
+[DONE] how are contract renewals processed?
+[DONE] does the release clause adjust proportionally to the lenght of the contract? in real life, it is usually 1/2 of the wages they would receive until end of contract
 
 Questions/multiplayer:
--how do we structure leagues/cups when players are coming/dropping? i thought of a seasons system, where a season is roughly a month in real life (with matches every other day or so). but i want some cups and periodically world cups with best teams from multiple leagues
--how can we replace teams whose players are inactive/dropped? do we even need to do that? study how other games like Hattrick solve for that?
--how many teams per league so that a season will take around 1 month with a game every other day?
+[DONE] how do we structure leagues/cups when players are coming/dropping? i thought of a seasons system, where a season is roughly a month in real life (with matches every other day or so). but i want some cups and periodically world cups with best teams from multiple leagues
+[DONE] how can we replace teams whose players are inactive/dropped? do we even need to do that? study how other games like Hattrick solve for that?
+[DONE] how many teams per league so that a season will take around 1 month with a game every other day?
+-does it make sense for the generated (initial) players to be better at each division? what formula should we use? i want there to be some individual luck upon each player, so that there are outliers even in lower divisions, but the overall should match that division's power so that a new team is not too strong or too bad for that division. should we use an exponential decay formula like the budget one? maybe we should just keep new teams with the same "power", no matter what division they spawn in and consider that power level will self-balance as teams go up/down divisions naturally
+--should we allow teams to upgrade their youth training centers so that they produce better and better players? upgrading must have diminishing returns - each upgrade makes less difference and is more expensive. i want people to play many seasons looking to improve their youth squad, this should not be easy to achieve. at the same time, someone wiht a maxed out one shouldn't always produce wonder players (like 17 yo, 90 overall). this should still be extremely rare. we should have a normal curve and the center of the normal slides depending on the level of the youth academy
 
-validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime
-
-create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.
+Technical/housekeeping:
+-validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime
+-create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.
+--implement full visibility to admin of what is scheduled to happen in each "tick". allow admin to trigger any scheduled event ahead of time (immediately), for testing purposes
+-remove stadium, remove fan support level
+-migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)

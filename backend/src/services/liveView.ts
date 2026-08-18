@@ -1,6 +1,6 @@
 import type { LiveMatchState, World } from "../game/types";
 import { livePhase } from "../game/match";
-import { dayInfo } from "../game/calendar";
+import { dayInfo, multiplayerDayLabel } from "../game/calendar";
 import { FORMATION_NAMES } from "../game/constants";
 
 export interface LiveEventView {
@@ -63,7 +63,7 @@ export interface LiveStateView {
   awayFormationId: number;
 }
 
-export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
+export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: number | null): LiveStateView {
   const byId = new Map(world.players.map((p) => [p.id, p]));
   const club = (id: number) => world.clubs.find((c) => c.id === id);
   const comp = world.competitions.find((c) => c.id === st.competitionId);
@@ -96,13 +96,15 @@ export function liveStateView(world: World, st: LiveMatchState): LiveStateView {
     player: e.playerId ? byId.get(e.playerId)?.name ?? "" : "",
     player2: e.player2Id ? byId.get(e.player2Id)?.name ?? "" : "",
   }));
-  const humanClubId = world.humanClubId;
+  // Determine which side the viewer controls (if any).
+  const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
+  const humanClubId = viewerClub?.id ?? null;
   return {
     matchId: st.matchId,
     fixtureId: st.fixtureId,
     competitionId: st.competitionId,
     competitionName: comp?.name ?? "",
-    dateLabel: dayInfo(world.dayIndex).label,
+    dateLabel: world.mp.seasonId === 0 ? dayInfo(world.dayIndex).label : multiplayerDayLabel(world.dayIndex),
     homeClubId: st.homeClubId,
     awayClubId: st.awayClubId,
     home: home?.name ?? "",

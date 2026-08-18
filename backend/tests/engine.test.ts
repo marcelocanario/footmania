@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateWorld } from "../src/game/worldgen";
+import { initSeason } from "../src/game/multiplayer";
 import { simulateMatch, createLiveMatchState, tickLiveMatch, performLiveSub, buildMatchFromState, matchRating, midfieldStrength, defenseStrength, attackStrength } from "../src/game/match";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
@@ -13,6 +14,12 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
     id: 1,
     name: "Test",
     shortName: "TST",
+    ownerUserId: null,
+    timezone: null,
+    competitionState: "ACTIVE",
+    lastMeaningfulActivityAt: null,
+    abandonmentEligibleAt: null,
+    liveMatchAt: null,
     country: "BRA",
     level: 20,
     cash: 10000000,
@@ -291,6 +298,7 @@ describe("player economy", () => {
 
   it("world generation produces sensible overalls", () => {
     const world = generateWorld(77);
+    initSeason(world, { year: 2026, month: 1 }, 1);
     const overalls = world.players.map((p) => p.overall);
     const avg = overalls.reduce((s, x) => s + x, 0) / overalls.length;
     expect(avg).toBeGreaterThan(15);

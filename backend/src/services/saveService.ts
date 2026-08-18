@@ -18,6 +18,14 @@ import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, rema
 
 type Tx = Prisma.TransactionClient;
 
+/** Thrown when a persist targets a stale revision (another process wrote first). */
+export class StaleWorldError extends Error {
+  constructor(public readonly saveId: number, public readonly expectedRevision: number, public readonly actualRevision: number) {
+    super(`Stale world write (save ${saveId}): expected revision ${expectedRevision}, found ${actualRevision}`);
+    this.name = "StaleWorldError";
+  }
+}
+
 const TABLE_NAMES = [
   "matchEvent",
   "matchStat",
@@ -96,6 +104,7 @@ function normalizePlayer(player: Player, club: Club | undefined): void {
 /** Normalize a save written by the old single-column worldJson format. */
 export function deserializeWorld(json: string): World {
   const world = JSON.parse(json) as World;
+  const legacyLiveMatch = (world as World & { liveMatch?: LiveMatchState | null }).liveMatch;
   world.seed ??= 0;
   world.year ??= 1;
   world.dayIndex ??= 0;
@@ -118,14 +127,64 @@ export function deserializeWorld(json: string): World {
   world.humanClubId ??= null;
   world.seasonSummary ??= null;
   world.contractWarnings ??= [];
-  world.liveMatch ??= null;
   world.rng ??= createRng(world.seed);
+  const legacyMp = world.mp as Partial<World["mp"]> | undefined;
+  world.mp = {
+    seasonId: 0,
+    seasonYear: world.year,
+    seasonMonth: 1,
+    seasonStatus: "PREPARATION",
+    completedRounds: 0,
+    joinLockRound: 7,
+    joinState: "OPEN",
+    joinThresholdPercent: 0.5,
+    inactivityThresholds: { 1: 42, 2: 35, default: 28 },
+    matchTimeMode: "GLOBAL_FIXED_KICKOFF",
+    matchKickoffHour: 20,
+    lastProcessedGameDay: 0,
+    lastDailyTickDay: 0,
+    lastDailyTickDate: null,
+    manualRound: null,
+    rolloverPhase: null,
+    ...(legacyMp ?? {}),
+  };
+  world.mp.seasonId ??= 0;
+  world.mp.seasonYear ??= world.year;
+  world.mp.seasonMonth ??= 1;
+  world.mp.seasonStatus ??= "PREPARATION";
+  world.mp.completedRounds ??= 0;
+  world.mp.joinLockRound ??= 7;
+  world.mp.joinThresholdPercent ??= 0.5;
+  world.mp.inactivityThresholds ??= { 1: 42, 2: 35, default: 28 };
+  world.mp.matchTimeMode ??= "GLOBAL_FIXED_KICKOFF";
+  world.mp.matchKickoffHour ??= 20;
+  world.mp.joinState ??= "OPEN";
+  world.mp.lastProcessedGameDay ??= 0;
+  world.mp.lastDailyTickDay ??= 0;
+  world.mp.lastDailyTickDate ??= null;
+  world.mp.manualRound ??= null;
+  world.mp.rolloverPhase ??= null;
+  world.mpQueue ??= [];
+  world.liveMatches ??= legacyLiveMatch ? [legacyLiveMatch] : [];
+  world.seasonAllocations ??= [];
+  world.mpMemberships ??= [];
+  world.mpClubSeasons ??= [];
+  world.mpActivities ??= [];
+  world.mpAudits ??= [];
+  world.seasonHistory ??= [];
 
   for (const club of world.clubs) {
     club.ledger ??= { income: [], expense: [] };
     club.trophies ??= {};
     club.trainingFocus ??= "assistant";
     club.country ??= "BRA"; // defensive: pre-country legacy rows would otherwise violate the NOT NULL column
+    club.ownerUserId ??= null;
+    club.timezone ??= null;
+    club.competitionState ??= "ACTIVE";
+    club.lastMeaningfulActivityAt ??= null;
+    club.abandonmentEligibleAt ??= null;
+    club.inactivityWarningStage ??= 0;
+    club.liveMatchAt ??= null;
   }
   for (const player of world.players) {
     const legacy = player as Player & { suspended?: boolean };
@@ -146,16 +205,18 @@ export function deserializeWorld(json: string): World {
     match.stats.wrongPasses ??= [0, 0];
     match.extraTime ??= false;
   }
-  if (world.liveMatch) {
-    world.liveMatch.compKind ??= "league";
-    world.liveMatch.year ??= world.year;
-    world.liveMatch.subbedIn ??= [[], []];
-    world.liveMatch.possessionCounts ??= [0, 0];
-    world.liveMatch.playerYellows ??= {};
-    world.liveMatch.subSlots ??= { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] };
-    world.liveMatch.suspensionClears ??= [];
-    world.liveMatch.stats.tackles ??= [0, 0];
-    world.liveMatch.stats.wrongPasses ??= [0, 0];
+  if (world.liveMatches) {
+    for (const st of world.liveMatches) {
+      st.compKind ??= "division";      st.year ??= world.year;
+      st.subbedIn ??= [[], []];
+      st.possessionCounts ??= [0, 0];
+      st.playerYellows ??= {};
+      st.subSlots ??= { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] };
+      st.suspensionClears ??= [];
+      st.lastAdvancedAt ??= Date.now();
+      st.stats.tackles ??= [0, 0];
+      st.stats.wrongPasses ??= [0, 0];
+    }
   }
   return world;
 }
@@ -182,39 +243,182 @@ export async function createSaveRecord(
   return { id: save.id };
 }
 
-export async function loadWorld(prisma: PrismaClient, saveId: number, userId: number): Promise<{ save: { id: number; name: string }; world: World } | null> {
-  const save = await prisma.save.findFirst({ where: { id: saveId, userId } });
-  if (!save) return null;
-  const world = await rebuildWorld(prisma, save);
-  // Old saves have no normalized rows yet. Keep them playable and let the
-  // next write migrate them through persistWorld.
-  const legacyWorldJson = (save as typeof save & { worldJson?: string | null }).worldJson;
-  if (world.clubs.length === 0 && legacyWorldJson) {
-    return { save: { id: save.id, name: save.name }, world: deserializeWorld(legacyWorldJson) };
+/** The single global multiplayer Save row (isGlobal = true). */
+export async function ensureGlobalSave(prisma: PrismaClient): Promise<{ id: number; name: string }> {
+  const existing = await prisma.save.findFirst({ where: { isGlobal: true } });
+  if (existing) {
+    if (existing.globalKey !== "GLOBAL") {
+      await prisma.save.update({ where: { id: existing.id }, data: { globalKey: "GLOBAL" } });
+    }
+    return { id: existing.id, name: existing.name };
   }
-  return { save: { id: save.id, name: save.name }, world };
+  // The global save needs an owning user for the FK; use (or create) a
+  // dedicated "system" user.
+  let system = await prisma.user.findUnique({ where: { username: "__system__" } });
+  if (!system) {
+    try {
+      system = await prisma.user.create({ data: { username: "__system__", passwordHash: "!" } });
+    } catch (error) {
+      // Multiple server processes can initialize the world concurrently. If
+      // another process won the unique username race, reuse its system user.
+      system = await prisma.user.findUnique({ where: { username: "__system__" } });
+      if (!system) throw error;
+    }
+  }
+  const world = generateWorld(Math.floor(Math.random() * 0x7fffffff));
+  let save;
+  try {
+    save = await prisma.save.create({
+      data: {
+        userId: system.id,
+        name: "Global Multiplayer",
+        isGlobal: true,
+        globalKey: "GLOBAL",
+        year: world.year,
+        dayIndex: world.dayIndex,
+        humanClubId: null,
+        seed: world.seed,
+        rngState: BigInt(world.rng.state),
+      },
+    });
+  } catch (error) {
+    // Another process may have won the singleton race between findFirst and
+    // create.  Return that row rather than creating a second world.
+    const winner = await prisma.save.findFirst({ where: { isGlobal: true } });
+    if (winner) return { id: winner.id, name: winner.name };
+    throw error;
+  }
+  await persistWorld(prisma, save.id, save.userId, world);
+  return { id: save.id, name: save.name };
+}
+
+export async function loadGlobalWorld(prisma: PrismaClient): Promise<{ save: { id: number; name: string; revision: number }; world: World } | null> {
+  return prisma.$transaction(async (tx) => {
+    const save = await tx.save.findFirst({ where: { isGlobal: true } });
+    if (!save) return null;
+    const world = await rebuildWorld(tx, save);
+    const legacyWorldJson = (save as typeof save & { worldJson?: string | null }).worldJson;
+    if (world.clubs.length === 0 && legacyWorldJson) {
+      return { save: { id: save.id, name: save.name, revision: save.revision }, world: deserializeWorld(legacyWorldJson) };
+    }
+    return { save: { id: save.id, name: save.name, revision: save.revision }, world };
+  });
+}
+
+/**
+ * Load the global world, apply a mutation, and persist it with optimistic
+ * concurrency. On a stale write (another process mutated the world between
+ * load and persist), the world is reloaded and the mutation re-run.
+ *
+ * NOTE: callers should still run inside `withGlobalLock` so the in-process
+ * worker/routes serialize; the revision check protects against OTHER processes
+ * racing the local lock (plan §80/§81).
+ */
+export async function mutateGlobalWorld<T>(
+  prisma: PrismaClient,
+  mutate: (world: World) => T | Promise<T>,
+  maxRetries = 3
+): Promise<{ result: T; saveId: number }> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("Global world unavailable");
+    const { save, world } = loaded;
+    const result = await mutate(world);
+    try {
+      await persistWorld(prisma, save.id, save.id, world, save.revision);
+      return { result, saveId: save.id };
+    } catch (err) {
+      if (err instanceof StaleWorldError && attempt < maxRetries) {
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}
+
+export async function loadWorld(prisma: PrismaClient, saveId: number, userId: number): Promise<{ save: { id: number; name: string }; world: World } | null> {
+  return prisma.$transaction(async (tx) => {
+    const save = await tx.save.findFirst({ where: { id: saveId, userId } });
+    if (!save) return null;
+    const world = await rebuildWorld(tx, save);
+    // Old saves have no normalized rows yet. Keep them playable and let the
+    // next write migrate them through persistWorld.
+    const legacyWorldJson = (save as typeof save & { worldJson?: string | null }).worldJson;
+    if (world.clubs.length === 0 && legacyWorldJson) {
+      const legacyWorld = deserializeWorld(legacyWorldJson);
+      const human = legacyWorld.humanClubId !== null ? legacyWorld.clubs.find((club) => club.id === legacyWorld.humanClubId) : undefined;
+      if (human) {
+        human.ownerUserId = userId;
+        human.competitionState = "ACTIVE";
+        human.isHuman = true;
+      }
+      return { save: { id: save.id, name: save.name }, world: legacyWorld };
+    }
+    return { save: { id: save.id, name: save.name }, world };
+  });
 }
 
 export async function persistWorld(
   prisma: PrismaClient,
   saveId: number,
   userId: number,
-  world: World
+  world: World,
+  expectedRevision?: number,
+  opts?: { dailyExecutions?: { seasonId: number; date: string; executionType: string }[] }
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    await tx.save.updateMany({
-      where: { id: saveId, userId },
-      data: {
-        year: world.year,
-        dayIndex: world.dayIndex,
-        humanClubId: world.humanClubId,
-        seed: world.seed,
-        rngState: BigInt(world.rng.state),
-        seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
-        pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
-        pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
-      },
-    });
+    const target = await tx.save.findUnique({ where: { id: saveId }, select: { userId: true, isGlobal: true } });
+    if (!target || (!target.isGlobal && target.userId !== userId)) {
+      throw new Error("Save not found");
+    }
+    // Multiplayer: the global save is updated by id (userId param is ignored
+    // for the global row; single-player saves were retired with the redesign).
+    // Optimistic concurrency: when the caller captured a revision at load time,
+    // the save row is only updated if the revision still matches, atomically
+    // bumping it. A concurrent writer in another process therefore cannot
+    // silently overwrite this world (plan §58/§80/§81).
+    if (expectedRevision !== undefined) {
+      const res = await tx.save.updateMany({
+        where: { id: saveId, revision: expectedRevision },
+        data: {
+          year: world.year,
+          dayIndex: world.dayIndex,
+          humanClubId: world.humanClubId,
+          seed: world.seed,
+          rngState: BigInt(world.rng.state),
+          mpStateJson: JSON.stringify(world.mp),
+          seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
+          seasonHistoryJson: world.seasonHistory.length > 0 ? JSON.stringify(world.seasonHistory) : null,
+          pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
+          pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
+          revision: { increment: 1 },
+        },
+      });
+      if (res.count !== 1) {
+        const fresh = await tx.save.findUnique({ where: { id: saveId }, select: { revision: true } });
+        throw new StaleWorldError(saveId, expectedRevision, fresh?.revision ?? -1);
+      }
+    } else {
+      await tx.save.update({
+        where: { id: saveId },
+        data: {
+          year: world.year,
+          dayIndex: world.dayIndex,
+          humanClubId: world.humanClubId,
+          seed: world.seed,
+          rngState: BigInt(world.rng.state),
+          mpStateJson: JSON.stringify(world.mp),
+          seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
+          seasonHistoryJson: world.seasonHistory.length > 0 ? JSON.stringify(world.seasonHistory) : null,
+          pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
+          pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
+          revision: { increment: 1 },
+        },
+      });
+    }
     for (const t of TABLE_NAMES) {
       await (tx as unknown as Record<string, { deleteMany: (args: { where: { saveId: number } }) => Promise<unknown> }>)[t].deleteMany({ where: { saveId } });
     }
@@ -243,7 +447,7 @@ export async function persistWorld(
       await tx.standingsRow.createMany({ data: rows });
     }
     if (world.fixtures.length > 0) {
-      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null })) });
+      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, homeClubNameSnapshot: f.homeClubNameSnapshot ?? null, awayClubNameSnapshot: f.awayClubNameSnapshot ?? null })) });
     }
     if (world.matches.length > 0) {
       await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, attendance: m.attendance, gateRevenue: m.gateRevenue, extraTime: m.extraTime ?? false })) });
@@ -266,7 +470,7 @@ export async function persistWorld(
     }
     if (ledgerRows.length > 0) await tx.ledgerEntry.createMany({ data: ledgerRows });
     if (world.auctions.length > 0) {
-      await tx.auction.createMany({ data: world.auctions.map((a) => ({ id: a.id, saveId, playerId: a.playerId, minBid: a.minBid, deadlineDay: a.deadlineDay, sellerClubId: a.sellerClubId })) });
+      await tx.auction.createMany({ data: world.auctions.map((a) => ({ id: a.id, saveId, playerId: a.playerId, minBid: a.minBid, deadlineDay: a.deadlineDay, startsAt: a.startsAt !== undefined ? BigInt(a.startsAt) : null, endsAt: a.endsAt !== undefined ? BigInt(a.endsAt) : null, sellerClubId: a.sellerClubId })) });
       const bidRows: { saveId: number; auctionId: number; clubId: number; amount: number }[] = [];
       for (const a of world.auctions) {
         for (const b of a.bids) bidRows.push({ saveId, auctionId: a.id, clubId: b.clubId, amount: b.amount });
@@ -298,8 +502,119 @@ export async function persistWorld(
     if (world.tvDeals.length > 0) {
       await tx.tvDeal.createMany({ data: world.tvDeals.map((d) => ({ saveId, clubId: d.clubId, season: d.season, baseAmount: d.baseAmount, positionBonus: d.positionBonus })) });
     }
-    if (world.liveMatch) {
-      await tx.liveMatch.create({ data: { saveId, stateJson: JSON.stringify(world.liveMatch) } });
+    if (world.liveMatches.length > 0) {
+      await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, stateJson: JSON.stringify(st) })) });
+    }
+    if (target.isGlobal && world.mp.seasonId !== 0) {
+      await tx.mpSeason.updateMany({
+        where: { id: world.mp.seasonId },
+        data: {
+          completedRounds: world.mp.completedRounds,
+          joinLockRound: world.mp.joinLockRound,
+          joinThresholdPercent: world.mp.joinThresholdPercent,
+          joinState: world.mp.joinState,
+          status: world.mp.seasonStatus,
+        },
+      });
+      // At most one season is active globally.  Archiving the previous row in
+      // the same transaction prevents the normalized calendar from showing
+      // two active seasons after a rollover retry.
+      await tx.mpSeason.updateMany({
+        where: { id: { not: world.mp.seasonId }, status: { in: ["ACTIVE", "INTERSEASON", "ROLLOVER"] } },
+        data: { status: "COMPLETE", completedRounds: 14, joinState: "LOCKED" },
+      });
+    }
+    // Multiplayer queue + allocations (idempotent unique constraints).
+    if (target.isGlobal) {
+      await tx.mpQueue.deleteMany({});
+      await tx.mpAllocation.deleteMany({});
+      if (world.mpQueue.length > 0) {
+        await tx.mpQueue.createMany({
+          data: world.mpQueue.map((q) => ({ clubId: q.clubId, source: q.source, queuedAt: new Date(q.queuedAt), preferredSeasonId: q.preferredSeasonId })),
+        });
+      }
+      if (world.seasonAllocations.length > 0) {
+        await tx.mpAllocation.createMany({
+          data: world.seasonAllocations.map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type, amount: a.amount, issuedAt: new Date(a.issuedAt) })),
+        });
+      }
+      // Normalized multiplayer records (plan §55). Memberships/season records are
+      // disposable between seasons and fully rewritten each persist.
+      await tx.mpMembership.deleteMany({});
+      if (world.mpMemberships.length > 0) {
+        await tx.mpMembership.createMany({
+          data: world.mpMemberships.map((m) => ({
+            divisionId: m.divisionId,
+            clubId: m.clubId,
+            slotNumber: m.slotNumber,
+            isFillerAI: m.isFillerAI,
+            replacedClubId: m.replacedClubId,
+            joinedAt: new Date(m.joinedAt),
+          })),
+        });
+      }
+      await tx.mpClubSeason.deleteMany({});
+      if (world.mpClubSeasons.length > 0) {
+        await tx.mpClubSeason.createMany({
+          data: world.mpClubSeasons.map((cs) => ({
+            clubId: cs.clubId,
+            seasonId: cs.seasonId,
+            divisionId: cs.divisionId,
+            tier: cs.tier,
+            played: cs.played,
+            wins: cs.wins,
+            draws: cs.draws,
+            losses: cs.losses,
+            goalsFor: cs.goalsFor,
+            goalsAgainst: cs.goalsAgainst,
+            points: cs.points,
+            promotionStatus: cs.promotionStatus,
+            relegationStatus: cs.relegationStatus,
+          })),
+        });
+      }
+      await tx.mpActivity.deleteMany({});
+      if (world.mpActivities.length > 0) {
+        await tx.mpActivity.createMany({
+          data: world.mpActivities.map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: new Date(a.occurredAt), metadata: a.metadata })),
+        });
+      }
+      await tx.mpAudit.deleteMany({});
+      if (world.mpAudits.length > 0) {
+        await tx.mpAudit.createMany({
+          data: world.mpAudits.map((audit) => ({
+            seasonId: audit.seasonId,
+            clubId: audit.clubId,
+            userId: audit.userId,
+            eventType: audit.eventType,
+            occurredAt: new Date(audit.occurredAt),
+            metadata: audit.metadata,
+          })),
+        });
+      }
+    }
+    if (opts?.dailyExecutions && opts.dailyExecutions.length > 0) {
+      // Upsert each execution independently. A duplicate marker must not cause
+      // unrelated new markers in the same batch to be lost.
+      for (const execution of opts.dailyExecutions) {
+        await tx.dailyExecution.upsert({
+          where: {
+            saveId_seasonId_date_executionType: {
+              saveId,
+              seasonId: execution.seasonId,
+              date: execution.date,
+              executionType: execution.executionType,
+            },
+          },
+          update: {},
+          create: {
+            saveId,
+            seasonId: execution.seasonId,
+            date: execution.date,
+            executionType: execution.executionType,
+          },
+        });
+      }
     }
   });
 }
@@ -308,6 +623,13 @@ function clubRow(c: Club, saveId: number) {
   return {
     id: c.id,
     saveId,
+    ownerUserId: c.ownerUserId,
+    timezone: c.timezone,
+    competitionState: c.competitionState,
+    lastMeaningfulActivityAt: c.lastMeaningfulActivityAt !== null ? BigInt(c.lastMeaningfulActivityAt) : null,
+    abandonmentEligibleAt: c.abandonmentEligibleAt !== null ? BigInt(c.abandonmentEligibleAt) : null,
+    inactivityWarningStage: c.inactivityWarningStage ?? 0,
+    liveMatchAt: c.liveMatchAt !== null ? BigInt(c.liveMatchAt) : null,
     name: c.name,
     shortName: c.shortName,
     country: c.country,
@@ -395,6 +717,11 @@ function competitionRow(c: Competition, saveId: number) {
     name: c.name,
     round: c.round,
     stage: c.stage,
+    seasonId: c.seasonId ?? null,
+    tier: c.tier ?? 1,
+    groupIndex: c.groupIndex ?? 0,
+    referenceTimezone: c.referenceTimezone ?? null,
+    status: c.status ?? "ACTIVE",
     configJson: JSON.stringify(c.config),
     winnersJson: JSON.stringify(c.winners),
     knockoutsJson: JSON.stringify(c.knockouts),
@@ -431,8 +758,8 @@ function statRow(m: Match, saveId: number) {
 }
 
 async function rebuildWorld(
-  prisma: PrismaClient,
-  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; worldJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null }
+  prisma: PrismaClient | Tx,
+  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; isGlobal?: boolean; worldJson?: string | null; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null }
 ): Promise<World> {
   const [
     clubRows,
@@ -456,6 +783,12 @@ async function rebuildWorld(
     upgradeRows,
     tvRows,
     liveRow,
+    mpQueueRows,
+    mpAllocationRows,
+    mpMembershipRows,
+    mpClubSeasonRows,
+    mpActivityRows,
+    mpAuditRows,
   ] = await Promise.all([
     prisma.club.findMany({ where: { saveId: saveRow.id } }),
     prisma.player.findMany({ where: { saveId: saveRow.id } }),
@@ -477,32 +810,54 @@ async function rebuildWorld(
     prisma.clubTicketPrices.findMany({ where: { saveId: saveRow.id } }),
     prisma.stadiumUpgrade.findMany({ where: { saveId: saveRow.id } }),
     prisma.tvDeal.findMany({ where: { saveId: saveRow.id } }),
-    prisma.liveMatch.findUnique({ where: { saveId: saveRow.id } }),
+    prisma.liveMatch.findMany({ where: { saveId: saveRow.id } }),
+    saveRow.isGlobal ? prisma.mpQueue.findMany({ orderBy: { queuedAt: "asc" } }) : Promise.resolve([]),
+    saveRow.isGlobal ? prisma.mpAllocation.findMany() : Promise.resolve([]),
+    saveRow.isGlobal ? prisma.mpMembership.findMany() : Promise.resolve([]),
+    saveRow.isGlobal ? prisma.mpClubSeason.findMany() : Promise.resolve([]),
+    saveRow.isGlobal ? prisma.mpActivity.findMany({ orderBy: { id: "asc" } }) : Promise.resolve([]),
+    saveRow.isGlobal ? prisma.mpAudit.findMany({ orderBy: { id: "asc" } }) : Promise.resolve([]),
   ]);
 
-  const clubs: Club[] = clubRows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    shortName: r.shortName,
-    country: r.country,
-    level: r.level,
-    cash: r.cash,
-    stadiumName: r.stadiumName,
-    stadiumCapacity: r.stadiumCapacity,
-    primaryColor: r.primaryColor,
-    secondaryColor: r.secondaryColor,
-    coachName: r.coachName,
-    boardConfidence: r.boardConfidence,
-    fanConfidence: r.fanConfidence,
-    tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
-    trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
-    captainId: r.captainId,
-    penaltyTakerId: r.penaltyTakerId,
-    savedLineup: jsonOr<Club["savedLineup"]>(r.savedLineupJson, null),
-    isHuman: r.isHuman,
-    ledger: { income: [], expense: [] },
-    trophies: {},
-  }));
+  const clubs: Club[] = clubRows.map((r) => {
+    const r2 = r as unknown as {
+      ownerUserId: number | null;
+      timezone: string | null;
+      competitionState: string;
+      lastMeaningfulActivityAt: bigint | null;
+      liveMatchAt: bigint | null;
+    };
+    return {
+      id: r.id,
+      name: r.name,
+      shortName: r.shortName,
+      ownerUserId: r2.ownerUserId ?? null,
+      timezone: r2.timezone ?? null,
+      competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
+      lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null ? Number(r2.lastMeaningfulActivityAt) : null,
+      abandonmentEligibleAt: (r as unknown as { abandonmentEligibleAt: bigint | null }).abandonmentEligibleAt !== null ? Number((r as unknown as { abandonmentEligibleAt: bigint | null }).abandonmentEligibleAt) : null,
+      inactivityWarningStage: (r as unknown as { inactivityWarningStage?: number }).inactivityWarningStage ?? 0,
+      liveMatchAt: r2.liveMatchAt !== null ? Number(r2.liveMatchAt) : null,
+      country: r.country,
+      level: r.level,
+      cash: r.cash,
+      stadiumName: r.stadiumName,
+      stadiumCapacity: r.stadiumCapacity,
+      primaryColor: r.primaryColor,
+      secondaryColor: r.secondaryColor,
+      coachName: r.coachName,
+      boardConfidence: r.boardConfidence,
+      fanConfidence: r.fanConfidence,
+      tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
+      trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
+      captainId: r.captainId,
+      penaltyTakerId: r.penaltyTakerId,
+      savedLineup: jsonOr<Club["savedLineup"]>(r.savedLineupJson, null),
+      isHuman: r.isHuman,
+      ledger: { income: [], expense: [] },
+      trophies: {},
+    };
+  });
 
   const players: Player[] = playerRows.map((r) => {
     const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
@@ -569,18 +924,26 @@ async function rebuildWorld(
     normalizePlayer(player, clubs.find((club) => club.id === player.clubId));
   }
 
-  const competitions: Competition[] = competitionRows.map((r) => ({
-    id: r.id,
-    kind: r.kind as Competition["kind"],
-    name: r.name,
-    round: r.round,
-    stage: r.stage as Competition["stage"],
-    config: jsonOr(r.configJson, { clubs: [], turns: 2, groups: [], bracket: [], promoted: 0, relegated: 0, groupQualifiers: 0 }),
-    winners: jsonOr<number[]>(r.winnersJson, []),
-    knockouts: jsonOr(r.knockoutsJson, []),
-    groupStandings: jsonOr<GroupStandings[]>(r.groupStandingsJson, []),
-    standings: {},
-  }));
+  const competitions: Competition[] = competitionRows.map((r) => {
+    const r2 = r as unknown as { seasonId: number | null; tier: number; groupIndex: number; referenceTimezone: string | null; status: string };
+    return {
+      id: r.id,
+      kind: r.kind as Competition["kind"],
+      name: r.name,
+      round: r.round,
+      stage: r.stage as Competition["stage"],
+      seasonId: r2.seasonId ?? undefined,
+      tier: r2.tier ?? 1,
+      groupIndex: r2.groupIndex ?? 0,
+      referenceTimezone: r2.referenceTimezone ?? null,
+      status: r2.status ?? "ACTIVE",
+      config: jsonOr(r.configJson, { clubs: [], turns: 2, groups: [], bracket: [], promoted: 0, relegated: 0, groupQualifiers: 0 }),
+      winners: jsonOr<number[]>(r.winnersJson, []),
+      knockouts: jsonOr(r.knockoutsJson, []),
+      groupStandings: jsonOr<GroupStandings[]>(r.groupStandingsJson, []),
+      standings: {},
+    };
+  });
 
   for (const r of standingsRows) {
     const comp = competitions.find((c) => c.id === r.competitionId);
@@ -598,17 +961,23 @@ async function rebuildWorld(
     }
   }
 
-  const fixtures = fixtureRows.map((f) => ({
-    id: f.id,
-    competitionId: f.competitionId,
-    round: f.round,
-    homeClubId: f.homeClubId,
-    awayClubId: f.awayClubId,
-    dayIndex: f.dayIndex,
-    played: f.played,
-    leg: f.leg ?? undefined,
-    tie: f.tie ?? undefined,
-  }));
+  const fixtures = fixtureRows.map((f) => {
+    const f2 = f as unknown as { kickoffAt: bigint | null; homeClubNameSnapshot: string | null; awayClubNameSnapshot: string | null };
+    return {
+      id: f.id,
+      competitionId: f.competitionId,
+      round: f.round,
+      homeClubId: f.homeClubId,
+      awayClubId: f.awayClubId,
+      dayIndex: f.dayIndex,
+      played: f.played,
+      leg: f.leg ?? undefined,
+      tie: f.tie ?? undefined,
+      kickoffAt: f2.kickoffAt !== null && f2.kickoffAt !== undefined ? Number(f2.kickoffAt) : undefined,
+      homeClubNameSnapshot: f2.homeClubNameSnapshot ?? undefined,
+      awayClubNameSnapshot: f2.awayClubNameSnapshot ?? undefined,
+    };
+  });
 
   const statByMatch = new Map(statRows.map((s) => [s.matchId, s]));
   const eventsByMatch = new Map<number, Match["events"]>();
@@ -669,6 +1038,8 @@ async function rebuildWorld(
     playerId: a.playerId,
     minBid: a.minBid,
     deadlineDay: a.deadlineDay,
+    startsAt: (a as unknown as { startsAt: bigint | null }).startsAt !== null && (a as unknown as { startsAt: bigint | null }).startsAt !== undefined ? Number((a as unknown as { startsAt: bigint | null }).startsAt) : undefined,
+    endsAt: (a as unknown as { endsAt: bigint | null }).endsAt !== null && (a as unknown as { endsAt: bigint | null }).endsAt !== undefined ? Number((a as unknown as { endsAt: bigint | null }).endsAt) : undefined,
     sellerClubId: a.sellerClubId,
     bids: bidRows.filter((b) => b.auctionId === a.id).map((b) => ({ clubId: b.clubId, amount: b.amount })),
   }));
@@ -697,14 +1068,87 @@ async function rebuildWorld(
     seasonSummary: jsonOr(saveRow.seasonSummaryJson, null),
     rng: createRng(saveRow.seed),
     contractWarnings: [],
+    mp: {
+      seasonId: 0,
+      seasonYear: saveRow.year,
+      seasonMonth: 1,
+      seasonStatus: "PREPARATION",
+      completedRounds: 0,
+      joinLockRound: 7,
+      joinState: "OPEN",
+      joinThresholdPercent: 0.5,
+      inactivityThresholds: { 1: 42, 2: 35, default: 28 },
+      matchTimeMode: "GLOBAL_FIXED_KICKOFF",
+      matchKickoffHour: 20,
+      lastProcessedGameDay: 0,
+      lastDailyTickDay: 0,
+      lastDailyTickDate: null,
+      manualRound: null,
+      rolloverPhase: null,
+      ...jsonOr<Partial<World["mp"]>>((saveRow as unknown as { mpStateJson?: string | null }).mpStateJson, {}),
+    },
+    mpQueue: [],
+    liveMatches: [],
+    seasonAllocations: [],
+    mpMemberships: [],
+    mpClubSeasons: [],
+    mpActivities: [],
+    mpAudits: [],
+    seasonHistory: [],
   };
+  world.mp.seasonId ??= 0;
+  world.mp.seasonYear ??= saveRow.year;
+  world.mp.seasonMonth ??= 1;
+  world.mp.seasonStatus ??= "PREPARATION";
+  world.mp.completedRounds ??= 0;
+  world.mp.joinLockRound ??= 7;
+  world.mp.joinThresholdPercent ??= 0.5;
+  world.mp.inactivityThresholds ??= { 1: 42, 2: 35, default: 28 };
+  world.mp.matchTimeMode ??= "GLOBAL_FIXED_KICKOFF";
+  world.mp.matchKickoffHour ??= 20;
+  world.mp.joinState ??= "OPEN";
+  world.mp.lastProcessedGameDay ??= 0;
+  world.mp.lastDailyTickDay ??= 0;
+  world.mp.lastDailyTickDate ??= null;
+  world.mp.manualRound ??= null;
+  world.mp.rolloverPhase ??= null;
   world.rng.state = Number(saveRow.rngState);
   world.nextId =
     Math.max(
       1,
       ...[...clubs.map((c) => c.id), ...players.map((p) => p.id), ...competitions.map((c) => c.id), ...fixtures.map((f) => f.id), ...matches.map((m) => m.id), ...auctions.map((a) => a.id), ...world.loans.map((l) => l.id)]
     ) + 1;
-  world.liveMatch = liveRow ? jsonOr<LiveMatchState | null>(liveRow.stateJson, null) : null;
+  world.liveMatches = (liveRow ?? []).map((r) => jsonOr<LiveMatchState | null>(r.stateJson, null)).filter((x): x is LiveMatchState => !!x);
+  for (const st of world.liveMatches) {
+    st.subbedIn ??= [[], []];
+    st.possessionCounts ??= [0, 0];
+    st.playerYellows ??= {};
+    st.suspensionClears ??= [];
+    st.lastAdvancedAt ??= Date.now();
+    st.stats.tackles ??= [0, 0];
+    st.stats.wrongPasses ??= [0, 0];
+  }
+  world.mpQueue = (mpQueueRows ?? []).map((q) => ({ clubId: q.clubId, source: q.source as "NEW_CLUB" | "RETURNING_CLUB", queuedAt: q.queuedAt.getTime(), preferredSeasonId: q.preferredSeasonId }));
+  world.seasonAllocations = (mpAllocationRows ?? []).map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type as "ACTIVE_FULL" | "ACTIVE_PRORATED" | "PROVISIONAL_NEXT_SEASON", amount: a.amount, issuedAt: a.issuedAt.getTime() }));
+  world.mpMemberships = (mpMembershipRows ?? []).map((m) => ({ divisionId: m.divisionId, clubId: m.clubId, slotNumber: m.slotNumber, isFillerAI: m.isFillerAI, replacedClubId: m.replacedClubId, joinedAt: m.joinedAt.getTime() }));
+  world.mpClubSeasons = (mpClubSeasonRows ?? []).map((cs) => ({
+    clubId: cs.clubId,
+    seasonId: cs.seasonId,
+    divisionId: cs.divisionId,
+    tier: cs.tier,
+    played: cs.played,
+    wins: cs.wins,
+    draws: cs.draws,
+    losses: cs.losses,
+    goalsFor: cs.goalsFor,
+    goalsAgainst: cs.goalsAgainst,
+    points: cs.points,
+    promotionStatus: cs.promotionStatus,
+    relegationStatus: cs.relegationStatus,
+  }));
+  world.mpActivities = (mpActivityRows ?? []).map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: a.occurredAt.getTime(), metadata: a.metadata }));
+  world.mpAudits = (mpAuditRows ?? []).map((a) => ({ seasonId: a.seasonId, clubId: a.clubId, userId: a.userId, eventType: a.eventType, occurredAt: a.occurredAt.getTime(), metadata: a.metadata }));
+  world.seasonHistory = jsonOr<World["seasonHistory"]>((saveRow as unknown as { seasonHistoryJson?: string | null }).seasonHistoryJson, []);
   world.pendingDayEvents = jsonOr<string[] | undefined>(saveRow.pendingEventsJson, undefined);
   world.pendingDayMatchIds = jsonOr<number[] | undefined>(saveRow.pendingMatchIdsJson, undefined);
   return world;

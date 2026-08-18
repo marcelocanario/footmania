@@ -6,7 +6,7 @@ import { useSettings } from "./store/settings";
 import { strings } from "./strings";
 import { Layout } from "./components/Layout";
 import { Login } from "./screens/Login";
-import { Saves } from "./screens/Saves";
+import { Join } from "./screens/Join";
 import { Dashboard } from "./screens/Dashboard";
 import { Squad } from "./screens/Squad";
 import { Competitions } from "./screens/Competitions";
@@ -16,7 +16,9 @@ import { Transfers } from "./screens/Transfers";
 import { Finances } from "./screens/Finances";
 import { SeasonEnd } from "./screens/SeasonEnd";
 import { Records } from "./screens/Records";
+import { History } from "./screens/History";
 import { SettingsScreen } from "./screens/Settings";
+import { Admin } from "./screens/Admin";
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, setUser } = useGame();
@@ -39,48 +41,58 @@ function Gate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function Guard({ children }: { children: React.ReactNode }) {
-  const { saveId, snapshot, loadSave } = useGame();
+function ClubGuard({ children }: { children: React.ReactNode }) {
+  const { loadStatus, snapshot, loadClub } = useGame();
   const navigate = useNavigate();
-  const [failed, setFailed] = useState(false);
+  const [checked, setChecked] = useState(false);
+  const [hasClub, setHasClub] = useState(false);
 
   useEffect(() => {
-    if (!saveId) {
-      navigate("/saves");
-      return;
-    }
-    if (!snapshot) {
-      loadSave(saveId).then((ok) => {
+    let alive = true;
+    void (async () => {
+      const st = await loadStatus();
+      if (!alive) return;
+      const owns = !!st?.club;
+      setHasClub(owns);
+      if (owns && !snapshot) {
+        const ok = await loadClub();
+        if (!alive) return;
         if (!ok) {
-          setFailed(true);
           navigate("/saves");
+          return;
         }
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveId, snapshot]);
+      }
+      setChecked(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [loadStatus, loadClub, snapshot, navigate]);
 
-  if (!saveId || failed) return null;
-  if (!snapshot) return <div className="empty-state" style={{ paddingTop: 80 }}>{strings.common.loading}</div>;
+  if (!checked) return <div className="empty-state" style={{ paddingTop: 80 }}>{strings.common.loading}</div>;
+  if (!hasClub) {
+    return <Navigate to="/saves" replace />;
+  }
   return <>{children}</>;
 }
 
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/saves" replace />} />
-      <Route path="/saves" element={<Saves />} />
-      <Route path="/dashboard" element={<Guard><Dashboard /></Guard>} />
-      <Route path="/squad" element={<Guard><Squad /></Guard>} />
-      <Route path="/competitions" element={<Guard><Competitions /></Guard>} />
-      <Route path="/matchday" element={<Guard><Matchday /></Guard>} />
-      <Route path="/live-match" element={<Guard><LiveMatch /></Guard>} />
-      <Route path="/transfers" element={<Guard><Transfers /></Guard>} />
-      <Route path="/finances" element={<Guard><Finances /></Guard>} />
-      <Route path="/season-end" element={<Guard><SeasonEnd /></Guard>} />
-      <Route path="/records" element={<Guard><Records /></Guard>} />
-      <Route path="/settings" element={<Guard><SettingsScreen /></Guard>} />
-      <Route path="*" element={<Navigate to="/saves" replace />} />
+      <Route path="/saves" element={<Join />} />
+      <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
+      <Route path="/squad" element={<ClubGuard><Squad /></ClubGuard>} />
+      <Route path="/competitions" element={<ClubGuard><Competitions /></ClubGuard>} />
+      <Route path="/matchday" element={<ClubGuard><Matchday /></ClubGuard>} />
+      <Route path="/live-match" element={<ClubGuard><LiveMatch /></ClubGuard>} />
+      <Route path="/transfers" element={<ClubGuard><Transfers /></ClubGuard>} />
+      <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />
+      <Route path="/season-end" element={<ClubGuard><SeasonEnd /></ClubGuard>} />
+      <Route path="/records" element={<ClubGuard><Records /></ClubGuard>} />
+      <Route path="/history" element={<ClubGuard><History /></ClubGuard>} />
+      <Route path="/settings" element={<ClubGuard><SettingsScreen /></ClubGuard>} />
+      <Route path="/admin" element={<Admin />} />
+      <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
   );
 }

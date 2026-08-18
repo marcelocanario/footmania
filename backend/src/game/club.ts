@@ -127,7 +127,10 @@ export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const excluded = new Set<number>();
   const starters: Player[] = [];
   for (const tacPos of formation) {
-    const p = pickForTacPos(available, tacPos, excluded, true);
+    // A randomly assigned formation can ask for more players in a position
+    // than a generated squad has. Fill the tactical slot from the best
+    // remaining eligible player rather than returning an empty match lineup.
+    const p = pickForTacPos(available, tacPos, excluded, true) ?? pickFallbackForTacPos(available, tacPos, excluded);
     if (p) {
       p.tacPos = tacPos;
       p.starter = true;
@@ -148,6 +151,12 @@ export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   }
   if (starters.length < 11) return null;
   return { starters, subs, formation: club.tactics.formation, positions: formation };
+}
+
+function pickFallbackForTacPos(players: Player[], tacPos: number, excluded: Set<number>): Player | null {
+  return players
+    .filter((p) => p.injuryDays === 0 && p.suspendedGames === 0 && !excluded.has(p.id))
+    .sort((a, b) => tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos) || b.overall - a.overall || b.energy - a.energy)[0] ?? null;
 }
 
 export interface SavedLineupInput {

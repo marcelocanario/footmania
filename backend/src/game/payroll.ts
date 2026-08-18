@@ -21,6 +21,12 @@ function normalizePayrollState(player: Player): void {
 /** Accrues and deducts one player's wages through `throughDay`. */
 export function settlePlayerPayroll(world: World, player: Player, throughDay = world.dayIndex): number {
   normalizePayrollState(player);
+  // Provisional and dormant clubs do not pay salaries (plan §19/§47). Their
+  // players keep accruing age/development but the wage clock stays frozen.
+  if (player.clubId !== null) {
+    const club = world.clubs.find((candidate) => candidate.id === player.clubId);
+    if (club && club.competitionState !== "ACTIVE") return 0;
+  }
   const startDay = player.payrollPaidThroughDay;
   const endDay = Math.max(startDay, Math.min(gameConfig.seasonDays, Math.trunc(throughDay)));
   const target = Math.round((player.salary * (endDay - player.payrollPeriodStartDay)) / gameConfig.seasonDays);

@@ -421,7 +421,10 @@ export function applyDevelopment(rng: RngState, player: Player, club: Club, dayI
   const base = calculateAgeDevelopment(age, player.developmentProfile.declineStartAge);
   if (Math.abs(base) < DEVELOPMENT.developmentEpsilon) return;
   const career = base * player.developmentProfile.developmentRate;
-  const activity = calculateRecentActivity(player);
+  // A provisional/dormant club cannot participate in league fixtures.  Treat
+  // that unavoidable lack of appearances as neutral rather than applying the
+  // inactive-player penalty; natural biological development still runs.
+  const activity = club.competitionState === "ACTIVE" || club.competitionState === undefined ? calculateRecentActivity(player) : 1;
   const modifier = calculateActivityModifier(career, activity);
   let budget = career * modifier * DEVELOPMENT.tickFraction;
   budget *= generateDevelopmentRandomFactor(rng, player);

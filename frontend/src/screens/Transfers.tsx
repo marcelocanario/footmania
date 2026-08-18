@@ -13,8 +13,12 @@ import { money } from "../format";
 
 type Tab = "auctions" | "free" | "loans" | "sell";
 
+function auctionEndLabel(auction: AuctionView): string {
+  return auction.endsAt ? new Date(auction.endsAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : auction.deadlineLabel;
+}
+
 export function Transfers() {
-  const { snapshot, saveId, refresh } = useGame();
+  const { snapshot, refresh } = useGame();
   const [auctions, setAuctions] = useState<AuctionView[]>([]);
   const [loans, setLoans] = useState<LoanView[]>([]);
   const [tab, setTab] = useState<Tab>("auctions");
@@ -26,6 +30,8 @@ export function Transfers() {
   const [loanTarget, setLoanTarget] = useState<LoanView | null>(null);
   const [auctionBidTarget, setAuctionBidTarget] = useState<AuctionView | null>(null);
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const toast = useRef<Toast>(null);
   const seasonsOf = (days: number) => {
     const per = snapshot?.save.seasonDays;
@@ -35,20 +41,28 @@ export function Transfers() {
   };
 
   const loadAuctions = async () => {
-    if (!saveId) return;
-    setAuctions((await api.listAuctions(saveId)).auctions);
-    setLoans((await api.listLoans(saveId)).loans);
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [auctionResult, loanResult] = await Promise.all([api.listAuctions(), api.listLoans()]);
+      setAuctions(auctionResult.auctions);
+      setLoans(loanResult.loans);
+    } catch (e) {
+      setLoadError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     loadAuctions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [saveId]);
+  }, []);
 
   const sell = async () => {
-    if (!saveId || !sellPlayer) return;
+    if (!sellPlayer) return;
     try {
-      await api.sellPlayer(saveId, sellPlayer.id, sellMode, sellMode === "fixed" ? sellPrice : undefined);
+      await api.sellPlayer(sellPlayer.id, sellMode, sellMode === "fixed" ? sellPrice : undefined);
       toast.current?.show({ severity: "success", summary: "Player listed for sale" });
       setSellPlayer(null);
       refresh();
@@ -59,9 +73,9 @@ export function Transfers() {
   };
 
   const submitBid = async () => {
-    if (!saveId || !bidTarget) return;
+    if (!bidTarget) return;
     try {
-      const res = await api.bidPlayer(saveId, bidTarget.id, bidAmount);
+      const res = await api.bidPlayer(bidTarget.id, bidAmount);
       if (res.accepted) {
         toast.current?.show({ severity: "success", summary: strings.transfers.bidAccepted });
       } else {
@@ -79,9 +93,9 @@ export function Transfers() {
   };
 
   const submitAuctionBid = async () => {
-    if (!saveId || !auctionBidTarget) return;
+    if (!auctionBidTarget) return;
     try {
-      await api.bidAuction(saveId, auctionBidTarget.id, auctionBidAmount);
+      await api.bidAuction(auctionBidTarget.id, auctionBidAmount);
       toast.current?.show({ severity: "success", summary: "Bid placed" });
       setAuctionBidTarget(null);
       loadAuctions();
@@ -91,12 +105,12 @@ export function Transfers() {
   };
 
   const takeLoan = async (loan: LoanView) => {
-    if (!saveId || !loan.player) return;
+    if (!loan.player) return;
     try {
-      await api.loanPlayer(saveId, loan.player.id, "take");
+      await api.loanPlayer(loan.player.id, "take");
       toast.current?.show({ severity: "success", summary: "Loan agreed" });
       await refresh();
-      setLoans((await api.listLoans(saveId)).loans);
+      setLoans((await api.listLoans()).loans);
       setLoanTarget(null);
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
@@ -126,9 +140,18 @@ export function Transfers() {
         />
       </div>
 
+      {loadError && (
+        <div className="card" style={{ color: "var(--danger, #d66)" }}>
+          Could not load transfer listings: {loadError}
+          <button className="btn ghost" style={{ marginLeft: 10 }} onClick={() => void loadAuctions()}>Retry</button>
+        </div>
+      )}
+
       {tab === "auctions" && (
         <div className="card">
-          {auctions.length === 0 ? (
+          {loading ? (
+            <div className="empty-state">{strings.common.loading}</div>
+          ) : auctions.length === 0 ? (
             <div className="empty-state">
               <span style={{ fontSize: 26 }}>🔨</span>
               No auctions right now. Check back after the next match day.
@@ -146,7 +169,7 @@ export function Transfers() {
                     <div style={{ color: "var(--text-3)", fontSize: "0.86rem", marginTop: 5 }}>
                       {a.age} yrs · Salary <b style={{ color: "var(--text-2)" }}>{money(a.salary)}/season</b> · Min bid <b style={{ color: "var(--text-2)" }}>{money(a.minBid)}</b> · Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentBid)}</b>
                     </div>
-                    <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>Ends {a.deadlineLabel}</div>
+                    <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>Ends {auctionEndLabel(a)}</div>
                     {a.myBid > 0 && <div style={{ color: "var(--grass-2)", fontSize: "0.84rem", marginTop: 4 }}>Your bid: {money(a.myBid)}</div>}
                   </div>
                   <button className="btn" onClick={() => { setAuctionBidTarget(a); setAuctionBidAmount(Math.max(a.minBid, a.currentBid + 1000)); }}>
@@ -188,7 +211,7 @@ export function Transfers() {
 
       {tab === "loans" && (
         <div className="card">
-          {loans.length === 0 ? <div className="empty-state">No players are currently listed for loan.</div> : (
+          {loading ? <div className="empty-state">{strings.common.loading}</div> : loans.length === 0 ? <div className="empty-state">No players are currently listed for loan.</div> : (
             <div className="grid stagger">
               {loans.map((loan) => loan.player && (
                 <div className="card hoverable" key={loan.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>

@@ -7,7 +7,7 @@ import { strings } from "../strings";
 import { money, num } from "../format";
 
 export function Finances() {
-  const { snapshot, saveId, refresh } = useGame();
+  const { snapshot, refresh } = useGame();
   const [income, setIncome] = useState<LedgerEntry[]>([]);
   const [expense, setExpense] = useState<LedgerEntry[]>([]);
   const [busy, setBusy] = useState(false);
@@ -16,24 +16,24 @@ export function Finances() {
   const toast = useRef<Toast>(null);
 
   useEffect(() => {
-    if (!saveId) return;
+    if (false) return;
     void (async () => {
-      const res = await api.finances(saveId);
+      const res = await api.finances();
       setIncome(res.income);
       setExpense(res.expense);
-      const financeDetails = await api.financeDetails(saveId);
+      const financeDetails = await api.financeDetails();
       setDetails(financeDetails);
       setPrices([...financeDetails.ticketPrices]);
     })();
-  }, [saveId, snapshot?.club?.cash]);
+  }, [snapshot?.club?.cash]);
 
   const club = snapshot?.club;
 
   const savePrices = async () => {
-    if (!saveId || prices.length !== 4) return;
+    if (prices.length !== 4) return;
     setBusy(true);
     try {
-      await api.setTicketPrices(saveId, prices as [number, number, number, number]);
+      await api.setTicketPrices(prices as [number, number, number, number]);
       toast.current?.show({ severity: "success", summary: "Ticket prices updated" });
       await refresh();
     } catch (e) {
@@ -44,13 +44,13 @@ export function Finances() {
   };
 
   const upgrade = async () => {
-    if (!saveId) return;
+    if (false) return;
     setBusy(true);
     try {
-      await api.startStadiumUpgrade(saveId);
+      await api.startStadiumUpgrade();
       toast.current?.show({ severity: "success", summary: "Stadium expansion started" });
       await refresh();
-      setDetails(await api.financeDetails(saveId));
+      setDetails(await api.financeDetails());
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     } finally {

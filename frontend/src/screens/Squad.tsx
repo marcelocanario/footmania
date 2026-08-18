@@ -45,7 +45,7 @@ type Tab = "seniors" | "juniors" | "tactics";
 type TrainingFocus = "assistant" | "primary" | "secondary";
 
 export function Squad() {
-  const { snapshot, saveId, refresh } = useGame();
+  const { snapshot, refresh } = useGame();
   const isMobile = useIsMobile();
   const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
   const [selected, setSelected] = useState<PlayerView | null>(null);
@@ -78,7 +78,7 @@ export function Squad() {
     setRenewSalary(p.salary);
     setRenewDemand(p.salary);
     setRenewDemandsBySeason({});
-    if (saveId) void api.contractDemand(saveId, p.id).then((res) => {
+    if (snapshot) void api.contractDemand(p.id).then((res) => {
       setRenewDemandsBySeason(res.demandsBySeason ?? {});
       setRenewDemand(res.demandsBySeason?.[1] ?? res.salary);
       setRenewSalary(res.demandsBySeason?.[1] ?? res.salary);
@@ -87,9 +87,9 @@ export function Squad() {
   };
 
   const renew = async () => {
-    if (!saveId || !selected) return;
+    if (!selected) return;
     try {
-      await api.renewContract(saveId, selected.id, renewSeasons, renewSalary);
+      await api.renewContract(selected.id, renewSeasons, renewSalary);
       toast.current?.show({ severity: "success", summary: strings.squad.contractDone });
       setShowRenew(false);
       refresh();
@@ -99,9 +99,9 @@ export function Squad() {
   };
 
   const saveTrainingFocus = async (focus: TrainingFocus) => {
-    if (!saveId) return;
+    if (false) return;
     try {
-      await api.setTrainingFocus(saveId, focus);
+      await api.setTrainingFocus(focus);
       setTrainingFocus(focus);
       toast.current?.show({ severity: "success", summary: "Training focus saved" });
       await refresh();
@@ -111,9 +111,9 @@ export function Squad() {
   };
 
   const saveTactics = async () => {
-    if (!saveId) return;
+    if (false) return;
     try {
-      await api.setTactics(saveId, { style: tactics.style, pressing: tactics.pressing, direction: tactics.direction });
+      await api.setTactics({ style: tactics.style, pressing: tactics.pressing, direction: tactics.direction });
       toast.current?.show({ severity: "success", summary: "Tactics saved" });
       refresh();
     } catch (e) {
@@ -122,10 +122,10 @@ export function Squad() {
   };
 
   const loanAction = async (p: PlayerView) => {
-    if (!saveId) return;
+    if (false) return;
     const action = p.loanId === null ? "offer" : "recall";
     try {
-      await api.loanPlayer(saveId, p.id, action);
+      await api.loanPlayer(p.id, action);
       toast.current?.show({ severity: "success", summary: action === "offer" ? "Player listed for loan" : "Player recalled" });
       await refresh();
     } catch (e) {
@@ -151,12 +151,12 @@ export function Squad() {
   };
 
   const academyAction = async (p: PlayerView, action: "promote" | "dismiss") => {
-    if (!saveId) return;
+    if (false) return;
     confirm(
       action === "promote" ? "Promote player" : "Release from academy",
       action === "promote" ? `Promote ${p.name} to the senior squad?` : `Release ${p.name} from the youth academy?`,
       async () => {
-        await api.academyAction(saveId, p.id, action);
+        await api.academyAction(p.id, action);
         toast.current?.show({ severity: "success", summary: action === "promote" ? "Player promoted" : "Player released" });
         await refresh();
       }
@@ -164,12 +164,12 @@ export function Squad() {
   };
 
   const releasePlayer = (p: PlayerView) => {
-    if (!saveId) return;
+    if (false) return;
     confirm(
       strings.squad.release,
       strings.squad.releaseConfirm.replace("{{name}}", p.name),
       async () => {
-        const res = await api.releasePlayer(saveId, p.id);
+        const res = await api.releasePlayer(p.id);
         toast.current?.show({
           severity: "success",
           summary: strings.squad.releaseDone,

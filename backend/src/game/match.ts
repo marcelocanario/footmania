@@ -22,7 +22,7 @@ import { injuryDays } from "./player";
 import { TACTICAL_RATING_WEIGHTS, tacticalSkillRating } from "./rating";
 
 export interface RatingContext {
-  kind: "league" | "cup" | "state";
+  kind: "league" | "cup" | "state" | "division";
   homeRep: number;
   awayRep: number;
   awayClubId: number;
@@ -273,6 +273,10 @@ interface LiveRuntime {
   playerMinutes: Record<number, number>;
 }
 
+function humanControlled(club: Club): boolean {
+  return club.isHuman || club.ownerUserId !== null;
+}
+
 function event(type: number, subtype: number, minute: number, half: number, clubId: number, playerId: number | null, player2Id: number | null, goalType: number): MatchEvent {
   return { minute, half, type, subtype, clubId, playerId, player2Id, goalType };
 }
@@ -369,7 +373,7 @@ function tiredSub(rng: RngState, lm: LiveRuntime, side: number, minute: number, 
 // I.java m() — halftime / tactical / tired substitution slots (AI clubs only).
 function maybeTacticalSub(rng: RngState, lm: LiveRuntime, minute: number) {
   let homeSubbed = false;
-  if (!lm.home.isHuman && lm.usedSubs[0] < 5) {
+  if (!humanControlled(lm.home) && lm.usedSubs[0] < 5) {
     if (minute === 0) {
       if (lm.scores[1] - lm.scores[0] >= 1 && nextInt(rng, 100) > 50) {
         homeSubbed = randomOutfieldSub(rng, lm, 0, 0, 1);
@@ -383,7 +387,7 @@ function maybeTacticalSub(rng: RngState, lm: LiveRuntime, minute: number) {
     }
   }
   if (homeSubbed) return;
-  if (!lm.away.isHuman && lm.usedSubs[1] < 5) {
+  if (!humanControlled(lm.away) && lm.usedSubs[1] < 5) {
     if (minute === 0) {
       if (lm.scores[0] - lm.scores[1] >= 2 && nextInt(rng, 100) > 50) {
         randomOutfieldSub(rng, lm, 1, 0, 1);
@@ -402,7 +406,7 @@ function maybeTacticalSub(rng: RngState, lm: LiveRuntime, minute: number) {
 function maybeO(rng: RngState, lm: LiveRuntime, half: number, minute: number) {
   const n5 = minute < 10 ? 95 : minute < 30 ? 80 : minute < 40 ? 60 : 40;
   if (nextInt(rng, 100) + 1 <= n5) return;
-  if (!lm.home.isHuman && lm.usedSubs[0] < 5) {
+  if (!humanControlled(lm.home) && lm.usedSubs[0] < 5) {
     for (const p of lm.homeOn) {
       if (p.tacPos !== 1) {
         if (p.energy < 75) {
@@ -415,7 +419,7 @@ function maybeO(rng: RngState, lm: LiveRuntime, half: number, minute: number) {
       }
     }
   }
-  if (!lm.away.isHuman && lm.usedSubs[1] < 5) {
+  if (!humanControlled(lm.away) && lm.usedSubs[1] < 5) {
     for (const p of lm.awayOn) {
       if (p.tacPos !== 1) {
         if (p.energy < 75) {
@@ -432,7 +436,7 @@ function maybeO(rng: RngState, lm: LiveRuntime, half: number, minute: number) {
 
 function autoSubAfterCard(rng: RngState, lm: LiveRuntime, side: number, minute: number, half: number, sentOff: Player) {
   const club = side === 0 ? lm.home : lm.away;
-  if (club.isHuman || lm.usedSubs[side] >= 5) return;
+  if (humanControlled(club) || lm.usedSubs[side] >= 5) return;
   if (sentOff.tacPos > 13) return;
   const on = side === 0 ? lm.homeOn : lm.awayOn;
   if (on.length === 0) return;
@@ -448,7 +452,7 @@ function autoSubAfterCard(rng: RngState, lm: LiveRuntime, side: number, minute: 
 
 function autoSubAfterInjury(rng: RngState, lm: LiveRuntime, side: number, minute: number, half: number, injured: Player) {
   const club = side === 0 ? lm.home : lm.away;
-  if (club.isHuman || lm.usedSubs[side] >= 5) return;
+  if (humanControlled(club) || lm.usedSubs[side] >= 5) return;
   const bench = side === 0 ? lm.homeSubs : lm.awaySubs;
   const inP = bestBenchForTacPos(bench, injured.tacPos, injured.position === 0);
   if (!inP) return;
@@ -510,7 +514,7 @@ function doCardOrInjury(rng: RngState, lm: LiveRuntime, half: number, minute: nu
       const days = injuryDays(rng, p);
       p.injuryDays = days;
       lm.events.push(event(EVENT_CODES.INJURY, 0, minute, half, club.id, p.id, null, days));
-      if (!club.isHuman) {
+      if (!humanControlled(club)) {
         removeFromPitch(on, p.id);
         autoSubAfterInjury(rng, lm, side, minute, half, p);
       }
@@ -552,7 +556,7 @@ function shotDuel(rng: RngState, lm: LiveRuntime, ctx: RatingContext): number {
   if (attStr === 0) dAtt = 0.1;
   if (dAtt < 0.2) dAtt = 0.2;
   if (dDef < 0.2) dDef = 0.2;
-  if (lm.home.isHuman || lm.away.isHuman) {
+  if (humanControlled(lm.home) || humanControlled(lm.away)) {
     const cbs = cbCount(defSide === 0 ? lm.homeOn : lm.awayOn);
     if (cbs === 0) dDef = 0.1;
     else if (cbs === 1) dDef = 0.05;
@@ -575,7 +579,7 @@ function shotResolution(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half
   const div = shotDiv(lm.year);
   let d6 = 1 + (gk - shooterRating) / div;
   let d7 = 1 + (defStr - attStr) / div;
-  if (lm.home.isHuman || lm.away.isHuman) {
+  if (humanControlled(lm.home) || humanControlled(lm.away)) {
     const cbs = cbCount(defList);
     if (cbs === 0) d6 = Math.round(d6 * 0.2);
     else if (cbs === 1) d6 = Math.round(d6 * 0.4);
@@ -634,7 +638,7 @@ function scoreGoal(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half: num
   } else if (gType === GOAL_SUBTYPES.PENALTY) {
     const taker = attList.find((p) => p.id === club.penaltyTakerId) ?? shooter;
     scorer = taker;
-    if (lm.home.isHuman || lm.away.isHuman) {
+    if (humanControlled(lm.home) || humanControlled(lm.away)) {
       if (nextInt(rng, 100) >= 85) {
         const ev = event(EVENT_CODES.MISSED_PENALTY, GOAL_SUBTYPES.PENALTY, minute, half, club.id, scorer.id, null, GOAL_SUBTYPES.PENALTY);
         lm.events.push(ev);
@@ -685,7 +689,7 @@ function updatePossession(lm: LiveRuntime) {
 function resolveMinute(rng: RngState, lm: LiveRuntime, half: number, minute: number): MatchEvent | null {
   if (minute % 7 === 0) fatigue(lm, half);
   doCardOrInjury(rng, lm, half, minute);
-  if (lm.home.isHuman || lm.away.isHuman) maybeO(rng, lm, half, minute);
+  if (humanControlled(lm.home) || humanControlled(lm.away)) maybeO(rng, lm, half, minute);
   const ctx = lm.ctx;
   const ballSide = lm.withBall;
   const offSide = 1 - ballSide;
@@ -744,7 +748,7 @@ export interface LiveCreateOpts {
   fixtureId: number;
   homeNeutral?: boolean;
   decider?: boolean;
-  compKind?: "league" | "cup" | "state";
+  compKind?: "league" | "cup" | "state" | "division";
   year?: number;
 }
 
@@ -797,6 +801,7 @@ export function createLiveMatchState(
     suspensionClears,
     playerMinutes,
     ended: false,
+    lastAdvancedAt: Date.now(),
   };
 }
 
@@ -949,6 +954,34 @@ function tickRuntime(rng: RngState, st: LiveMatchState, lm: LiveRuntime, minutes
     st.minute++;
     remaining--;
   }
+  // A time-based worker can land exactly on a half/full-time boundary. Process
+  // that boundary without consuming an extra match minute, otherwise an
+  // unattended match would wait for one more worker interval to transition.
+  while (!st.ended && st.minute >= (st.half === 0 ? st.firstHalfLen : st.secondHalfLen)) {
+    if (st.half === 0) {
+      if (st.extraTimePlayed) {
+        st.half = 1;
+        st.minute = 0;
+      } else {
+        maybeTacticalSub(rng, lm, 0);
+        st.half = 1;
+        st.minute = 0;
+        if (!opts?.ignoreHalfTime) break;
+      }
+      continue;
+    }
+    if (st.extraTimePlayed) {
+      finishMatchState(rng, lm, st, newEvents);
+    } else if (st.decider && lm.scores[0] === lm.scores[1]) {
+      st.extraTimePlayed = true;
+      st.half = 0;
+      st.minute = 0;
+      st.firstHalfLen = 15;
+      st.secondHalfLen = 15;
+    } else {
+      finishMatchState(rng, lm, st, newEvents);
+    }
+  }
   writeBackState(lm, st);
   return { events: newEvents, finished: st.ended, atHalfTime: false };
 }
@@ -1044,6 +1077,7 @@ export interface SimulatedMatch {
   match: Match;
   homeGoals: number;
   awayGoals: number;
+  suspensionClears: number[];
 }
 
 export function simulateMatch(
@@ -1051,7 +1085,7 @@ export function simulateMatch(
   home: Club,
   away: Club,
   allPlayers: Player[],
-  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state"; year?: number }
+  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number }
 ): SimulatedMatch {
   const st = createLiveMatchState(rng, home, away, allPlayers, {
     matchId: opts.fixtureId,
@@ -1064,7 +1098,7 @@ export function simulateMatch(
   });
   tickLiveMatch(rng, home, away, allPlayers, st, 500, { ignoreHalfTime: true });
   const match = matchFromRuntime(st, runtimeFromState(st, home, away, allPlayers), { competitionId: opts.competitionId, fixtureId: opts.fixtureId });
-  return { match, homeGoals: st.scores[0], awayGoals: st.scores[1] };
+  return { match, homeGoals: st.scores[0], awayGoals: st.scores[1], suspensionClears: st.suspensionClears };
 }
 
 export interface LiveSubResult {
