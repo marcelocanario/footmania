@@ -1,7 +1,7 @@
 import { gameConfig, MP_CONFIG } from "../config";
 
 /**
- * Server-authoritative global clock (plans/multiplayer.md §3).
+ * Server-authoritative global clock (plans/1. multiplayer.md §3).
  *
  * Time model:
  * - A season is one calendar month (e.g. 2026-08).

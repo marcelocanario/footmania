@@ -31,7 +31,6 @@ export interface PlayerView {
   tacPos: number;
   tacPosName: string;
   overall: number;
-  potential: number;
   tier: number;
   skills: SkillSet;
   energy: number;
@@ -49,7 +48,6 @@ export interface PlayerView {
   characteristic1: number;
   characteristic2: number;
   onSale: boolean;
-  salePrice: number | null;
   suspended: boolean;
   suspendedGames: number;
   morale: number;
@@ -59,7 +57,6 @@ export interface PlayerView {
   onLoanOut: boolean;
   loanClubName: string | null;
   loanFromName: string | null;
-  signingBonus?: number;
 }
 
 export interface ClubView {
@@ -67,15 +64,13 @@ export interface ClubView {
   name: string;
   shortName: string;
   country: string;
-  level: number;
+  highestDivision: number;
   cash: number;
   stadiumName: string;
   stadiumCapacity: number;
   primaryColor: string;
   secondaryColor: string;
   coachName: string;
-  boardConfidence: number;
-  fanConfidence: number;
   trainingFocus: "assistant" | "primary" | "secondary";
   competitionState?: string;
   tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string } | null;
@@ -101,7 +96,7 @@ export interface MpStatus {
     name: string;
     shortName: string;
     country: string;
-    level: number;
+    highestDivision: number;
     cash: number;
     competitionState: string;
     timezone: string | null;
@@ -216,17 +211,19 @@ export interface LoanView {
   startDay: number;
   endDay: number;
   recalled: boolean;
+  listedAt: number;
+  claimableAt: number;
   player: PlayerView | null;
   fromClub: string;
   toClub: string | null;
   available: boolean;
+  claimableIn: number;
 }
 
 export interface FinanceDetails {
   ticketPrices: [number, number, number, number];
   ticketBounds: { min: number; max: number }[];
   stadiumUpgrade: { clubId: number; startedDay: number; completesDay: number; newCapacity: number; cost: number; completed: boolean } | null;
-  tvDeal: { clubId: number; season: number; baseAmount: number; positionBonus: number } | null;
   records: CareerRecord[];
   awards: SeasonAward[];
 }
@@ -247,14 +244,43 @@ export interface AuctionView {
   age: number;
   salary: number;
   skills: SkillSet;
-  minBid: number;
-  deadlineDay: number;
-  deadlineLabel: string;
-  startsAt: number | null;
-  endsAt: number | null;
-  currentBid: number;
-  sellerClubId: number | null;
-  myBid: number;
+  value: number;
+  openingPrice: number;
+  currentPrice: number;
+  bidIncrement: number;
+  bidderCount: number;
+  sellerClubId: number;
+  sellerName: string;
+  deadline: number;
+  originalDeadline: number;
+  status: string;
+  completedAt: number | null;
+  winningClubId: number | null;
+  finalPrice: number | null;
+  myMaxBid: number | null;
+  amILeading: boolean;
+}
+
+export interface FreeAgentView {
+  id: number;
+  playerId: number;
+  playerName: string;
+  overall: number;
+  position: number;
+  age: number;
+  salary: number;
+  contractDays: number;
+  skills: SkillSet;
+  value: number;
+  openingPrice: number;
+  currentPrice: number;
+  bidIncrement: number;
+  bidderCount: number;
+  deadline: number;
+  relistStage: number;
+  status: string;
+  myMaxBid: number | null;
+  amILeading: boolean;
 }
 
 export interface LivePlayer {
@@ -426,13 +452,27 @@ export const api = {
   competitionFixtures: (compId: number) =>
     request<{ competition: { id: number; name: string }; fixtures: { id: number; round: number; roundLabel: string; leg: number; home: string; away: string; dayLabel: string; dayIndex: number; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[] }>(`/api/competitions/${compId}/fixtures`),
 
-  sellPlayer: (playerId: number, mode: "auction" | "fixed", price?: number) =>
-    request<{ ok: boolean; listingId?: number; price?: number }>("/api/transfers/sell", { method: "POST", body: JSON.stringify({ playerId, mode, price }) }),
-  bidPlayer: (playerId: number, bid: number) =>
-    request<{ accepted: boolean; price?: number; counter?: number; signingBonus?: number }>("/api/transfers/bid", { method: "POST", body: JSON.stringify({ playerId, bid }) }),
+  sellPlayer: (playerId: number, openingPrice?: number) =>
+    request<{ ok: boolean; listingId?: number; openingPrice?: number }>("/api/transfers/auctions", { method: "POST", body: JSON.stringify({ playerId, openingPrice }) }),
   listAuctions: () => request<{ auctions: AuctionView[] }>("/api/transfers/auctions"),
-  bidAuction: (listingId: number, amount: number) =>
-    request<{ ok: boolean; currentBid: number }>(`/api/auctions/${listingId}/bid`, { method: "POST", body: JSON.stringify({ amount }) }),
+  listFreeAgents: () => request<{ signings: FreeAgentView[] }>("/api/transfers/free-agents"),
+  bidFreeAgent: (listingId: number, maxBid: number) =>
+    request<{ ok: boolean; currentPrice: number; leading: boolean }>(`/api/transfers/free-agents/${listingId}/bid`, { method: "POST", body: JSON.stringify({ maxBid }) }),
+  bidAuction: (listingId: number, maxBid: number) =>
+    request<{ ok: boolean; currentPrice: number; leading: boolean }>(`/api/transfers/auctions/${listingId}/bid`, { method: "POST", body: JSON.stringify({ maxBid }) }),
+  cancelAuction: (listingId: number) =>
+    request<{ ok: boolean }>(`/api/transfers/auctions/${listingId}/cancel`, { method: "POST" }),
+  auctionPreview: (playerId: number) =>
+    request<{
+      playerId: number;
+      value: number;
+      baseValue: number;
+      openingPriceRange: { min: number; max: number };
+      cooldownError: string | null;
+      alreadyListed: boolean;
+    }>(
+      `/api/transfers/auctions/preview?playerId=${playerId}`
+    ),
 
   renewContract: (playerId: number, length: number, salary: number) =>
     request<{ ok: boolean }>(`/api/players/${playerId}/contract`, { method: "POST", body: JSON.stringify({ length, salary }) }),

@@ -14,7 +14,7 @@ import { generatePlayer, refreshPlayerDerived } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import { contractCycle, promoteYouthPlayer, rolloverSeason } from "../src/game/season";
 import { settlePayroll } from "../src/game/season";
-import { transferPlayer } from "../src/game/transfers";
+import { applyMaxBid, createTransferAuction, settleTransferAuction } from "../src/game/market";
 import { gameConfig } from "../src/config";
 import { makeClub, makeWorld } from "./helpers";
 
@@ -267,6 +267,7 @@ describe("season timing", () => {
     const buyer = { ...makeClub(), id: 2, name: "Buyer FC", isHuman: false };
     const p = generatePlayer(createRng(18), seller, { id: 1 });
     p.salary = 100_000;
+    p.value = 2_000_000;
     p.payrollPaidThroughDay = 0;
     p.payrollPaidAmount = 0;
     const world = makeWorld([seller, buyer], [p]);
@@ -276,13 +277,23 @@ describe("season timing", () => {
     world.dayIndex = 10;
     // The transfer path settles seller wages through day 10 and resets the
     // player's payroll period before the buyer takes ownership.
-    expect(transferPlayer(world, p, buyer, 0)).toBe(true);
-    expect(seller.cash).toBe(sellerAfterCycle - Math.round(100_000 * 3 / gameConfig.seasonDays));
+    const listed = createTransferAuction(world, { player: p, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
+    if (!listed.ok) throw new Error(listed.error);
+    const bid = applyMaxBid(world, { listing: listed.listing, club: buyer, player: p, proposedMaximum: 2_100_000, buyerDivision: 1, safeMarketBudget: 50_000_000 });
+    expect(bid.ok).toBe(true);
+    const settleAt = Date.now();
+    listed.listing.deadline = settleAt - 1;
+    const settled = settleTransferAuction(world, listed.listing, settleAt);
+    expect(settled.ok).toBe(true);
+    // Seller receives the final price (opening 2M for a single bid) minus the
+    // seller's prorated wages through day 10.
+    const fee = listed.listing.openingPrice;
+    expect(seller.cash).toBe(sellerAfterCycle + fee - Math.round(100_000 * 3 / gameConfig.seasonDays));
     world.dayIndex = 14;
     settlePayroll(world.rng, world);
-    expect(seller.cash).toBe(sellerAfterCycle - Math.round(100_000 * 3 / gameConfig.seasonDays));
+    expect(seller.cash).toBe(sellerAfterCycle + fee - Math.round(100_000 * 3 / gameConfig.seasonDays));
     expect(buyer.ledger.expense.filter((e) => e.code === 4).reduce((sum, e) => sum + e.amount, 0)).toBe(
-      Math.round(100_000 * 14 / gameConfig.seasonDays) - Math.round(100_000 * 10 / gameConfig.seasonDays)
+      Math.round(100_000 * (14 - 10) / gameConfig.seasonDays)
     );
   });
 });

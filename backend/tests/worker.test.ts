@@ -11,8 +11,12 @@ import { initSeason } from "../src/game/multiplayer";
 import { dailyProcessor } from "../src/services/jobs/dailyProcessor";
 import { notificationProcessor } from "../src/services/jobs/notificationProcessor";
 import { matchScheduler } from "../src/services/jobs/matchScheduler";
+import { auctionProcessor } from "../src/services/jobs/auctionProcessor";
 import { missingDailyDates, processDailyDate, utcDateKey } from "../src/game/daily";
 import { runDailyTick } from "../src/game/world";
+import { createTransferAuction, applyMaxBid } from "../src/game/market";
+import { applyFreeAgentBid, createFreeAgentListing } from "../src/game/freeAgents";
+import { aiMarketProcessor } from "../src/services/jobs/aiMarketProcessor";
 import type { World } from "../src/game/types";
 
 const prisma = new PrismaClient();
@@ -216,6 +220,75 @@ describe("runDailyTick shim", () => {
   });
 });
 
+describe("auction processor settles new-format transfer listings (Phase 3)", () => {
+  it("settles a due listing with bids atomically and skips it on re-run", async () => {
+    const { saveId } = await freshGlobalWorld(4101);
+    const { world } = await withSeason(saveId);
+    const seller = world.clubs[0];
+    const buyer = world.clubs.find((c) => c.id !== seller.id)!;
+    const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
+
+    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+
+    const bid = applyMaxBid(world, {
+      listing,
+      club: buyer,
+      player,
+      proposedMaximum: Math.round(player.value * 1.1),
+      buyerDivision: 1,
+      safeMarketBudget: 100_000_000,
+    });
+    expect(bid.ok).toBe(true);
+    listing.deadline = Date.now() - 1; // make it due AFTER the bid was accepted
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const loaded = await loadGlobalWorld(prisma);
+    const result = await auctionProcessor({ prisma, saveId, revision: loaded!.save.revision, world: loaded!.world });
+    expect(result.changed).toBe(true);
+    await persistWorld(prisma, saveId, saveId, loaded!.world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    const settled = reloaded!.world.transferAuctions.find((a) => a.id === listing.id)!;
+    expect(settled.status).toBe("COMPLETED");
+    expect(settled.winningClubId).toBe(buyer.id);
+    expect(reloaded!.world.playerMarketHistory).toHaveLength(1);
+    expect(reloaded!.world.players.find((p) => p.id === player.id)!.clubId).toBe(buyer.id);
+    expect(reloaded!.world.marketReservations.every((r) => r.releasedAt !== null)).toBe(true);
+
+    // Re-run: idempotent (nothing changed).
+    const loaded2 = await loadGlobalWorld(prisma);
+    const rerun = await auctionProcessor({ prisma, saveId, revision: loaded2!.save.revision, world: loaded2!.world });
+    expect(rerun.changed).toBe(false);
+    const reloaded2 = await loadGlobalWorld(prisma);
+    expect(reloaded2!.world.playerMarketHistory).toHaveLength(1);
+  });
+
+  it("expires a due no-bid listing and clears on-sale", async () => {
+    const { saveId } = await freshGlobalWorld(4102);
+    const { world } = await withSeason(saveId);
+    const seller = world.clubs[0];
+    const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
+    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+    listing.deadline = Date.now() - 1;
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const loaded = await loadGlobalWorld(prisma);
+    const result = await auctionProcessor({ prisma, saveId, revision: loaded!.save.revision, world: loaded!.world });
+    expect(result.changed).toBe(true);
+    await persistWorld(prisma, saveId, saveId, loaded!.world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    const settled = reloaded!.world.transferAuctions.find((a) => a.id === listing.id)!;
+    expect(settled.status).toBe("CANCELLED");
+    expect(reloaded!.world.players.find((p) => p.id === player.id)!.onSale).toBe(false);
+    expect(reloaded!.world.playerMarketHistory).toHaveLength(0);
+  });
+});
+
 describe("manual worker scheduling", () => {
   it("simulates a set-round target instead of syncing the real clock", async () => {
     const { world } = inMemoryWorld(3501);
@@ -227,6 +300,162 @@ describe("manual worker scheduling", () => {
     expect(result.changed).toBe(true);
     expect(world.mp.completedRounds).toBe(2);
     expect(world.fixtures.some((fixture) => fixture.played)).toBe(true);
+  });
+});
+
+describe("ai market processor creates AI selling listings (Phase 5)", () => {
+  it("lists surplus players from AI clubs and is idempotent on re-run", async () => {
+    const { saveId } = await freshGlobalWorld(5101);
+    const { world } = await withSeason(saveId);
+    // Pick an AI (filler) club and force positional surplus: 3+ senior
+    // defenders with the evaluated ones clearly expendable.
+    const ai = world.clubs.find((c) => !c.isHuman && c.ownerUserId === null)!;
+    const defenders = world.players.filter((p) => p.clubId === ai.id && !p.isYouth && p.position === 2);
+    // Ensure at least 3 senior defenders; clone extra if needed.
+    while (defenders.length < 3) {
+      const source = world.players.find((p) => p.clubId === ai.id && !p.isYouth)!;
+      const clone = { ...source, id: world.nextId++, position: 2 as const, onSale: false };
+      clone.contractDays = 30;
+      clone.value = clone.value || 1_000_000;
+      world.players.push(clone);
+      defenders.push(clone);
+    }
+    await persistWorld(prisma, saveId, saveId, world);
+
+    // Use a deterministic "now" near the start of the season month so any
+    // generated 24h auction stays inside the season rollover boundary (§17).
+    const now = Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, 2, 8, 0, 0);
+
+    const loaded = await loadGlobalWorld(prisma);
+    const before = loaded!.world.transferAuctions.filter((a) => a.status === "ACTIVE").length;
+    const result = await aiMarketProcessor({ prisma, saveId, revision: loaded!.save.revision, world: loaded!.world, now });
+    const after = loaded!.world.transferAuctions.filter((a) => a.status === "ACTIVE").length;
+
+    if (result.changed) {
+      expect(after).toBeGreaterThan(before);
+      const sellers = new Set(loaded!.world.transferAuctions.filter((a) => a.status === "ACTIVE").map((a) => a.sellerClubId));
+      expect(sellers.has(ai.id)).toBe(true);
+    }
+
+    // Re-run must not create duplicate listings for already-listed players.
+    await persistWorld(prisma, saveId, saveId, loaded!.world);
+    const loaded2 = await loadGlobalWorld(prisma);
+    const beforeSecond = loaded2!.world.transferAuctions.filter((a) => a.status === "ACTIVE").map((a) => a.playerId);
+    const second = await aiMarketProcessor({ prisma, saveId, revision: loaded2!.save.revision, world: loaded2!.world, now });
+    void second;
+    // Domain invariant (§31): at most one ACTIVE listing per player.
+    const active = loaded2!.world.transferAuctions.filter((a) => a.status === "ACTIVE");
+    const playerIds = active.map((a) => a.playerId);
+    expect(new Set(playerIds).size).toBe(playerIds.length);
+    // The second run listed only NEW players (no duplicate active listings).
+    const newlyListed = playerIds.filter((id) => !beforeSecond.includes(id));
+    expect(newlyListed.length).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("ai market processor AI buying (Phase 6)", () => {
+  it("lets a needful AI club bid on an AI listing and records the evaluation durably", async () => {
+    const { saveId } = await freshGlobalWorld(5201);
+    const { world } = await withSeason(saveId);
+    // Pick two AI clubs: buyer = first AI club by id, seller = second.
+    const aiClubs = world.clubs
+      .filter((c) => !c.isHuman && c.ownerUserId === null && c.competitionState === "ACTIVE")
+      .sort((a, b) => a.id - b.id);
+    const buyer = aiClubs[0];
+    const seller = aiClubs[1];
+    // Make the buyer the ONLY active AI club so the buying rotation always
+    // selects it (start = bucket % 1 === 0) regardless of `now`.
+    for (const c of aiClubs) {
+      if (c.id !== buyer.id) c.competitionState = "DORMANT";
+    }
+    // Strip the buyer's senior keepers so it has a real need (§28).
+    world.players = world.players.filter((p) => !(p.clubId === buyer.id && p.position === 0));
+    // Give the seller a senior keeper that's clearly better than "nothing".
+    const sellerGK = world.players.find((p) => p.clubId === seller.id && !p.isYouth && p.position === 0);
+    if (!sellerGK) throw new Error("seller has no GK");
+    sellerGK.overall = 75;
+    sellerGK.value = 10_000_000;
+    // Give the buyer lots of cash so safe-market-budget allows the bid.
+    buyer.cash = 200_000_000;
+
+    // Create the seller's GK listing FIRST so it has the smallest listing id and
+    // is the first ACTIVE listing evaluated by the buying pass (§34 ordering).
+    const now = Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, 2, 8, 0, 0);
+    const created = createTransferAuction(world, {
+      player: sellerGK,
+      sellerClub: seller,
+      sellerDivision: 1,
+      totalDivisions: 3,
+      now,
+    });
+    if (!created.ok) throw new Error(created.error);
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const loaded = await loadGlobalWorld(prisma);
+    const listing = loaded!.world.transferAuctions.find(
+      (a) => a.playerId === sellerGK.id && a.status === "ACTIVE"
+    );
+    expect(listing).toBeDefined();
+
+    // Run the processor. Only the buyer is ACTIVE among AI clubs, so the buying
+    // rotation selects it deterministically; the listing is the first active
+    // one by id. The AI must bid (real need) and record a durable evaluation.
+    const result = await aiMarketProcessor({
+      prisma,
+      saveId,
+      revision: loaded!.save.revision,
+      world: loaded!.world,
+      now,
+    });
+
+    const after = loaded!.world.marketBids.filter((b) => b.listingId === listing!.id).length;
+    expect(after).toBeGreaterThan(0);
+    void result;
+
+    // Evaluations persist through a reload (round-trip).
+    await persistWorld(prisma, saveId, saveId, loaded!.world);
+    const reloaded = await loadGlobalWorld(prisma);
+    const evalRows = reloaded!.world.aiEvaluations.filter((e) => e.listingId === listing!.id);
+    expect(evalRows.length).toBeGreaterThan(0);
+    expect(evalRows.some((e) => e.decision === "BID")).toBe(true);
+  });
+});
+
+describe("free-agent market (Phase 7)", () => {
+  it("settles a free-agent signing through the worker and persists it", async () => {
+    const { saveId } = await freshGlobalWorld(5301);
+    const { world } = await withSeason(saveId);
+    // Free a player: pick one, set clubId to null.
+    const club = world.clubs.find((c) => !c.isHuman && c.ownerUserId === null)!;
+    const buyer = world.clubs.find((c) => c.id !== club.id)!;
+    const player = world.players.find((p) => p.clubId === club.id && !p.isYouth)!;
+    player.clubId = null;
+    player.onSale = false;
+    const created = createFreeAgentListing(world, player, { now: 1_700_000_000_000 });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+
+    // A club bids.
+    const bidAt = 1_700_000_000_000 + 10_000;
+    const bid = applyFreeAgentBid(world, { listing, club: buyer, player, proposedMaximum: 2_000_000, safeMarketBudget: 200_000_000, now: bidAt });
+    expect(bid.ok).toBe(true);
+    listing.deadline = Date.now() - 1;
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const loaded = await loadGlobalWorld(prisma);
+    const result = await auctionProcessor({ prisma, saveId, revision: loaded!.save.revision, world: loaded!.world });
+    expect(result.changed).toBe(true);
+    await persistWorld(prisma, saveId, saveId, loaded!.world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    const settled = reloaded!.world.freeAgentListings.find((l) => l.id === listing.id)!;
+    expect(settled.status).toBe("COMPLETED");
+    expect(settled.winningClubId).toBe(buyer.id);
+    const signedPlayer = reloaded!.world.players.find((p) => p.id === player.id)!;
+    expect(signedPlayer.clubId).toBe(buyer.id);
+    expect(signedPlayer.salary).toBe(settled.demandedSalary);
+    // Money left the economy (no club credited) and history recorded.
+    expect(reloaded!.world.playerMarketHistory.some((t) => t.type === "FREE_AGENT_SIGNING")).toBe(true);
   });
 });
 

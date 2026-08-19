@@ -1,10 +1,8 @@
 import type { Player, World } from "./types";
-import { chance, pick } from "./rng";
+import { chance } from "./rng";
 import { applyDevelopment } from "./player";
 import { isIntervalDay } from "./calendar";
-import { contractCycle, loanCycle, seasonEndDay, settlePayroll, stadiumCycle, weeklyUpdate, yearlySponsorship } from "./season";
-import { aiBid, aiBuyGaps, aiBuyListings, aiSellSurplus, auctionAvailableCash, createAuction, isEligibleAuctionBidder, resolveAuction } from "./transfers";
-import { aiBidDuringWindow } from "./world";
+import { contractCycle, loanCycle, settlePayroll, stadiumCycle, weeklyUpdate } from "./season";
 import { gameConfig } from "../config";
 import { evaluateInactivity } from "./multiplayer";
 
@@ -87,45 +85,6 @@ function dailyDevelopment(world: World) {
   }
 }
 
-function spawnAuction(rng: World["rng"], world: World, now: number) {
-  const sellers = world.clubs.filter((c) => c.ownerUserId === null && !c.isHuman);
-  if (sellers.length === 0) return;
-  const seller = pick(rng, sellers);
-  const roster = world.players.filter((p) => p.clubId === seller.id && p.loanId === null && !p.isYouth && !p.onSale);
-  if (roster.length === 0) return;
-  const player = pick(rng, roster);
-  createAuction(
-    rng,
-    world,
-    player.id,
-    seller.id,
-    seasonEndDay(world.dayIndex, gameConfig.auctionDurationDays),
-    now + gameConfig.auctionDurationDays * 24 * 60 * 60 * 1000,
-  );
-  world.news.push({ dayIndex: world.dayIndex, text: `${seller.name} put ${player.name} up for auction`, kind: "auction" });
-}
-
-function resolveAuctionDeadlines(world: World) {
-  // Timestamp-backed multiplayer auctions are settled by settleDueAuctions.
-  // Keep this path only for legacy listings that predate the endsAt column.
-  const due = world.auctions.filter((a) => a.endsAt === undefined && a.deadlineDay <= world.dayIndex);
-  for (const listing of due) {
-    for (const club of world.clubs) {
-      if (!isEligibleAuctionBidder(listing, club)) continue;
-      const player = world.players.find((p) => p.id === listing.playerId);
-      if (!player) continue;
-      const bid = aiBid(world.rng, club, listing, player.value, player.position, world.players, auctionAvailableCash(world, club.id, listing.playerId));
-      if (bid !== null) listing.bids.push({ clubId: club.id, amount: bid });
-    }
-    const winner = resolveAuction(world, listing.id);
-    if (winner !== null) {
-      const club = world.clubs.find((c) => c.id === winner);
-      const player = world.players.find((p) => p.id === listing.playerId);
-      world.news.push({ dayIndex: world.dayIndex, text: `${club?.name ?? "Club"} won the auction for ${player?.name ?? "a player"}`, kind: "auction" });
-    }
-  }
-}
-
 /**
  * Process a single UTC date. The world must already be positioned in the
  * correct season for `date` (the caller handles month-boundary rollover).
@@ -152,8 +111,6 @@ export function processDailyDate(
   evaluateInactivity(world, now);
   executed.push(DAILY_TICK);
 
-  if (world.dayIndex === 1) yearlySponsorship(world);
-
   for (const p of world.players) {
     if (p.clubId !== null && p.energy < 100) p.energy = Math.min(100, p.energy + 6);
   }
@@ -171,14 +128,6 @@ export function processDailyDate(
   }
   stadiumCycle(world);
 
-  const aiClubs = world.clubs.filter((c) => c.ownerUserId === null && !c.isHuman);
-  if (isIntervalDay(world.dayIndex, gameConfig.transferIntervalDays) && chance(rng, 10) && aiClubs.length > 0) {
-    aiSellSurplus(rng, world, pick(rng, aiClubs));
-  }
-  if (chance(rng, 4) && aiClubs.length > 0) {
-    aiBuyGaps(rng, world, pick(rng, aiClubs));
-  }
-
   for (const club of world.clubs) {
     if (club.competitionState !== "ACTIVE") continue;
     const warningThreshold = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
@@ -189,11 +138,6 @@ export function processDailyDate(
       }
     }
   }
-
-  if (world.auctions.length < 3 && chance(rng, 15)) spawnAuction(rng, world, now);
-  if (chance(rng, 8)) aiBuyListings(rng, world);
-  resolveAuctionDeadlines(world);
-  if (world.auctions.length > 0 && chance(rng, 25)) aiBidDuringWindow(world, now);
 
   return { executed };
 }

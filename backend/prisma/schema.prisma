@@ -77,8 +77,6 @@ model Save {
   matchEvents    MatchEvent[]
   newsItems      NewsItem[]
   ledgerEntries  LedgerEntry[]
-  auctions       Auction[]
-  auctionBids    AuctionBid[]
   trophies       Trophy[]
   managerHistory ManagerHistory[]
   seasonAwards   SeasonAward[]
@@ -88,6 +86,12 @@ model Save {
   tvDeals        TvDeal[]
   liveMatches    LiveMatch[]
   dailyExecutions DailyExecution[]
+  transferAuctions TransferAuction[]
+  marketBids     MarketBid[]
+  freeAgentListings FreeAgentListing[]
+  marketReservations MarketReservation[]
+  playerMarketTransactions PlayerMarketTransaction[]
+  aiEvaluations  AiEvaluation[]
 }
 
 model Club {
@@ -114,6 +118,9 @@ model Club {
   name             String
   shortName        String
   country          String
+  highestDivision  Int      @default(1)
+  // DEPRECATED: still read by the (soon-to-be-overhauled) player-generation
+  // code; every other subsystem derives strength from divisionForClub.
   level            Int
   cash             Int
   stadiumName      String
@@ -121,8 +128,6 @@ model Club {
   primaryColor     String
   secondaryColor   String
   coachName        String
-  boardConfidence  Int
-  fanConfidence    Int
   isHuman          Boolean
   captainId        Int?
   penaltyTakerId   Int?
@@ -368,34 +373,6 @@ model LedgerEntry {
   @@index([saveId, clubId])
 }
 
-model Auction {
-  id           Int
-  saveId       Int
-  save         Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  playerId     Int
-  minBid       Int
-  deadlineDay  Int
-  // Multiplayer: absolute epoch-ms deadline (plan §51). Null for legacy rows.
-  startsAt     BigInt?
-  endsAt       BigInt?
-  sellerClubId Int?
-
-  @@id([saveId, id])
-  @@index([saveId, endsAt])
-}
-
-model AuctionBid {
-  id        Int    @id @default(autoincrement())
-  saveId    Int
-  save      Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  auctionId Int
-  clubId    Int
-  amount    Int
-
-  @@index([saveId, auctionId])
-  @@unique([saveId, auctionId, clubId])
-}
-
 model Trophy {
   id              Int    @id @default(autoincrement())
   saveId          Int
@@ -492,11 +469,146 @@ model LiveMatch {
 }
 
 // ---------------------------------------------------------------------------
+// Multiplayer transfer market (Phase 2+)
+// ---------------------------------------------------------------------------
+
+// A public club-to-club auction listing (transfer-market-overhaul §9-§20).
+model TransferAuction {
+  id                    Int
+  saveId                Int
+  save                  Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  playerId              Int
+  sellerClubId          Int
+  playerValueAtListing  Int
+  openingPrice          Int
+  bidIncrement          Int
+  // Division snapshots taken at listing time (cap basis, §10/§102.13.3).
+  sellerDivisionAtListing Int
+  totalDivisionsAtListing Int
+  currentPrice          Int
+  leadingClubId         Int?
+  createdAt             BigInt
+  deadline              BigInt
+  originalDeadline      BigInt
+  status                String
+  completedAt           BigInt?
+  winningClubId         Int?
+  finalPrice            Int?
+  cancelledAt           BigInt?
+  softClosed            Boolean
+  softCloseExtensions   Int
+
+  @@id([saveId, id])
+  @@index([saveId, status])
+  @@index([saveId, deadline])
+}
+
+// A club's private maximum bid on a transfer or free-agent listing (§11/§69).
+model MarketBid {
+  id                            Int      @id @default(autoincrement())
+  saveId                        Int
+  save                          Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  marketType                    String // TRANSFER | FREE_AGENT
+  listingId                     Int
+  clubId                        Int
+  maxBid                        Int
+  capMultiplierAtSubmission     Float?
+  maximumAllowedByRuleAtSubmission Int?
+  buyerDivisionAtSubmission     Int?
+  createdAt                     BigInt
+  updatedAt                     BigInt
+  initialPriorityAt             BigInt
+
+  @@unique([saveId, marketType, listingId, clubId])
+  @@index([saveId, marketType, listingId])
+}
+
+// A free-agent listing with frozen salary/contract terms (§41-§54).
+model FreeAgentListing {
+  id                 Int
+  saveId             Int
+  save               Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  playerId           Int
+  playerValueAtListing Int
+  openingPrice       Int
+  bidIncrement       Int
+  demandedSalary     Int
+  demandedContractDays Int
+  currentPrice       Int
+  leadingClubId      Int?
+  relistStage        Int
+  createdAt          BigInt
+  deadline           BigInt
+  status             String
+  completedAt        BigInt?
+  winningClubId      Int?
+  finalPrice         Int?
+  previousListingId  Int?
+  softClosed         Boolean
+  softCloseExtensions Int
+
+  @@id([saveId, id])
+  @@index([saveId, status])
+  @@index([saveId, deadline])
+}
+
+// Durable funds reserved against a club's active market commitments (§23).
+model MarketReservation {
+  id         Int    @id @default(autoincrement())
+  saveId     Int
+  save       Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  clubId     Int
+  listingId  Int
+  marketType String // TRANSFER | FREE_AGENT
+  amount     Int
+  createdAt  BigInt
+  releasedAt BigInt?
+
+  @@index([saveId, clubId])
+  @@index([saveId, marketType, listingId])
+}
+
+// Completed market movement history (§72).
+model PlayerMarketTransaction {
+  id         Int      @id @default(autoincrement())
+  saveId     Int
+  save       Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  playerId   Int
+  listingId  Int?
+  type       String // TRANSFER | FREE_AGENT_SIGNING | LOAN
+  fromClubId Int?
+  toClubId   Int?
+  price      Int
+  seasonId   Int
+  seasonKey  String
+  matchday   Int
+  timestamp  BigInt
+
+  @@index([saveId, playerId])
+}
+
+// Durable AI market evaluation (BID/PASS) for idempotent retry (§34).
+model AiEvaluation {
+  id           Int    @id @default(autoincrement())
+  saveId       Int
+  save         Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  marketType   String // TRANSFER | FREE_AGENT
+  listingId    Int
+  clubId       Int
+  evaluatedAt  BigInt
+  decision     String // BID | PASS
+  maxBid       Int?
+
+  @@unique([saveId, marketType, listingId, clubId])
+  @@index([saveId, marketType, listingId])
+}
+
+// ---------------------------------------------------------------------------
 // Multiplayer league system
 // ---------------------------------------------------------------------------
 
 // One synchronized season = one calendar month. All divisions share the same
-// global season. See plans/multiplayer.md.
+// global season. See plans/1. multiplayer.md.
 model MpSeason {
   id                 Int      @id @default(autoincrement())
   year               Int

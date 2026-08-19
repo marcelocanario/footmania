@@ -1,7 +1,7 @@
 # Multiplayer Core Design Invariants
 
 These invariants are the non-negotiable rules of the multiplayer league engine
-(plan `plans/multiplayer.md` §92). Any refactor or new feature must preserve them.
+(plan `plans/1. multiplayer.md` §92). Any refactor or new feature must preserve them.
 
 1. **Every active division always contains exactly 8 competition slots.**
    Divisions are completed with filler AI up to 8 when created and after human

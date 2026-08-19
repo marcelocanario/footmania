@@ -1,27 +1,68 @@
-import { execSync } from "node:child_process";
+import { PrismaClient } from "@prisma/client";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-export default function setup() {
+/**
+ * Test database bootstrap.
+ *
+ * Each test file that talks to Prisma points at its own persistent SQLite file
+ * (test.db / test-live.db / test-persist.db / test-worker.db), created once via
+ * `prisma db push` and kept in sync with the schema (see AGENTS.md). This setup
+ * clears every row in all four databases before the suite runs so tests that
+ * register users / create worlds start from a clean state.
+ *
+ * Rows are deleted in dependency order (children before parents) using the
+ * generated client with an explicit datasource URL. This avoids spawning
+ * `prisma db push` and avoids deleting the DB files, both of which are
+ * unreliable on Windows (deadlocks / transient lock / EPERM errors).
+ */
+export default async function setup(): Promise<void> {
   const cwd = join(dirname(fileURLToPath(import.meta.url)), "..");
-  execSync("npx prisma db push --skip-generate --force-reset", {
-    cwd,
-    env: { ...process.env, DATABASE_URL: "file:./test.db" },
-    stdio: "ignore",
-  });
-  execSync("npx prisma db push --skip-generate --force-reset", {
-    cwd,
-    env: { ...process.env, DATABASE_URL: "file:./test-live.db" },
-    stdio: "ignore",
-  });
-  execSync("npx prisma db push --skip-generate --force-reset", {
-    cwd,
-    env: { ...process.env, DATABASE_URL: "file:./test-persist.db" },
-    stdio: "ignore",
-  });
-  execSync("npx prisma db push --skip-generate --force-reset", {
-    cwd,
-    env: { ...process.env, DATABASE_URL: "file:./test-worker.db" },
-    stdio: "ignore",
-  });
+  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db"]) {
+    const url = `file:${join(cwd, "prisma", name).replaceAll("\\", "/")}`;
+    const prisma = new PrismaClient({ datasourceUrl: url, log: [] });
+    try {
+      // Sequential deleteMany avoids SQLite write-lock contention inside a
+      // single large transaction. Children are deleted before parents.
+      await prisma.matchEvent.deleteMany();
+      await prisma.matchStat.deleteMany();
+      await prisma.match.deleteMany();
+      await prisma.standingsRow.deleteMany();
+      await prisma.fixture.deleteMany();
+      await prisma.competition.deleteMany();
+      await prisma.ledgerEntry.deleteMany();
+      await prisma.newsItem.deleteMany();
+      await prisma.player.deleteMany();
+      await prisma.club.deleteMany();
+      await prisma.loan.deleteMany();
+      await prisma.trophy.deleteMany();
+      await prisma.managerHistory.deleteMany();
+      await prisma.seasonAward.deleteMany();
+      await prisma.careerRecord.deleteMany();
+      await prisma.clubTicketPrices.deleteMany();
+      await prisma.stadiumUpgrade.deleteMany();
+      await prisma.tvDeal.deleteMany();
+      await prisma.liveMatch.deleteMany();
+      await prisma.marketBid.deleteMany();
+      await prisma.transferAuction.deleteMany();
+      await prisma.freeAgentListing.deleteMany();
+      await prisma.marketReservation.deleteMany();
+      await prisma.playerMarketTransaction.deleteMany();
+      await prisma.aiEvaluation.deleteMany();
+      await prisma.mpMembership.deleteMany();
+      await prisma.mpClubSeason.deleteMany();
+      await prisma.mpQueue.deleteMany();
+      await prisma.mpAllocation.deleteMany();
+      await prisma.mpActivity.deleteMany();
+      await prisma.mpAudit.deleteMany();
+      await prisma.mpSeason.deleteMany();
+      await prisma.session.deleteMany();
+      await prisma.setting.deleteMany();
+      await prisma.dailyExecution.deleteMany();
+      await prisma.save.deleteMany();
+      await prisma.user.deleteMany();
+    } finally {
+      await prisma.$disconnect();
+    }
+  }
 }

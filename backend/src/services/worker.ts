@@ -5,6 +5,7 @@ import { matchScheduler } from "./jobs/matchScheduler";
 import { auctionProcessor } from "./jobs/auctionProcessor";
 import { dailyProcessor } from "./jobs/dailyProcessor";
 import { notificationProcessor } from "./jobs/notificationProcessor";
+import { aiMarketProcessor } from "./jobs/aiMarketProcessor";
 
 /**
  * Server-authoritative clock worker orchestrator (worker plan §1).
@@ -28,6 +29,7 @@ export interface WorkerOptions {
   auctionIntervalMs?: number;
   dailyIntervalMs?: number;
   notificationIntervalMs?: number;
+  aiMarketIntervalMs?: number;
 }
 
 export function startWorker(prisma: PrismaClient, intervalMs: number, opts: WorkerOptions = {}) {
@@ -36,6 +38,7 @@ export function startWorker(prisma: PrismaClient, intervalMs: number, opts: Work
   const auctionInterval = opts.auctionIntervalMs ?? Math.min(intervalMs, 5000);
   const dailyInterval = opts.dailyIntervalMs ?? Math.max(intervalMs, 60_000);
   const notificationInterval = opts.notificationIntervalMs ?? intervalMs;
+  const aiMarketInterval = opts.aiMarketIntervalMs ?? Math.max(intervalMs, 120_000);
 
   const timers: ReturnType<typeof setInterval>[] = [];
 
@@ -60,6 +63,7 @@ export function startWorker(prisma: PrismaClient, intervalMs: number, opts: Work
   const stopAuctions = schedule("auctions", auctionInterval, () => runJob(prisma, "auctions", auctionProcessor));
   const stopDaily = schedule("daily", dailyInterval, () => runJob(prisma, "daily", dailyProcessor));
   const stopNotifications = schedule("notifications", notificationInterval, () => runJob(prisma, "notifications", notificationProcessor));
+  const stopAiMarket = schedule("aiMarket", aiMarketInterval, () => runJob(prisma, "aiMarket", aiMarketProcessor));
 
   return () => {
     stopSeason();
@@ -67,5 +71,6 @@ export function startWorker(prisma: PrismaClient, intervalMs: number, opts: Work
     stopAuctions();
     stopDaily();
     stopNotifications();
+    stopAiMarket();
   };
 }

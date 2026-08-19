@@ -2,9 +2,9 @@ import type { PrismaClient } from "@prisma/client";
 import type { World } from "../game/types";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave } from "./saveService";
 import { seasonRefFor, seasonKey } from "../game/clock";
-import { auditMultiplayerEvent, initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, groupIndexOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, simulateDivisionThroughRound, syncMemberships, syncClubSeasons, ROUNDS_PER_SEASON } from "../game/multiplayer";
-import { awardLeaguePrizes, awardTvPositionBonuses, rolloverSeason } from "../game/season";
-import { advanceLiveMatches, playFixtureInstant, settleDueAuctions, syncCompletedRounds } from "../game/world";
+import { auditMultiplayerEvent, initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, groupIndexOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, simulateDivisionThroughRound, syncMemberships, syncClubSeasons, ROUNDS_PER_SEASON, recordDivision } from "../game/multiplayer";
+import { awardDivisionPrizes, rolloverSeason } from "../game/season";
+import { advanceLiveMatches, playFixtureInstant, syncCompletedRounds } from "../game/world";
 import { standingsTiebreak } from "../game/league";
 import { readNumberSetting, writeNumberSetting } from "../game/budget";
 import { MP_CONFIG } from "../config";
@@ -58,11 +58,9 @@ function removeFillerClubs(world: World): void {
   }
   world.players = world.players.filter((player) => !removedPlayerIds.has(player.id));
   world.loans = world.loans.filter((loan) => !loanIds.has(loan.id));
-  world.auctions = world.auctions.filter((auction) => !removedPlayerIds.has(auction.playerId) && (auction.sellerClubId === null || !removed.has(auction.sellerClubId)));
   world.clubs = world.clubs.filter((club) => !removed.has(club.id));
   for (const id of removed) delete world.ticketPrices[id];
   world.stadiumUpgrades = world.stadiumUpgrades.filter((upgrade) => !removed.has(upgrade.clubId));
-  world.tvDeals = world.tvDeals.filter((deal) => !removed.has(deal.clubId));
 }
 
 /** Find the MpSeason row for a calendar month, creating it if needed. */
@@ -257,9 +255,9 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   }
 
   // Finish work that may have been missed while the server was offline before
-  // calculating movement. Timestamp auctions must not be lost at rollover,
-  // and incomplete fixtures still need to contribute to final standings.
-  settleDueAuctions(world, now);
+  // calculating movement. Incomplete fixtures still need to contribute to
+  // final standings. (Transfer/free-agent/loan listings are handled by their
+  // own worker + rollover reconciliation.)
   advanceLiveMatches(world, now);
   const oldSeasonDivisions = divisionsInSeason(world, world.mp.seasonId).filter((division) => division.status !== "ARCHIVED");
   for (const division of oldSeasonDivisions) {
@@ -307,8 +305,7 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   // archiving.  These functions are applied to divisions as well as legacy
   // single-player leagues and are safe here because rollover commits as one
   // idempotent world transition.
-  awardTvPositionBonuses(world);
-  awardLeaguePrizes(world);
+  await awardDivisionPrizes(prisma, world);
   const oldDivisions = divisionsInSeason(world, oldSeasonId);
   captureSeasonHistory(world, oldSeasonId, oldDivisions);
   for (const d of oldDivisions) {
@@ -332,6 +329,7 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   }
   for (const [clubId, tier] of assignments) {
     auditMultiplayerEvent(world, "TIER_ASSIGNMENT", { clubId, metadata: JSON.stringify({ tier }) });
+    recordDivision(world, clubId, tier);
   }
   // Provisional clubs enter at the lowest active tier + 1 (bottom of pyramid).
   const humansAtLowestTier = byTier.get(lowestTier)?.length ?? 0;
@@ -343,6 +341,7 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
     if (!byTier.has(provisionalTier)) byTier.set(provisionalTier, []);
     for (const club of provisional) {
       club.competitionState = "ACTIVE";
+      recordDivision(world, club.id, provisionalTier);
       byTier.get(provisionalTier)!.push({ clubId: club.id, timezone: club.timezone });
       world.mpQueue = world.mpQueue.filter((q) => q.clubId !== club.id);
     }

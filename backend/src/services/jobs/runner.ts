@@ -21,6 +21,8 @@ export interface JobContext {
   saveId: number;
   revision: number;
   world: World;
+  /** Optional wall-clock override for testability (defaults to Date.now()). */
+  now?: number;
 }
 
 export interface JobResult {

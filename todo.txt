@@ -6,22 +6,23 @@ Game engine
 	[DONE] make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
 
 Multiplayer
--think of tournment structure
+[DONE] think of tournment structure
 -players create teams, choose team color, jerseys, country, stadium name, etc.
 --allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
 [DONE] initial player names for that team should match the chosen country, same as youth-generated players
 -push notifications for match started and match ended
 --pros can see match goals and other events and also get their league results as push
 -invite players should give some in-game advantage or give free pro
--let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
--spawn small leagues; human players automatically promoted over AI teams
+[DONE] let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
+[DONE] spawn small leagues; human players automatically promoted over AI teams
 
 [DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
 
 Balance economy
--also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
--prevent people from creating a new disposeable team and ripping that team off in favor of their main team (prevent this through the bidding mechanism somehow, we can't guarante we'll be able to stop multiple accs)
-
+[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
+[DONE] prevent people from creating a new disposeable team and ripping that team off in favor of their main team (prevent this through the bidding mechanism somehow, we can't guarante we'll be able to stop multiple accs)
+-plan a stadium system (attendance and income tied to fan confidence); stadium upgrades are expensive and have diminishing returns; you only have income from stadium when you play at home. important games have higher attendance (define what important means). stadium has upkeep
+-plan formula for newgens (expected starting squad quality for a Division 1 club)
 
 Questions:
 [DONE] what does a player salary depend on? does it increase overtime or as they win prizes, etc.? do they demand higher wages when contracts renew?
@@ -41,3 +42,12 @@ Technical/housekeeping:
 --implement full visibility to admin of what is scheduled to happen in each "tick". allow admin to trigger any scheduled event ahead of time (immediately), for testing purposes
 -remove stadium, remove fan support level
 -migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)
+-when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
+-confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time. consider not allowing them to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably
+
+Tuning:
+-run monte carlo simulations of multiple matches with teams with varied skills/overals/divisions, etc. and propose tuning suggestions to match simulator and the related variables
+-run monte carlo simulations of multiple seasons and propose tuning suggestions to the economy variables or formulas
+-run monte carlo simulations of multiple player auctions, loans, promotions, etc. and propose tuning suggestions to the economy variables or formulas
+-run monte carlo simulations of multiple players being generated in main squad, youth squad and simulate growth/decay for a large number of players and propose tuning suggestions to related variables or formulas
+

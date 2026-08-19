@@ -55,7 +55,6 @@ export interface Player {
   clubId: number | null;
   tacPos: number;
   onSale: boolean;
-  salePrice: number | null;
   suspendedGames: number;
   morale: number;
   loanId: number | null;
@@ -109,6 +108,12 @@ export interface Club {
   // Multiplayer: epoch ms of the scheduled live-match kickoff (if any).
   liveMatchAt: number | null;
   country: string;
+  // Highest division this club has ever reached (1 = strongest). Historical
+  // milestone, independent of the current division (which is derived from
+  // membership state via divisionForClub).
+  highestDivision: number;
+  // DEPRECATED: still read by the (soon-to-be-overhauled) player-generation
+  // code. Every other subsystem derives strength from divisionForClub.
   level: number;
   cash: number;
   stadiumName: string;
@@ -116,8 +121,6 @@ export interface Club {
   primaryColor: string;
   secondaryColor: string;
   coachName: string;
-  boardConfidence: number;
-  fanConfidence: number;
   tactics: Tactics;
   trainingFocus: "assistant" | "primary" | "secondary";
   captainId: number | null;
@@ -311,17 +314,129 @@ export interface NewsItem {
   clubId?: number;
 }
 
-export interface AuctionListing {
+/** One private maximum bid per club/listing (transfer-market-overhaul §69). */
+export interface MarketBid {
+  id: number;
+  /** TRANSFER | FREE_AGENT */
+  marketType: "TRANSFER" | "FREE_AGENT";
+  listingId: number;
+  clubId: number;
+  maxBid: number;
+  // Snapshot of bidder-specific cap inputs/results for TRANSFER bids so later
+  // config changes cannot make historical acceptance impossible to audit.
+  capMultiplierAtSubmission?: number;
+  maximumAllowedByRuleAtSubmission?: number;
+  buyerDivisionAtSubmission?: number;
+  createdAt: number;
+  updatedAt: number;
+  // Immutable tie-priority instant (earliest wins at equal maximums, §13).
+  initialPriorityAt: number;
+}
+
+/** A listing in a public market. Auction + free-agent (transfer-market §68/70). */
+export type MarketType = "TRANSFER" | "FREE_AGENT";
+
+export type AuctionStatus = "ACTIVE" | "COMPLETED" | "CANCELLED";
+
+/** Public auction listing (transfer-market-overhaul §68). */
+export interface TransferAuction {
   id: number;
   playerId: number;
-  minBid: number;
-  deadlineDay: number;
-  // Multiplayer: absolute epoch-ms deadline (plan §51). Set from deadlineDay
-  // when created; the minute worker settles auctions whose endsAt has passed.
-  startsAt?: number;
-  endsAt?: number;
-  sellerClubId: number | null;
-  bids: { clubId: number; amount: number }[];
+  sellerClubId: number;
+  playerValueAtListing: number;
+  openingPrice: number;
+  bidIncrement: number;
+  // Seller's division number at listing time (cap basis, §10/§102.13.3).
+  sellerDivisionAtListing: number;
+  // Total division count (pyramid depth) at listing time, so later pyramid
+  // changes cannot retroactively alter the normalized gap of a live listing.
+  totalDivisionsAtListing: number;
+  currentPrice: number;
+  leadingClubId: number | null;
+  createdAt: number;
+  deadline: number;
+  originalDeadline: number;
+  status: AuctionStatus;
+  completedAt: number | null;
+  winningClubId: number | null;
+  finalPrice: number | null;
+  cancelledAt: number | null;
+  /** True once the deadline was extended by a soft-close competitive bid. */
+  softClosed: boolean;
+  /** Number of soft-close extensions applied so far (bounds §17/§18). */
+  softCloseExtensions: number;
+}
+
+/** Free-agent listing (transfer-market-overhaul §70). Phase 7 lifecycle. */
+export interface FreeAgentListing {
+  id: number;
+  playerId: number;
+  playerValueAtListing: number;
+  openingPrice: number;
+  bidIncrement: number;
+  demandedSalary: number;
+  demandedContractDays: number;
+  currentPrice: number;
+  leadingClubId: number | null;
+  relistStage: number;
+  createdAt: number;
+  deadline: number;
+  status: AuctionStatus;
+  completedAt: number | null;
+  winningClubId: number | null;
+  finalPrice: number | null;
+  previousListingId: number | null;
+  /** True once the deadline was extended by a soft-close competitive bid. */
+  softClosed: boolean;
+  /** Number of soft-close extensions applied so far (bounds §17/§18). */
+  softCloseExtensions: number;
+}
+
+/**
+ * Durable funds reserved against a club's active market commitments
+ * (transfer-market-overhaul §23/§73). Survives server restart; released at
+ * proxy state transitions and settlement.
+ */
+export interface MarketReservation {
+  id: number;
+  clubId: number;
+  listingId: number;
+  marketType: MarketType;
+  /** Reserved amount = the club's current private maximum on this listing. */
+  amount: number;
+  createdAt: number;
+  releasedAt: number | null;
+}
+
+/** Completed market movement history (transfer-market-overhaul §72). */
+export interface PlayerMarketTransaction {
+  id: number;
+  playerId: number;
+  listingId: number | null;
+  type: "TRANSFER" | "FREE_AGENT_SIGNING" | "LOAN";
+  fromClubId: number | null;
+  toClubId: number | null;
+  price: number;
+  seasonId: number;
+  seasonKey: string;
+  matchday: number;
+  timestamp: number;
+}
+
+/**
+ * Durable AI market evaluation/decision state (transfer-market-overhaul
+ * §102.5). One row per (marketType, listingId, clubId) so the AI evaluates
+ * each listing at most once and a restart cannot trigger a re-evaluation.
+ */
+export interface AIEvaluation {
+  marketType: MarketType;
+  listingId: number;
+  clubId: number;
+  evaluatedAt: number;
+  /** Action decided: NONE | BID | CLAIM (loans) | PASS. */
+  decision: string;
+  /** Maximum the AI committed, when it chose to bid. */
+  maxBid: number | null;
 }
 
 export interface Loan {
@@ -332,6 +447,10 @@ export interface Loan {
   startDay: number;
   endDay: number;
   recalled: boolean;
+  /** Real-time instant the player was listed for loan (§57). */
+  listedAt: number;
+  /** Real-time instant the listing becomes claimable (listedAt + exposure, §57). */
+  claimableAt: number;
 }
 
 export interface SeasonAward {
@@ -366,13 +485,6 @@ export interface StadiumUpgrade {
   newCapacity: number;
   cost: number;
   completed: boolean;
-}
-
-export interface TvDeal {
-  clubId: number;
-  season: number;
-  baseAmount: number;
-  positionBonus: number;
 }
 
 export interface SeasonSummary {
@@ -505,14 +617,19 @@ export interface World {
   fixtures: Fixture[];
   matches: Match[];
   news: NewsItem[];
-  auctions: AuctionListing[];
   loans: Loan[];
+  // Multiplayer transfer market (transfer-market-overhaul Phase 2+).
+  marketBids: MarketBid[];
+  transferAuctions: TransferAuction[];
+  freeAgentListings: FreeAgentListing[];
+  marketReservations: MarketReservation[];
+  playerMarketHistory: PlayerMarketTransaction[];
+  aiEvaluations: AIEvaluation[];
   seasonAwards: SeasonAward[];
   records: CareerRecord[];
   managerHistory: ManagerHistoryEntry[];
   ticketPrices: Record<number, [number, number, number, number]>;
   stadiumUpgrades: StadiumUpgrade[];
-  tvDeals: TvDeal[];
   humanClubId: number | null;
   seasonSummary: SeasonSummary | null;
   rng: RngState;

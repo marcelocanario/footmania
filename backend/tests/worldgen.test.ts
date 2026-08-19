@@ -8,7 +8,6 @@ import { buildLineup } from "../src/game/club";
 import { generateName, hasNamePool } from "../src/game/names";
 import { createRng } from "../src/game/rng";
 import { parseGameConfig } from "../src/config";
-import { LEAGUE_PRIZES, TV_POSITION_BONUS } from "../src/game/constants";
 import { sortedStandings } from "../src/game/league";
 import type { World } from "../src/game/types";
 

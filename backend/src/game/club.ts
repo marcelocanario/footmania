@@ -2,6 +2,7 @@ import type { Club, Player, RngState } from "./types";
 import { nextInt, shuffle } from "./rng";
 import { tacticalSkillRating } from "./rating";
 import { DAYS_PER_YEAR } from "./constants";
+import { MARKET_CONFIG } from "../config";
 import {
   BENCH_ORDER,
   FORMATION_POSITIONS,
@@ -307,9 +308,15 @@ const ATTENDANCE_BY_COMP: Record<string, number[][]> = {
   ],
 };
 
-/** Club tier 1..5 derived from level (replaces the removed reputation). */
-export function clubTier(club: Club): number {
-  return Math.min(5, Math.max(1, Math.round(club.level / 5)));
+/**
+ * Map a club's division number (1 = strongest) to a 1..maxTier ticket bucket
+ * used to index the TICKET_PRICES / TICKET_PRICE_NOISE / ATTENDANCE tables.
+ * Monotone sublinear curve so the strongest division always tops the bucket
+ * range while deeper divisions decay smoothly (never hard-coded — MARKET_CONFIG).
+ */
+export function divisionTicketTier(division: number): number {
+  const { maxTier, curveK } = MARKET_CONFIG.ticketTier;
+  return Math.max(1, Math.min(maxTier, Math.round(maxTier / Math.max(1, Math.pow(division, curveK)))));
 }
 
 export function calcGate(
@@ -317,10 +324,12 @@ export function calcGate(
   home: Club,
   away: Club,
   compKind: string,
-  configuredPrices?: [number, number, number, number]
+  configuredPrices?: [number, number, number, number],
+  homeDivision?: number,
+  awayDivision?: number
 ): TicketCalc {
-  const homeTier = clubTier(home);
-  const awayTier = clubTier(away);
+  const homeTier = divisionTicketTier(homeDivision ?? 1);
+  const awayTier = divisionTicketTier(awayDivision ?? 1);
   const sectors = sectorCapacity(home.stadiumCapacity);
   const reference = TICKET_PRICES[Math.min(5, homeTier)].map((x) => Math.max(1, Math.round(x / 200)));
   let prices = configuredPrices ? [...configuredPrices] : [...reference] as number[];
@@ -339,7 +348,6 @@ export function calcGate(
     const adj = Math.round(prices[i] * factor);
     prices[i] = awayTier > homeTier ? prices[i] + adj : Math.max(1, prices[i] - adj);
   }
-  const fanFactor = Math.max(0.3, home.fanConfidence / 100);
   const table = ATTENDANCE_BY_COMP[compKind] ?? ATTENDANCE_BY_COMP.league;
   const attIdx = Math.min(4, Math.max(0, homeTier - 1));
   const attPct = table[attIdx] ?? table[0];
@@ -349,7 +357,7 @@ export function calcGate(
     const cap = sectors[i];
     const referencePrice = Math.max(1, reference[i]);
     const elasticity = Math.max(0.35, Math.min(1.5, 1 / (1 + (prices[i] - referencePrice) / referencePrice)));
-    const tickets = Math.min(cap, Math.max(0, Math.round((cap * attPct[i] * elasticity * fanFactor) / 100)));
+    const tickets = Math.min(cap, Math.max(0, Math.round((cap * attPct[i] * elasticity) / 100)));
     attendance += tickets;
     revenue += tickets * prices[i];
   }

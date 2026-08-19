@@ -2,43 +2,55 @@
   // Length of a season in game-days: from the day after the previous season's
   // final match day through the last league round + 1. The engine derives the
   // season end from this and LEAGUE_LAST_MATCH_DAY.
+  // (e.g. 30 = a full season spans 30 game-days.)
   "seasonDays": 30,
 
   // League structure. Total match days = turns * (teams - 1).
   "league": {
     // Number of clubs in the league (also the number generated for the world).
+    // (e.g. 8 = 8 clubs; with 2 turns that is 14 rounds per season.)
     "teams": 8,
     // Number of times each pair of teams meets (2 = home and away).
     "turns": 2,
     // Day of the season (0-indexed) on which the first league round is played.
+    // (e.g. 1 = the first round is played on the day after the season starts.)
     "startDay": 1,
     // Game-days between consecutive league rounds.
+    // (e.g. 2 = two game-days pass between rounds.)
     "matchIntervalDays": 2
   },
 
   // Game-day cadence at which player wages are paid. Wages are prorated over
   // seasonDays so a full season sums to the stored annual salary.
+  // (e.g. 7 = wages are paid every 7 game-days.)
   "payrollIntervalDays": 7,
   // Game-day cadence for weekly sim updates (energy recovery, morale,
-  // potential growth, board/fan confidence, manager firings).
+  // potential growth, contracts, loans).
+  // (e.g. 7 = a weekly sim update runs every 7 game-days.)
   "weeklyIntervalDays": 7,
   // Game-day cadence at which AI clubs list players for sale and generate
   // transfer activity.
+  // (e.g. 1 = AI clubs may list a player for sale every game-day.)
   "transferIntervalDays": 1,
   // Game-days an auction stays open before it resolves to the highest bidder.
+  // (e.g. 7 = a listing resolves 7 game-days after it opens.)
   "auctionDurationDays": 7,
   // Length of a loan in seasons (converted to game-days via seasonDays).
+  // (e.g. 1 = a loan lasts one full season.)
   "loanDurationSeasons": 1,
 
   // Game-days a stadium expansion takes to complete once construction starts.
+  // (e.g. 15 = an expansion completes after 15 game-days.)
   "stadiumUpgradeDays": 15,
   // How many seasons before a contract's expiry (in game-days) a club starts
   // trying to renew the player.
+  // (e.g. 2 = renewal talks begin 2 seasons before expiry.)
   "contractWarningSeasons": 2,
 
   // How long (in real time) a match involving the human player's club takes to
   // play out, used to pace the live-match ticker. AI-vs-AI matches always
   // resolve instantly with the same engine.
+  // (e.g. 10 = the live ticker plays out over 10 real minutes.)
   "humanMatchDurationMinutes": 10,
 
   // --- Player economy ---
@@ -50,16 +62,20 @@
   //
   // Base monetary unit used to scale the whole value curve. Doubling it roughly
   // doubles every player's market value.
+  // (e.g. raising 500000 to 1,000,000 roughly doubles every player's value.)
   "playerValueBase": 500000,
   // The overall rating that produces a value multiplier of exactly 1.0 before
   // age/contract are applied. Players rated above this get super-linear value;
   // below it get sub-linear value.
+  // (e.g. 50 = a rating of 50 yields a value multiplier of 1.0.)
   "playerValueOverallReference": 50,
   // Exponent applied to (overall / reference). Higher exponents make high-rated
   // players disproportionately more expensive (super-linear growth).
+  // (e.g. 3.5 = a rating of 75 is worth ~4.1x a rating of 50.)
   "playerValueOverallExponent": 3.5,
   // Global multiplier applied to the final value. A convenient single knob to
   // scale all market values without touching the base or curves.
+  // (e.g. 1.5 = every player's market value rises by 50%.)
   "playerValueMultiplier": 1,
   // Age multiplier applied to base value (ages between keyframes interpolate).
   // Below ~23 the multiplier grows with age (prospects appreciate), peaks in
@@ -71,15 +87,18 @@
   },
   // Contract length (in seasons) at which the contract multiplier is exactly
   // 1.0. Shorter contracts are worth slightly less; longer ones slightly more.
+  // (e.g. 3 = a 3-season contract leaves value unchanged.)
   "playerValueContractNeutralSeasons": 3,
   // How much the value multiplier changes per season of difference from
   // contractNeutralSeasons (e.g. 0.05 = 5% per season).
   "playerValueContractWeight": 0.05,
   // Lower bound for the contract multiplier (floor applied when contracts are
   // very short). Prevents value from dropping too far on expiring contracts.
+  // (e.g. 0.9 = value never falls below 90% of its neutral-contract level.)
   "playerValueContractMinMultiplier": 0.9,
   // Upper bound for the contract multiplier (cap applied when contracts are
   // very long). Prevents value from inflating too much on long contracts.
+  // (e.g. 1.1 = value never rises above 110% of its neutral-contract level.)
   "playerValueContractMaxMultiplier": 1.1,
 
   // Base salary = salaryBase x (overall/reference)^exponent x ageMultiplier x multiplier.
@@ -87,15 +106,19 @@
   //
   // Base monetary unit for the salary curve. Doubling it roughly doubles every
   // player's suggested salary.
+  // (e.g. 70000 = a rating-50 player at neutral age is offered ~70000/season.)
   "salaryBase": 70000,
   // The overall rating that produces a salary multiplier of exactly 1.0 before
   // age is applied.
+  // (e.g. 50 = a rating of 50 yields a salary multiplier of 1.0.)
   "salaryOverallReference": 50,
   // Exponent applied to (overall / reference). Higher values make top players
   // demand disproportionately higher wages.
+  // (e.g. 2.5 = a rating of 75 demands ~2.8x a rating of 50.)
   "salaryOverallExponent": 2.5,
   // Global multiplier applied to the final suggested salary. A convenient knob
   // to scale all wages without touching the base or curves.
+  // (e.g. 1.5 = every suggested salary rises by 50%.)
   "salaryMultiplier": 1,
   // Age multiplier applied to the suggested salary (ages between keyframes
   // interpolate). Young prospects earn less, peak in their mid-to-late 20s,
@@ -107,26 +130,32 @@
   },
   // Minimum salary a player can ever receive (per season). Guards against
   // absurdly low wages for very low-rated or very old players.
+  // (e.g. 500 = no annual salary can fall below 500.)
   "salaryFloor": 500,
   // Academy players receive this fraction of their normal salary until promotion.
+  // (e.g. 0.1 = an academy player earns 10% of his normal salary.)
   "academySalaryMultiplier": 0.1,
 
   // --- Contracts & renewals ---
   //
   // Maximum contract length (in seasons) a player can be offered. Both the API
   // validation and the frontend renewal dropdown honor this value.
+  // (e.g. 5 = no player can be offered more than 5 seasons.)
   "maxContractSeasons": 5,
   // Minimum fractional raise a player expects per season of a new contract,
   // regardless of how good he is (e.g. 0.02 = at least a 2% raise).
   "renewalMinRaise": 0.02,
   // How strongly a player's skill (overall) influences the raise he demands.
   // Higher values make top players ask for much bigger raises than squad players.
+  // (e.g. 0.08 = full skill adds up to 8 percentage points to the raise.)
   "renewalSkillRaiseWeight": 0.08,
   // Exponent applied to the normalized skill before weighting the raise. Values
   // > 1 make the skill influence super-linear (only elite players get big raises).
+  // (e.g. 1.6 = half-skill counts as ~0.33 instead of 0.5.)
   "renewalSkillExponent": 1.6,
   // Maximum fractional raise a player can demand per season, capping renewal
   // demands even for the best players at their peak.
+  // (e.g. 0.15 = no renewal demand exceeds a 15% raise per season.)
   "renewalMaxRaise": 0.15,
   // Age multiplier applied to the renewal raise (ages between keyframes
   // interpolate). Young rising stars demand bigger raises; aging veterans accept
@@ -139,5 +168,6 @@
   // Release clause = salaryPerSeason x remainingSeasons x this percentage.
   // Fraction of the remaining contract value (salary x seasons left) the club
   // must pay to release the player early.
+  // (e.g. 0.5 = releasing a player costs 50% of his remaining contract value.)
   "releaseClauseRemainingValuePct": 0.5
 }

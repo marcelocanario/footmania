@@ -6,10 +6,6 @@ import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
 import { money } from "../format";
 
-function confidenceDot(v: number): string {
-  return v >= 65 ? "good" : v >= 40 ? "mid" : "bad";
-}
-
 /** Days remaining until the end of the current calendar month (interseason). */
 function SeasonCountdown({ seasonKey }: { seasonKey: string }) {
   const [now, setNow] = useState(() => Date.now());
@@ -57,8 +53,6 @@ export function Dashboard() {
           </div>
           <h1>{club.name}</h1>
           <div className="head-chips">
-            <span className="chip"><span className={`dot ${confidenceDot(club.boardConfidence)}`} /> Board {club.boardConfidence}%</span>
-            <span className="chip"><span className={`dot ${confidenceDot(club.fanConfidence)}`} /> Fans {club.fanConfidence}%</span>
             <span className="chip">{strings.team.country} {club.country}</span>
           </div>
         </div>

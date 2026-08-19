@@ -1,6 +1,6 @@
 import type { Club, LiveMatchState, Match, MatchEvent, MatchStats, Player, RngState, SubSlots, World } from "./types";
 import { chanceDenom, nextInt, shuffle } from "./rng";
-import { lineupForMatch, tacPosToBasePosition } from "./club";
+import { lineupForMatch, tacPosToBasePosition, divisionTicketTier } from "./club";
 import {
   ASSISTER_WEIGHTS,
   CARD_RED_FIRST,
@@ -20,6 +20,7 @@ import {
 } from "./constants";
 import { injuryDays } from "./player";
 import { TACTICAL_RATING_WEIGHTS, tacticalSkillRating } from "./rating";
+import { MARKET_CONFIG } from "../config";
 
 export interface RatingContext {
   kind: "league" | "cup" | "state" | "division";
@@ -594,9 +595,12 @@ function shotResolution(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half
     }
   }
   let damp = GOAL_DAMPING[Math.min(6, Math.max(0, lm.scores[attSide]))] ?? GOAL_DAMPING[0];
-  const defClub = defSide === 0 ? lm.home : lm.away;
-  const attClub = attSide === 0 ? lm.home : lm.away;
-  if (lm.scores[attSide] >= 2 && defClub.level - attClub.level >= 8) {
+  // Comeback damping: when the attacker is 2+ goals up and the defending club
+  // is a much stronger rep bucket, suppress the comeback. Compares the
+  // division-derived reps (1..5) instead of the removed club.level.
+  const defRep = attSide === 0 ? ctx.awayRep : ctx.homeRep;
+  const attRep = attSide === 0 ? ctx.homeRep : ctx.awayRep;
+  if (lm.scores[attSide] >= 2 && defRep - attRep >= MARKET_CONFIG.match.comebackRepGap) {
     damp = GOAL_DAMPING[5];
   }
   if (d6 < 0.2) d6 = 0.2;
@@ -817,14 +821,29 @@ function seededPlayerMinutes(st: LiveMatchState): Record<number, number> {
   return seeded;
 }
 
-function runtimeFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[]): LiveRuntime {
+/** Division-derived strength reps (1..5) for a match, resolved by world-aware
+ *  callers from `divisionForClub` (the engine stays pure and defaults to a
+ *  neutral rep of 3 when omitted). */
+export interface MatchReps {
+  homeRep?: number;
+  awayRep?: number;
+}
+
+/** Build match reps from two division numbers (1 = strongest), mapping each
+ *  division through the shared ticket-tier curve so strength buckets stay
+ *  consistent across pricing, attendance and match rating. */
+export function matchRepsForDivisions(homeDivision: number, awayDivision: number): MatchReps {
+  return { homeRep: divisionTicketTier(homeDivision), awayRep: divisionTicketTier(awayDivision) };
+}
+
+function runtimeFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[], reps?: MatchReps): LiveRuntime {
   const resolve = (ids: number[]) => ids.map((id) => allPlayers.find((p) => p.id === id)).filter((p): p is Player => !!p);
   const homeXI = resolve(st.homeXI);
   const awayXI = resolve(st.awayXI);
   const ctx: RatingContext = {
     kind: st.compKind ?? "league",
-    homeRep: Math.min(5, Math.max(1, Math.round(home.level / 5))),
-    awayRep: Math.min(5, Math.max(1, Math.round(away.level / 5))),
+    homeRep: reps?.homeRep ?? 3,
+    awayRep: reps?.awayRep ?? 3,
     awayClubId: away.id,
   };
   return {
@@ -899,9 +918,9 @@ export function tickLiveMatch(
   allPlayers: Player[],
   st: LiveMatchState,
   minutes: number,
-  opts?: { resume?: boolean; ignoreHalfTime?: boolean }
+  opts?: { resume?: boolean; ignoreHalfTime?: boolean; reps?: MatchReps }
 ): LiveTickResult {
-  const lm = runtimeFromState(st, home, away, allPlayers);
+  const lm = runtimeFromState(st, home, away, allPlayers, opts?.reps);
   return tickRuntime(rng, st, lm, minutes, opts);
 }
 
@@ -1085,7 +1104,7 @@ export function simulateMatch(
   home: Club,
   away: Club,
   allPlayers: Player[],
-  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number }
+  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; reps?: MatchReps }
 ): SimulatedMatch {
   const st = createLiveMatchState(rng, home, away, allPlayers, {
     matchId: opts.fixtureId,
@@ -1096,8 +1115,8 @@ export function simulateMatch(
     compKind: opts.compKind,
     year: opts.year,
   });
-  tickLiveMatch(rng, home, away, allPlayers, st, 500, { ignoreHalfTime: true });
-  const match = matchFromRuntime(st, runtimeFromState(st, home, away, allPlayers), { competitionId: opts.competitionId, fixtureId: opts.fixtureId });
+  tickLiveMatch(rng, home, away, allPlayers, st, 500, { ignoreHalfTime: true, reps: opts.reps });
+  const match = matchFromRuntime(st, runtimeFromState(st, home, away, allPlayers, opts.reps), { competitionId: opts.competitionId, fixtureId: opts.fixtureId });
   return { match, homeGoals: st.scores[0], awayGoals: st.scores[1], suspensionClears: st.suspensionClears };
 }
 
@@ -1114,10 +1133,11 @@ export function performLiveSub(
   st: LiveMatchState,
   side: number,
   outId: number,
-  inId: number
+  inId: number,
+  reps?: MatchReps
 ): LiveSubResult {
   if (st.ended) return { event: null, error: "Match already finished" };
-  const lm = runtimeFromState(st, home, away, allPlayers);
+  const lm = runtimeFromState(st, home, away, allPlayers, reps);
   const on = side === 0 ? lm.homeOn : lm.awayOn;
   const bench = side === 0 ? lm.homeSubs : lm.awaySubs;
   const out = on.find((p) => p.id === outId);
@@ -1224,8 +1244,8 @@ export function rebuildLiveHumanLineup(st: LiveMatchState, humanClub: Club, allP
   }
 }
 
-export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[]): Match {
-  return matchFromRuntime(st, runtimeFromState(st, home, away, allPlayers), { competitionId: st.competitionId, fixtureId: st.fixtureId });
+export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[], reps?: MatchReps): Match {
+  return matchFromRuntime(st, runtimeFromState(st, home, away, allPlayers, reps), { competitionId: st.competitionId, fixtureId: st.fixtureId });
 }
 
 export function tribunalSuspension(rng: RngState): number {
@@ -1259,15 +1279,12 @@ export function applyMatchToPlayers(match: Match, world: World) {
       p.reds++;
       const games = tribunalSuspension(world.rng);
       p.suspendedGames = Math.max(p.suspendedGames, games);
-      const fine = Math.round(p.salary / 10);
       const club = world.clubs.find((c) => c.id === ev.clubId);
       if (club) {
-        club.cash += fine;
-        club.ledger.income.push({ code: 12, amount: fine, day: world.dayIndex, label: `Fine: ${p.name} (${games} game${games > 1 ? "s" : ""})` });
         const flavor = games >= 5 ? "after a violent challenge" : games >= 3 ? "for a serious foul" : "for foul play";
         world.news.push({
           dayIndex: world.dayIndex,
-          text: `Tribunal suspends ${p.name} (${club.name}) for ${games} game${games > 1 ? "s" : ""} ${flavor}. The club collects a fine of ${fine}.`,
+          text: `Tribunal suspends ${p.name} (${club.name}) for ${games} game${games > 1 ? "s" : ""} ${flavor}.`,
           kind: "tribunal",
           clubId: club.id,
         });

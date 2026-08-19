@@ -1,6 +1,6 @@
 import type { LiveMatchState, World } from "../game/types";
 import { livePhase } from "../game/match";
-import { dayInfo, multiplayerDayLabel } from "../game/calendar";
+import { multiplayerDayLabel } from "../game/calendar";
 import { FORMATION_NAMES } from "../game/constants";
 
 export interface LiveEventView {
@@ -104,7 +104,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     fixtureId: st.fixtureId,
     competitionId: st.competitionId,
     competitionName: comp?.name ?? "",
-    dateLabel: world.mp.seasonId === 0 ? dayInfo(world.dayIndex).label : multiplayerDayLabel(world.dayIndex),
+    dateLabel: multiplayerDayLabel(world.dayIndex),
     homeClubId: st.homeClubId,
     awayClubId: st.awayClubId,
     home: home?.name ?? "",

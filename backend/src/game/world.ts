@@ -6,14 +6,12 @@ import type {
   Player,
   World,
 } from "./types";
-import { pick } from "./rng";
-import { createLiveMatchState, simulateMatch, applyMatchToPlayers, buildMatchFromState, tickLiveMatch } from "./match";
+import { createLiveMatchState, simulateMatch, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, matchRepsForDivisions } from "./match";
 import { updateStandings, isLeagueFinished } from "./league";
-import { aiBid, auctionAvailableCash, isEligibleAuctionBidder, resolveAuction } from "./transfers";
 import { calcGate } from "./club";
 import { MP_CONFIG } from "../config";
 import { completedRounds, seasonRefFor, seasonStatusFor } from "./clock";
-import { auditMultiplayerEvent, syncClubSeasons } from "./multiplayer";
+import { auditMultiplayerEvent, syncClubSeasons, divisionForClub } from "./multiplayer";
 import { missingDailyDates, processDailyDate, utcDateKey } from "./daily";
 
 export function nextId(world: World): number {
@@ -110,7 +108,7 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
     const played = st.minute + (st.half === 1 ? st.firstHalfLen : 0);
     const remaining = (st.firstHalfLen + st.secondHalfLen) - played;
     const minutes = Math.min(wholeMinutes, Math.max(1, remaining));
-    tickLiveMatch(world.rng, home, away, world.players, st, minutes, { ignoreHalfTime: true });
+    tickLiveMatch(world.rng, home, away, world.players, st, minutes, { ignoreHalfTime: true, reps: matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id)) });
     // The match is now fully simulated up to the real time that `minutes`
     // match-minutes represent. Any sub-minute fraction of the elapsed window
     // is preserved for the next tick (lastAdvancedAt only moves forward by the
@@ -132,10 +130,10 @@ export function finalizeLiveMatch(world: World, st: { matchId: number; fixtureId
   const fixture = world.fixtures.find((f) => f.id === st.fixtureId);
   if (!home || !away) return null;
   const live = world.liveMatches.find((x) => x.matchId === st.matchId);
-  const match = live ? buildMatchFromState(live, home, away, world.players) : null;
+  const match = live ? buildMatchFromState(live, home, away, world.players, matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id))) : null;
   if (!match) return null;
   const comp = fixture ? findCompetition(world, fixture.competitionId) : undefined;
-  const gate = calcGate(rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id]);
+  const gate = calcGate(rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id], divisionForClub(world, home.id), divisionForClub(world, away.id));
   match.attendance = gate.attendance;
   match.gateRevenue = gate.revenue;
   home.cash += gate.revenue;
@@ -154,7 +152,6 @@ export function finalizeLiveMatch(world: World, st: { matchId: number; fixtureId
     updateStandings(comp, fixture.homeClubId, fixture.awayClubId, match.homeScore, match.awayScore);
     if (comp.seasonId !== undefined) syncClubSeasons(world, comp.seasonId);
   }
-  updateConfidence(world, match);
   // Remove the finished live state.
   world.liveMatches = world.liveMatches.filter((x) => x.matchId !== st.matchId);
   for (const club of [home, away]) club.liveMatchAt = null;
@@ -199,7 +196,7 @@ export function playFixtureInstant(world: World, fixture: Fixture): Match | null
   match.extraTime = sim.match.extraTime;
   match.minuteEvents = sim.match.minuteEvents;
   match.minutes = sim.match.minutes;
-  const gate = calcGate(world.rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id]);
+  const gate = calcGate(world.rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id], divisionForClub(world, home.id), divisionForClub(world, away.id));
   match.attendance = gate.attendance;
   match.gateRevenue = gate.revenue;
   home.cash += gate.revenue;
@@ -215,7 +212,6 @@ export function playFixtureInstant(world: World, fixture: Fixture): Match | null
     updateStandings(comp, fixture.homeClubId, fixture.awayClubId, match.homeScore, match.awayScore);
     if (comp.seasonId !== undefined) syncClubSeasons(world, comp.seasonId);
   }
-  updateConfidence(world, match);
   return match;
 }
 
@@ -267,55 +263,6 @@ export function runDailyTick(world: World, now: number) {
   }
 }
 
-/** Minute-resolution auction settlement (plan §51). */
-export function settleDueAuctions(world: World, now: number) {
-  // The persistent Auction.endsAt column is indexed.  The in-memory world is
-  // already loaded for the worker, so first narrow the work to due listings;
-  // never run bidder/settlement logic for every open auction on every tick.
-  const dueListings = world.auctions.filter((listing) => {
-    const deadline = listing.endsAt ?? Date.UTC(seasonRefFor(new Date(now)).year, seasonRefFor(new Date(now)).month - 1, Math.max(1, Math.min(31, listing.deadlineDay)), MP_CONFIG.matchKickoffHourUtc, 0, 0);
-    return now >= deadline;
-  }).sort((a, b) => (a.endsAt ?? 0) - (b.endsAt ?? 0));
-  for (const listing of [...dueListings]) {
-    // Resolve using the absolute endsAt timestamp when present (plan §51);
-    // legacy rows fall back to the day-of-month cutoff hour.
-    let deadline = listing.endsAt;
-    if (deadline === undefined) {
-      const ref = seasonRefFor(new Date(now));
-      deadline = Date.UTC(ref.year, ref.month - 1, Math.max(1, Math.min(31, listing.deadlineDay)), MP_CONFIG.matchKickoffHourUtc, 0, 0);
-    }
-    if (now >= deadline) {
-      for (const club of world.clubs) {
-        if (!isEligibleAuctionBidder(listing, club)) continue;
-        const player = world.players.find((p) => p.id === listing.playerId);
-        if (!player) continue;
-        const bid = aiBid(world.rng, club, listing, player.value, player.position, world.players, auctionAvailableCash(world, club.id, listing.id));
-        if (bid !== null) listing.bids.push({ clubId: club.id, amount: bid });
-      }
-      const winner = resolveAuction(world, listing.id);
-      auditMultiplayerEvent(world, "AUCTION_SETTLEMENT", { clubId: winner, metadata: JSON.stringify({ auctionId: listing.id, winner }) });
-      if (winner !== null) {
-        const club = findClub(world, winner);
-        const player = world.players.find((p) => p.id === listing.playerId);
-        world.news.push({ dayIndex: world.dayIndex, text: `${club?.name ?? "Club"} won the auction for ${player?.name ?? "a player"}`, kind: "auction" });
-      }
-    }
-  }
-}
-
-export function aiBidDuringWindow(world: World, now = Date.now()) {
-  const open = world.auctions.filter((a) => (a.endsAt !== undefined ? a.endsAt > now : a.deadlineDay > world.dayIndex));
-  if (open.length === 0) return;
-  const listing = pick(world.rng, open);
-  const player = world.players.find((p) => p.id === listing.playerId);
-  if (!player) return;
-  const candidates = world.clubs.filter((c) => isEligibleAuctionBidder(listing, c));
-  if (candidates.length === 0) return;
-  const club = pick(world.rng, candidates);
-  const bid = aiBid(world.rng, club, listing, player.value, player.position, world.players, auctionAvailableCash(world, club.id, listing.id));
-  if (bid !== null) listing.bids.push({ clubId: club.id, amount: bid });
-}
-
 export function allDivisionsFinished(world: World): boolean {
   const divs = world.competitions.filter((c) => c.kind === "division" && c.status !== "ARCHIVED");
   if (divs.length === 0) return false;
@@ -326,26 +273,6 @@ function applyMatchToStandings(world: World, fixture: Fixture, match: Match) {
   const comp = findCompetition(world, fixture.competitionId);
   if (!comp) return;
   if (comp.kind === "division") updateStandings(comp, fixture.homeClubId, fixture.awayClubId, match.homeScore, match.awayScore);
-}
-
-function updateConfidence(world: World, match: Match) {
-  const home = findClub(world, match.homeClubId);
-  const away = findClub(world, match.awayClubId);
-  if (!home || !away) return;
-  const hGoals = match.homeScore;
-  const aGoals = match.awayScore;
-  const apply = (club: Club, opponent: Club, goals: number, conceded: number) => {
-    let board = 0;
-    if (goals > conceded) board = club.level <= opponent.level ? 5 : 3;
-    else if (goals < conceded) board = club.level >= opponent.level ? -7 : -4;
-    club.boardConfidence = Math.max(0, Math.min(100, club.boardConfidence + board));
-    let fan = board > 0 ? 3 : board < 0 ? -4 : 0;
-    fan += Math.min(3, goals);
-    if (home.country === away.country) fan += goals > conceded ? 2 : goals === conceded ? 1 : -1;
-    club.fanConfidence = Math.max(0, Math.min(100, club.fanConfidence + fan));
-  };
-  apply(home, away, hGoals, aGoals);
-  apply(away, home, aGoals, hGoals);
 }
 
 export function roundLabelFor(competition: Competition, round: number): string {

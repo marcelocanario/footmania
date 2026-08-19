@@ -19,10 +19,6 @@ const NAV = [
   { to: "/settings", label: "Settings", icon: <SettingsIcon size={15} /> },
 ];
 
-function confidenceDot(v: number): string {
-  return v >= 65 ? "good" : v >= 40 ? "mid" : "bad";
-}
-
 export function Layout({ children }: { children: ReactNode }) {
   const { snapshot, clear, setUser, status, liveMatchId, checkLiveMatch, user } = useGame();
   const navigate = useNavigate();
@@ -108,9 +104,6 @@ export function Layout({ children }: { children: ReactNode }) {
               {provisional && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.4)", color: "var(--gold-2)" }}>PROV</span>}
               {dormant && <span className="chip" style={{ borderColor: "rgba(120,140,130,0.4)", color: "var(--text-3)" }}>DORMANT</span>}
               {status?.club?.inactivity?.eligible && <span className="chip" style={{ borderColor: "rgba(220,120,60,0.5)", color: "var(--red-2)" }}>INACTIVE</span>}
-              {club.boardConfidence !== undefined && (
-                <span className={`dot ${confidenceDot(club.boardConfidence)}`} title={`Board confidence ${club.boardConfidence}%`} />
-              )}
             </span>
           )}
           <button className="icon-btn" onClick={logout} title={strings.auth.logout} aria-label={strings.auth.logout}>

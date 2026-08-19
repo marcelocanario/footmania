@@ -1,7 +1,7 @@
 import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRow, World } from "./types";
 import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStandings, updateStandings } from "./league";
 import { generatePlayer } from "./player";
-import { simulateMatch } from "./match";
+import { simulateMatch, matchRepsForDivisions } from "./match";
 import { kickoffForRound, kickoffForRoundInTimezone, seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
 import { gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
@@ -170,6 +170,29 @@ export function activeDivisionForClub(world: World, clubId: number): Competition
   return world.competitions.find((c) => c.kind === "division" && c.status !== "ARCHIVED" && c.standings[clubId] !== undefined);
 }
 
+/**
+ * A club's current division number (1 = strongest) resolved from existing
+ * membership state — never from a club-level field. ACTIVE/filler clubs are
+ * found through their division's standings; PROVISIONAL/DORMANT clubs fall
+ * back to their most recent MpClubSeason tier (their last known / reserved
+ * tier), floored at 1. AI filler only exists inside a division (created via
+ * `createFillerAI` into `comp.standings`), so it always resolves here.
+ */
+export function divisionForClub(world: World, clubId: number): number {
+  const active = activeDivisionForClub(world, clubId);
+  if (active) return tierOf(active);
+  const membership = world.mpClubSeasons
+    .filter((m) => m.clubId === clubId)
+    .sort((a, b) => b.seasonId - a.seasonId)[0];
+  return membership?.tier ?? 1;
+}
+
+/** Record a club reaching a division, preserving its all-time highest. */
+export function recordDivision(world: World, clubId: number, division: number): void {
+  const club = clubById(world, clubId);
+  if (club) club.highestDivision = Math.max(club.highestDivision ?? 1, division);
+}
+
 export function lowestActiveTier(world: World, seasonId: number): number {
   const tiers = divisionsInSeason(world, seasonId).map(tierOf);
   return tiers.length === 0 ? 1 : Math.max(...tiers);
@@ -184,16 +207,14 @@ export function firstReplaceableAIDivision(world: World, seasonId: number, tier:
   return null;
 }
 
-/** Create a filler AI club with a generated squad. */
+/** Create a filler AI club with a generated squad. Filler AI only exists
+ *  inside a division (tier is its division), never standalone. */
 export function createFillerAI(world: World, tier: number): Club {
   const rng = world.rng;
   const id = world.nextId++;
   const city = pickCity(rng);
   const name = `${city} FC`;
   const country = "BRA";
-  // Division 1 filler should be a competitive benchmark (level ~20); lower
-  // tiers drop off so the pyramid has sporting meaning.
-  const level = Math.max(5, Math.round(21 - (tier - 1) * 4));
   const club: Club = {
     id,
     name,
@@ -206,15 +227,17 @@ export function createFillerAI(world: World, tier: number): Club {
     inactivityWarningStage: 0,
     liveMatchAt: null,
     country,
-    level,
+    highestDivision: tier,
+    // Deprecated: still consumed by the player-generation code until that
+    // overhaul lands. Filler quality derives from its division (tier).
+    level: Math.max(5, Math.round(21 - (tier - 1) * 4)),
     cash: STARTING_CASH(tier),
     stadiumName: `${city} Stadium`,
-    stadiumCapacity: Math.max(10000, Math.min(60000, level * 1100 + nextInt(rng, 15000))),
+    // Neutral per-tier capacity; stadium logic is slated for a separate revamp.
+    stadiumCapacity: Math.max(10000, Math.min(60000, tier * 1100 + nextInt(rng, 15000))),
     primaryColor: "#334455",
     secondaryColor: "#112233",
     coachName: generateName(rng, country),
-    boardConfidence: 50,
-    fanConfidence: 50,
     tactics: randomTactics(rng),
     trainingFocus: "assistant",
     captainId: null,
@@ -403,6 +426,7 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
       decider: false,
       compKind: "division",
       year: world.mp.seasonYear,
+      reps: matchRepsForDivisions(tierOf(comp), tierOf(comp)),
     });
     f.played = true;
     world.matches.push({
@@ -511,10 +535,37 @@ function retireFillerClub(world: World, clubId: number): void {
   }
   world.players = world.players.filter((player) => !playerIds.has(player.id));
   world.loans = world.loans.filter((loan) => !loanIds.has(loan.id));
-  world.auctions = world.auctions.filter((auction) => auction.sellerClubId !== clubId && !playerIds.has(auction.playerId));
+  // Transfer-market reconciliation (§102.9): a listing cannot reference a
+  // deleted seller or player. Cancel such listings, release reservations, and
+  // drop bids/history referencing the removed club. Applies to both transfer
+  // auctions and free-agent listings.
+  const cancelTransferListing = (listing: (typeof world.transferAuctions)[number]) => {
+    if (listing.status !== "ACTIVE") return;
+    if (listing.sellerClubId === clubId || playerIds.has(listing.playerId)) {
+      listing.status = "CANCELLED";
+      listing.cancelledAt = Date.now();
+      for (const r of world.marketReservations) {
+        if (r.listingId === listing.id && r.releasedAt === null) r.releasedAt = Date.now();
+      }
+    }
+  };
+  const cancelFreeAgentListing = (listing: (typeof world.freeAgentListings)[number]) => {
+    if (listing.status !== "ACTIVE") return;
+    if (playerIds.has(listing.playerId)) {
+      listing.status = "CANCELLED";
+      listing.completedAt = Date.now();
+      for (const r of world.marketReservations) {
+        if (r.listingId === listing.id && r.releasedAt === null) r.releasedAt = Date.now();
+      }
+    }
+  };
+  for (const listing of world.transferAuctions) cancelTransferListing(listing);
+  for (const listing of world.freeAgentListings) cancelFreeAgentListing(listing);
+  // Remove the retired club's own bids/reservations across both markets.
+  world.marketBids = world.marketBids.filter((b) => b.clubId !== clubId);
+  world.marketReservations = world.marketReservations.filter((r) => r.clubId !== clubId);
   delete world.ticketPrices[clubId];
   world.stadiumUpgrades = world.stadiumUpgrades.filter((upgrade) => upgrade.clubId !== clubId);
-  world.tvDeals = world.tvDeals.filter((deal) => deal.clubId !== clubId);
   world.clubs = world.clubs.filter((candidate) => candidate.id !== clubId);
 }
 
@@ -568,6 +619,7 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
   const club = clubById(world, clubId)!;
   retireFillerClub(world, aiId);
   club.competitionState = "ACTIVE";
+  recordDivision(world, clubId, tierOf(division));
   // The human club inherits only current-season competition state; it keeps
   // its own identity, roster, finances, facilities.
   world.news.push({ dayIndex: world.dayIndex, text: `${club.name} joined ${division.name}`, kind: "mp", clubId: club.id });
@@ -628,6 +680,7 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
   club.competitionState = "ACTIVE";
   club.abandonmentEligibleAt = null;
   club.lastMeaningfulActivityAt = now;
+  recordDivision(world, clubId, tierOf(division));
   // Dormancy freezes payroll time.  Re-entering starts a fresh active payroll
   // period at the return instant; it must not charge missed salary or inherit
   // a stale day counter from the previous season.
@@ -1180,6 +1233,7 @@ export function playPracticeMatch(world: World, clubId: number): { homeGoals: nu
     decider: false,
     compKind: "division",
     year: world.mp.seasonYear,
+    reps: matchRepsForDivisions(divisionForClub(world, club.id), divisionForClub(world, opponent.id)),
   });
   // Deliberately NOT applying applyMatchToPlayers: practice results are
   // non-persistent and must not farm progression (plan §15).

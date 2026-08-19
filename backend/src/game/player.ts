@@ -336,7 +336,6 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
     clubId: club.id,
     tacPos: -1,
     onSale: false,
-    salePrice: null,
     suspendedGames: 0,
     morale: 70,
     loanId: null,

@@ -2,8 +2,9 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorld, persistWorld } from "../services/saveService";
 import { liveStateView } from "../services/liveView";
-import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
+import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, matchRepsForDivisions } from "../game/match";
 import { advanceLiveMatches } from "../game/world";
+import { divisionForClub } from "../game/multiplayer";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
 import { StaleWorldError } from "../services/saveService";
@@ -173,7 +174,7 @@ async function handleMessage(
           return;
         }
         const humanSide = st.homeClubId === humanClub.id ? 0 : 1;
-        const res = performLiveSub(world.rng, home, away, world.players, st, humanSide, msg.outId ?? -1, msg.inId ?? -1);
+        const res = performLiveSub(world.rng, home, away, world.players, st, humanSide, msg.outId ?? -1, msg.inId ?? -1, matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id)));
         if (res.error) {
           send(ws, { type: "sub", error: res.error, state: liveStateView(world, st, meta.userId) });
           return;

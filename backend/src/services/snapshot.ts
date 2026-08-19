@@ -1,8 +1,7 @@
 import type { Competition, World } from "../game/types";
-import { dayInfo, multiplayerDayLabel, weekdayName } from "../game/calendar";
+import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { sortedStandings, getPosition } from "../game/league";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
-import { freeAgentSigningBonus } from "../game/transfers";
 import { gameConfig } from "../config";
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
@@ -16,7 +15,6 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     tacPos: p.tacPos,
     tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
     overall: p.overall,
-    potential: p.potential,
     tier: p.tier,
     skills: p.skills,
     energy: p.energy,
@@ -34,7 +32,6 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     characteristic1: p.characteristic1,
     characteristic2: p.characteristic2,
     onSale: p.onSale,
-    salePrice: p.salePrice,
     suspended: p.suspendedGames > 0,
     suspendedGames: p.suspendedGames,
     morale: p.morale,
@@ -66,23 +63,20 @@ function loanInfo(world: World, p: World["players"][number], clubId: number) {
 
 export function buildSnapshot(world: World, clubId: number) {
   const club = world.clubs.find((c) => c.id === clubId);
-  const info = dayInfo(world.dayIndex);
-  const dayLabel = (day: number) => world.mp.seasonId === 0 ? dayInfo(day).label : multiplayerDayLabel(day);
-  const currentDateLabel = world.mp.seasonId === 0 ? info.label : multiplayerDayLabel(world.dayIndex);
-  const currentDayOfWeek = world.mp.seasonId === 0
-    ? info.dayOfWeek
-    : new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, world.dayIndex))).getUTCDay();
+  const dayLabel = (day: number) => multiplayerDayLabel(day);
+  const currentDateLabel = multiplayerDayLabel(world.dayIndex);
+  const currentDayOfWeek = new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, world.dayIndex))).getUTCDay();
   const currentSeasonDivisions = new Set(
     world.competitions
       .filter((c) => c.kind === "division" && c.seasonId === world.mp.seasonId)
       .map((c) => c.id),
   );
   const nextFixture = world.fixtures
-    .filter((f) => !f.played && (world.mp.seasonId === 0 || f.competitionId < 0 || currentSeasonDivisions.has(f.competitionId)) && f.dayIndex >= world.dayIndex && (f.homeClubId === clubId || f.awayClubId === clubId))
+    .filter((f) => !f.played && currentSeasonDivisions.has(f.competitionId) && f.dayIndex >= world.dayIndex && (f.homeClubId === clubId || f.awayClubId === clubId))
     .sort((a, b) => a.dayIndex - b.dayIndex)[0];
 
   const competitions = world.competitions
-    .filter((c) => world.mp.seasonId === 0 || c.kind !== "division" || c.seasonId === world.mp.seasonId)
+    .filter((c) => c.kind !== "division" || c.seasonId === world.mp.seasonId)
     .map((c) => {
     const position = c.kind === "league" || c.kind === "division" ? getPosition(c, clubId) : 0;
     return {
@@ -118,33 +112,44 @@ export function buildSnapshot(world: World, clubId: number) {
     .reverse()
     .map((n) => ({ dayIndex: n.dayIndex, dayLabel: dayLabel(n.dayIndex), text: n.text, kind: n.kind }));
 
-  const auctions = world.auctions.map((a) => {
-    const p = world.players.find((x) => x.id === a.playerId);
-    return {
-      id: a.id,
-      playerId: a.playerId,
-      playerName: p?.name ?? "",
-      overall: p?.overall ?? 0,
-      position: p?.position ?? 0,
-      age: p?.age ?? 0,
-      salary: p?.salary ?? 0,
-      skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
-      minBid: a.minBid,
-      deadlineDay: a.deadlineDay,
-      deadlineLabel: dayLabel(a.deadlineDay),
-      startsAt: a.startsAt ?? null,
-      endsAt: a.endsAt ?? null,
-      currentBid: a.bids.length > 0 ? Math.max(...a.bids.map((b) => b.amount)) : 0,
-      sellerClubId: a.sellerClubId,
-      myBid: a.bids.find((b) => b.clubId === clubId)?.amount ?? 0,
-    };
-  });
+  const auctions = world.transferAuctions
+    .filter((a) => a.status === "ACTIVE")
+    .map((a) => {
+      const p = world.players.find((x) => x.id === a.playerId);
+      const myBid = clubId !== null ? world.marketBids.find((b) => b.listingId === a.id && b.clubId === clubId) : undefined;
+      return {
+        id: a.id,
+        playerId: a.playerId,
+        playerName: p?.name ?? "",
+        overall: p?.overall ?? 0,
+        position: p?.position ?? 0,
+        age: p?.age ?? 0,
+        salary: p?.salary ?? 0,
+        skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
+        value: p?.value ?? 0,
+        openingPrice: a.openingPrice,
+        currentPrice: a.currentPrice,
+        bidIncrement: a.bidIncrement,
+        bidderCount: world.marketBids.filter((b) => b.listingId === a.id).length,
+        sellerClubId: a.sellerClubId,
+        sellerName: world.clubs.find((c) => c.id === a.sellerClubId)?.name ?? "",
+        deadline: a.deadline,
+        status: a.status,
+        myMaxBid: myBid?.maxBid ?? null,
+        amILeading: a.leadingClubId === clubId,
+      };
+    });
 
+  // Free agents with an active market listing (Phase 7). Raw clubId === null
+  // players without a listing are not market-visible yet.
+  const listedPlayerIds = new Set(
+    world.freeAgentListings.filter((l) => l.status === "ACTIVE").map((l) => l.playerId)
+  );
   const freeAgents = world.players
-    .filter((p) => p.clubId === null)
+    .filter((p) => p.clubId === null && listedPlayerIds.has(p.id))
     .sort((a, b) => b.overall - a.overall)
     .slice(0, 30)
-    .map((p) => ({ ...playerView(p), signingBonus: freeAgentSigningBonus(p) }));
+    .map((p) => playerView(p));
 
   return {
     save: {
@@ -166,15 +171,13 @@ export function buildSnapshot(world: World, clubId: number) {
           name: club.name,
           shortName: club.shortName,
           country: club.country,
-          level: club.level,
+          highestDivision: club.highestDivision,
           cash: club.cash,
           stadiumName: club.stadiumName,
           stadiumCapacity: club.stadiumCapacity,
           primaryColor: club.primaryColor,
           secondaryColor: club.secondaryColor,
           coachName: club.coachName,
-          boardConfidence: club.boardConfidence,
-          fanConfidence: club.fanConfidence,
           trainingFocus: club.trainingFocus,
           competitionState: club.competitionState,
           tactics: club.tactics

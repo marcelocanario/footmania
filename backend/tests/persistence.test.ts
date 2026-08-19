@@ -162,4 +162,67 @@ describe("global multiplayer world persistence", () => {
     expect(after).not.toBeNull();
     expect(after!.save.revision).toBeGreaterThan(rev0);
   });
+
+  it("round-trips market listings, bids, reservations, history, and AI evaluations", async () => {
+    const { saveId } = await freshGlobalWorld(901);
+    const { seasonId, world } = await withSeason(saveId);
+    const seller = world.clubs[0];
+    const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
+    const now = Date.now();
+
+    // A public auction listing.
+    const { createTransferAuction, applyMaxBid, releaseAllReservations } = await import("../src/game/market");    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
+    expect(created.ok).toBe(true);
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+
+    // A club bids (reservation + bid rows).
+    const buyer = world.clubs.find((c) => c.id !== seller.id)!;
+    const bid = applyMaxBid(world, {
+      listing,
+      club: buyer,
+      player,
+      proposedMaximum: Math.round(player.value * 1.1),
+      buyerDivision: 1,
+      safeMarketBudget: 50_000_000,
+      now,
+    });
+    expect(bid.ok).toBe(true);
+
+    // History + AI evaluation state.
+    const { recordTransaction } = await import("../src/game/market");
+    recordTransaction(world, {
+      playerId: player.id, listingId: listing.id, type: "TRANSFER",
+      fromClubId: seller.id, toClubId: buyer.id, price: listing.currentPrice,
+      seasonId, seasonKey: "2026-01", matchday: world.dayIndex, timestamp: now,
+    });
+    world.aiEvaluations.push({
+      marketType: "TRANSFER", listingId: listing.id, clubId: buyer.id,
+      evaluatedAt: now, decision: "BID", maxBid: Math.round(player.value * 1.1),
+    });
+
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const rw = reloaded!.world;
+    expect(rw.transferAuctions).toHaveLength(1);
+    expect(rw.transferAuctions[0].id).toBe(listing.id);
+    expect(rw.transferAuctions[0].status).toBe("ACTIVE");
+    expect(rw.marketBids).toHaveLength(1);
+    expect(rw.marketBids[0].clubId).toBe(buyer.id);
+    expect(rw.marketBids[0].maxBid).toBe(world.marketBids[0].maxBid);
+    expect(rw.marketReservations).toHaveLength(1);
+    expect(rw.marketReservations[0].amount).toBe(world.marketBids[0].maxBid);
+    expect(rw.playerMarketHistory).toHaveLength(1);
+    expect(rw.playerMarketHistory[0].type).toBe("TRANSFER");
+    expect(rw.aiEvaluations).toHaveLength(1);
+    expect(rw.aiEvaluations[0].decision).toBe("BID");
+
+    // A reload after settlement-like release: released reservations survive.
+    releaseAllReservations(rw, listing.id, "TRANSFER");
+    await persistWorld(prisma, saveId, saveId, rw);
+    const reloaded2 = await loadGlobalWorld(prisma);
+    expect(reloaded2!.world.marketReservations[0].releasedAt).not.toBeNull();
+  });
 });

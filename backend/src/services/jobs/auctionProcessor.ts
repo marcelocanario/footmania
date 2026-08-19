@@ -1,29 +1,25 @@
 import type { JobContext, JobResult } from "./runner";
-import { settleDueAuctions } from "../../game/world";
+import { expireDueListings, settleDueTransferAuctions } from "../../game/market";
+import { relistDueFreeAgents, settleDueFreeAgentListings } from "../../game/freeAgents";
 
 /**
  * Auction processor (worker plan §1).
  *
  * Responsibilities:
- *  - settle only auctions whose endsAt (or legacy day deadline) <= now;
- *  - settle in chronological order;
- *  - settle idempotently: a resolved auction leaves the world (or is marked
- *    resolved), so re-running the job cannot settle the same listing twice.
+ *  - expire no-bid new-format transfer listings past deadline;
+ *  - atomically settle new-format transfer listings WITH bids (Phase 3);
+ *  - settle due free-agent listings and relist no-bid ones (§54);
+ *  - settle idempotently: resolved listings change status so re-runs skip them.
  */
 export async function auctionProcessor(ctx: JobContext): Promise<JobResult> {
   const { world } = ctx;
   const now = Date.now();
-  const dueListings = world.auctions.filter((listing) => {
-    const deadline = listing.endsAt ?? fallbackDeadline(world, listing);
-    return now >= deadline;
-  });
-  if (dueListings.length === 0) return { changed: false };
-  settleDueAuctions(world, now);
+  const expiredNew = expireDueListings(world, now);
+  const settledNew = settleDueTransferAuctions(world, now);
+  const settledFreeAgents = settleDueFreeAgentListings(world, now);
+  const relistedFreeAgents = relistDueFreeAgents(world, now);
+  if (expiredNew === 0 && settledNew === 0 && settledFreeAgents === 0 && relistedFreeAgents === 0) {
+    return { changed: false };
+  }
   return { changed: true };
-}
-
-function fallbackDeadline(world: JobContext["world"], listing: { deadlineDay: number }) {
-  const year = world.mp.seasonYear;
-  const month = world.mp.seasonMonth;
-  return Date.UTC(year, month - 1, Math.max(1, Math.min(31, listing.deadlineDay)), 20, 0, 0);
 }

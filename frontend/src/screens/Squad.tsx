@@ -183,7 +183,6 @@ export function Squad() {
   const ratingBody = (p: PlayerView) => (
     <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.2rem" }}>
       {p.overall}
-      {p.potential > p.overall && <span style={{ color: "var(--grass-2)", fontSize: "0.78rem" }}> (+{p.potential - p.overall})</span>}
     </span>
   );
 
@@ -309,7 +308,7 @@ export function Squad() {
               <div style={{ margin: "14px 0 4px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-3)", marginBottom: 5 }}>
                   <span>Overall</span>
-                  <span>Potential {selectedPlayer.potential} · Tier {selectedPlayer.tier}</span>
+                  <span>Tier {selectedPlayer.tier}</span>
                 </div>
                 <RatingBar value={selectedPlayer.overall} />
               </div>

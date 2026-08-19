@@ -2,7 +2,7 @@ import type { Club, Player, World } from "../game/types";
 import { createRng } from "../game/rng";
 import { nextInt } from "../game/rng";
 import { generatePlayer } from "../game/player";
-import { tacticsForClub } from "../game/club";
+import { tacticsForClub, divisionTicketTier } from "../game/club";
 import { STARTING_CASH, TICKET_PRICES } from "../game/constants";
 import { generateName } from "../game/names";
 import { MP_CONFIG } from "../config";
@@ -26,14 +26,18 @@ export function generateWorld(seed: number): World {
     fixtures: [],
     matches: [],
     news: [{ dayIndex: 0, text: "Welcome to Footmania! A new season is about to begin.", kind: "season" }],
-    auctions: [],
     loans: [],
+    marketBids: [],
+    transferAuctions: [],
+    freeAgentListings: [],
+    marketReservations: [],
+    playerMarketHistory: [],
+    aiEvaluations: [],
     seasonAwards: [],
     records: [],
     managerHistory: [],
     ticketPrices: {},
     stadiumUpgrades: [],
-    tvDeals: [],
     humanClubId: null,
     seasonSummary: null,
     rng,
@@ -86,7 +90,6 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
   const rng = world.rng;
   const id = world.nextId++;
   const name = opts.clubName.trim();
-  const level = 15; // Division 1 benchmark quality for a fresh club
   const stadiumName = opts.stadiumName?.trim() || `${name} Stadium`;
   const club: Club = {
     id,
@@ -100,15 +103,19 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     inactivityWarningStage: 0,
     liveMatchAt: null,
     country: opts.country,
-    level,
+    // A fresh club's division is unknown until placement (placeNewClub). Keep a
+    // neutral 1 until then; placement / rollover records the real tier.
+    highestDivision: 1,
+    // Deprecated: still consumed by the player-generation code (calcOverall /
+    // generateSkills) until that overhaul lands. Neutral benchmark level.
+    level: 15,
     cash: STARTING_CASH[2], // Division 1 new-club starting cash
     stadiumName,
-    stadiumCapacity: Math.max(15000, Math.min(60000, level * 1100 + nextInt(rng, 15000))),
+    // Neutral default; stadium/capacity logic is slated for a separate revamp.
+    stadiumCapacity: Math.max(15000, Math.min(60000, 15 * 1100 + nextInt(rng, 15000))),
     primaryColor: opts.primaryColor ?? "#d40000",
     secondaryColor: opts.secondaryColor ?? "#ffffff",
     coachName: generateName(rng, opts.country),
-    boardConfidence: 50,
-    fanConfidence: 50,
     tactics: tacticsForClub(rng),
     trainingFocus: "assistant",
     captainId: null,
@@ -118,7 +125,7 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     trophies: {},
   };
   world.clubs.push(club);
-  const base = TICKET_PRICES[Math.min(5, Math.round(club.level / 5))].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];
+  const base = TICKET_PRICES[divisionTicketTier(1)].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];
   world.ticketPrices[club.id] = base;
   populatePlayers(rng, world, club);
   return club;

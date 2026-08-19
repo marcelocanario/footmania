@@ -71,9 +71,203 @@ const gameConfigSchema = z
     }
   });
 
-// Multiplayer settings, all tunable without code changes. Kept out of the
-// strict game.config schema because they may not exist in older config files.
-export const MP_CONFIG = {
+  // Central market configuration (transfer-market-overhaul §85). Every market
+  // multiplier/balance knob lives here so business logic never hard-codes a
+  // tunable value. Structural rules (privacy, youth ineligibility, shared
+  // financial validation) remain domain invariants in the market services.
+  export const MARKET_CONFIG = {
+    transferAuction: {
+      // Real-time 24-hour listings (replaces legacy auctionDurationDays).
+      durationHours: 24,
+      cap: {
+        // Bidder-specific club-to-club cap (§10/§102.13.3). The cap is
+        // asymmetric based on the division GAP between buyer and seller:
+        //   favorableGap = max(0, Dseller - Dbuyer)
+        //   normalizedGap = favorableGap / max(1, Dmax - 1)
+        //   curve = (1 - exp(-K * normalizedGap)) / (1 - exp(-K))
+        //   capMultiplier = base + bonus * curve
+        // Same/weaker-division buyer => exactly BASE (150%); strongest buying
+        // from weakest => BASE + BONUS (300%). Independent of the budget curve.
+        baseMultiplier: 1.5,
+        maxBonusMultiplier: 1.5,
+        curveK: 2.0,
+      },
+      bidIncrementRate: 0.01,
+      softCloseMinutes: 5,
+      extensionMinutes: 5,
+      maxSoftCloseExtensionMinutes: 30,
+      allowAcrossSeasonRollover: false,
+    },
+
+    freeAgents: {
+      startMultiplier: 0.1,
+      durationHours: 24,
+      relistMultipliers: [0.1, 0.075, 0.05, 0.025],
+      // Null => no player-value cap; only SafeMarketBudget applies.
+      valueBasedMaximumMultiplier: null,
+      salaryKernelBandwidthLogValue: Math.log(2),
+      salaryEffectiveSampleTarget: 25,
+      salaryNoiseSigma: 0.05,
+      salaryNoiseZClamp: 1.5,
+      salaryPercentileFloor: 0.05,
+      salaryPercentileCeiling: 0.95,
+      contractMinSeasons: 1,
+      contractMaxSeasons: 4,
+      contractAgeMidpointOffset: 1.0,
+      contractAgeScaleSigmaMultiplier: 0.625,
+      allowAcrossSeasonRollover: true,
+    },
+
+    finance: {
+      // P10 conservative quantile for uncertain recurring income.
+      uncertainIncomeQuantile: 0.1,
+      // Shrinkage constant w = n / (n + K) toward the division distribution.
+      clubIncomeShrinkageK: 8,
+      // Liquidity reserve in payroll cycles (>= 1).
+      reservePayrollCycles: 1,
+    },
+
+    // Division → ticket-tier mapping for pricing/attendance. The division
+    // number (1 = strongest) is mapped to a 1..maxTier bucket via a monotone
+    // sublinear curve: tier = clamp(1..maxTier, maxTier / division^curveK).
+    // Division 1 always lands on the strongest (highest) bucket; deeper
+    // divisions decay sublinearly so the pyramid tiers are not over-indexed.
+    ticketTier: {
+      maxTier: 5,
+      curveK: 0.5,
+    },
+
+    // Match comeback-damping strength gap (see match.ts). When the attacking
+    // side leads by 2+ goals and the defending club's strength bucket exceeds
+    // the attacker's by at least this many buckets, comeback probability is
+    // suppressed (replaces the old club.level >= 8 difference).
+    match: {
+      comebackRepGap: 2,
+    },
+
+    aiSelling: {
+      // Phase 5 AI selling (§36/§39/§40). Weights are starting points tuned in
+      // Phase 11; exact ranges come from the plan's suggested values.
+      sellScore: {
+        surplusAtPosition: 30,
+        backupRarelyNeeded: 25,
+        olderWithReplacement: 15,
+        contractNearingExpiry: 10,
+        poorWageEfficiency: 10,
+        squadAboveDesiredSize: 10,
+        financialPressure: 30,
+        marketOpportunity: 10,
+        primaryStarterPenalty: -30,
+        onlyAdequatePlayerPenalty: -40,
+        positionThinPenalty: -30,
+      },
+      // The AI lists only when it would accept selling at the opening price
+      // (the base-value default, §64.1). A positive threshold encourages supply;
+      // too high starves the market. Tuned in Phase 11.
+      listThreshold: 25,
+      // Salary/value efficiency: salary above this fraction of value triggers
+      // the poor-wage-efficiency sell signal (§36).
+      poorWageEfficiencySalaryToValueRatio: 0.2,
+      // Age at which an ageing-with-replacement sell signal applies (§36).
+      ageingSellAge: 30,
+      // Minimum senior players per position (used for market-opportunity
+      // demand counting, §40).
+      minPerPosition: [3, 4, 4, 5, 4],
+      // Market-opportunity thresholds (§40): few listings at the position and
+      // several needy clubs before the nudge applies.
+      marketOpportunityMaxActiveListings: 1,
+      marketOpportunityMinNeedyClubs: 2,
+      // Number of AI clubs evaluated per worker tick (spreads load and keeps
+      // each run small). 0 => evaluate every AI club.
+      clubsPerTick: 4,
+      // An AI club evaluates its squad at most this often (real-time minutes).
+      evaluationIntervalMinutes: 120,
+      // Maximum players a club lists in one evaluation run.
+      maxListingsPerClub: 3,
+      // Desired senior squad size (for oversized-squad pressure).
+      desiredSeniorSquadSize: 26,
+      // Players below this overall count as "adequate" for depth protection.
+      depthReplacementOverallFloor: 60,
+      // Financial pressure ratio: cash < salary × ratio triggers pressure.
+      financialPressureCashToSalaryRatio: 3,
+      // Market-opportunity horizon: how many recent days count as "few players
+      // available" when a club over-stocks a position.
+      marketOpportunityLookbackDays: 5,
+    },
+
+    aiBuying: {
+      // Phase 6 AI buying (§28-§34). Weights are starting points tuned in
+      // Phase 11; ranges come from the plan's suggested values.
+      needScore: {
+        // No viable senior starter at the position.
+        noViableStarter: 50,
+        // Below the required positional depth.
+        belowRequiredDepth: 40,
+        // Current starter is well below the desired level.
+        starterBelowDesired: 25,
+        // Backup is weak (senior present but below the depth floor).
+        weakBackup: 15,
+        // Ageing starter that needs eventual replacement.
+        ageingStarter: 10,
+        // Position is already strong/deep — discourages buying.
+        alreadyStrong: -40,
+      },
+      // Desired number of senior players per position (used by need scoring).
+      desiredDepthPerPosition: [2, 3, 3, 3, 3],
+      // Players below this overall count as "inadequate" at a position.
+      adequateOverallFloor: 60,
+      // A starter below floor + this offset triggers starter-below-desired (§28).
+      starterBelowDesiredOffset: 10,
+      // At least floor + this surplus is "already strong" (§28).
+      alreadyStrongSurplus: 2,
+      // Upgrade gain below this ratio is treated as "does not improve the squad"
+      // unless the positional need is severe (§29).
+      upgradeGainFloor: 1.02,
+      // Age at which a starter is considered "ageing" (§28).
+      ageingBuyAge: 30,
+      // Player-value multiplier applied to the base valuation for position need.
+      needMultiplierRange: [0.95, 1.3],
+      // Player-value multiplier applied for how much the target upgrades the squad.
+      upgradeMultiplierRange: [0.95, 1.2],
+      // Deterministic valuation noise multiplier bounds (§32).
+      valuationNoiseRange: [0.95, 1.05],
+      // Number of AI clubs that evaluate active listings per worker tick.
+      clubsPerTick: 4,
+      // AI evaluates active listings at most this often (real-time minutes).
+      evaluationIntervalMinutes: 60,
+      // Maximum active listings a club evaluates per run.
+      maxListingsPerRun: 8,
+    },
+
+    // Recent-trade opening-price base (§48/§64.1). A player's own last
+    // permanent trade price blends toward player.value over this many league
+    // rounds played by the current owner. 0 => base is always player.value.
+    recentTrade: {
+      fadeOverGames: 6,
+    },
+
+    // Seller-defined opening-price range as a fraction of the base value
+    // (§64.1). 60%–100% prevents artificially cheap funneling while letting
+    // competitive bidding reach the max-bid cap. Sellers almost always choose
+    // the maximum, so the default opening (the max) = the player's value.
+    auctionOpeningRange: {
+      minValueRatio: 0.6,
+      maxValueRatio: 1.0,
+    },
+
+    loans: {
+      exposureMinutes: 30,
+      borrowerWageShare: 1.0,
+      cancellation: "PRE_CLAIM_ONLY" as const,
+      allowAcrossSeasonRollover: false,
+    },
+  } as const;
+
+  export type MarketConfig = typeof MARKET_CONFIG;
+
+  // Multiplayer settings, all tunable without code changes. Kept out of the
+  // strict game.config schema because they may not exist in older config files.
+  export const MP_CONFIG = {
   // Fraction of rounds after which no new humans may join the current season.
   joinThresholdPercent: 0.5,
   // UTC hour at which every scheduled round kicks off (GLOBAL_FIXED mode).
@@ -91,7 +285,7 @@ export const MP_CONFIG = {
   liveAdvanceMinutesPerTick: 1,
   // Idempotency guard: only one UTC day's daily tick runs per key.
   dailyTickHourUtc: 0,
-  // Season budget economy (plans/multiplayer.md §17A).
+  // Season budget economy (plans/1. multiplayer.md §17A).
   minimumTierBudgetRatio: 0.3,
   tierBudgetDecayRate: 0.55,
   // Inactivity thresholds by tier (days), per plan §41.

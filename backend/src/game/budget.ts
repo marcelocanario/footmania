@@ -4,7 +4,7 @@ import { calculateBaseSalary, calculatePlayerValue } from "./economy";
 import { remainingSeasons } from "./economy";
 
 /**
- * Seasonal budget economy (plans/multiplayer.md §17A).
+ * Seasonal budget economy (plans/1. multiplayer.md §17A).
  *
  * The seasonal budget is an allocation ADDED to the club's existing finances
  * (never a balance reset). Each club-season pair may receive at most one
@@ -61,8 +61,8 @@ export async function setBudgetSettings(prisma: PrismaClient, opts: { firstDivis
 
 /**
  * Estimate of the senior-squad average overall for a healthy Division 1 club.
- * Derived from the club-generation curve: top clubs (level 19-25) generate
- * players around overall ~72-80. We pick a representative middle value.
+ * Derived from the club-generation curve: top-division clubs generate players
+ * around overall ~72-80. We pick a representative middle value.
  */
 export function expectedFirstTeamOverall(): number {
   return 72;
@@ -84,18 +84,18 @@ export function calculateInitialFirstDivisionSeasonBudget(): number {
 
   // Expected first-team transfer spend: 2 meaningful acquisitions of a strong
   // starter (~overall 78).
-  const starOverall = 78;
-  const starValue = calculatePlayerValue(starOverall, 27, 3);
-  const expectedTransferSpend = MP_CONFIG.expectedMeaningfulSigningsPerSeason * starValue;
+  const strongStarterOverall = 78;
+  const strongStarterValue = calculatePlayerValue(strongStarterOverall, 27, 3);
+  const expectedTransferSpend = MP_CONFIG.expectedMeaningfulSigningsPerSeason * strongStarterValue;
 
   // Recurring operating costs are intentionally NOT funded directly by the
-  // seasonal allocation: clubs have gate revenue, TV deals, and prizes as
-  // separate income streams. Counting them again here would double-fund wages.
+  // seasonal allocation: clubs have gate revenue and prizes as separate income
+  // streams. Counting them again here would double-fund wages.
   const rawTier1Budget = expectedSeasonWages + expectedTransferSpend;
 
   // Sanity check against representative values:
   //  - an average starter (~overall 68) must be comfortably affordable;
-  //  - a star (~78) a meaningful-but-reasonable purchase;
+  //  - a strong starter (~78) a meaningful-but-reasonable purchase;
   //  - an elite (~86) a major expenditure, not a routine buy.
   const avgStarter = calculatePlayerValue(68, 25, 3);
   const elite = calculatePlayerValue(86, 26, 3);
@@ -123,9 +123,15 @@ export async function tierBudget(prisma: PrismaClient, tier: number): Promise<nu
   const first = await ensureFirstDivisionBudget(prisma);
   const ratio = Math.max(0.05, Math.min(1, await readNumberSetting(prisma, MINIMUM_TIER_BUDGET_RATIO_KEY, MP_CONFIG.minimumTierBudgetRatio)));
   const decay = Math.max(0.01, Math.min(5, await readNumberSetting(prisma, TIER_BUDGET_DECAY_RATE_KEY, MP_CONFIG.tierBudgetDecayRate)));
-  const minimum = Math.round(first * ratio);
-  const budget = minimum + Math.round((first - minimum) * Math.exp(-decay * Math.max(0, tier - 1)));
-  return Math.max(1, budget);
+  return calculateTierBudget(first, ratio, decay, Math.max(1, tier));
+}
+
+/** Budget curve used for prize comparisons, including hypothetical tier 0. */
+export async function prizeBudgetForTier(prisma: PrismaClient, tier: number): Promise<number> {
+  const first = await ensureFirstDivisionBudget(prisma);
+  const ratio = Math.max(0.05, Math.min(1, await readNumberSetting(prisma, MINIMUM_TIER_BUDGET_RATIO_KEY, MP_CONFIG.minimumTierBudgetRatio)));
+  const decay = Math.max(0.01, Math.min(5, await readNumberSetting(prisma, TIER_BUDGET_DECAY_RATE_KEY, MP_CONFIG.tierBudgetDecayRate)));
+  return calculateTierBudget(first, ratio, decay, tier);
 }
 
 /** Prorated budget for a club joining mid-season (plan §17). */
@@ -140,6 +146,14 @@ export function performanceModifier(finishPosition: number, divisionSize: number
   const mid = (divisionSize + 1) / 2;
   const delta = (mid - finishPosition) / (Math.max(1, divisionSize - 1));
   return Math.max(0.85, Math.min(1.15, 1 + delta * 0.06));
+}
+
+/** Calculate a configured tier budget, including hypothetical tier 0. */
+export function calculateTierBudget(first: number, ratio: number, decay: number, tier: number): number {
+  const minimum = Math.round(first * Math.max(0.05, Math.min(1, ratio)));
+  const rate = Math.max(0.01, Math.min(5, decay));
+  const budget = minimum + Math.round((first - minimum) * Math.exp(-rate * (tier - 1)));
+  return Math.max(1, budget);
 }
 
 export { remainingSeasons };

@@ -120,12 +120,7 @@ export function Finances() {
           <button className="btn sm" disabled={busy || prices.length !== 4} onClick={savePrices}>{strings.common.save}</button>
         </div>
         <div className="card">
-          <h2 className="card-title">TV deal & confidence</h2>
-          <div className="stats-row">
-            <div className="stat"><div className="label">TV this season</div><div className="value" style={{ fontSize: "1.2rem" }}>{money((details?.tvDeal?.baseAmount ?? 0) + (details?.tvDeal?.positionBonus ?? 0))}</div></div>
-            <div className="stat"><div className="label">Board</div><div className="value" style={{ fontSize: "1.2rem" }}>{club?.boardConfidence ?? 0}%</div></div>
-            <div className="stat"><div className="label">Fans</div><div className="value" style={{ fontSize: "1.2rem" }}>{club?.fanConfidence ?? 0}%</div></div>
-          </div>
+          <h2 className="card-title">Club operations</h2>
           <div className="hint" style={{ marginTop: 12 }}>Coach: {club?.coachName}</div>
         </div>
       </div>

@@ -14,7 +14,6 @@ import { persistWorld } from "../saveService";
  */
 export async function notificationProcessor(ctx: JobContext): Promise<JobResult> {
   const { world } = ctx;
-  if (world.mp.seasonId === 0) return { changed: false };
 
   const now = new Date();
   const realRef = seasonRefFor(now);
