@@ -10,6 +10,7 @@ import {
   contractSeasonsForAge,
 } from "../src/game/freeAgents";
 import { MARKET_CONFIG } from "../src/config";
+import { getImmediateAvailableCash } from "../src/game/finance";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
@@ -142,6 +143,30 @@ describe("free-agent proxy bidding (§43)", () => {
     const poor = makeClubFn(2, { cash: 100_000 });
     const r2 = applyFreeAgentBid(world, { listing, club: poor, player: fa, proposedMaximum: 5_000_000, immediateAvailableCash: 100, now: 1_700_000_000_000 });
     expect(r2.ok).toBe(false);
+  });
+
+  it("allows an active free-agent bidder to increase its maximum within total cash", () => {
+    const { world, listing, fa } = setupWorld();
+    const club = makeClubFn(1, { cash: 30_000_000 });
+    world.clubs.push(club);
+    expect(applyFreeAgentBid(world, {
+      listing,
+      club,
+      player: fa,
+      proposedMaximum: 20_000_000,
+      immediateAvailableCash: getImmediateAvailableCash(world, club),
+      now: 1_700_000_000_000,
+    }).ok).toBe(true);
+    const increased = applyFreeAgentBid(world, {
+      listing,
+      club,
+      player: fa,
+      proposedMaximum: 25_000_000,
+      immediateAvailableCash: getImmediateAvailableCash(world, club),
+      now: 1_700_000_000_001,
+    });
+    expect(increased.ok).toBe(true);
+    expect(world.marketReservations.find((r) => r.clubId === club.id)?.amount).toBe(25_000_000);
   });
 });
 

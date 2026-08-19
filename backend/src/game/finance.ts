@@ -65,7 +65,8 @@ export function remainingSeasonFraction(world: World): number {
  * Salaries the club is responsible for from the next unpaid payroll through
  * season end (financial-control §5). Includes owned active players and
  * loaned-in players (borrower pays 100% of wages); excludes loaned-out
- * players, youth/academy players, and free agents.
+ * players and free agents. Academy/youth players are included because active
+ * payroll charges their salary just like senior payroll.
  */
 export function remainingSalaryCommitments(world: World, club: Club): number {
   // Provisional clubs do not pay current-season salaries, but their warning
@@ -73,7 +74,7 @@ export function remainingSalaryCommitments(world: World, club: Club): number {
   // Payroll state is frozen before activation, so that horizon starts at day 0.
   if (club.competitionState === "PROVISIONAL") {
     return world.players
-      .filter((player) => player.clubId === club.id && !player.isYouth && player.loanId === null)
+      .filter((player) => player.clubId === club.id && player.loanId === null)
       .reduce((sum, player) => sum + salaryCommitmentForPeriod(player.salary, 0, gameConfig.seasonDays), 0);
   }
   if (club.competitionState !== "ACTIVE") return 0;
@@ -87,7 +88,6 @@ export function remainingSalaryCommitments(world: World, club: Club): number {
   let total = 0;
   for (const player of world.players) {
     if (player.clubId !== club.id) continue;
-    if (player.isYouth) continue;
     // Loaned-out players are outside this club's current wage responsibility
     // (§5/§28); loaned-in players are handled through the active loan map.
     if (player.loanId !== null && !loanedInIds.has(player.id)) continue;
@@ -185,8 +185,12 @@ export interface AiFinancialDecision {
 }
 
 /** Remaining-season salary commitment for a fresh acquisition. */
-function acquisitionSalaryCommitment(salary: number, world: World): number {
-  return salaryCommitmentForPeriod(salary, world.dayIndex, gameConfig.seasonDays);
+function acquisitionSalaryCommitment(salary: number, world: World, club: Club): number {
+  // Provisional clubs are warned against the funded upcoming season, whose
+  // salary horizon starts at season day zero even though the current season's
+  // wage clock is frozen.
+  const startDay = club.competitionState === "PROVISIONAL" ? 0 : world.dayIndex;
+  return salaryCommitmentForPeriod(salary, startDay, gameConfig.seasonDays);
 }
 
 /**
@@ -200,11 +204,11 @@ function acquisitionSalaryCommitment(salary: number, world: World): number {
  *     + existing contingent salaries
  */
 export function evaluateAIDecision(world: World, club: Club, decision: AiFinancialDecision): boolean {
-  if (club.competitionState !== "ACTIVE") return true; // no salaries while not active
+  if (club.competitionState !== "ACTIVE" && club.competitionState !== "PROVISIONAL") return false;
   const totals = getCommitmentTotals(world, club);
   const cashAfter = club.cash - decision.immediateCost;
   const bidsAfter = totals.activeBidCommitments + decision.newBidCommitments;
-  const salaryAdded = decision.additionalSalaryCommitment ?? acquisitionSalaryCommitment(decision.additionalSalary, world);
+  const salaryAdded = decision.additionalSalaryCommitment ?? acquisitionSalaryCommitment(decision.additionalSalary, world, club);
   const salariesAfter = Math.max(0, totals.remainingSalaryCommitments - (decision.replacedSalaryCommitment ?? 0)) + salaryAdded;
   return cashAfter >= bidsAfter + salariesAfter + totals.contingentSalary;
 }
@@ -216,7 +220,7 @@ export function evaluateAIDecision(world: World, club: Club, decision: AiFinanci
  */
 export function aiAffordableCommitment(world: World, club: Club, additionalSalary: number): number {
   const totals = getCommitmentTotals(world, club);
-  const salaryDelta = acquisitionSalaryCommitment(additionalSalary, world);
+  const salaryDelta = acquisitionSalaryCommitment(additionalSalary, world, club);
   return Math.max(0, totals.financialCushion - salaryDelta);
 }
 
@@ -606,9 +610,9 @@ export function runFinancialIntervention(
         allowOwnedPlayer: true,
       });
       if (!prepared.ok) {
-        // This is an invariant failure: candidates were filtered from the
-        // same eligibility rules. Throw before any selected player is changed
-        // so the caller's save transaction can fail closed (§51).
+        // Candidates were filtered from the same eligibility rules. Throw
+        // before any selected player is changed so the caller's save
+        // transaction fails closed (§22/§51).
         throw new Error(`Financial intervention could not prepare a free-agent listing: ${prepared.error}`);
       }
       preparedListings.set(candidate.player.id, prepared.listing);
@@ -640,9 +644,9 @@ export function runFinancialIntervention(
       effectiveRecovered += candidate.effectiveRecovery;
 
       // The resulting free-agent listing blocks the former club (§35).
-       const listing = preparedListings.get(player.id);
-       if (!listing) throw new Error(`Financial intervention lost the prepared free-agent listing for player ${player.id}`);
-       world.freeAgentListings.push(listing);
+      const listing = preparedListings.get(player.id);
+      if (!listing) throw new Error(`Financial intervention lost the prepared free-agent listing for player ${player.id}`);
+      world.freeAgentListings.push(listing);
       world.news.push({
         dayIndex: world.dayIndex,
         text: `${player.name} left ${club.name} due to unpaid wages and is now a free agent`,
@@ -652,7 +656,7 @@ export function runFinancialIntervention(
 
       recordTransaction(world, {
         playerId: player.id,
-         listingId: listing.id,
+        listingId: listing.id,
         type: "FREE_AGENT_SIGNING",
         fromClubId: club.id,
         toClubId: null,

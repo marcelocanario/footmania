@@ -482,6 +482,35 @@ describe("applyMaxBid integration", () => {
     expect(view.amILeading).toBe(true);
   });
 
+  it("allows an active bidder to increase its maximum using its existing reservation", () => {
+    const { world, buyer, player, listing } = setupWorld();
+    buyer.cash = 20_000_000;
+    expect(applyMaxBid(world, {
+      listing,
+      club: buyer,
+      player,
+      proposedMaximum: 12_000_000,
+      buyerDivision: 1,
+      immediateAvailableCash: getImmediateAvailableCash(world, buyer),
+      now: 1_000,
+    }).ok).toBe(true);
+
+    // Cash is 20M and 12M is already reserved, so a 14M maximum is valid.
+    // The old implementation compared 14M to the post-reservation 8M and
+    // rejected this valid increase.
+    const increased = applyMaxBid(world, {
+      listing,
+      club: buyer,
+      player,
+      proposedMaximum: 14_000_000,
+      buyerDivision: 1,
+      immediateAvailableCash: getImmediateAvailableCash(world, buyer),
+      now: 2_000,
+    });
+    expect(increased.ok).toBe(true);
+    expect(world.marketReservations.find((r) => r.clubId === buyer.id)?.amount).toBe(14_000_000);
+  });
+
   it("a second higher max flips the leader and releases the loser's reservation", () => {
     const { world, buyer, seller, player, listing } = setupWorld();
     const buyer2 = makeClub(2, { cash: 40_000_000, isHuman: true });
@@ -496,6 +525,12 @@ describe("applyMaxBid integration", () => {
     // Loser's reservation released; winner reserves its own max.
     expect(world.marketReservations.filter((r) => r.clubId === buyer.id && r.releasedAt !== null)).toHaveLength(1);
     expect(world.marketReservations.find((r) => r.clubId === buyer2.id)?.amount).toBe(11_000_000);
+
+    const rebid = applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 12_000_000, buyerDivision: 1, immediateAvailableCash: 20_000_000, now: 3_000 });
+    expect(rebid.ok).toBe(true);
+    expect(listing.leadingClubId).toBe(buyer.id);
+    expect(world.marketReservations.find((r) => r.clubId === buyer.id)?.releasedAt).toBeNull();
+    expect(world.marketReservations.find((r) => r.clubId === buyer.id)?.amount).toBe(12_000_000);
   });
 
   it("clears at second-highest + increment when three clubs compete", () => {

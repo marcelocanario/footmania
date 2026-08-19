@@ -70,6 +70,19 @@ describe("financial cushion (§2/§62)", () => {
     const salaries = remainingSalaryCommitments(world, club);
     expect(salaries).toBe(3_000_000); // only the loaned-in wage counts
   });
+
+  it("includes active academy/youth salaries in the commitment horizon", () => {
+    const club = makeClubFn(1);
+    const youth = clubPlayer(createRng(31), club, 12, {
+      isYouth: true,
+      salary: 1_250_000,
+      payrollPaidThroughDay: 0,
+      payrollPaidAmount: 0,
+      payrollPeriodStartDay: 0,
+    });
+    const world = makeWorld([club], [youth]);
+    expect(remainingSalaryCommitments(world, club)).toBe(1_250_000);
+  });
 });
 
 describe("immediate available cash (§9/§64)", () => {
@@ -422,6 +435,24 @@ describe("provisional clubs (§7/§76)", () => {
     // No intervention while salaries are frozen.
     const res = runFinancialIntervention(world, club, { seasonId: 1, payrollCycleId: 7 });
     expect(res.ok).toBe(false);
+  });
+
+  it("includes funded youth wages and applies the AI guardrail before activation", () => {
+    const club = makeClubFn(1, { cash: 1_000_000, competitionState: "PROVISIONAL", isHuman: false });
+    const youth = clubPlayer(createRng(32), club, 10, {
+      isYouth: true,
+      salary: 5_000_000,
+      payrollPaidThroughDay: 0,
+      payrollPaidAmount: 0,
+      payrollPeriodStartDay: 0,
+    });
+    const world = makeWorld([club], [youth]);
+    expect(remainingSalaryCommitments(world, club)).toBe(5_000_000);
+    expect(evaluateAIDecision(world, club, {
+      immediateCost: 0,
+      newBidCommitments: 0,
+      additionalSalary: 0,
+    })).toBe(false);
   });
 });
 

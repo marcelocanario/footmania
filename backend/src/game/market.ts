@@ -346,6 +346,10 @@ export function upsertReservation(
     world.marketReservations.push(reservation);
   } else {
     reservation.amount = opts.amount;
+    // A previously outbid club may bid again on the same listing. Reuse the
+    // durable row, but make the commitment active again; otherwise settlement
+    // would see the club as leader with no live reservation (§23/§73).
+    reservation.releasedAt = null;
   }
   return reservation;
 }
@@ -711,6 +715,15 @@ export function applyMaxBid(
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
   const existing = marketBidFor(world, listing.id, club.id);
+  const existingReservation = existing
+    ? world.marketReservations.find(
+        (reservation) =>
+          reservation.clubId === club.id &&
+          reservation.listingId === listing.id &&
+          reservation.marketType === "TRANSFER" &&
+          reservation.releasedAt === null,
+      )
+    : undefined;
 
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
   if (now >= listing.deadline) return { ok: false, error: "Listing has closed" };
@@ -721,7 +734,10 @@ export function applyMaxBid(
     player,
     proposedMaximum: opts.proposedMaximum,
     buyerDivision: opts.buyerDivision,
-    immediateAvailableCash: opts.immediateAvailableCash,
+    // An active reservation for this same bid is being replaced, so it is
+    // available capacity for the increased maximum rather than an additional
+    // cash requirement.
+    immediateAvailableCash: opts.immediateAvailableCash + (existingReservation?.amount ?? 0),
     existingBid: existing,
   });
   if (!validated.ok) return validated;

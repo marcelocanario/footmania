@@ -214,6 +214,15 @@ export function applyFreeAgentBid(
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
   const existing = marketBidFor(world, listing.id, club.id);
+  const existingReservation = existing
+    ? world.marketReservations.find(
+        (reservation) =>
+          reservation.clubId === club.id &&
+          reservation.listingId === listing.id &&
+          reservation.marketType === "FREE_AGENT" &&
+          reservation.releasedAt === null,
+      )
+    : undefined;
 
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
   if (now >= listing.deadline) return { ok: false, error: "Listing has closed" };
@@ -238,7 +247,8 @@ export function applyFreeAgentBid(
   // §11/§9: free agents have no player-value cap; the only financial ceiling is
   // the hard immediate-cash rule (unreserved actual cash). Humans may make the
   // cushion negative; AI applies its own stricter guardrail at the strategy layer.
-  if (opts.proposedMaximum > opts.immediateAvailableCash) {
+  const availableForMaximum = opts.immediateAvailableCash + (existingReservation?.amount ?? 0);
+  if (opts.proposedMaximum > availableForMaximum) {
     return { ok: false, error: "Maximum exceeds your immediately available cash" };
   }
 
