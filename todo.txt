@@ -4,6 +4,7 @@ Game engine
 [DONE] player development/decay
 	[DONE] make players who have played a game this week develop more. players who have not played should receive a small debuff in development. similarly, not playing should negatively affect players who are decaying
 	[DONE] make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
+-inter-seasons should be carefully calculated when defining the match schedule. ex: we have 8 teams per group, so it's 14 games or 28 days (considering games every other day). most Februarys have exactly 28 days, so we need to plan January and March so that the inter-season leaves at least 1-2 days between last Feb game and first Mar game or last Jan game and first Feb game. all months should be distributed in such a way that we have a little breathing room like that. should we consider making seasons longer, like 45 days and increase each group to 10?
 
 Multiplayer
 [DONE] think of tournment structure
@@ -23,6 +24,7 @@ Balance economy
 [DONE] prevent people from creating a new disposeable team and ripping that team off in favor of their main team (prevent this through the bidding mechanism somehow, we can't guarante we'll be able to stop multiple accs)
 -plan a stadium system (attendance and income tied to fan confidence); stadium upgrades are expensive and have diminishing returns; you only have income from stadium when you play at home. important games have higher attendance (define what important means). stadium has upkeep
 -plan formula for newgens (expected starting squad quality for a Division 1 club)
+-implement a logic so that, if free agents are unclaimed for too long (configurable amount of days), they are deleted
 
 Questions:
 [DONE] what does a player salary depend on? does it increase overtime or as they win prizes, etc.? do they demand higher wages when contracts renew?
@@ -51,3 +53,5 @@ Tuning:
 -run monte carlo simulations of multiple player auctions, loans, promotions, etc. and propose tuning suggestions to the economy variables or formulas
 -run monte carlo simulations of multiple players being generated in main squad, youth squad and simulate growth/decay for a large number of players and propose tuning suggestions to related variables or formulas
 
+Documentation:
+-based on the plans, come up with a topic structure for a business rules document (all the important rules, algorithms and formulas in the system, what they mean and how they are calculated)

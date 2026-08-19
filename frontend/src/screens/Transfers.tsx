@@ -142,7 +142,7 @@ export function Transfers() {
   const takeLoan = async (loan: LoanView) => {
     if (!loan.player) return;
     try {
-      await api.loanPlayer(loan.player.id, "take");
+      await api.claimLoan(loan.id);
       toast.current?.show({ severity: "success", summary: "Loan agreed" });
       await refresh();
       setLoans((await api.listLoans()).loans);

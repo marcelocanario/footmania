@@ -2,12 +2,16 @@ import { PrismaClient } from "@prisma/client";
 import { generateWorld } from "../src/game/worldgen";
 import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
+import { ensureNamePools, seedNamePoolsFromArtifact } from "../src/services/namePoolService";
 import { initSeason } from "../src/game/multiplayer";
 import { seasonRefFor } from "../src/game/clock";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  const { rows } = await seedNamePoolsFromArtifact(prisma);
+  console.log(`Seeded ${rows} name-pool rows from artifact`);
+  await ensureNamePools(prisma);
   const save = await ensureGlobalSave(prisma);
   const loaded = await loadGlobalWorld(prisma);
   if (!loaded) throw new Error("Global save could not be loaded");

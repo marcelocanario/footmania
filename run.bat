@@ -25,7 +25,7 @@ echo   Stop the servers by closing their windows or pressing Ctrl+C.
 echo ============================================================
 echo.
 
-start "Footmania Backend" /D "%~dp0backend" cmd /k "npm run db:upgrade && npm run dev"
+start "Footmania Backend" /D "%~dp0backend" cmd /k "npm run db:upgrade && npm run db:seed-name-pools && npm run dev"
 start "Footmania Frontend" /D "%~dp0frontend" cmd /k "npm run dev"
 
 echo Both servers are launching in separate windows.

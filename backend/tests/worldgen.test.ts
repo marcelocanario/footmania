@@ -12,14 +12,13 @@ import { sortedStandings } from "../src/game/league";
 import type { World } from "../src/game/types";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const assets = join(here, "..", "assets", "namepools");
+const artifact = JSON.parse(readFileSync(join(here, "..", "assets", "namepools.json"), "utf8")) as {
+  countries: Record<string, { names: string[]; surnames: string[] }>;
+};
 
 function poolLines(kind: "names" | "surnames", code: string): Set<string> {
-  const lines = readFileSync(join(assets, kind, `${code}.txt`), "utf8")
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.includes(".") && !/\d/.test(l));
-  return new Set(lines);
+  const lines = kind === "names" ? artifact.countries[code]?.names : artifact.countries[code]?.surnames;
+  return new Set(lines ?? []);
 }
 
 const NAME_STOPWORDS = new Set(["de", "da", "do", "dos", "das", "van", "von", "del", "della", "di", "el", "al", "ibn", "bin", "o'", "mc", "mac"]);

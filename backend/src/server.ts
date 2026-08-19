@@ -10,6 +10,7 @@ import { gameRoutes } from "./routes/game";
 import { adminRoutes } from "./routes/admin";
 import { startWorker } from "./services/worker";
 import { ensureCurrentSeason } from "./services/mpService";
+import { ensureNamePools } from "./services/namePoolService";
 import { PORT, MP_CONFIG } from "./config";
 import bcrypt from "bcryptjs";
 
@@ -45,6 +46,7 @@ if (process.env.NODE_ENV !== "test") {
       // Start the authoritative clock once the prisma plugin is ready.
       instance.addHook("onReady", async () => {
         await ensureAdminUser(instance.prisma);
+        await ensureNamePools(instance.prisma);
         await ensureCurrentSeason(instance.prisma);
         stopWorker = startWorker(instance.prisma, MP_CONFIG.workerIntervalMs);
       });

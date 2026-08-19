@@ -1,13 +1,57 @@
 import type { PrismaClient } from "@prisma/client";
 import type { World } from "../game/types";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave } from "./saveService";
-import { seasonRefFor, seasonKey } from "../game/clock";
-import { auditMultiplayerEvent, initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, groupIndexOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, simulateDivisionThroughRound, syncMemberships, syncClubSeasons, ROUNDS_PER_SEASON, recordDivision } from "../game/multiplayer";
-import { awardDivisionPrizes, rolloverSeason } from "../game/season";
-import { advanceLiveMatches, playFixtureInstant, syncCompletedRounds } from "../game/world";
-import { standingsTiebreak } from "../game/league";
-import { readNumberSetting, writeNumberSetting } from "../game/budget";
+import { seasonRefFor, seasonKey, joinLockRound } from "../game/clock";
 import { MP_CONFIG } from "../config";
+import { initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, syncMemberships, syncClubSeasons } from "../game/multiplayer";
+import { rolloverSeason } from "../game/season";
+import { advanceLiveMatches, playFixtureInstant } from "../game/world";
+import { releaseAllReservations, settleDueTransferAuctions } from "../game/market";
+
+export async function configuredInactivityThresholds(prisma: PrismaClient): Promise<{ 1: number; 2: number; default: number }> {
+  const rows = await prisma.setting.findMany({ where: { key: { in: ["INACTIVITY_TIER_1", "INACTIVITY_TIER_2", "INACTIVITY_DEFAULT"] } } });
+  const values = new Map(rows.map((row) => [row.key, Number(row.value)]));
+  return {
+    1: values.get("INACTIVITY_TIER_1") || MP_CONFIG.inactivityThresholds[1],
+    2: values.get("INACTIVITY_TIER_2") || MP_CONFIG.inactivityThresholds[2],
+    default: values.get("INACTIVITY_DEFAULT") || MP_CONFIG.inactivityThresholds.default,
+  };
+}
+
+export async function configuredMatchTiming(prisma: PrismaClient): Promise<{ mode: typeof MP_CONFIG.matchTimeMode; kickoffHour: number }> {
+  const rows = await prisma.setting.findMany({ where: { key: { in: ["MATCH_TIME_MODE", "MATCH_KICKOFF_HOUR_UTC"] } } });
+  const values = new Map(rows.map((row) => [row.key, row.value]));
+  const mode = values.get("MATCH_TIME_MODE");
+  return {
+    mode: mode === "GLOBAL_FIXED_KICKOFF" || mode === "DIVISION_LOCAL_KICKOFF" ? mode : MP_CONFIG.matchTimeMode,
+    kickoffHour: Math.max(0, Math.min(23, Number(values.get("MATCH_KICKOFF_HOUR_UTC") ?? MP_CONFIG.matchKickoffHourUtc))),
+  };
+}
+
+export async function setLeagueSettings(
+  prisma: PrismaClient,
+  opts: { joinThresholdPercent?: number; tier1InactivityDays?: number; tier2InactivityDays?: number; defaultInactivityDays?: number; matchTimeMode?: typeof MP_CONFIG.matchTimeMode; matchKickoffHourUtc?: number },
+) {
+  const current = await configuredInactivityThresholds(prisma);
+  const values = {
+    joinThresholdPercent: opts.joinThresholdPercent ?? MP_CONFIG.joinThresholdPercent,
+    inactivityThresholds: {
+      1: opts.tier1InactivityDays ?? current[1],
+      2: opts.tier2InactivityDays ?? current[2],
+      default: opts.defaultInactivityDays ?? current.default,
+    },
+  };
+  const settings = [
+    ["JOIN_THRESHOLD_PERCENT", String(values.joinThresholdPercent)],
+    ["INACTIVITY_TIER_1", String(values.inactivityThresholds[1])],
+    ["INACTIVITY_TIER_2", String(values.inactivityThresholds[2])],
+    ["INACTIVITY_DEFAULT", String(values.inactivityThresholds.default)],
+  ] as const;
+  for (const [key, value] of settings) await prisma.setting.upsert({ where: { key }, update: { value }, create: { key, value } });
+  if (opts.matchTimeMode !== undefined) await prisma.setting.upsert({ where: { key: "MATCH_TIME_MODE" }, update: { value: opts.matchTimeMode }, create: { key: "MATCH_TIME_MODE", value: opts.matchTimeMode } });
+  if (opts.matchKickoffHourUtc !== undefined) await prisma.setting.upsert({ where: { key: "MATCH_KICKOFF_HOUR_UTC" }, update: { value: String(opts.matchKickoffHourUtc) }, create: { key: "MATCH_KICKOFF_HOUR_UTC", value: String(opts.matchKickoffHourUtc) } });
+  return values;
+}
 
 /**
  * Multiplayer season lifecycle service.
@@ -21,16 +65,7 @@ export interface SeasonHandle {
   seasonId: number;
   year: number;
   month: number;
-  joinLockRound: number;
-  joinThresholdPercent: number;
 }
-
-export const JOIN_THRESHOLD_SETTING = "JOIN_THRESHOLD_PERCENT";
-export const INACTIVITY_TIER1_SETTING = "INACTIVITY_TIER1_DAYS";
-export const INACTIVITY_TIER2_SETTING = "INACTIVITY_TIER2_DAYS";
-export const INACTIVITY_DEFAULT_SETTING = "INACTIVITY_DEFAULT_DAYS";
-export const MATCH_TIME_MODE_SETTING = "MATCH_TIME_MODE";
-export const MATCH_KICKOFF_HOUR_SETTING = "MATCH_KICKOFF_HOUR_UTC";
 
 function seasonOrder(year: number, month: number): number {
   return year * 12 + (month - 1);
@@ -58,6 +93,20 @@ function removeFillerClubs(world: World): void {
   }
   world.players = world.players.filter((player) => !removedPlayerIds.has(player.id));
   world.loans = world.loans.filter((loan) => !loanIds.has(loan.id));
+  for (const listing of world.transferAuctions) {
+    if (listing.status !== "ACTIVE" || (!removedPlayerIds.has(listing.playerId) && !removed.has(listing.sellerClubId))) continue;
+    releaseAllReservations(world, listing.id, "TRANSFER");
+    listing.status = "CANCELLED";
+    listing.cancelledAt = Date.now();
+    const player = world.players.find((candidate) => candidate.id === listing.playerId);
+    if (player) player.onSale = false;
+  }
+  for (const listing of world.freeAgentListings) {
+    if (listing.status !== "ACTIVE" || !removedPlayerIds.has(listing.playerId)) continue;
+    releaseAllReservations(world, listing.id, "FREE_AGENT");
+    listing.status = "CANCELLED";
+    listing.completedAt = Date.now();
+  }
   world.clubs = world.clubs.filter((club) => !removed.has(club.id));
   for (const id of removed) delete world.ticketPrices[id];
   world.stadiumUpgrades = world.stadiumUpgrades.filter((upgrade) => !removed.has(upgrade.clubId));
@@ -65,65 +114,22 @@ function removeFillerClubs(world: World): void {
 
 /** Find the MpSeason row for a calendar month, creating it if needed. */
 export async function ensureSeasonRow(prisma: PrismaClient, ref: { year: number; month: number }): Promise<SeasonHandle> {
-  const configuredThreshold = Math.max(0, Math.min(1, await readNumberSetting(prisma, JOIN_THRESHOLD_SETTING, MP_CONFIG.joinThresholdPercent)));
-  const configuredLock = Math.floor(ROUNDS_PER_SEASON * configuredThreshold);
-  const season = await prisma.mpSeason.upsert({
-    where: { year_month: { year: ref.year, month: ref.month } },
-    update: {},
-    create: {
-        year: ref.year,
-        month: ref.month,
-        startsAt: new Date(Date.UTC(ref.year, ref.month - 1, 1)),
-        endsAt: new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1)),
-         joinLockRound: configuredLock,
-         joinThresholdPercent: configuredThreshold,
-        status: "ACTIVE",
-        completedRounds: 0,
-        joinState: "OPEN",
+  const existing = await prisma.mpSeason.findFirst({ where: { year: ref.year, month: ref.month } });
+  if (existing) return { seasonId: existing.id, year: existing.year, month: existing.month };
+  const created = await prisma.mpSeason.create({
+    data: {
+      year: ref.year,
+      month: ref.month,
+      startsAt: new Date(Date.UTC(ref.year, ref.month - 1, 1)),
+      endsAt: new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1)),
+      joinLockRound: joinLockRound(),
+      joinThresholdPercent: 0.5,
+      status: "ACTIVE",
+      completedRounds: 0,
+      joinState: "OPEN",
     },
   });
-  return { seasonId: season.id, year: season.year, month: season.month, joinLockRound: season.joinLockRound, joinThresholdPercent: season.joinThresholdPercent };
-}
-
-export async function configuredInactivityThresholds(prisma: PrismaClient): Promise<{ 1: number; 2: number; default: number }> {
-  return {
-    1: Math.max(1, await readNumberSetting(prisma, INACTIVITY_TIER1_SETTING, MP_CONFIG.inactivityThresholds[1])),
-    2: Math.max(1, await readNumberSetting(prisma, INACTIVITY_TIER2_SETTING, MP_CONFIG.inactivityThresholds[2])),
-    default: Math.max(1, await readNumberSetting(prisma, INACTIVITY_DEFAULT_SETTING, MP_CONFIG.inactivityThresholds.default)),
-  };
-}
-
-export async function configuredMatchTiming(prisma: PrismaClient): Promise<{ mode: "GLOBAL_FIXED_KICKOFF" | "DIVISION_LOCAL_KICKOFF"; kickoffHour: number }> {
-  const rawMode = await prisma.setting.findUnique({ where: { key: MATCH_TIME_MODE_SETTING } });
-  const mode = rawMode?.value === "DIVISION_LOCAL_KICKOFF"
-    ? "DIVISION_LOCAL_KICKOFF"
-    : rawMode?.value === "GLOBAL_FIXED_KICKOFF"
-      ? "GLOBAL_FIXED_KICKOFF"
-      : MP_CONFIG.matchTimeMode;
-  return {
-    mode,
-    kickoffHour: Math.max(0, Math.min(23, Math.round(await readNumberSetting(prisma, MATCH_KICKOFF_HOUR_SETTING, MP_CONFIG.matchKickoffHourUtc)))),
-  };
-}
-
-export async function setLeagueSettings(prisma: PrismaClient, values: {
-  joinThresholdPercent?: number;
-  tier1InactivityDays?: number;
-  tier2InactivityDays?: number;
-  defaultInactivityDays?: number;
-  matchTimeMode?: "GLOBAL_FIXED_KICKOFF" | "DIVISION_LOCAL_KICKOFF";
-  matchKickoffHourUtc?: number;
-}): Promise<{ joinThresholdPercent: number; inactivityThresholds: { 1: number; 2: number; default: number } }> {
-  if (values.joinThresholdPercent !== undefined) await writeNumberSetting(prisma, JOIN_THRESHOLD_SETTING, Math.max(0, Math.min(1, values.joinThresholdPercent)));
-  if (values.tier1InactivityDays !== undefined) await writeNumberSetting(prisma, INACTIVITY_TIER1_SETTING, Math.max(1, values.tier1InactivityDays));
-  if (values.tier2InactivityDays !== undefined) await writeNumberSetting(prisma, INACTIVITY_TIER2_SETTING, Math.max(1, values.tier2InactivityDays));
-  if (values.defaultInactivityDays !== undefined) await writeNumberSetting(prisma, INACTIVITY_DEFAULT_SETTING, Math.max(1, values.defaultInactivityDays));
-  if (values.matchTimeMode !== undefined) await prisma.setting.upsert({ where: { key: MATCH_TIME_MODE_SETTING }, update: { value: values.matchTimeMode }, create: { key: MATCH_TIME_MODE_SETTING, value: values.matchTimeMode } });
-  if (values.matchKickoffHourUtc !== undefined) await writeNumberSetting(prisma, MATCH_KICKOFF_HOUR_SETTING, Math.max(0, Math.min(23, values.matchKickoffHourUtc)));
-  return {
-    joinThresholdPercent: Math.max(0, Math.min(1, await readNumberSetting(prisma, JOIN_THRESHOLD_SETTING, MP_CONFIG.joinThresholdPercent))),
-    inactivityThresholds: await configuredInactivityThresholds(prisma),
-  };
+  return { seasonId: created.id, year: created.year, month: created.month };
 }
 
 /**
@@ -138,8 +144,6 @@ export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonH
   const loaded = await loadGlobalWorld(prisma);
   if (!loaded) throw new Error("Global world unavailable");
   const world = loaded.world;
-  const inactivityThresholds = await configuredInactivityThresholds(prisma);
-  const matchTiming = await configuredMatchTiming(prisma);
   const worldOrder = seasonOrder(world.mp.seasonYear, world.mp.seasonMonth);
   const realOrder = seasonOrder(ref.year, ref.month);
 
@@ -148,7 +152,7 @@ export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonH
   // pyramid in place.
   if (world.mp.rolloverPhase !== null) {
     await rollover(prisma);
-  return ensureSeasonRow(prisma, ref);
+    return ensureSeasonRow(prisma, ref);
   }
 
   if (worldOrder > realOrder) {
@@ -167,54 +171,15 @@ export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonH
       await rollover(prisma);
       return ensureSeasonRow(prisma, ref);
     } else {
-       initSeason(world, ref, season.seasonId);
-       world.mp.joinLockRound = season.joinLockRound;
-       world.mp.joinThresholdPercent = season.joinThresholdPercent;
-       world.mp.inactivityThresholds = inactivityThresholds;
-       world.mp.matchTimeMode = matchTiming.mode;
-       world.mp.matchKickoffHour = matchTiming.kickoffHour;
-      syncCompletedRounds(world, now);
-      for (const division of divisionsInSeason(world, season.seasonId)) {
-        simulateDivisionThroughRound(world, division, world.mp.completedRounds, now);
-      }
-      syncMemberships(world, season.seasonId);
-      syncClubSeasons(world, season.seasonId);
+      initSeason(world, ref, season.seasonId);
       await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
     }
   } else if (world.mp.seasonId !== season.seasonId) {
     // The normalized season row may have been recreated while the in-memory
     // world still has the same calendar month. Reattach it without rebuilding
     // the active competition.
-     world.mp.seasonId = season.seasonId;
-     world.mp.joinLockRound = season.joinLockRound;
-     world.mp.joinThresholdPercent = season.joinThresholdPercent;
-     world.mp.inactivityThresholds = inactivityThresholds;
-     world.mp.matchTimeMode = matchTiming.mode;
-     world.mp.matchKickoffHour = matchTiming.kickoffHour;
-    syncMemberships(world, season.seasonId);
-    syncClubSeasons(world, season.seasonId);
+    world.mp.seasonId = season.seasonId;
     await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-  } else if (world.mp.manualRound === null) {
-    // Refresh the join gate from the authoritative real clock even when the
-    // worker has not reached its next interval yet.
-    const completedBefore = world.mp.completedRounds;
-    const statusBefore = world.mp.seasonStatus;
-    const joinBefore = world.mp.joinState;
-    const normalizedBefore = world.mpMemberships.length + world.mpClubSeasons.length;
-    const settingsBefore = JSON.stringify({ lock: world.mp.joinLockRound, threshold: world.mp.joinThresholdPercent, inactivity: world.mp.inactivityThresholds, mode: world.mp.matchTimeMode, kickoff: world.mp.matchKickoffHour });
-    world.mp.joinLockRound = season.joinLockRound;
-    world.mp.joinThresholdPercent = season.joinThresholdPercent;
-    world.mp.inactivityThresholds = inactivityThresholds;
-    world.mp.matchTimeMode = matchTiming.mode;
-    world.mp.matchKickoffHour = matchTiming.kickoffHour;
-    syncCompletedRounds(world, now);
-    if (normalizedBefore === 0) {
-      syncMemberships(world, season.seasonId);
-      syncClubSeasons(world, season.seasonId);
-    }
-    if (completedBefore !== world.mp.completedRounds || statusBefore !== world.mp.seasonStatus || joinBefore !== world.mp.joinState || normalizedBefore === 0 || settingsBefore !== JSON.stringify({ lock: world.mp.joinLockRound, threshold: world.mp.joinThresholdPercent, inactivity: world.mp.inactivityThresholds, mode: world.mp.matchTimeMode, kickoff: world.mp.matchKickoffHour })) {
-      await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-    }
   }
   return season;
 }
@@ -229,12 +194,6 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   const loaded = await loadGlobalWorld(prisma);
   if (!loaded) throw new Error("Global world unavailable");
   const world = loaded.world;
-  const hadRolloverPhase = world.mp.rolloverPhase !== null;
-  // The current coordinator commits rollover atomically, so a non-null phase
-  // can only be a marker left by an interrupted older build. Recompute from
-  // the still-current season rather than treating the marker as completed
-  // state; the final persist below clears it.
-  world.mp.rolloverPhase = null;
   const realOrder = seasonOrder(ref.year, ref.month);
   const worldOrder = seasonOrder(world.mp.seasonYear, world.mp.seasonMonth);
   // If the persisted world is behind the host calendar (server downtime),
@@ -248,16 +207,13 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   // Idempotency for forced/admin rollover and retries: if the world already
   // points at the requested next month, do not rebuild/reset that season.
   if (seasonOrder(world.mp.seasonYear, world.mp.seasonMonth) >= seasonOrder(nextRef.year, nextRef.month)) {
-    if (hadRolloverPhase) {
-      await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-    }
     return ensureSeasonRow(prisma, { year: world.mp.seasonYear, month: world.mp.seasonMonth });
   }
 
   // Finish work that may have been missed while the server was offline before
-  // calculating movement. Incomplete fixtures still need to contribute to
-  // final standings. (Transfer/free-agent/loan listings are handled by their
-  // own worker + rollover reconciliation.)
+  // calculating movement. Timestamp auctions must not be lost at rollover,
+  // and incomplete fixtures still need to contribute to final standings.
+  settleDueTransferAuctions(world, now);
   advanceLiveMatches(world, now);
   const oldSeasonDivisions = divisionsInSeason(world, world.mp.seasonId).filter((division) => division.status !== "ARCHIVED");
   for (const division of oldSeasonDivisions) {
@@ -276,16 +232,10 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   //    the old divisions are still non-archived).
   const oldSeasonId = world.mp.seasonId;
   world.mp.rolloverPhase = "ROLL_OVER_STARTED";
+  await persist();
   const { assignments, abandonedClubIds } = computeNextTierAssignments(world, oldSeasonId);
-  const abandonedSet = new Set(abandonedClubIds);
-  for (const entry of world.mpClubSeasons.filter((candidate) => candidate.seasonId === oldSeasonId)) {
-    const division = entry.divisionId === null ? undefined : world.competitions.find((candidate) => candidate.id === entry.divisionId);
-    const targetTier = assignments.get(entry.clubId);
-    if (!division || targetTier === undefined || abandonedSet.has(entry.clubId)) continue;
-    entry.promotionStatus = targetTier < tierOf(division) ? "PROMOTED" : "NONE";
-    entry.relegationStatus = targetTier > tierOf(division) ? "RELEGATED" : "NONE";
-  }
   world.mp.rolloverPhase = "MOVEMENTS_CALCULATED";
+  await persist();
 
   // 2a. Abandoned clubs become DORMANT at rollover (plan §45): removed from the
   //     pyramid but never deleted. Roster, money, facilities and history are
@@ -295,19 +245,12 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
     if (!club) continue;
     club.competitionState = "DORMANT";
     club.abandonmentEligibleAt = null;
-    club.inactivityWarningStage = 0;
     club.lastMeaningfulActivityAt = null;
-    auditMultiplayerEvent(world, "ABANDONMENT_REMOVAL", { clubId: club.id });
     world.news.push({ dayIndex: world.dayIndex, text: `${club.name} was moved to dormant status and will re-enter at the lowest tier if you return`, kind: "mp", clubId: club.id });
   }
 
-  // 2. Finalize old season standings and active-competition income before
-  // archiving.  These functions are applied to divisions as well as legacy
-  // single-player leagues and are safe here because rollover commits as one
-  // idempotent world transition.
-  await awardDivisionPrizes(prisma, world);
+  // 2. Finalize old season standings / prizes (light version).
   const oldDivisions = divisionsInSeason(world, oldSeasonId);
-  captureSeasonHistory(world, oldSeasonId, oldDivisions);
   for (const d of oldDivisions) {
     if (d.status !== "ARCHIVED") d.status = "ARCHIVED";
   }
@@ -315,21 +258,13 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
 
   // 3. Move humans to their new tiers, activate provisional clubs at lowest tier.
   const activeIds = [...assignments.keys()];
-  const queueOrder = new Map(world.mpQueue.map((entry) => [entry.clubId, entry.queuedAt]));
-  const provisional = world.clubs
-    .filter((c) => c.competitionState === "PROVISIONAL" && c.ownerUserId !== null)
-    .sort((a, b) => (queueOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (queueOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER) || a.id - b.id);
-  const provisionalIds = new Set(provisional.map((club) => club.id));
+  const provisional = world.clubs.filter((c) => c.competitionState === "PROVISIONAL" && c.ownerUserId !== null);
   const lowestTier = activeIds.length > 0 ? Math.max(...assignments.values()) : 1;
   const byTier = new Map<number, { clubId: number; timezone: string | null }[]>();
   for (const [clubId, tier] of assignments) {
     if (!byTier.has(tier)) byTier.set(tier, []);
     const club = world.clubs.find((c) => c.id === clubId);
     byTier.get(tier)!.push({ clubId, timezone: club?.timezone ?? null });
-  }
-  for (const [clubId, tier] of assignments) {
-    auditMultiplayerEvent(world, "TIER_ASSIGNMENT", { clubId, metadata: JSON.stringify({ tier }) });
-    recordDivision(world, clubId, tier);
   }
   // Provisional clubs enter at the lowest active tier + 1 (bottom of pyramid).
   const humansAtLowestTier = byTier.get(lowestTier)?.length ?? 0;
@@ -341,7 +276,6 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
     if (!byTier.has(provisionalTier)) byTier.set(provisionalTier, []);
     for (const club of provisional) {
       club.competitionState = "ACTIVE";
-      recordDivision(world, club.id, provisionalTier);
       byTier.get(provisionalTier)!.push({ clubId: club.id, timezone: club.timezone });
       world.mpQueue = world.mpQueue.filter((q) => q.clubId !== club.id);
     }
@@ -350,14 +284,6 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   // 4. Rebuild divisions per tier (fresh season context).
   for (const [tier, humans] of byTier.entries()) {
     rebuildTierDivisions(world, newSeason.seasonId, tier, humans, nextRef);
-  }
-  // Rebuilding creates the new competition membership, but provisional clubs
-  // must remain economically provisional until the old season's rollover
-  // housekeeping has completed.  Otherwise rolloverSeason would consume one
-  // contract season immediately on entry.
-  for (const clubId of provisionalIds) {
-    const club = world.clubs.find((candidate) => candidate.id === clubId);
-    if (club) club.competitionState = "PROVISIONAL";
   }
   world.mp.rolloverPhase = "DIVISIONS_CREATED";
 
@@ -380,21 +306,12 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   world.mp.lastProcessedGameDay = 0;
   // A fresh season starts with the real clock (or admin re-arms manual mode).
   world.mp.manualRound = null;
-  // A new season begins a new calendar month: reset the daily-time marker so
-  // the daily processor replays this month's dates (worker plan §4).
-  world.mp.lastDailyTickDate = null;
   // Fresh season standings already created by rebuildTierDivisions.
   // Season rollover housekeeping on players (aging, contracts) — reuses the
   // existing single-player rollover minus structure rebuild.
   rolloverSeason(world.rng, world);
-  // Keep archived fixtures and completed matches.  They are immutable season
-  // history and remain addressable by their archived division/fixture IDs.
-  // New-season workers naturally ignore them because they are already played
-  // and their competitions are ARCHIVED.
-  for (const clubId of provisionalIds) {
-    const club = world.clubs.find((candidate) => candidate.id === clubId);
-    if (club) club.competitionState = "ACTIVE";
-  }
+  world.fixtures = world.fixtures.filter((f) => divisionsInSeason(world, newSeason.seasonId).some((d) => d.id === f.competitionId));
+  world.matches = [];
   world.liveMatches = [];
 
   // Issue the new season's full allocation exactly once. Provisional clubs
@@ -419,37 +336,6 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
 
   await persist();
   return newSeason;
-}
-
-/** Snapshot the final standings of a completed season with club-name identity
- *  (plan §70/§71). Later AI replacement, renaming or dormancy never rewrites
- *  these records because each entry stores the name at archive time. */
-function captureSeasonHistory(world: World, seasonId: number, divisions: ReturnType<typeof divisionsInSeason>): void {
-  if (world.seasonHistory.some((entry) => entry.seasonId === seasonId)) return;
-  const entry = {
-    seasonId,
-    seasonKey: `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`,
-    archivedAt: Date.now(),
-    divisions: divisions.map((comp) => ({
-      divisionId: comp.id,
-      divisionName: comp.name,
-      tier: tierOf(comp),
-      groupIndex: groupIndexOf(comp),
-      standings: standingsTiebreak(Object.values(comp.standings))
-        .map((row) => ({
-          clubId: row.clubId,
-          clubName: world.clubs.find((club) => club.id === row.clubId)?.name ?? "",
-          played: row.played,
-          wins: row.wins,
-          draws: row.draws,
-          losses: row.losses,
-          goalsFor: row.goalsFor,
-          goalsAgainst: row.goalsAgainst,
-          points: row.points,
-        })),
-    })),
-  };
-  world.seasonHistory.push(entry);
 }
 
 /** Issue the seasonal budget to a club (idempotent per type). */

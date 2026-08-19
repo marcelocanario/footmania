@@ -10,5 +10,6 @@ export default defineConfig({
     // nondeterministic and can cross-contaminate integration state.
     fileParallelism: false,
     globalSetup: ["tests/global-setup.ts"],
+    setupFiles: ["tests/setup.ts"],
   },
 });

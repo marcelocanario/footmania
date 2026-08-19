@@ -29,6 +29,15 @@ export interface RatingContext {
   awayClubId: number;
 }
 
+export interface MatchReps {
+  homeRep?: number;
+  awayRep?: number;
+}
+
+export function matchRepsForDivisions(homeDivision: number, awayDivision: number): MatchReps {
+  return { homeRep: divisionTicketTier(homeDivision), awayRep: divisionTicketTier(awayDivision) };
+}
+
 // Brasfoot aq.sS — picker position ranges for cards/injuries.
 const POSITION_RANGES = [
   [10, 13], [14, 17], [3, 8], [2, 3], [8, 9], [19, 24], [1, 1],
@@ -228,6 +237,7 @@ export interface MatchSetup {
   awayXI: Player[];
   homeSubs: Player[];
   awaySubs: Player[];
+  positions: number[];
 }
 
 export function setupMatch(home: Club, away: Club, allPlayers: Player[]): MatchSetup {
@@ -238,7 +248,7 @@ export function setupMatch(home: Club, away: Club, allPlayers: Player[]): MatchS
   const awayXI = al ? al.starters : empty.starters;
   const homeSubs = hl ? hl.subs : [];
   const awaySubs = al ? al.subs : [];
-  return { home, away, homeXI, awayXI, homeSubs, awaySubs };
+  return { home, away, homeXI, awayXI, homeSubs, awaySubs, positions: (hl ?? al)?.positions ?? [] };
 }
 
 interface LiveRuntime {
@@ -272,10 +282,6 @@ interface LiveRuntime {
   playerYellows: Record<number, number>;
   subSlots: SubSlots;
   playerMinutes: Record<number, number>;
-}
-
-function humanControlled(club: Club): boolean {
-  return club.isHuman || club.ownerUserId !== null;
 }
 
 function event(type: number, subtype: number, minute: number, half: number, clubId: number, playerId: number | null, player2Id: number | null, goalType: number): MatchEvent {
@@ -374,7 +380,7 @@ function tiredSub(rng: RngState, lm: LiveRuntime, side: number, minute: number, 
 // I.java m() — halftime / tactical / tired substitution slots (AI clubs only).
 function maybeTacticalSub(rng: RngState, lm: LiveRuntime, minute: number) {
   let homeSubbed = false;
-  if (!humanControlled(lm.home) && lm.usedSubs[0] < 5) {
+  if (!lm.home.isHuman && lm.usedSubs[0] < 5) {
     if (minute === 0) {
       if (lm.scores[1] - lm.scores[0] >= 1 && nextInt(rng, 100) > 50) {
         homeSubbed = randomOutfieldSub(rng, lm, 0, 0, 1);
@@ -388,7 +394,7 @@ function maybeTacticalSub(rng: RngState, lm: LiveRuntime, minute: number) {
     }
   }
   if (homeSubbed) return;
-  if (!humanControlled(lm.away) && lm.usedSubs[1] < 5) {
+  if (!lm.away.isHuman && lm.usedSubs[1] < 5) {
     if (minute === 0) {
       if (lm.scores[0] - lm.scores[1] >= 2 && nextInt(rng, 100) > 50) {
         randomOutfieldSub(rng, lm, 1, 0, 1);
@@ -407,7 +413,7 @@ function maybeTacticalSub(rng: RngState, lm: LiveRuntime, minute: number) {
 function maybeO(rng: RngState, lm: LiveRuntime, half: number, minute: number) {
   const n5 = minute < 10 ? 95 : minute < 30 ? 80 : minute < 40 ? 60 : 40;
   if (nextInt(rng, 100) + 1 <= n5) return;
-  if (!humanControlled(lm.home) && lm.usedSubs[0] < 5) {
+  if (!lm.home.isHuman && lm.usedSubs[0] < 5) {
     for (const p of lm.homeOn) {
       if (p.tacPos !== 1) {
         if (p.energy < 75) {
@@ -420,7 +426,7 @@ function maybeO(rng: RngState, lm: LiveRuntime, half: number, minute: number) {
       }
     }
   }
-  if (!humanControlled(lm.away) && lm.usedSubs[1] < 5) {
+  if (!lm.away.isHuman && lm.usedSubs[1] < 5) {
     for (const p of lm.awayOn) {
       if (p.tacPos !== 1) {
         if (p.energy < 75) {
@@ -437,7 +443,7 @@ function maybeO(rng: RngState, lm: LiveRuntime, half: number, minute: number) {
 
 function autoSubAfterCard(rng: RngState, lm: LiveRuntime, side: number, minute: number, half: number, sentOff: Player) {
   const club = side === 0 ? lm.home : lm.away;
-  if (humanControlled(club) || lm.usedSubs[side] >= 5) return;
+  if (club.isHuman || lm.usedSubs[side] >= 5) return;
   if (sentOff.tacPos > 13) return;
   const on = side === 0 ? lm.homeOn : lm.awayOn;
   if (on.length === 0) return;
@@ -453,7 +459,7 @@ function autoSubAfterCard(rng: RngState, lm: LiveRuntime, side: number, minute: 
 
 function autoSubAfterInjury(rng: RngState, lm: LiveRuntime, side: number, minute: number, half: number, injured: Player) {
   const club = side === 0 ? lm.home : lm.away;
-  if (humanControlled(club) || lm.usedSubs[side] >= 5) return;
+  if (club.isHuman || lm.usedSubs[side] >= 5) return;
   const bench = side === 0 ? lm.homeSubs : lm.awaySubs;
   const inP = bestBenchForTacPos(bench, injured.tacPos, injured.position === 0);
   if (!inP) return;
@@ -515,7 +521,7 @@ function doCardOrInjury(rng: RngState, lm: LiveRuntime, half: number, minute: nu
       const days = injuryDays(rng, p);
       p.injuryDays = days;
       lm.events.push(event(EVENT_CODES.INJURY, 0, minute, half, club.id, p.id, null, days));
-      if (!humanControlled(club)) {
+      if (!club.isHuman) {
         removeFromPitch(on, p.id);
         autoSubAfterInjury(rng, lm, side, minute, half, p);
       }
@@ -557,7 +563,7 @@ function shotDuel(rng: RngState, lm: LiveRuntime, ctx: RatingContext): number {
   if (attStr === 0) dAtt = 0.1;
   if (dAtt < 0.2) dAtt = 0.2;
   if (dDef < 0.2) dDef = 0.2;
-  if (humanControlled(lm.home) || humanControlled(lm.away)) {
+  if (lm.home.isHuman || lm.away.isHuman) {
     const cbs = cbCount(defSide === 0 ? lm.homeOn : lm.awayOn);
     if (cbs === 0) dDef = 0.1;
     else if (cbs === 1) dDef = 0.05;
@@ -580,7 +586,7 @@ function shotResolution(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half
   const div = shotDiv(lm.year);
   let d6 = 1 + (gk - shooterRating) / div;
   let d7 = 1 + (defStr - attStr) / div;
-  if (humanControlled(lm.home) || humanControlled(lm.away)) {
+  if (lm.home.isHuman || lm.away.isHuman) {
     const cbs = cbCount(defList);
     if (cbs === 0) d6 = Math.round(d6 * 0.2);
     else if (cbs === 1) d6 = Math.round(d6 * 0.4);
@@ -595,10 +601,7 @@ function shotResolution(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half
     }
   }
   let damp = GOAL_DAMPING[Math.min(6, Math.max(0, lm.scores[attSide]))] ?? GOAL_DAMPING[0];
-  // Comeback damping: when the attacker is 2+ goals up and the defending club
-  // is a much stronger rep bucket, suppress the comeback. Compares the
-  // division-derived reps (1..5) instead of the removed club.level.
-  const defRep = attSide === 0 ? ctx.awayRep : ctx.homeRep;
+  const defRep = defSide === 0 ? ctx.homeRep : ctx.awayRep;
   const attRep = attSide === 0 ? ctx.homeRep : ctx.awayRep;
   if (lm.scores[attSide] >= 2 && defRep - attRep >= MARKET_CONFIG.match.comebackRepGap) {
     damp = GOAL_DAMPING[5];
@@ -642,7 +645,7 @@ function scoreGoal(rng: RngState, lm: LiveRuntime, ctx: RatingContext, half: num
   } else if (gType === GOAL_SUBTYPES.PENALTY) {
     const taker = attList.find((p) => p.id === club.penaltyTakerId) ?? shooter;
     scorer = taker;
-    if (humanControlled(lm.home) || humanControlled(lm.away)) {
+    if (lm.home.isHuman || lm.away.isHuman) {
       if (nextInt(rng, 100) >= 85) {
         const ev = event(EVENT_CODES.MISSED_PENALTY, GOAL_SUBTYPES.PENALTY, minute, half, club.id, scorer.id, null, GOAL_SUBTYPES.PENALTY);
         lm.events.push(ev);
@@ -693,7 +696,7 @@ function updatePossession(lm: LiveRuntime) {
 function resolveMinute(rng: RngState, lm: LiveRuntime, half: number, minute: number): MatchEvent | null {
   if (minute % 7 === 0) fatigue(lm, half);
   doCardOrInjury(rng, lm, half, minute);
-  if (humanControlled(lm.home) || humanControlled(lm.away)) maybeO(rng, lm, half, minute);
+  if (lm.home.isHuman || lm.away.isHuman) maybeO(rng, lm, half, minute);
   const ctx = lm.ctx;
   const ballSide = lm.withBall;
   const offSide = 1 - ballSide;
@@ -819,21 +822,6 @@ function seededPlayerMinutes(st: LiveMatchState): Record<number, number> {
     if (seeded[id] === undefined) seeded[id] = 0;
   }
   return seeded;
-}
-
-/** Division-derived strength reps (1..5) for a match, resolved by world-aware
- *  callers from `divisionForClub` (the engine stays pure and defaults to a
- *  neutral rep of 3 when omitted). */
-export interface MatchReps {
-  homeRep?: number;
-  awayRep?: number;
-}
-
-/** Build match reps from two division numbers (1 = strongest), mapping each
- *  division through the shared ticket-tier curve so strength buckets stay
- *  consistent across pricing, attendance and match rating. */
-export function matchRepsForDivisions(homeDivision: number, awayDivision: number): MatchReps {
-  return { homeRep: divisionTicketTier(homeDivision), awayRep: divisionTicketTier(awayDivision) };
 }
 
 function runtimeFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[], reps?: MatchReps): LiveRuntime {

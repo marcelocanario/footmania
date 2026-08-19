@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import type {
+  AuctionStatus,
   Club,
   Competition,
   GroupStandings,
@@ -15,6 +16,7 @@ import { createRng } from "../game/rng";
 import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
+import { ensureNamePools } from "./namePoolService";
 
 type Tx = Prisma.TransactionClient;
 
@@ -37,6 +39,12 @@ const TABLE_NAMES = [
   "club",
   "newsItem",
   "ledgerEntry",
+  "transferAuction",
+  "marketBid",
+  "freeAgentListing",
+  "marketReservation",
+  "playerMarketTransaction",
+  "aiEvaluation",
   "trophy",
   "loan",
   "managerHistory",
@@ -45,12 +53,6 @@ const TABLE_NAMES = [
   "clubTicketPrices",
   "stadiumUpgrade",
   "liveMatch",
-  "marketBid",
-  "transferAuction",
-  "freeAgentListing",
-  "marketReservation",
-  "playerMarketTransaction",
-  "aiEvaluation",
 ] as const;
 
 function jsonOr<T>(raw: string | null | undefined, fallback: T): T {
@@ -104,62 +106,168 @@ function normalizePlayer(player: Player, club: Club | undefined): void {
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
 }
 
+/** Normalize a save written by the old single-column worldJson format. */
+export function deserializeWorld(json: string): World {
+  const world = JSON.parse(json) as World;
+  const legacyLiveMatch = (world as World & { liveMatch?: LiveMatchState | null }).liveMatch;
+  world.seed ??= 0;
+  world.year ??= 1;
+  world.dayIndex ??= 0;
+  world.dayOfWeek ??= ((world.dayIndex % 7) + 7) % 7;
+  world.nextId ??= 1;
+   world.clubs ??= [];
+   world.players ??= [];
+   world.competitions ??= [];
+   world.fixtures ??= [];
+   world.matches ??= [];
+   world.news ??= [];
+   world.loans ??= [];
+   world.seasonAwards ??= [];
+   world.records ??= [];
+   world.managerHistory ??= [];
+   world.ticketPrices ??= {};
+   world.stadiumUpgrades ??= [];
+   world.humanClubId ??= null;
+   world.seasonSummary ??= null;
+   world.contractWarnings ??= [];
+   world.rng ??= createRng(world.seed);
+   world.mp ??= {
+     seasonId: 0,
+     seasonYear: world.year,
+     seasonMonth: 1,
+     seasonStatus: "PREPARATION",
+     completedRounds: 0,
+     joinLockRound: 7,
+     joinState: "OPEN",
+     joinThresholdPercent: 0.5,
+     inactivityThresholds: { 1: 42, 2: 35, default: 28 },
+     matchTimeMode: "DIVISION_LOCAL_KICKOFF",
+     matchKickoffHour: 20,
+     lastProcessedGameDay: 0,
+     lastDailyTickDay: 0,
+     lastDailyTickDate: null,
+     manualRound: null,
+     rolloverPhase: null,
+   };
+   world.marketBids ??= [];
+   world.transferAuctions ??= [];
+   world.freeAgentListings ??= [];
+   world.marketReservations ??= [];
+   world.playerMarketHistory ??= [];
+   world.aiEvaluations ??= [];
+   world.mpQueue ??= [];
+   world.liveMatches ??= legacyLiveMatch ? [legacyLiveMatch] : [];
+   world.seasonAllocations ??= [];
+   world.mpMemberships ??= [];
+   world.mpClubSeasons ??= [];
+   world.mpActivities ??= [];
+   world.mpAudits ??= [];
+   world.seasonHistory ??= [];
+
+  for (const club of world.clubs) {
+    club.ledger ??= { income: [], expense: [] };
+    club.trophies ??= {};
+    club.trainingFocus ??= "assistant";
+    club.country ??= "BRA"; // defensive: pre-country legacy rows would otherwise violate the NOT NULL column
+    club.ownerUserId ??= null;
+    club.timezone ??= null;
+    club.competitionState ??= "ACTIVE";
+    club.lastMeaningfulActivityAt ??= null;
+    club.abandonmentEligibleAt ??= null;
+    club.liveMatchAt ??= null;
+  }
+  for (const player of world.players) {
+    const legacy = player as Player & { suspended?: boolean };
+    player.skillAcc ??= [0, 0, 0, 0, 0, 0, 0];
+    player.suspendedGames ??= legacy.suspended ? 1 : 0;
+    player.morale ??= 50;
+    player.loanId ??= null;
+    if (!player.developmentProfile) {
+      player.developmentProfile = backfillDevelopmentProfile(world.seed, player.id);
+    }
+    player.recentMinutes ??= [];
+    normalizePlayer(player, world.clubs.find((club) => club.id === player.clubId));
+  }
+  for (const match of world.matches) {
+    match.events ??= [];
+    match.minuteEvents ??= [];
+    match.stats.tackles ??= [0, 0];
+    match.stats.wrongPasses ??= [0, 0];
+    match.extraTime ??= false;
+  }
+  if (world.liveMatches) {
+    for (const st of world.liveMatches) {
+      st.compKind ??= "division";      st.year ??= world.year;
+      st.subbedIn ??= [[], []];
+      st.possessionCounts ??= [0, 0];
+      st.playerYellows ??= {};
+      st.subSlots ??= { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] };
+      st.suspensionClears ??= [];
+      st.lastAdvancedAt ??= Date.now();
+      st.stats.tackles ??= [0, 0];
+      st.stats.wrongPasses ??= [0, 0];
+    }
+  }
+  return world;
+}
+
+export async function createSaveRecord(
+  prisma: PrismaClient,
+  userId: number,
+  name: string,
+  seed?: number
+): Promise<{ id: number }> {
+  const world = generateWorld(seed ?? Math.floor(Math.random() * 0x7fffffff));
+  const save = await prisma.save.create({
+    data: {
+      userId,
+      name,
+      year: world.year,
+      dayIndex: world.dayIndex,
+      humanClubId: world.humanClubId,
+      seed: world.seed,
+      rngState: BigInt(world.rng.state),
+    },
+  });
+  await persistWorld(prisma, save.id, userId, world);
+  return { id: save.id };
+}
+
 /** The single global multiplayer Save row (isGlobal = true). */
 export async function ensureGlobalSave(prisma: PrismaClient): Promise<{ id: number; name: string }> {
   const existing = await prisma.save.findFirst({ where: { isGlobal: true } });
-  if (existing) {
-    if (existing.globalKey !== "GLOBAL") {
-      await prisma.save.update({ where: { id: existing.id }, data: { globalKey: "GLOBAL" } });
-    }
-    return { id: existing.id, name: existing.name };
-  }
+  if (existing) return { id: existing.id, name: existing.name };
   // The global save needs an owning user for the FK; use (or create) a
   // dedicated "system" user.
   let system = await prisma.user.findUnique({ where: { username: "__system__" } });
   if (!system) {
-    try {
-      system = await prisma.user.create({ data: { username: "__system__", passwordHash: "!" } });
-    } catch (error) {
-      // Multiple server processes can initialize the world concurrently. If
-      // another process won the unique username race, reuse its system user.
-      system = await prisma.user.findUnique({ where: { username: "__system__" } });
-      if (!system) throw error;
-    }
+    system = await prisma.user.create({ data: { username: "__system__", passwordHash: "!" } });
   }
+  // Name pools must be ready before the first world is generated so the
+  // deterministic RNG draws from the database source of truth.
+  await ensureNamePools(prisma);
   const world = generateWorld(Math.floor(Math.random() * 0x7fffffff));
-  let save;
-  try {
-    save = await prisma.save.create({
-      data: {
-        userId: system.id,
-        name: "Global Multiplayer",
-        isGlobal: true,
-        globalKey: "GLOBAL",
-        year: world.year,
-        dayIndex: world.dayIndex,
-        humanClubId: null,
-        seed: world.seed,
-        rngState: BigInt(world.rng.state),
-      },
-    });
-  } catch (error) {
-    // Another process may have won the singleton race between findFirst and
-    // create.  Return that row rather than creating a second world.
-    const winner = await prisma.save.findFirst({ where: { isGlobal: true } });
-    if (winner) return { id: winner.id, name: winner.name };
-    throw error;
-  }
+  const save = await prisma.save.create({
+    data: {
+      userId: system.id,
+      name: "Global Multiplayer",
+      isGlobal: true,
+      year: world.year,
+      dayIndex: world.dayIndex,
+      humanClubId: null,
+      seed: world.seed,
+      rngState: BigInt(world.rng.state),
+    },
+  });
   await persistWorld(prisma, save.id, save.userId, world);
   return { id: save.id, name: save.name };
 }
 
 export async function loadGlobalWorld(prisma: PrismaClient): Promise<{ save: { id: number; name: string; revision: number }; world: World } | null> {
-  return prisma.$transaction(async (tx) => {
-    const save = await tx.save.findFirst({ where: { isGlobal: true } });
-    if (!save) return null;
-    const world = await rebuildWorld(tx, save);
-    return { save: { id: save.id, name: save.name, revision: save.revision }, world };
-  });
+  const save = await prisma.save.findFirst({ where: { isGlobal: true } });
+  if (!save) return null;
+  const world = await rebuildWorld(prisma, save);
+  return { save: { id: save.id, name: save.name, revision: save.revision }, world };
 }
 
 /**
@@ -226,7 +334,6 @@ export async function persistWorld(
           rngState: BigInt(world.rng.state),
           mpStateJson: JSON.stringify(world.mp),
           seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
-          seasonHistoryJson: world.seasonHistory.length > 0 ? JSON.stringify(world.seasonHistory) : null,
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
           revision: { increment: 1 },
@@ -247,7 +354,6 @@ export async function persistWorld(
           rngState: BigInt(world.rng.state),
           mpStateJson: JSON.stringify(world.mp),
           seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
-          seasonHistoryJson: world.seasonHistory.length > 0 ? JSON.stringify(world.seasonHistory) : null,
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
           revision: { increment: 1 },
@@ -263,9 +369,9 @@ export async function persistWorld(
     if (world.players.length > 0) {
       await tx.player.createMany({ data: world.players.map((p) => playerRow(p, saveId)) });
     }
-    if (world.loans.length > 0) {
-      await tx.loan.createMany({ data: world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })) });
-    }
+     if (world.loans.length > 0) {
+       await tx.loan.createMany({ data: world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })) });
+     }
     if (world.competitions.length > 0) {
       await tx.competition.createMany({ data: world.competitions.map((c) => competitionRow(c, saveId)) });
       const rows: { saveId: number; competitionId: number; clubId: number; played: number; wins: number; draws: number; losses: number; goalsFor: number; goalsAgainst: number; points: number; groupName: string | null }[] = [];
@@ -282,7 +388,7 @@ export async function persistWorld(
       await tx.standingsRow.createMany({ data: rows });
     }
     if (world.fixtures.length > 0) {
-      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, homeClubNameSnapshot: f.homeClubNameSnapshot ?? null, awayClubNameSnapshot: f.awayClubNameSnapshot ?? null })) });
+      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null })) });
     }
     if (world.matches.length > 0) {
       await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, attendance: m.attendance, gateRevenue: m.gateRevenue, extraTime: m.extraTime ?? false })) });
@@ -303,136 +409,22 @@ export async function persistWorld(
       for (const e of club.ledger.income) ledgerRows.push({ saveId, clubId: club.id, direction: "income", code: e.code, amount: e.amount, day: e.day, label: e.label });
       for (const e of club.ledger.expense) ledgerRows.push({ saveId, clubId: club.id, direction: "expense", code: e.code, amount: e.amount, day: e.day, label: e.label });
     }
-    if (ledgerRows.length > 0) await tx.ledgerEntry.createMany({ data: ledgerRows });
-    // Multiplayer transfer market (Phase 2+).
-    if (world.transferAuctions.length > 0) {
-      await tx.transferAuction.createMany({
-        data: world.transferAuctions.map((a) => ({
-          id: a.id,
-          saveId,
-          playerId: a.playerId,
-          sellerClubId: a.sellerClubId,
-          playerValueAtListing: a.playerValueAtListing,
-          openingPrice: a.openingPrice,
-          bidIncrement: a.bidIncrement,
-          sellerDivisionAtListing: a.sellerDivisionAtListing,
-          totalDivisionsAtListing: a.totalDivisionsAtListing,
-          currentPrice: a.currentPrice,
-          leadingClubId: a.leadingClubId,
-          createdAt: BigInt(a.createdAt),
-          deadline: BigInt(a.deadline),
-          originalDeadline: BigInt(a.originalDeadline),
-          status: a.status,
-          completedAt: a.completedAt !== null ? BigInt(a.completedAt) : null,
-          winningClubId: a.winningClubId,
-          finalPrice: a.finalPrice,
-          cancelledAt: a.cancelledAt !== null ? BigInt(a.cancelledAt) : null,
-          softClosed: a.softClosed,
-          softCloseExtensions: a.softCloseExtensions,
-        })),
-      });
-    }
-    if (world.marketBids.length > 0) {
-      await tx.marketBid.createMany({
-        data: world.marketBids.map((b) => ({
-          saveId,
-          marketType: b.marketType,
-          listingId: b.listingId,
-          clubId: b.clubId,
-          maxBid: b.maxBid,
-          capMultiplierAtSubmission: b.capMultiplierAtSubmission ?? null,
-          maximumAllowedByRuleAtSubmission: b.maximumAllowedByRuleAtSubmission ?? null,
-          buyerDivisionAtSubmission: b.buyerDivisionAtSubmission ?? null,
-          createdAt: BigInt(b.createdAt),
-          updatedAt: BigInt(b.updatedAt),
-          initialPriorityAt: BigInt(b.initialPriorityAt),
-        })),
-      });
-    }
-    if (world.freeAgentListings.length > 0) {
-      await tx.freeAgentListing.createMany({
-        data: world.freeAgentListings.map((l) => ({
-          id: l.id,
-          saveId,
-          playerId: l.playerId,
-          playerValueAtListing: l.playerValueAtListing,
-          openingPrice: l.openingPrice,
-          bidIncrement: l.bidIncrement,
-          demandedSalary: l.demandedSalary,
-          demandedContractDays: l.demandedContractDays,
-          currentPrice: l.currentPrice,
-          leadingClubId: l.leadingClubId,
-          relistStage: l.relistStage,
-          createdAt: BigInt(l.createdAt),
-          deadline: BigInt(l.deadline),
-          status: l.status,
-          completedAt: l.completedAt !== null ? BigInt(l.completedAt) : null,
-          winningClubId: l.winningClubId,
-          finalPrice: l.finalPrice,
-          previousListingId: l.previousListingId,
-          softClosed: l.softClosed,
-          softCloseExtensions: l.softCloseExtensions,
-        })),
-      });
-    }
-    if (world.marketReservations.length > 0) {
-      await tx.marketReservation.createMany({
-        data: world.marketReservations.map((r) => ({
-          saveId,
-          clubId: r.clubId,
-          listingId: r.listingId,
-          marketType: r.marketType,
-          amount: r.amount,
-          createdAt: BigInt(r.createdAt),
-          releasedAt: r.releasedAt !== null ? BigInt(r.releasedAt) : null,
-        })),
-      });
-    }
-    if (world.playerMarketHistory.length > 0) {
-      await tx.playerMarketTransaction.createMany({
-        data: world.playerMarketHistory.map((t) => ({
-          saveId,
-          playerId: t.playerId,
-          listingId: t.listingId,
-          type: t.type,
-          fromClubId: t.fromClubId,
-          toClubId: t.toClubId,
-          price: t.price,
-          seasonId: t.seasonId,
-          seasonKey: t.seasonKey,
-          matchday: t.matchday,
-          timestamp: BigInt(t.timestamp),
-        })),
-      });
-    }
-    if (world.aiEvaluations.length > 0) {
-      await tx.aiEvaluation.createMany({
-        data: world.aiEvaluations.map((e) => ({
-          saveId,
-          marketType: e.marketType,
-          listingId: e.listingId,
-          clubId: e.clubId,
-          evaluatedAt: BigInt(e.evaluatedAt),
-          decision: e.decision,
-          maxBid: e.maxBid,
-        })),
-      });
-    }
-    const trophyRows: { saveId: number; clubId: number; competitionName: string; count: number }[] = [];
-    for (const club of world.clubs) {
-      for (const [name, count] of Object.entries(club.trophies)) {
-        trophyRows.push({ saveId, clubId: club.id, competitionName: name, count });
-      }
-    }
-    if (trophyRows.length > 0) await tx.trophy.createMany({ data: trophyRows });
-    if (world.managerHistory.length > 0) {
-      await tx.managerHistory.createMany({ data: world.managerHistory.map((m) => ({ saveId, clubId: m.clubId, name: m.name, appointedDay: m.appointedDay, departedDay: m.departedDay, gamesInCharge: m.gamesInCharge, reason: m.reason })) });
-    }
-    if (world.seasonAwards.length > 0) {
-      await tx.seasonAward.createMany({ data: world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })) });
-    }
-    if (world.records.length > 0) {
-      await tx.careerRecord.createMany({ data: world.records.map((r) => ({ saveId, category: r.category, value: r.value, holderName: r.holderName })) });
+     if (ledgerRows.length > 0) await tx.ledgerEntry.createMany({ data: ledgerRows });
+     const trophyRows: { saveId: number; clubId: number; competitionName: string; count: number }[] = [];
+     for (const club of world.clubs) {
+       for (const [name, count] of Object.entries(club.trophies)) {
+         trophyRows.push({ saveId, clubId: club.id, competitionName: name, count });
+       }
+     }
+     if (trophyRows.length > 0) await tx.trophy.createMany({ data: trophyRows });
+     if (world.managerHistory.length > 0) {
+       await tx.managerHistory.createMany({ data: world.managerHistory.map((m) => ({ saveId, clubId: m.clubId, name: m.name, appointedDay: m.appointedDay, departedDay: m.departedDay, gamesInCharge: m.gamesInCharge, reason: m.reason })) });
+     }
+     if (world.seasonAwards.length > 0) {
+       await tx.seasonAward.createMany({ data: world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })) });
+     }
+     if (world.records.length > 0) {
+       await tx.careerRecord.createMany({ data: world.records.map((r) => ({ saveId, category: r.category, value: r.value, holderName: r.holderName })) });
     }
     if (Object.keys(world.ticketPrices).length > 0) {
       await tx.clubTicketPrices.createMany({ data: Object.entries(world.ticketPrices).map(([clubId, p]) => ({ saveId, clubId: Number(clubId), sector0: p[0], sector1: p[1], sector2: p[2], sector3: p[3] })) });
@@ -440,11 +432,130 @@ export async function persistWorld(
     if (world.stadiumUpgrades.length > 0) {
       await tx.stadiumUpgrade.createMany({ data: world.stadiumUpgrades.map((u) => ({ saveId, clubId: u.clubId, startedDay: u.startedDay, completesDay: u.completesDay, newCapacity: u.newCapacity, cost: u.cost, completed: u.completed })) });
     }
-    if (world.liveMatches.length > 0) {
-      await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, stateJson: JSON.stringify(st) })) });
-    }
-    if (target.isGlobal && world.mp.seasonId !== 0) {
-      await tx.mpSeason.updateMany({
+     if (world.liveMatches.length > 0) {
+       await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, stateJson: JSON.stringify(st) })) });
+     }
+     // Normalized multiplayer transfer market (plan §55). Full rewrite each
+     // persist: the in-memory World is the source of truth for active
+     // listings/bids; resolved/cancelled rows are simply no longer present.
+     if (world.transferAuctions.length > 0) {
+       await tx.transferAuction.createMany({
+         data: world.transferAuctions.map((a) => ({
+           id: a.id,
+           saveId,
+           playerId: a.playerId,
+           sellerClubId: a.sellerClubId,
+           playerValueAtListing: a.playerValueAtListing,
+           openingPrice: a.openingPrice,
+           bidIncrement: a.bidIncrement,
+           sellerDivisionAtListing: a.sellerDivisionAtListing,
+           totalDivisionsAtListing: a.totalDivisionsAtListing,
+           currentPrice: a.currentPrice,
+           leadingClubId: a.leadingClubId,
+           createdAt: BigInt(a.createdAt),
+           deadline: BigInt(a.deadline),
+           originalDeadline: BigInt(a.originalDeadline),
+           status: a.status,
+           completedAt: a.completedAt !== null ? BigInt(a.completedAt) : null,
+           winningClubId: a.winningClubId,
+           finalPrice: a.finalPrice,
+           cancelledAt: a.cancelledAt !== null ? BigInt(a.cancelledAt) : null,
+           softClosed: a.softClosed,
+           softCloseExtensions: a.softCloseExtensions,
+         })),
+       });
+     }
+     if (world.marketBids.length > 0) {
+       await tx.marketBid.createMany({
+         data: world.marketBids.map((b) => ({
+           id: b.id,
+           saveId,
+           marketType: b.marketType,
+           listingId: b.listingId,
+           clubId: b.clubId,
+           maxBid: b.maxBid,
+           capMultiplierAtSubmission: b.capMultiplierAtSubmission !== undefined ? b.capMultiplierAtSubmission : null,
+           maximumAllowedByRuleAtSubmission: b.maximumAllowedByRuleAtSubmission !== undefined ? b.maximumAllowedByRuleAtSubmission : null,
+           buyerDivisionAtSubmission: b.buyerDivisionAtSubmission !== undefined ? b.buyerDivisionAtSubmission : null,
+           createdAt: BigInt(b.createdAt),
+           updatedAt: BigInt(b.updatedAt),
+           initialPriorityAt: BigInt(b.initialPriorityAt),
+         })),
+       });
+     }
+     if (world.freeAgentListings.length > 0) {
+       await tx.freeAgentListing.createMany({
+         data: world.freeAgentListings.map((l) => ({
+           id: l.id,
+           saveId,
+           playerId: l.playerId,
+           playerValueAtListing: l.playerValueAtListing,
+           openingPrice: l.openingPrice,
+           bidIncrement: l.bidIncrement,
+           demandedSalary: l.demandedSalary,
+           demandedContractDays: l.demandedContractDays,
+           currentPrice: l.currentPrice,
+           leadingClubId: l.leadingClubId,
+           relistStage: l.relistStage,
+           createdAt: BigInt(l.createdAt),
+           deadline: BigInt(l.deadline),
+           status: l.status,
+           completedAt: l.completedAt !== null ? BigInt(l.completedAt) : null,
+           winningClubId: l.winningClubId,
+           finalPrice: l.finalPrice,
+           previousListingId: l.previousListingId,
+           softClosed: l.softClosed,
+           softCloseExtensions: l.softCloseExtensions,
+         })),
+       });
+     }
+     if (world.marketReservations.length > 0) {
+       await tx.marketReservation.createMany({
+         data: world.marketReservations.map((r) => ({
+           id: r.id,
+           saveId,
+           clubId: r.clubId,
+           listingId: r.listingId,
+           marketType: r.marketType,
+           amount: r.amount,
+           createdAt: BigInt(r.createdAt),
+           releasedAt: r.releasedAt !== null ? BigInt(r.releasedAt) : null,
+         })),
+       });
+     }
+     if (world.playerMarketHistory.length > 0) {
+       await tx.playerMarketTransaction.createMany({
+         data: world.playerMarketHistory.map((t) => ({
+           id: t.id,
+           saveId,
+           playerId: t.playerId,
+           listingId: t.listingId,
+           type: t.type,
+           fromClubId: t.fromClubId,
+           toClubId: t.toClubId,
+           price: t.price,
+           seasonId: t.seasonId,
+           seasonKey: t.seasonKey,
+           matchday: t.matchday,
+           timestamp: BigInt(t.timestamp),
+         })),
+       });
+     }
+      if (world.aiEvaluations.length > 0) {
+        await tx.aiEvaluation.createMany({
+          data: world.aiEvaluations.map((e) => ({
+            saveId,
+            marketType: e.marketType,
+            listingId: e.listingId,
+            clubId: e.clubId,
+            evaluatedAt: BigInt(e.evaluatedAt),
+            decision: e.decision,
+            maxBid: e.maxBid,
+          })),
+        });
+      }
+      if (world.mp.seasonId !== 0) {
+       await tx.mpSeason.updateMany({
         where: { id: world.mp.seasonId },
         data: {
           completedRounds: world.mp.completedRounds,
@@ -454,142 +565,104 @@ export async function persistWorld(
           status: world.mp.seasonStatus,
         },
       });
-      // At most one season is active globally.  Archiving the previous row in
-      // the same transaction prevents the normalized calendar from showing
-      // two active seasons after a rollover retry.
-      await tx.mpSeason.updateMany({
-        where: { id: { not: world.mp.seasonId }, status: { in: ["ACTIVE", "INTERSEASON", "ROLLOVER"] } },
-        data: { status: "COMPLETE", completedRounds: 14, joinState: "LOCKED" },
-      });
     }
     // Multiplayer queue + allocations (idempotent unique constraints).
-    if (target.isGlobal) {
-      await tx.mpQueue.deleteMany({});
-      await tx.mpAllocation.deleteMany({});
-      if (world.mpQueue.length > 0) {
-        await tx.mpQueue.createMany({
-          data: world.mpQueue.map((q) => ({ clubId: q.clubId, source: q.source, queuedAt: new Date(q.queuedAt), preferredSeasonId: q.preferredSeasonId })),
-        });
-      }
-      if (world.seasonAllocations.length > 0) {
-        await tx.mpAllocation.createMany({
-          data: world.seasonAllocations.map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type, amount: a.amount, issuedAt: new Date(a.issuedAt) })),
-        });
-      }
-      // Normalized multiplayer records (plan §55). Memberships/season records are
-      // disposable between seasons and fully rewritten each persist.
-      await tx.mpMembership.deleteMany({});
-      if (world.mpMemberships.length > 0) {
-        await tx.mpMembership.createMany({
-          data: world.mpMemberships.map((m) => ({
-            divisionId: m.divisionId,
-            clubId: m.clubId,
-            slotNumber: m.slotNumber,
-            isFillerAI: m.isFillerAI,
-            replacedClubId: m.replacedClubId,
-            joinedAt: new Date(m.joinedAt),
-          })),
-        });
-      }
-      await tx.mpClubSeason.deleteMany({});
-      if (world.mpClubSeasons.length > 0) {
-        await tx.mpClubSeason.createMany({
-          data: world.mpClubSeasons.map((cs) => ({
-            clubId: cs.clubId,
-            seasonId: cs.seasonId,
-            divisionId: cs.divisionId,
-            tier: cs.tier,
-            played: cs.played,
-            wins: cs.wins,
-            draws: cs.draws,
-            losses: cs.losses,
-            goalsFor: cs.goalsFor,
-            goalsAgainst: cs.goalsAgainst,
-            points: cs.points,
-            promotionStatus: cs.promotionStatus,
-            relegationStatus: cs.relegationStatus,
-          })),
-        });
-      }
-      await tx.mpActivity.deleteMany({});
-      if (world.mpActivities.length > 0) {
-        await tx.mpActivity.createMany({
-          data: world.mpActivities.map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: new Date(a.occurredAt), metadata: a.metadata })),
-        });
-      }
-      await tx.mpAudit.deleteMany({});
-      if (world.mpAudits.length > 0) {
-        await tx.mpAudit.createMany({
-          data: world.mpAudits.map((audit) => ({
-            seasonId: audit.seasonId,
-            clubId: audit.clubId,
-            userId: audit.userId,
-            eventType: audit.eventType,
-            occurredAt: new Date(audit.occurredAt),
-            metadata: audit.metadata,
-          })),
-        });
-      }
+    await tx.mpQueue.deleteMany({});
+    await tx.mpAllocation.deleteMany({});
+    if (world.mpQueue.length > 0) {
+      await tx.mpQueue.createMany({
+        data: world.mpQueue.map((q) => ({ clubId: q.clubId, source: q.source, queuedAt: new Date(q.queuedAt), preferredSeasonId: q.preferredSeasonId })),
+      });
     }
-    if (opts?.dailyExecutions && opts.dailyExecutions.length > 0) {
-      // Upsert each execution independently. A duplicate marker must not cause
-      // unrelated new markers in the same batch to be lost.
-      for (const execution of opts.dailyExecutions) {
-        await tx.dailyExecution.upsert({
-          where: {
-            saveId_seasonId_date_executionType: {
-              saveId,
-              seasonId: execution.seasonId,
-              date: execution.date,
-              executionType: execution.executionType,
-            },
-          },
-          update: {},
-          create: {
-            saveId,
-            seasonId: execution.seasonId,
-            date: execution.date,
-            executionType: execution.executionType,
-          },
-        });
-      }
+    if (world.seasonAllocations.length > 0) {
+      await tx.mpAllocation.createMany({
+        data: world.seasonAllocations.map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type, amount: a.amount, issuedAt: new Date(a.issuedAt) })),
+      });
+    }
+    // Normalized multiplayer records (plan §55). Memberships/season records are
+    // disposable between seasons and fully rewritten each persist.
+    await tx.mpMembership.deleteMany({});
+    if (world.mpMemberships.length > 0) {
+      await tx.mpMembership.createMany({
+        data: world.mpMemberships.map((m) => ({
+          divisionId: m.divisionId,
+          clubId: m.clubId,
+          slotNumber: m.slotNumber,
+          isFillerAI: m.isFillerAI,
+          replacedClubId: m.replacedClubId,
+          joinedAt: new Date(m.joinedAt),
+        })),
+      });
+    }
+    await tx.mpClubSeason.deleteMany({});
+    if (world.mpClubSeasons.length > 0) {
+      await tx.mpClubSeason.createMany({
+        data: world.mpClubSeasons.map((cs) => ({
+          clubId: cs.clubId,
+          seasonId: cs.seasonId,
+          divisionId: cs.divisionId,
+          tier: cs.tier,
+          played: cs.played,
+          wins: cs.wins,
+          draws: cs.draws,
+          losses: cs.losses,
+          goalsFor: cs.goalsFor,
+          goalsAgainst: cs.goalsAgainst,
+          points: cs.points,
+          promotionStatus: cs.promotionStatus,
+          relegationStatus: cs.relegationStatus,
+        })),
+      });
+    }
+    await tx.mpActivity.deleteMany({});
+    if (world.mpActivities.length > 0) {
+      await tx.mpActivity.createMany({
+        data: world.mpActivities.map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: new Date(a.occurredAt), metadata: a.metadata })),
+      });
+    }
+    for (const execution of opts?.dailyExecutions ?? []) {
+      await tx.dailyExecution.upsert({
+        where: { saveId_seasonId_date_executionType: { saveId, seasonId: execution.seasonId, date: execution.date, executionType: execution.executionType } },
+        update: {},
+        create: { saveId, seasonId: execution.seasonId, date: execution.date, executionType: execution.executionType },
+      });
     }
   });
 }
 
 function clubRow(c: Club, saveId: number) {
-  return {
-    id: c.id,
-    saveId,
-    ownerUserId: c.ownerUserId,
-    timezone: c.timezone,
-    competitionState: c.competitionState,
-    lastMeaningfulActivityAt: c.lastMeaningfulActivityAt !== null ? BigInt(c.lastMeaningfulActivityAt) : null,
-    abandonmentEligibleAt: c.abandonmentEligibleAt !== null ? BigInt(c.abandonmentEligibleAt) : null,
-    inactivityWarningStage: c.inactivityWarningStage ?? 0,
-    liveMatchAt: c.liveMatchAt !== null ? BigInt(c.liveMatchAt) : null,
-    name: c.name,
-    shortName: c.shortName,
-    country: c.country,
-    highestDivision: c.highestDivision,
-    level: c.level,
-    cash: c.cash,
-    stadiumName: c.stadiumName,
-    stadiumCapacity: c.stadiumCapacity,
-    primaryColor: c.primaryColor,
-    secondaryColor: c.secondaryColor,
-    coachName: c.coachName,
-    isHuman: c.isHuman,
-    captainId: c.captainId,
-    penaltyTakerId: c.penaltyTakerId,
-    tacticsFormation: c.tactics.formation,
-    tacticsStyle: c.tactics.style,
-    tacticsPressing: c.tactics.pressing,
-    tacticsDirection: c.tactics.direction,
-    trainingFocus: c.trainingFocus,
-    savedLineupJson: c.savedLineup ? JSON.stringify(c.savedLineup) : null,
-  };
-}
+   return {
+     id: c.id,
+     saveId,
+     ownerUserId: c.ownerUserId,
+     timezone: c.timezone,
+     competitionState: c.competitionState,
+     lastMeaningfulActivityAt: c.lastMeaningfulActivityAt !== null ? BigInt(c.lastMeaningfulActivityAt) : null,
+     abandonmentEligibleAt: c.abandonmentEligibleAt !== null ? BigInt(c.abandonmentEligibleAt) : null,
+     inactivityWarningStage: c.inactivityWarningStage ?? 0,
+     liveMatchAt: c.liveMatchAt !== null ? BigInt(c.liveMatchAt) : null,
+     name: c.name,
+     shortName: c.shortName,
+     country: c.country,
+     highestDivision: c.highestDivision,
+     level: c.level,
+     cash: c.cash,
+     stadiumName: c.stadiumName,
+     stadiumCapacity: c.stadiumCapacity,
+     primaryColor: c.primaryColor,
+     secondaryColor: c.secondaryColor,
+     coachName: c.coachName,
+     isHuman: c.isHuman,
+     captainId: c.captainId,
+     penaltyTakerId: c.penaltyTakerId,
+     tacticsFormation: c.tactics.formation,
+     tacticsStyle: c.tactics.style,
+     tacticsPressing: c.tactics.pressing,
+     tacticsDirection: c.tactics.direction,
+     trainingFocus: c.trainingFocus,
+     savedLineupJson: c.savedLineup ? JSON.stringify(c.savedLineup) : null,
+   };
+ }
 
 function playerRow(p: Player, saveId: number) {
   return {
@@ -626,8 +699,8 @@ function playerRow(p: Player, saveId: number) {
     yellows: p.yellows,
     reds: p.reds,
     tacPos: p.tacPos,
-    onSale: p.onSale,
-    suspendedGames: p.suspendedGames,
+     onSale: p.onSale,
+     suspendedGames: p.suspendedGames,
     morale: p.morale,
     loanId: p.loanId,
     skillGol: p.skills.gol,
@@ -656,7 +729,6 @@ function competitionRow(c: Competition, saveId: number) {
     seasonId: c.seasonId ?? null,
     tier: c.tier ?? 1,
     groupIndex: c.groupIndex ?? 0,
-    referenceTimezone: c.referenceTimezone ?? null,
     status: c.status ?? "ACTIVE",
     configJson: JSON.stringify(c.config),
     winnersJson: JSON.stringify(c.winners),
@@ -694,72 +766,70 @@ function statRow(m: Match, saveId: number) {
 }
 
 async function rebuildWorld(
-  prisma: PrismaClient | Tx,
-  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; isGlobal?: boolean; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null }
+  prisma: PrismaClient,
+  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null }
 ): Promise<World> {
-  const [
-    clubRows,
-    playerRows,
-    loanRows,
-    competitionRows,
-    standingsRows,
-    fixtureRows,
-    matchRows,
-    statRows,
-    eventRows,
-    newsRows,
-    ledgerRows,
-    trophyRows,
-    managerRows,
-    awardRows,
-    recordRows,
-    ticketRows,
-    upgradeRows,
-    liveRow,
-    mpQueueRows,
-    mpAllocationRows,
-    mpMembershipRows,
-    mpClubSeasonRows,
-    mpActivityRows,
-    mpAuditRows,
-    marketBidRows,
-    transferAuctionRows,
-    freeAgentListingRows,
-    marketReservationRows,
-    playerMarketTransactionRows,
-    aiEvaluationRows,
-  ] = await Promise.all([
-    prisma.club.findMany({ where: { saveId: saveRow.id } }),
-    prisma.player.findMany({ where: { saveId: saveRow.id } }),
-    prisma.loan.findMany({ where: { saveId: saveRow.id } }),
-    prisma.competition.findMany({ where: { saveId: saveRow.id } }),
-    prisma.standingsRow.findMany({ where: { saveId: saveRow.id } }),
-    prisma.fixture.findMany({ where: { saveId: saveRow.id } }),
-    prisma.match.findMany({ where: { saveId: saveRow.id } }),
-    prisma.matchStat.findMany({ where: { saveId: saveRow.id } }),
-    prisma.matchEvent.findMany({ where: { saveId: saveRow.id }, orderBy: { ordinal: "asc" } }),
-    prisma.newsItem.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-    prisma.ledgerEntry.findMany({ where: { saveId: saveRow.id } }),
-    prisma.trophy.findMany({ where: { saveId: saveRow.id } }),
-    prisma.managerHistory.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-    prisma.seasonAward.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-    prisma.careerRecord.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-    prisma.clubTicketPrices.findMany({ where: { saveId: saveRow.id } }),
-    prisma.stadiumUpgrade.findMany({ where: { saveId: saveRow.id } }),
-    prisma.liveMatch.findMany({ where: { saveId: saveRow.id } }),
-    saveRow.isGlobal ? prisma.mpQueue.findMany({ orderBy: { queuedAt: "asc" } }) : Promise.resolve([]),
-    saveRow.isGlobal ? prisma.mpAllocation.findMany() : Promise.resolve([]),
-    saveRow.isGlobal ? prisma.mpMembership.findMany() : Promise.resolve([]),
-    saveRow.isGlobal ? prisma.mpClubSeason.findMany() : Promise.resolve([]),
-    saveRow.isGlobal ? prisma.mpActivity.findMany({ orderBy: { id: "asc" } }) : Promise.resolve([]),
-    saveRow.isGlobal ? prisma.mpAudit.findMany({ orderBy: { id: "asc" } }) : Promise.resolve([]),
-    prisma.marketBid.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-    prisma.transferAuction.findMany({ where: { saveId: saveRow.id } }),
-    prisma.freeAgentListing.findMany({ where: { saveId: saveRow.id } }),
-    prisma.marketReservation.findMany({ where: { saveId: saveRow.id } }),
-    prisma.playerMarketTransaction.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-    prisma.aiEvaluation.findMany({ where: { saveId: saveRow.id } }),
-  ]);
+   const [
+     clubRows,
+     playerRows,
+     loanRows,
+     competitionRows,
+     standingsRows,
+     fixtureRows,
+     matchRows,
+     statRows,
+     eventRows,
+     newsRows,
+     ledgerRows,
+     transferAuctionRows,
+     marketBidRows,
+     freeAgentListingRows,
+     marketReservationRows,
+     playerMarketTransactionRows,
+     aiEvaluationRows,
+     trophyRows,
+     managerRows,
+     awardRows,
+     recordRows,
+     ticketRows,
+     upgradeRows,
+     liveRow,
+     mpQueueRows,
+     mpAllocationRows,
+     mpMembershipRows,
+     mpClubSeasonRows,
+     mpActivityRows,
+   ] = await Promise.all([
+     prisma.club.findMany({ where: { saveId: saveRow.id } }),
+     prisma.player.findMany({ where: { saveId: saveRow.id } }),
+     prisma.loan.findMany({ where: { saveId: saveRow.id } }),
+     prisma.competition.findMany({ where: { saveId: saveRow.id } }),
+     prisma.standingsRow.findMany({ where: { saveId: saveRow.id } }),
+     prisma.fixture.findMany({ where: { saveId: saveRow.id } }),
+     prisma.match.findMany({ where: { saveId: saveRow.id } }),
+     prisma.matchStat.findMany({ where: { saveId: saveRow.id } }),
+     prisma.matchEvent.findMany({ where: { saveId: saveRow.id }, orderBy: { ordinal: "asc" } }),
+     prisma.newsItem.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+     prisma.ledgerEntry.findMany({ where: { saveId: saveRow.id } }),
+     prisma.transferAuction.findMany({ where: { saveId: saveRow.id } }),
+     prisma.marketBid.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+     prisma.freeAgentListing.findMany({ where: { saveId: saveRow.id } }),
+     prisma.marketReservation.findMany({ where: { saveId: saveRow.id } }),
+     prisma.playerMarketTransaction.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+     prisma.aiEvaluation.findMany({ where: { saveId: saveRow.id } }),
+     prisma.trophy.findMany({ where: { saveId: saveRow.id } }),
+     prisma.managerHistory.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+     prisma.seasonAward.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+     prisma.careerRecord.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+     prisma.clubTicketPrices.findMany({ where: { saveId: saveRow.id } }),
+     prisma.stadiumUpgrade.findMany({ where: { saveId: saveRow.id } }),
+     prisma.liveMatch.findMany({ where: { saveId: saveRow.id } }),
+     prisma.mpQueue.findMany({ orderBy: { queuedAt: "asc" } }),
+     prisma.mpAllocation.findMany(),
+     prisma.mpMembership.findMany(),
+     prisma.mpClubSeason.findMany(),
+     prisma.mpActivity.findMany({ orderBy: { id: "asc" } }),
+   ]);
 
   const clubs: Club[] = clubRows.map((r) => {
     const r2 = r as unknown as {
@@ -767,7 +837,10 @@ async function rebuildWorld(
       timezone: string | null;
       competitionState: string;
       lastMeaningfulActivityAt: bigint | null;
+      abandonmentEligibleAt: bigint | null;
+      inactivityWarningStage: number | null;
       liveMatchAt: bigint | null;
+      highestDivision: number | null;
     };
     return {
       id: r.id,
@@ -776,12 +849,12 @@ async function rebuildWorld(
       ownerUserId: r2.ownerUserId ?? null,
       timezone: r2.timezone ?? null,
       competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
-      lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null ? Number(r2.lastMeaningfulActivityAt) : null,
-      abandonmentEligibleAt: (r as unknown as { abandonmentEligibleAt: bigint | null }).abandonmentEligibleAt !== null ? Number((r as unknown as { abandonmentEligibleAt: bigint | null }).abandonmentEligibleAt) : null,
-      inactivityWarningStage: (r as unknown as { inactivityWarningStage?: number }).inactivityWarningStage ?? 0,
-      liveMatchAt: r2.liveMatchAt !== null ? Number(r2.liveMatchAt) : null,
+      lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null && r2.lastMeaningfulActivityAt !== undefined ? Number(r2.lastMeaningfulActivityAt) : null,
+      abandonmentEligibleAt: r2.abandonmentEligibleAt !== null && r2.abandonmentEligibleAt !== undefined ? Number(r2.abandonmentEligibleAt) : null,
+      inactivityWarningStage: r2.inactivityWarningStage ?? 0,
+      liveMatchAt: r2.liveMatchAt !== null && r2.liveMatchAt !== undefined ? Number(r2.liveMatchAt) : null,
       country: r.country,
-      highestDivision: r.highestDivision,
+      highestDivision: r2.highestDivision ?? 1,
       level: r.level,
       cash: r.cash,
       stadiumName: r.stadiumName,
@@ -800,72 +873,72 @@ async function rebuildWorld(
     };
   });
 
-  const players: Player[] = playerRows.map((r) => {
-    const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
-    // Backfill deterministically unless the whole profile is present and sane;
-    // never silently substitute arbitrary defaults for a partial profile.
-    const profileValid =
-      saved.declineStartAge !== null && saved.declineStartAge !== undefined &&
-      saved.developmentRate !== null && saved.developmentRate !== undefined &&
-      saved.developmentVolatility !== null && saved.developmentVolatility !== undefined &&
-      Number.isFinite(saved.declineStartAge) && Number.isFinite(saved.developmentRate) && Number.isFinite(saved.developmentVolatility);
-    const profile = profileValid
-      ? {
-          declineStartAge: saved.declineStartAge as number,
-          developmentRate: saved.developmentRate as number,
-          developmentVolatility: saved.developmentVolatility as number,
-        }
-      : backfillDevelopmentProfile(saveRow.seed, r.id);
-    return {
-      id: r.id,
-      name: r.name,
-      country: r.country,
-      age: r.age,
-      position: r.position as Player["position"],
-      side: r.side,
-      skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
-      overall: r.overall,
-      potential: r.potential,
-      tier: r.tier,
-      characteristic1: r.characteristic1,
-      characteristic2: r.characteristic2,
-      energy: r.energy,
-      salary: r.salary,
-      payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
-      payrollPaidAmount: (r as typeof r & { payrollPaidAmount?: number }).payrollPaidAmount ?? 0,
-      payrollPeriodStartDay: (r as typeof r & { payrollPeriodStartDay?: number }).payrollPeriodStartDay ?? 0,
-      value: r.value,
-      releaseClause: r.releaseClause,
-      injuryDays: r.injuryDays,
-      contractDays: r.contractDays,
-      isYouth: r.isYouth,
-      starter: r.starter,
-      growthAcc: r.growthAcc,
-      potentialAcc: r.potentialAcc,
-      skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
-      careerGoals: r.careerGoals,
-      careerAssists: r.careerAssists,
-      seasonGoals: r.seasonGoals,
-      seasonAssists: r.seasonAssists,
-      yellows: r.yellows,
-      reds: r.reds,
-      clubId: r.clubId,
-      tacPos: r.tacPos,
-      onSale: r.onSale,
-      suspendedGames: r.suspendedGames,
-      morale: r.morale,
-      loanId: r.loanId,
-      developmentProfile: profile,
-      recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
-    };
-  });
+   const players: Player[] = playerRows.map((r) => {
+     const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
+     // Backfill deterministically unless the whole profile is present and sane;
+     // never silently substitute arbitrary defaults for a partial profile.
+     const profileValid =
+       saved.declineStartAge !== null && saved.declineStartAge !== undefined &&
+       saved.developmentRate !== null && saved.developmentRate !== undefined &&
+       saved.developmentVolatility !== null && saved.developmentVolatility !== undefined &&
+       Number.isFinite(saved.declineStartAge) && Number.isFinite(saved.developmentRate) && Number.isFinite(saved.developmentVolatility);
+     const profile = profileValid
+       ? {
+           declineStartAge: saved.declineStartAge as number,
+           developmentRate: saved.developmentRate as number,
+           developmentVolatility: saved.developmentVolatility as number,
+         }
+       : backfillDevelopmentProfile(saveRow.seed, r.id);
+     return {
+       id: r.id,
+       name: r.name,
+       country: r.country,
+       age: r.age,
+       position: r.position as Player["position"],
+       side: r.side,
+       skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
+       overall: r.overall,
+       potential: r.potential,
+       tier: r.tier,
+       characteristic1: r.characteristic1,
+       characteristic2: r.characteristic2,
+       energy: r.energy,
+       salary: r.salary,
+       payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
+       payrollPaidAmount: (r as typeof r & { payrollPaidAmount?: number }).payrollPaidAmount ?? 0,
+       payrollPeriodStartDay: (r as typeof r & { payrollPeriodStartDay?: number }).payrollPeriodStartDay ?? 0,
+       value: r.value,
+       releaseClause: r.releaseClause,
+       injuryDays: r.injuryDays,
+       contractDays: r.contractDays,
+       isYouth: r.isYouth,
+       starter: r.starter,
+       growthAcc: r.growthAcc,
+       potentialAcc: r.potentialAcc,
+       skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
+       careerGoals: r.careerGoals,
+       careerAssists: r.careerAssists,
+       seasonGoals: r.seasonGoals,
+       seasonAssists: r.seasonAssists,
+       yellows: r.yellows,
+       reds: r.reds,
+       clubId: r.clubId,
+       tacPos: r.tacPos,
+       onSale: r.onSale,
+       suspendedGames: r.suspendedGames,
+       morale: r.morale,
+       loanId: r.loanId,
+       developmentProfile: profile,
+       recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
+     } as Player;
+   });
 
   for (const player of players) {
     normalizePlayer(player, clubs.find((club) => club.id === player.clubId));
   }
 
   const competitions: Competition[] = competitionRows.map((r) => {
-    const r2 = r as unknown as { seasonId: number | null; tier: number; groupIndex: number; referenceTimezone: string | null; status: string };
+    const r2 = r as unknown as { seasonId: number | null; tier: number; groupIndex: number; status: string };
     return {
       id: r.id,
       kind: r.kind as Competition["kind"],
@@ -875,7 +948,6 @@ async function rebuildWorld(
       seasonId: r2.seasonId ?? undefined,
       tier: r2.tier ?? 1,
       groupIndex: r2.groupIndex ?? 0,
-      referenceTimezone: r2.referenceTimezone ?? null,
       status: r2.status ?? "ACTIVE",
       config: jsonOr(r.configJson, { clubs: [], turns: 2, groups: [], bracket: [], promoted: 0, relegated: 0, groupQualifiers: 0 }),
       winners: jsonOr<number[]>(r.winnersJson, []),
@@ -902,7 +974,7 @@ async function rebuildWorld(
   }
 
   const fixtures = fixtureRows.map((f) => {
-    const f2 = f as unknown as { kickoffAt: bigint | null; homeClubNameSnapshot: string | null; awayClubNameSnapshot: string | null };
+    const f2 = f as unknown as { kickoffAt: bigint | null };
     return {
       id: f.id,
       competitionId: f.competitionId,
@@ -914,8 +986,6 @@ async function rebuildWorld(
       leg: f.leg ?? undefined,
       tie: f.tie ?? undefined,
       kickoffAt: f2.kickoffAt !== null && f2.kickoffAt !== undefined ? Number(f2.kickoffAt) : undefined,
-      homeClubNameSnapshot: f2.homeClubNameSnapshot ?? undefined,
-      awayClubNameSnapshot: f2.awayClubNameSnapshot ?? undefined,
     };
   });
 
@@ -973,195 +1043,162 @@ async function rebuildWorld(
     if (club) club.trophies[t.competitionName] = t.count;
   }
 
-  const transferAuctions: World["transferAuctions"] = transferAuctionRows.map((a) => {
-    const r = a as unknown as { createdAt: bigint; deadline: bigint; originalDeadline: bigint; completedAt: bigint | null; cancelledAt: bigint | null };
-    return {
-      id: a.id,
-      playerId: a.playerId,
-      sellerClubId: a.sellerClubId,
-      playerValueAtListing: a.playerValueAtListing,
-      openingPrice: a.openingPrice,
-      bidIncrement: a.bidIncrement,
-      sellerDivisionAtListing: a.sellerDivisionAtListing,
-      totalDivisionsAtListing: a.totalDivisionsAtListing,
-      currentPrice: a.currentPrice,
-      leadingClubId: a.leadingClubId,
-      createdAt: Number(r.createdAt),
-      deadline: Number(r.deadline),
-      originalDeadline: Number(r.originalDeadline),
-      status: a.status as World["transferAuctions"][number]["status"],
-      completedAt: r.completedAt !== null ? Number(r.completedAt) : null,
-      winningClubId: a.winningClubId,
-      finalPrice: a.finalPrice,
-      cancelledAt: r.cancelledAt !== null ? Number(r.cancelledAt) : null,
-      softClosed: a.softClosed,
-      softCloseExtensions: a.softCloseExtensions,
-    };
-  });
+   const auctions = transferAuctionRows.map((a) => ({
+     id: a.id,
+     playerId: a.playerId,
+     sellerClubId: a.sellerClubId,
+     playerValueAtListing: a.playerValueAtListing,
+     openingPrice: a.openingPrice,
+     bidIncrement: a.bidIncrement,
+     sellerDivisionAtListing: a.sellerDivisionAtListing,
+     totalDivisionsAtListing: a.totalDivisionsAtListing,
+     currentPrice: a.currentPrice,
+     leadingClubId: a.leadingClubId,
+     bids: marketBidRows.filter((b) => b.listingId === a.id && b.marketType === "TRANSFER").map((b) => ({ clubId: b.clubId, maxBid: b.maxBid, initialPriorityAt: Number(b.initialPriorityAt) })),
+     createdAt: Number(a.createdAt),
+     deadline: Number(a.deadline),
+     originalDeadline: Number(a.originalDeadline),
+     status: (a.status as AuctionStatus) ?? "ACTIVE",
+     completedAt: a.completedAt !== null ? Number(a.completedAt) : null,
+     winningClubId: a.winningClubId,
+     finalPrice: a.finalPrice,
+     cancelledAt: a.cancelledAt !== null ? Number(a.cancelledAt) : null,
+     softClosed: a.softClosed,
+     softCloseExtensions: a.softCloseExtensions,
+   }));
 
-  const marketBids: World["marketBids"] = marketBidRows.map((b) => {
-    const r = b as unknown as { createdAt: bigint; updatedAt: bigint; initialPriorityAt: bigint };
-    return {
-      id: b.id,
-      marketType: b.marketType as "TRANSFER" | "FREE_AGENT",
-      listingId: b.listingId,
-      clubId: b.clubId,
-      maxBid: b.maxBid,
-      capMultiplierAtSubmission: b.capMultiplierAtSubmission ?? undefined,
-      maximumAllowedByRuleAtSubmission: b.maximumAllowedByRuleAtSubmission ?? undefined,
-      buyerDivisionAtSubmission: b.buyerDivisionAtSubmission ?? undefined,
-      createdAt: Number(r.createdAt),
-      updatedAt: Number(r.updatedAt),
-      initialPriorityAt: Number(r.initialPriorityAt),
-    };
-  });
+   const freeAgentListings = freeAgentListingRows.map((l) => ({
+     id: l.id,
+     playerId: l.playerId,
+     playerValueAtListing: l.playerValueAtListing,
+     openingPrice: l.openingPrice,
+     bidIncrement: l.bidIncrement,
+     demandedSalary: l.demandedSalary,
+     demandedContractDays: l.demandedContractDays,
+     currentPrice: l.currentPrice,
+     leadingClubId: l.leadingClubId,
+     relistStage: l.relistStage,
+     bids: marketBidRows.filter((b) => b.listingId === l.id && b.marketType === "FREE_AGENT").map((b) => ({ clubId: b.clubId, maxBid: b.maxBid, initialPriorityAt: Number(b.initialPriorityAt) })),
+     createdAt: Number(l.createdAt),
+     deadline: Number(l.deadline),
+     status: (l.status as AuctionStatus) ?? "ACTIVE",
+     completedAt: l.completedAt !== null ? Number(l.completedAt) : null,
+     winningClubId: l.winningClubId,
+     finalPrice: l.finalPrice,
+     previousListingId: l.previousListingId,
+     softClosed: l.softClosed,
+     softCloseExtensions: l.softCloseExtensions,
+   }));
 
-  const freeAgentListings: World["freeAgentListings"] = freeAgentListingRows.map((l) => {
-    const r = l as unknown as { createdAt: bigint; deadline: bigint; completedAt: bigint | null };
-    return {
-      id: l.id,
-      playerId: l.playerId,
-      playerValueAtListing: l.playerValueAtListing,
-      openingPrice: l.openingPrice,
-      bidIncrement: l.bidIncrement,
-      demandedSalary: l.demandedSalary,
-      demandedContractDays: l.demandedContractDays,
-      currentPrice: l.currentPrice,
-      leadingClubId: l.leadingClubId,
-      relistStage: l.relistStage,
-      createdAt: Number(r.createdAt),
-      deadline: Number(r.deadline),
-      status: l.status as World["freeAgentListings"][number]["status"],
-      completedAt: r.completedAt !== null ? Number(r.completedAt) : null,
-      winningClubId: l.winningClubId,
-      finalPrice: l.finalPrice,
-      previousListingId: l.previousListingId,
-      softClosed: l.softClosed,
-      softCloseExtensions: l.softCloseExtensions,
-    };
-  });
+   const marketBidsList = marketBidRows.map((b) => ({
+     id: b.id,
+     marketType: (b.marketType as "TRANSFER" | "FREE_AGENT"),
+     listingId: b.listingId,
+     clubId: b.clubId,
+     maxBid: b.maxBid,
+     capMultiplierAtSubmission: b.capMultiplierAtSubmission ?? undefined,
+     maximumAllowedByRuleAtSubmission: b.maximumAllowedByRuleAtSubmission ?? undefined,
+     buyerDivisionAtSubmission: b.buyerDivisionAtSubmission ?? undefined,
+     createdAt: Number(b.createdAt),
+     updatedAt: Number(b.updatedAt),
+     initialPriorityAt: Number(b.initialPriorityAt),
+   }));
 
-  const marketReservations: World["marketReservations"] = marketReservationRows.map((r) => ({
-    id: r.id,
-    clubId: r.clubId,
-    listingId: r.listingId,
-    marketType: r.marketType as "TRANSFER" | "FREE_AGENT",
-    amount: r.amount,
-    createdAt: Number((r as unknown as { createdAt: bigint }).createdAt),
-    releasedAt: (r as unknown as { releasedAt: bigint | null }).releasedAt !== null ? Number((r as unknown as { releasedAt: bigint | null }).releasedAt) : null,
-  }));
+   const marketReservations = marketReservationRows.map((r) => ({
+     id: r.id,
+     clubId: r.clubId,
+     listingId: r.listingId,
+     marketType: (r.marketType as "TRANSFER" | "FREE_AGENT"),
+     amount: r.amount,
+     createdAt: Number(r.createdAt),
+     releasedAt: r.releasedAt !== null ? Number(r.releasedAt) : null,
+   }));
 
-  const playerMarketHistory: World["playerMarketHistory"] = playerMarketTransactionRows.map((t) => ({
-    id: t.id,
-    playerId: t.playerId,
-    listingId: t.listingId,
-    type: t.type as World["playerMarketHistory"][number]["type"],
-    fromClubId: t.fromClubId,
-    toClubId: t.toClubId,
-    price: t.price,
-    seasonId: t.seasonId,
-    seasonKey: t.seasonKey,
-    matchday: t.matchday,
-    timestamp: Number((t as unknown as { timestamp: bigint }).timestamp),
-  }));
+   const playerMarketHistory = playerMarketTransactionRows.map((t) => ({
+     id: t.id,
+     playerId: t.playerId,
+     listingId: t.listingId,
+     type: (t.type as "TRANSFER" | "FREE_AGENT_SIGNING" | "LOAN"),
+     fromClubId: t.fromClubId,
+     toClubId: t.toClubId,
+     price: t.price,
+     seasonId: t.seasonId,
+     seasonKey: t.seasonKey,
+     matchday: t.matchday,
+     timestamp: Number(t.timestamp),
+   }));
 
-  const aiEvaluations: World["aiEvaluations"] = aiEvaluationRows.map((e) => ({
-    marketType: e.marketType as "TRANSFER" | "FREE_AGENT",
-    listingId: e.listingId,
-    clubId: e.clubId,
-    evaluatedAt: Number((e as unknown as { evaluatedAt: bigint }).evaluatedAt),
-    decision: e.decision,
-    maxBid: e.maxBid,
-  }));
+   const aiEvaluations = aiEvaluationRows.map((e) => ({
+     marketType: (e.marketType as "TRANSFER" | "FREE_AGENT"),
+     listingId: e.listingId,
+     clubId: e.clubId,
+     evaluatedAt: Number(e.evaluatedAt),
+     decision: e.decision,
+     maxBid: e.maxBid ?? null,
+   }));
 
-  const world: World = {
-    seed: saveRow.seed,
-    year: saveRow.year,
-    dayIndex: saveRow.dayIndex,
-    dayOfWeek: ((saveRow.dayIndex % 7) + 7) % 7,
-    nextId: 1,
-    clubs,
-    players,
-    competitions,
+   const world: World = {
+     seed: saveRow.seed,
+     year: saveRow.year,
+     dayIndex: saveRow.dayIndex,
+     dayOfWeek: ((saveRow.dayIndex % 7) + 7) % 7,
+     nextId: 1,
+     clubs,
+     players,
+     competitions,
     fixtures,
     matches,
     news: newsRows.map((n) => ({ dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? undefined })),
-    loans: loanRows.map((l) => ({
-      id: l.id,
-      playerId: l.playerId,
-      fromClubId: l.fromClubId,
-      toClubId: l.toClubId,
-      startDay: l.startDay,
-      endDay: l.endDay,
-      recalled: l.recalled,
-      listedAt: Number((l as unknown as { listedAt: bigint }).listedAt),
-      claimableAt: Number((l as unknown as { claimableAt: bigint }).claimableAt),
-    })),
-    marketBids,
-    transferAuctions,
-    freeAgentListings,
-    marketReservations,
-    playerMarketHistory,
-    aiEvaluations,
-    seasonAwards: awardRows.map((a) => ({ season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })),
-    records: recordRows.map((r) => ({ category: r.category, value: r.value, holderName: r.holderName })),
-    managerHistory: managerRows.map((m) => ({ clubId: m.clubId, name: m.name, appointedDay: m.appointedDay, departedDay: m.departedDay, gamesInCharge: m.gamesInCharge, reason: m.reason })),
-    ticketPrices: Object.fromEntries(ticketRows.map((t) => [t.clubId, [t.sector0, t.sector1, t.sector2, t.sector3]])),
+     transferAuctions: auctions,
+     marketBids: marketBidsList,
+     freeAgentListings,
+     marketReservations,
+     playerMarketHistory,
+     aiEvaluations,
+     loans: loanRows.map((l) => ({ id: l.id, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, listedAt: Number(l.listedAt), claimableAt: Number(l.claimableAt) })),
+     seasonAwards: awardRows.map((a) => ({ season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })),
+     records: recordRows.map((r) => ({ category: r.category, value: r.value, holderName: r.holderName })),
+     managerHistory: managerRows.map((m) => ({ clubId: m.clubId, name: m.name, appointedDay: m.appointedDay, departedDay: m.departedDay, gamesInCharge: m.gamesInCharge, reason: m.reason })),
+     ticketPrices: Object.fromEntries(ticketRows.map((t) => [t.clubId, [t.sector0, t.sector1, t.sector2, t.sector3]])),
     stadiumUpgrades: upgradeRows.map((u) => ({ clubId: u.clubId, startedDay: u.startedDay, completesDay: u.completesDay, newCapacity: u.newCapacity, cost: u.cost, completed: u.completed })),
-    humanClubId: saveRow.humanClubId,
-    seasonSummary: jsonOr(saveRow.seasonSummaryJson, null),
-    rng: createRng(saveRow.seed),
-    contractWarnings: [],
-    mp: {
-      seasonId: 0,
-      seasonYear: saveRow.year,
-      seasonMonth: 1,
-      seasonStatus: "PREPARATION",
-      completedRounds: 0,
-      joinLockRound: 7,
-      joinState: "OPEN",
-      joinThresholdPercent: 0.5,
-      inactivityThresholds: { 1: 42, 2: 35, default: 28 },
-      matchTimeMode: "GLOBAL_FIXED_KICKOFF",
-      matchKickoffHour: 20,
-      lastProcessedGameDay: 0,
-      lastDailyTickDay: 0,
-      lastDailyTickDate: null,
-      manualRound: null,
-      rolloverPhase: null,
-      ...jsonOr<Partial<World["mp"]>>((saveRow as unknown as { mpStateJson?: string | null }).mpStateJson, {}),
-    },
-    mpQueue: [],
-    liveMatches: [],
-    seasonAllocations: [],
-    mpMemberships: [],
-    mpClubSeasons: [],
-    mpActivities: [],
-    mpAudits: [],
-    seasonHistory: [],
-  };
-  world.mp.seasonId ??= 0;
-  world.mp.seasonYear ??= saveRow.year;
-  world.mp.seasonMonth ??= 1;
-  world.mp.seasonStatus ??= "PREPARATION";
-  world.mp.completedRounds ??= 0;
-  world.mp.joinLockRound ??= 7;
-  world.mp.joinThresholdPercent ??= 0.5;
-  world.mp.inactivityThresholds ??= { 1: 42, 2: 35, default: 28 };
-  world.mp.matchTimeMode ??= "GLOBAL_FIXED_KICKOFF";
-  world.mp.matchKickoffHour ??= 20;
-  world.mp.joinState ??= "OPEN";
-  world.mp.lastProcessedGameDay ??= 0;
-  world.mp.lastDailyTickDay ??= 0;
-  world.mp.lastDailyTickDate ??= null;
-  world.mp.manualRound ??= null;
-  world.mp.rolloverPhase ??= null;
-  world.rng.state = Number(saveRow.rngState);
-  world.nextId =
-    Math.max(
-      1,
-      ...[...clubs.map((c) => c.id), ...players.map((p) => p.id), ...competitions.map((c) => c.id), ...fixtures.map((f) => f.id), ...matches.map((m) => m.id), ...world.loans.map((l) => l.id), ...transferAuctions.map((a) => a.id), ...marketBids.map((b) => b.id), ...freeAgentListings.map((l) => l.id), ...marketReservations.map((r) => r.id), ...playerMarketHistory.map((t) => t.id)]
-    ) + 1;
+     humanClubId: saveRow.humanClubId,
+     seasonSummary: jsonOr(saveRow.seasonSummaryJson, null),
+     rng: createRng(saveRow.seed),
+     contractWarnings: [],
+     mp: {
+       seasonId: 0,
+       seasonYear: saveRow.year,
+       seasonMonth: 1,
+       seasonStatus: "PREPARATION",
+       completedRounds: 0,
+       joinLockRound: 7,
+       joinState: "OPEN",
+       joinThresholdPercent: 0.5,
+       inactivityThresholds: { 1: 42, 2: 35, default: 28 },
+       matchTimeMode: "DIVISION_LOCAL_KICKOFF",
+       matchKickoffHour: 20,
+       lastProcessedGameDay: 0,
+       lastDailyTickDay: 0,
+       lastDailyTickDate: null,
+       manualRound: null,
+       rolloverPhase: null,
+       ...jsonOr<Partial<World["mp"]>>((saveRow as unknown as { mpStateJson?: string | null }).mpStateJson, {}),
+     },
+     mpQueue: [],
+     liveMatches: [],
+     seasonAllocations: [],
+     mpMemberships: [],
+     mpClubSeasons: [],
+     mpActivities: [],
+     mpAudits: [],
+     seasonHistory: [],
+   };
+   world.rng.state = Number(saveRow.rngState);
+   world.nextId =
+     Math.max(
+       1,
+       ...[...clubs.map((c) => c.id), ...players.map((p) => p.id), ...competitions.map((c) => c.id), ...fixtures.map((f) => f.id), ...matches.map((m) => m.id), ...auctions.map((a) => a.id), ...freeAgentListings.map((l) => l.id), ...world.loans.map((l) => l.id)]
+     ) + 1;
   world.liveMatches = (liveRow ?? []).map((r) => jsonOr<LiveMatchState | null>(r.stateJson, null)).filter((x): x is LiveMatchState => !!x);
   for (const st of world.liveMatches) {
     st.subbedIn ??= [[], []];
@@ -1191,8 +1228,6 @@ async function rebuildWorld(
     relegationStatus: cs.relegationStatus,
   }));
   world.mpActivities = (mpActivityRows ?? []).map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: a.occurredAt.getTime(), metadata: a.metadata }));
-  world.mpAudits = (mpAuditRows ?? []).map((a) => ({ seasonId: a.seasonId, clubId: a.clubId, userId: a.userId, eventType: a.eventType, occurredAt: a.occurredAt.getTime(), metadata: a.metadata }));
-  world.seasonHistory = jsonOr<World["seasonHistory"]>((saveRow as unknown as { seasonHistoryJson?: string | null }).seasonHistoryJson, []);
   world.pendingDayEvents = jsonOr<string[] | undefined>(saveRow.pendingEventsJson, undefined);
   world.pendingDayMatchIds = jsonOr<number[] | undefined>(saveRow.pendingMatchIdsJson, undefined);
   return world;

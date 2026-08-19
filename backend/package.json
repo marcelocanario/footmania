@@ -13,6 +13,7 @@
     "db:upgrade": "prisma db push",
     "db:push": "prisma db push",
     "db:reset": "prisma db push --force-reset",
+    "db:seed-name-pools": "tsx scripts/import-name-pools.mts",
     "db:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {

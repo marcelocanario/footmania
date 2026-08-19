@@ -488,8 +488,12 @@ export const api = {
   startStadiumUpgrade: () =>
     request<{ ok: boolean; upgrade: FinanceDetails["stadiumUpgrade"] }>("/api/club/stadium-upgrade", { method: "POST" }),
   listLoans: () => request<{ loans: LoanView[] }>("/api/transfers/loans"),
-  loanPlayer: (playerId: number, action: "offer" | "take" | "recall") =>
-    request<{ ok: boolean }>(`/api/players/${playerId}/loan`, { method: "POST", body: JSON.stringify({ action }) }),
+  offerLoan: (playerId: number) =>
+    request<{ ok: boolean }>("/api/transfers/loans", { method: "POST", body: JSON.stringify({ playerId }) }),
+  claimLoan: (loanId: number) =>
+    request<{ ok: boolean }>(`/api/transfers/loans/${loanId}/claim`, { method: "POST" }),
+  cancelLoan: (loanId: number) =>
+    request<{ ok: boolean }>(`/api/transfers/loans/${loanId}/cancel`, { method: "POST" }),
   academyAction: (playerId: number, action: "promote" | "dismiss") =>
     request<{ ok: boolean }>(`/api/players/${playerId}/academy`, { method: "POST", body: JSON.stringify({ action }) }),
   releasePlayer: (playerId: number) =>

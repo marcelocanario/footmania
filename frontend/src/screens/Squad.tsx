@@ -125,7 +125,8 @@ export function Squad() {
     if (false) return;
     const action = p.loanId === null ? "offer" : "recall";
     try {
-      await api.loanPlayer(p.id, action);
+      if (action === "offer") await api.offerLoan(p.id);
+      else if (p.loanId !== null) await api.cancelLoan(p.loanId);
       toast.current?.show({ severity: "success", summary: action === "offer" ? "Player listed for loan" : "Player recalled" });
       await refresh();
     } catch (e) {

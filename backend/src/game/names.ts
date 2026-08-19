@@ -1,51 +1,55 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import type { RngState } from "./rng";
 import { nextInt } from "./rng";
 
-const here = dirname(fileURLToPath(import.meta.url));
-const ASSETS = join(here, "..", "..", "assets");
+/**
+ * Name-pool catalog for player/coach name generation.
+ *
+ * The pools are global reference data persisted in the `NamePoolEntry` table
+ * (seeded from backend/assets/namepools.json) and loaded once into memory at
+ * startup by `loadNamePoolsFromDb` (services/namePoolService.ts). The loader
+ * mutates this module's catalog directly so the synchronous engine code keeps
+ * working without plumbing a context through every generator.
+ *
+ * Countries with no rows fall back to a small generic pool so any country can
+ * still generate names.
+ */
 
 const nameCache: Record<string, string[]> = {};
-const poolSource: Record<string, "file" | "fallback"> = {};
+const poolSource: Record<string, "db" | "fallback"> = {};
 
 const FALLBACK_NAMES = ["Alex", "João", "Marco", "Luca", "James", "Ken", "Ivan", "Diego", "Omar", "Yuki"];
 const FALLBACK_SURNAMES = ["Silva", "Rossi", "Smith", "Khan", "Sato", "Nakamura", "Ferreira", "Muller", "Garcia", "Kim"];
 
-function loadPool(kind: "names" | "surnames", country: string): string[] {
+function pool(kind: "names" | "surnames", country: string): string[] {
   const key = `${kind}:${country}`;
   if (nameCache[key]) return nameCache[key];
-  let lines: string[] = [];
-  try {
-    const file = join(ASSETS, "namepools", kind, `${country}.txt`);
-    lines = readFileSync(file, "utf8")
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.includes(".") && !/\d/.test(l));
-  } catch {
-    lines = [];
-  }
-  // Sparse/empty pools fall back to a small generic pool so every country can
-  // still generate names.
-  if (lines.length === 0) {
-    lines = kind === "names" ? [...FALLBACK_NAMES] : [...FALLBACK_SURNAMES];
-    poolSource[key] = "fallback";
-  } else {
-    poolSource[key] = "file";
-  }
-  nameCache[key] = lines;
+  const fallback = kind === "names" ? [...FALLBACK_NAMES] : [...FALLBACK_SURNAMES];
+  nameCache[key] = fallback;
+  poolSource[key] = "fallback";
   return nameCache[key];
 }
 
+/** Register a country+kind pool (file order preserved, duplicates kept). Empty pools keep the generic fallback. */
+export function registerNamePool(kind: "names" | "surnames", country: string, values: string[]): void {
+  const key = `${kind}:${country}`;
+  if (values.length > 0) {
+    nameCache[key] = values;
+    poolSource[key] = "db";
+  } else {
+    delete nameCache[key];
+    poolSource[key] = "fallback";
+  }
+}
+
+/** True when the country has a non-fallback first-name pool. */
 export function hasNamePool(country: string): boolean {
-  loadPool("names", country);
-  return poolSource[`names:${country}`] === "file";
+  const key = `names:${country}`;
+  return Boolean(nameCache[key]) && poolSource[key] === "db";
 }
 
 export function generateName(rng: RngState, country: string): string {
-  const names = loadPool("names", country);
-  const surnames = loadPool("surnames", country);
+  const names = pool("names", country);
+  const surnames = pool("surnames", country);
   let idx = nextInt(rng, names.length);
   if (idx === 0) idx = 1;
   let name = names[idx];

@@ -1,5 +1,4 @@
 import type { Club, Player, World } from "./types";
-import type { PrismaClient } from "@prisma/client";
 import { chance, nextInt, pick } from "./rng";
 import {
   aging,
@@ -10,9 +9,6 @@ import {
 import { DAYS_PER_YEAR } from "./constants";
 import { sortedStandings } from "./league";
 import { squadNeeds } from "./transfers";
-import { reconcileListingsAtRollover, safeMarketBudget } from "./market";
-import { createFreeAgentListing } from "./freeAgents";
-import { offerPlayerForLoan, claimLoan, reconcileLoansAtRollover } from "./loans";
 import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
 import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from "./payroll";
 import {
@@ -22,7 +18,6 @@ import {
   calculateReleaseClause,
   remainingSeasons,
 } from "./economy";
-import { prizeBudgetForTier } from "./budget";
 
 /** Latest day-of-season a deadline can resolve: the season rolls over on the
  * day after the final league round (LEAGUE_LAST_MATCH_DAY + 1), so any deadline
@@ -31,16 +26,18 @@ export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
   return Math.min(LEAGUE_LAST_MATCH_DAY + 1, dayIndex + daysFromNow);
 }
 
+export function calculateDivisionPrize(higherBudget: number, currentBudget: number, position: number, teamCount: number): number {
+  if (position < 1 || teamCount < 1 || position > teamCount) return 0;
+  const difference = Math.max(0, higherBudget - currentBudget);
+  return Math.round(difference * ((teamCount - position + 1) / teamCount));
+}
+
 export function loanFitsContract(startDay: number, endDay: number, contractDays: number): boolean {
   return endDay > startDay && endDay - startDay <= contractDays;
 }
 
 export const SENIOR_SQUAD_LIMIT = 35;
 const ACADEMY_TARGET = 8;
-
-function humanControlled(club: Club): boolean {
-  return club.isHuman || club.ownerUserId !== null;
-}
 
 export function fairSalaryForPlayer(player: Player): number {
   return calculateBaseSalary(player.overall, player.age);
@@ -108,14 +105,9 @@ function lastMatchXI(world: World, clubId: number): Set<number> {
   return ids;
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
-}
-
 export function weeklyUpdate(rng: World["rng"], world: World) {
   for (const club of world.clubs) {
-    const participates = club.competitionState === "ACTIVE";
-    const last = participates ? clubLastMatch(world, club.id) : null;
+    const last = clubLastMatch(world, club.id);
     const won =
       last !== null &&
       ((last.homeClubId === club.id && last.homeScore > last.awayScore) ||
@@ -129,24 +121,10 @@ export function weeklyUpdate(rng: World["rng"], world: World) {
       if (player.injuryDays > 0) player.injuryDays--;
       if (player.energy < 100) player.energy += nextInt(rng, 6);
       potentialGrowth(rng, player);
-      if (participates && won) player.morale = Math.min(100, player.morale + 2);
-      if (participates && lost) player.morale = Math.max(0, player.morale - 2);
-      if (participates && player.starter) player.morale = Math.min(100, player.morale + 1);
-      else if (participates && player.injuryDays === 0 && !player.isYouth) player.morale = Math.max(0, player.morale - 3);
-    }
-    const squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
-    if (squad.length > 0) {
-      const avgMorale = squad.reduce((s, p) => s + p.morale, 0) / squad.length;
-      if (avgMorale < 30) {
-        if (chance(rng, 20)) {
-          world.news.push({
-            dayIndex: world.dayIndex,
-            text: `A rift is growing in the ${club.name} dressing room`,
-            kind: "morale",
-            clubId: club.id,
-          });
-        }
-      }
+      if (won) player.morale = Math.min(100, player.morale + 2);
+      if (lost) player.morale = Math.max(0, player.morale - 2);
+      if (player.starter) player.morale = Math.min(100, player.morale + 1);
+      else if (player.injuryDays === 0 && !player.isYouth) player.morale = Math.max(0, player.morale - 3);
     }
   }
 }
@@ -154,32 +132,6 @@ export function weeklyUpdate(rng: World["rng"], world: World) {
 /** Pays wages accrued since the previous payroll boundary. */
 export function settlePayroll(rng: World["rng"], world: World) {
   settlePayrollThrough(world);
-}
-
-export function calculateDivisionPrize(higherBudget: number, currentBudget: number, position: number, teamCount: number): number {
-  if (position < 1 || teamCount < 1 || position > teamCount) return 0;
-  const difference = Math.max(0, higherBudget - currentBudget);
-  return Math.round(difference * ((teamCount - position + 1) / teamCount));
-}
-
-export async function awardDivisionPrizes(prisma: PrismaClient, world: World) {
-  for (const comp of world.competitions) {
-    if (comp.kind !== "division" || comp.tier === undefined) continue;
-    const sorted = sortedStandings(comp);
-    const teamCount = comp.config.clubs.length || sorted.length;
-    if (teamCount <= 0) continue;
-    const currentBudget = await prizeBudgetForTier(prisma, comp.tier);
-    const higherBudget = await prizeBudgetForTier(prisma, comp.tier - 1);
-    for (let i = 0; i < sorted.length; i++) {
-      const prize = calculateDivisionPrize(higherBudget, currentBudget, i + 1, teamCount);
-      if (prize <= 0) continue;
-      const club = world.clubs.find((c) => c.id === sorted[i].clubId);
-      if (club) {
-        club.cash += prize;
-        club.ledger.income.push({ code: 5, amount: prize, day: world.dayIndex, label: `Division prize (${comp.name})` });
-      }
-    }
-  }
 }
 
 export function updateCareerRecords(world: World) {
@@ -307,9 +259,7 @@ export function contractCycle(rng: World["rng"], world: World) {
       player.contractDays = freeAgentDays;
       player.tacPos = -1;
       player.starter = false;
-      player.onSale = false;
-      // §42: automatically create the free-agent listing for the new FA.
-      createFreeAgentListing(world, player);
+       player.onSale = false;
       world.news.push({
         dayIndex: world.dayIndex,
         text: `${player.name} left ${club?.name ?? "his club"} as a free agent after his contract expired`,
@@ -318,20 +268,15 @@ export function contractCycle(rng: World["rng"], world: World) {
       });
       continue;
     }
-    if (humanControlled(club)) continue;
+    if (club.isHuman) continue;
     const warningThreshold = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
     if (player.contractDays <= warningThreshold) {
       const maxSeasons = gameConfig.maxContractSeasons;
       const offerSeasons = 1 + nextInt(rng, maxSeasons);
       const demand = calculateContractDemand(player.salary, player.overall, player.age, offerSeasons);
       // AI renewal uses the same demand model as the human player; the club
-      // only decides whether it can afford it and for how long. Affordability
-      // uses the shared safe-budget boundary (§102.10) instead of the legacy
-      // `club.cash > demand` check so a renewal cannot bypass the same
-      // solvency rule the transfer market enforces.
-      const renewalCost = Math.max(0, demand - player.salary);
-      const budget = safeMarketBudget(world, club, { committedExpenses: renewalCost });
-      if (budget > 0 && demand > player.salary) {
+      // only decides whether it can afford it and for how long.
+      if (club.cash > demand && demand > player.salary) {
         settlePlayerPayroll(world, player);
         resetPayrollPeriod(player, world.dayIndex);
         player.salary = demand;
@@ -384,7 +329,7 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
 
 export function loanCycle(rng: World["rng"], world: World) {
   for (const club of world.clubs) {
-    if (humanControlled(club) || !chance(rng, 15)) continue;
+    if (club.isHuman || !chance(rng, 15)) continue;
     const roster = world.players.filter(
       (p) =>
         p.clubId === club.id && !p.isYouth && !p.onSale && p.loanId === null && p.injuryDays === 0 && p.overall < 70
@@ -397,8 +342,17 @@ export function loanCycle(rng: World["rng"], world: World) {
     const contractEligible = candidates.filter((p) => loanFitsContract(world.dayIndex, endDay, p.contractDays));
     if (contractEligible.length === 0) continue;
     const p = pick(rng, contractEligible);
-    const offered = offerPlayerForLoan(world, club, p, { startDay: world.dayIndex });
-    if (!offered.ok) continue;
+    world.loans.push({
+      id: world.nextId++,
+      playerId: p.id,
+      fromClubId: club.id,
+      toClubId: null,
+      startDay: world.dayIndex,
+      endDay,
+      recalled: false,
+      listedAt: Date.now(),
+      claimableAt: Date.now(),
+    });
     world.news.push({
       dayIndex: world.dayIndex,
       text: `${club.name} listed ${p.name} on the loan list`,
@@ -408,14 +362,14 @@ export function loanCycle(rng: World["rng"], world: World) {
   }
   for (const loan of [...world.loans]) {
     if (loan.recalled) continue;
-    // Loans end only at the earliest terminal event: current-season end or
-    // contract expiry (§56). The random early-ending path was removed (§102.8).
     if (loan.endDay <= world.dayIndex) {
+      endLoan(world, loan);
+    } else if (loan.toClubId !== null && chance(rng, 5)) {
       endLoan(world, loan);
     }
   }
   for (const club of world.clubs) {
-    if (humanControlled(club) || !chance(rng, 12)) continue;
+    if (club.isHuman || !chance(rng, 12)) continue;
     const needs = squadNeeds(club, world.players);
     const candidates = world.loans.filter((l) => {
       if (l.toClubId !== null || l.recalled) return false;
@@ -425,10 +379,10 @@ export function loanCycle(rng: World["rng"], world: World) {
     if (candidates.length === 0) continue;
     const loan = pick(rng, candidates);
     const p = world.players.find((x) => x.id === loan.playerId)!;
-    // §60: the AI uses the same claim service as humans and never has priority;
-    // it only attempts after the public exposure period has elapsed.
-    const claimed = claimLoan(world, club, loan, { now: Date.now() });
-    if (!claimed.ok) continue;
+    settlePlayerPayroll(world, p);
+    loan.toClubId = club.id;
+    p.loanId = loan.id;
+    p.clubId = club.id;
     world.news.push({
       dayIndex: world.dayIndex,
       text: `${club.name} took ${p.name} on loan`,
@@ -537,23 +491,13 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
       }
     }
   }
-  // Multiplayer seasons are calendar months, not an abstract annual counter.
-  // `mp.seasonYear` has already been advanced by the rollover coordinator.
-  world.year = world.mp.seasonYear;
+  world.year += 1;
   world.dayIndex = 0;
   world.dayOfWeek = 0;
   for (const player of world.players) resetPayrollPeriod(player, 0);
-  // A club-to-club auction may not cross season rollover (§17). Cancel any
-  // still-active transfer listings, release reservations, and clear derived
-  // on-sale state before the flag sweep below (§102.9). Free-agent listings
-  // may cross rollover and are handled by their own lifecycle (Phase 7).
-  reconcileListingsAtRollover(world, Date.now());
-  // Loans: unclaimed listings cancel at rollover; active loans end and the
-  // player returns to the owner (§17).
-  reconcileLoansAtRollover(world);
   // Season structure (fixtures, standings reset, promotions) is owned by the
-  // multiplayer engine during season rollover, not here. Completed matches
-  // remain available through archived fixture history.
+  // multiplayer engine during season rollover, not here.
+  world.matches = [];
   // Multiplayer auctions use absolute deadlines and may legitimately cross a
   // month boundary. Keep all listings alive; the worker settles timestamped
   // listings, while legacy rows continue through the day-based compatibility

@@ -32,8 +32,6 @@ model Session {
 // is a full sync (delete + insert) inside the save lock, and loading rebuilds
 // the World from the tables. `LiveMatch` is the documented exception: transient
 // runtime state kept as JSON because it is never queried relationally.
-// `worldJson` is retained only as a one-release compatibility bridge for saves
-// created by the pre-normalized schema.
 model Save {
   id          Int      @id @default(autoincrement())
   userId      Int
@@ -50,7 +48,6 @@ model Save {
   // Nullable so legacy per-user saves can coexist; GLOBAL is reserved for the
   // singleton multiplayer world and is database-unique.
   globalKey   String?  @unique
-  worldJson   String?
   // Optimistic concurrency: bumped on every persist; conditional updates use
   // it to detect lost updates when multiple processes write the global world.
   revision    Int      @default(0)
@@ -83,7 +80,6 @@ model Save {
   records        CareerRecord[]
   ticketPrices   ClubTicketPrices[]
   stadiumUpgrades StadiumUpgrade[]
-  tvDeals        TvDeal[]
   liveMatches    LiveMatch[]
   dailyExecutions DailyExecution[]
   transferAuctions TransferAuction[]
@@ -180,7 +176,6 @@ model Player {
   reds            Int
   tacPos          Int
   onSale          Boolean
-  salePrice       Int?
   suspendedGames  Int
   morale          Int
   loanId          Int?
@@ -211,6 +206,9 @@ model Loan {
   startDay   Int
   endDay     Int
   recalled   Boolean
+  // Multiplayer: real-time listing/claim window (§57) for the loan market.
+  listedAt   BigInt
+  claimableAt BigInt
 
   @@id([saveId, id])
 }
@@ -441,18 +439,6 @@ model StadiumUpgrade {
   newCapacity   Int
   cost          Int
   completed     Boolean @default(false)
-
-  @@index([saveId, clubId])
-}
-
-model TvDeal {
-  id            Int  @id @default(autoincrement())
-  saveId        Int
-  save          Save @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  clubId        Int
-  season        Int
-  baseAmount    Int
-  positionBonus Int
 
   @@index([saveId, clubId])
 }
@@ -734,6 +720,27 @@ model Setting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+// Global (not save-scoped) reference data: the per-country first-name and
+// surname pools used by player/coach name generation. Previously loaded from
+// backend/assets/namepools/*.txt at runtime; now the database is the source of
+// truth and the rows are loaded once into an in-memory catalog at startup.
+//
+// `position` is the 0-based index within the country+kind pool and `value` the
+// raw line. Duplicate lines are preserved (they weight the seeded RNG exactly
+// like the original files) and rows are never de-duplicated or reordered.
+// `backend/assets/namepools.json` is the committed seed artifact, populated by
+// `npm run db:seed-name-pools`.
+model NamePoolEntry {
+  id          Int    @id @default(autoincrement())
+  countryCode String
+  kind        String // "names" | "surnames"
+  position    Int
+  value       String
+
+  @@unique([countryCode, kind, position])
+  @@index([countryCode, kind])
 }
 
 // Idempotency ledger for recurring worker jobs (plan §5 of the worker plan).
