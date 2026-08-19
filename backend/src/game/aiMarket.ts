@@ -1,7 +1,8 @@
 import { MARKET_CONFIG, gameConfig } from "../config";
 import type { Club, FreeAgentListing, Player, TransferAuction, World } from "./types";
-import { applyMaxBid, clubTransferCapMultiplier, createTransferAuction, currentAnnualPayroll, safeMarketBudget } from "./market";
+import { applyMaxBid, clubTransferCapMultiplier, createTransferAuction } from "./market";
 import { applyFreeAgentBid } from "./freeAgents";
+import { aiAffordableCommitment, getFinancialCushion } from "./finance";
 import { positionCount } from "./club";
 import { createRng, nextDouble } from "./rng";
 
@@ -139,9 +140,11 @@ export function calculateSellScore(inputs: SellScoreInputs): SellScoreResult {
     reasons.push("oversized-squad");
   }
 
-  // --- Financial pressure (§36) ---
-  const payroll = currentAnnualPayroll(world, club.id);
-  if (payroll > 0 && club.cash < payroll * MARKET_CONFIG.aiSelling.financialPressureCashToSalaryRatio) {
+  // --- Financial pressure (§36, financial-control §16) ---
+  // The existing sell signal can use the FinancialCushion directly: a negative
+  // cushion means known bids + salaries exceed cash, pushing the AI to sell.
+  const cushion = getFinancialCushion(world, club);
+  if (cushion < 0) {
     score += cfg.financialPressure;
     reasons.push("financial-pressure");
   }
@@ -398,9 +401,10 @@ export function deterministicValuationNoise(clubId: number, playerId: number, li
 /**
  * AI maximum bid (§30). Base valuation:
  *   calculatedMax = player.value × needMultiplier × upgradeMultiplier × noise
- * then capped by the bidder-specific auction maximum (§10/§102.13.3) and the
- * shared safe-market budget (§25). This is the ONLY place the AI derives a bid;
- * it never reads competing maximums or hidden data.
+ * then capped by the bidder-specific auction maximum (§10/§102.13.3) AND the
+ * AI's financial safety rule (financial-control §13): the AI never submits a
+ * bid that would push its financial cushion below 0. This is the ONLY place
+ * the AI derives a bid; it never reads competing maximums or hidden data.
  */
 export function aiMaximumBid(opts: {
   club: Club;
@@ -410,7 +414,7 @@ export function aiMaximumBid(opts: {
   upgrade: number;
   buyerDivision: number;
   totalDivisions: number;
-  safeMarketBudget: number;
+  immediateAvailableCash: number;
 }): number {
   const need = rangeMap(opts.needScore, MARKET_CONFIG.aiBuying.needMultiplierRange);
   const upgrade = rangeMap(opts.upgrade, MARKET_CONFIG.aiBuying.upgradeMultiplierRange);
@@ -422,7 +426,7 @@ export function aiMaximumBid(opts: {
     opts.buyerDivision,
     opts.listing.sellerDivisionAtListing,
     opts.totalDivisions,
-    opts.safeMarketBudget
+    opts.immediateAvailableCash
   );
   return Math.round(Math.min(calculatedMax, allowed));
 }
@@ -438,7 +442,7 @@ function rangeMap(input: number, range: readonly [number, number]): number {
 }
 
 /**
- * The bidder-specific maximum allowed by rule (value cap × safe budget).
+ * The bidder-specific maximum allowed by rule (value cap × immediate cash).
  * Mirrors maximumAllowedBid in market.ts — reused so the AI ceiling and the
  * shared validator can never diverge.
  */
@@ -447,10 +451,10 @@ function maximumAllowedBidByRule(
   buyerDivision: number,
   sellerDivision: number,
   totalDivisions: number,
-  safeMarketBudget: number
+  immediateAvailableCash: number
 ): number {
   const capMultiplier = clubTransferCapMultiplier(buyerDivision, sellerDivision, totalDivisions);
-  return Math.min(playerValue * capMultiplier, safeMarketBudget);
+  return Math.min(playerValue * capMultiplier, immediateAvailableCash);
 }
 
 /**
@@ -505,7 +509,10 @@ export function evaluateAndBidOnce(
     return { ok: false, error: "No upgrade", recorded: true };
   }
 
-  const budget = safeMarketBudget(world, club, { acquisitionSalary: player.salary });
+  // The AI's financial safety rule (financial-control §13): it may only bid up
+  // to what keeps its financial cushion >= 0. The affordability ceiling is
+  // derived from the shared commitment calculator, never a separate formula.
+  const affordable = aiAffordableCommitment(world, club, player.salary);
   const maxBid = aiMaximumBid({
     club,
     player,
@@ -514,7 +521,7 @@ export function evaluateAndBidOnce(
     upgrade,
     buyerDivision: opts.buyerDivision,
     totalDivisions: opts.totalDivisions,
-    safeMarketBudget: budget,
+    immediateAvailableCash: affordable,
   });
 
   if (maxBid < listing.openingPrice) {
@@ -528,7 +535,7 @@ export function evaluateAndBidOnce(
     player,
     proposedMaximum: maxBid,
     buyerDivision: opts.buyerDivision,
-    safeMarketBudget: budget,
+    immediateAvailableCash: affordable,
     now,
     seasonRolloverAt: opts.seasonRolloverAt,
   });
@@ -610,7 +617,8 @@ export function runAiBuying(
  * Evaluate one free-agent listing for one AI club (§45) and, when the player
  * genuinely helps the squad and is affordable, submit a single signing-fee
  * maximum. Reuses the same need/upgrade logic as auction buying; the bid is
- * capped by SafeMarketBudget only (no player-value cap, §43). Idempotent via
+ * capped by the shared cushion-safe affordability ceiling only (no player-value
+ * cap, §43). Idempotent via
  * durable AiEvaluation rows (marketType FREE_AGENT).
  */
 export function evaluateFreeAgentAndBid(
@@ -651,13 +659,14 @@ export function evaluateFreeAgentAndBid(
     return { ok: false, error: "No upgrade", recorded: true };
   }
 
-  // Free-agent valuation: value x need x upgrade x noise, but NO value cap.
-  const budget = safeMarketBudget(world, club, { acquisitionSalary: listing.demandedSalary });
+  // Free-agent valuation: value x need x upgrade x noise, NO player-value cap
+  // (§43). The AI's affordability ceiling still enforces the §13 cushion rule.
+  const affordable = aiAffordableCommitment(world, club, listing.demandedSalary);
   const needMult = rangeMap(need, MARKET_CONFIG.aiBuying.needMultiplierRange);
   const upgradeMult = rangeMap(upgrade, MARKET_CONFIG.aiBuying.upgradeMultiplierRange);
   const noise = deterministicValuationNoise(club.id, player.id, listing.id);
   const calculated = player.value * needMult * upgradeMult * noise;
-  const maxBid = Math.round(Math.min(calculated, budget));
+  const maxBid = Math.round(Math.min(calculated, affordable));
 
   if (maxBid < listing.openingPrice) {
     record("PASS", null);
@@ -669,7 +678,7 @@ export function evaluateFreeAgentAndBid(
     club,
     player,
     proposedMaximum: maxBid,
-    safeMarketBudget: budget,
+    immediateAvailableCash: affordable,
     now,
   });
   if (!result.ok) {

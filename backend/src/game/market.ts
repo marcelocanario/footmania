@@ -70,21 +70,31 @@ export function clubTransferCapMultiplier(buyerDivision: number, sellerDivision:
   return baseMultiplier + maxBonusMultiplier * curve;
 }
 
-/** The bidder-specific maximum allowed by rule (player-value cap × SafeMarketBudget). */
+/**
+ * The bidder-specific maximum allowed by rule for a TRANSFER bid
+ * (financial-control §10). For humans this is the club-to-club value cap
+ * subject only to the hard immediate-cash rule:
+ *
+ *   maximumAllowedBid = min(bidderSpecificPlayerValueCap, ImmediateAvailableCash)
+ *
+ * AI clubs additionally cap themselves at what keeps their financial cushion
+ * >= 0 (see aiAffordableCommitment in finance.ts).
+ */
 export function maximumAllowedBid(
   playerValue: number,
   buyerDivision: number,
   sellerDivision: number,
   totalDivisions: number,
-  safeMarketBudget: number
+  immediateAvailableCash: number
 ): number {
   const capMultiplier = clubTransferCapMultiplier(buyerDivision, sellerDivision, totalDivisions);
-  return Math.min(playerValue * capMultiplier, safeMarketBudget);
+  return Math.min(playerValue * capMultiplier, immediateAvailableCash);
 }
 
 /**
- * Private maximum bids are validated for amount floor/cap and financial
- * capacity (§11/§15/§23-26). Returns an error string or the accepted maximum.
+ * Private maximum bids are validated for amount floor/cap and the hard
+ * immediate-cash rule (financial-control §9/§10/§11). Returns an error string
+ * or the accepted maximum.
  */
 export function validateMaxBid(opts: {
   listing: TransferAuction;
@@ -92,10 +102,10 @@ export function validateMaxBid(opts: {
   player: Player;
   proposedMaximum: number;
   buyerDivision: number;
-  safeMarketBudget: number;
+  immediateAvailableCash: number;
   existingBid?: MarketBid;
 }): { ok: true; maximum: number } | { ok: false; error: string } {
-  const { listing, club, player, proposedMaximum, buyerDivision, safeMarketBudget } = opts;
+  const { listing, club, player, proposedMaximum, buyerDivision, immediateAvailableCash } = opts;
 
   if (!Number.isFinite(proposedMaximum) || proposedMaximum <= 0) {
     return { ok: false, error: "Maximum bid must be positive" };
@@ -113,9 +123,12 @@ export function validateMaxBid(opts: {
   if (opts.existingBid === undefined && proposedMaximum < listing.openingPrice) {
     return { ok: false, error: "Maximum must be at least the opening price" };
   }
-  // §24/§26: shared financial validation — humans and AI use the same check.
-  if (proposedMaximum > safeMarketBudget) {
-    return { ok: false, error: "Maximum exceeds your safe market budget" };
+  // §9/§10/§11: the hard immediate-cash rule. Humans may make their financial
+  // cushion negative, but a new immediate obligation cannot exceed actual
+  // unreserved cash. AI clubs apply a stricter cushion rule at the strategy
+  // layer (finance.evaluateAIDecision) — not here.
+  if (proposedMaximum > immediateAvailableCash) {
+    return { ok: false, error: "Maximum exceeds your immediately available cash" };
   }
   // §10/§102.13.3: club-to-club value cap, bidder-specific, based on the
   // division gap. Uses the player value and division snapshots taken at
@@ -197,7 +210,7 @@ export function extendDeadline(opts: {
 }
 
 // ---------------------------------------------------------------------------
-// MarketFinanceService (§24, §102.10)
+// MarketFinanceService (§24, §102.10 — simplified by financial-control.md)
 // ---------------------------------------------------------------------------
 
 /**
@@ -208,62 +221,6 @@ export function activeReservations(world: World, clubId: number, excludeListingI
   return world.marketReservations
     .filter((r) => r.clubId === clubId && r.releasedAt === null && r.listingId !== excludeListingId)
     .reduce((sum, r) => sum + r.amount, 0);
-}
-
-/** Total annual payroll for the club's current squad (senior only). */
-export function currentAnnualPayroll(world: World, clubId: number): number {
-  return world.players
-    .filter((p) => p.clubId === clubId && !p.isYouth)
-    .reduce((sum, p) => sum + p.salary, 0);
-}
-
-/**
- * Safe market budget (§24/§102.13.2). Deterministic lower-tail estimate of how
- * much a club can safely commit, considering current cash, active market
- * reservations, guaranteed income, committed expenses, acquisition payroll,
- * and a scale-independent liquidity reserve (>= one full payroll cycle).
- *
- * The plan calls for a P10 uncertain-income distribution with shrinkage toward
- * the division distribution; until historical income data exists, this
- * implementation treats recurring income conservatively as zero (only
- * guaranteed income counts), which is the strongest safe bound and keeps the
- * validator deterministic and testable.
- */
-export function safeMarketBudget(
-  world: World,
-  club: Club,
-  opts: {
-    // 100% guaranteed income through the horizon (e.g. issued season budget).
-    guaranteedIncome?: number;
-    // Future payroll already contractually committed (e.g. a renewal).
-    committedExpenses?: number;
-    // Per-season salary the acquisition would add.
-    acquisitionSalary?: number;
-    minimumLiquidityReserve?: number;
-  } = {}
-): number {
-  const reservations = activeReservations(world, club.id);
-  const payroll = currentAnnualPayroll(world, club.id);
-  const guaranteed = opts.guaranteedIncome ?? 0;
-  const committed = opts.committedExpenses ?? 0;
-  const acquisitionSalary = opts.acquisitionSalary ?? 0;
-  const reserve = opts.minimumLiquidityReserve ?? onePayrollCycleReserve(world, club);
-
-  // Projected minimum cash across the horizon (single checkpoint today; the
-  // horizon is through the current funded season, which is the only allocation
-  // a club is guaranteed to hold).
-  const projected = club.cash - reservations + guaranteed - committed - acquisitionSalary - payroll;
-
-  return Math.max(0, projected - reserve);
-}
-
-/** Liquidity reserve of at least one full payroll cycle (scale-independent). */
-export function onePayrollCycleReserve(world: World, club: Club): number {
-  const cycles = MARKET_CONFIG.finance.reservePayrollCycles;
-  const cycleLength = 7; // payrollIntervalDays in this configuration
-  const seasonDays = 30;
-  const payroll = currentAnnualPayroll(world, club.id);
-  return Math.round((payroll * cycleLength * cycles) / seasonDays);
 }
 
 // ---------------------------------------------------------------------------
@@ -591,11 +548,17 @@ export function settleTransferAuction(
 
   const finalPrice = calculateCurrentPrice({ openingPrice: listing.openingPrice, bidIncrement: listing.bidIncrement, bids });
 
-  // Atomic cash + ownership movement. The winner's full max was reserved, so
-  // the clearing price is guaranteed affordable; still fail closed before any
-  // state changes rather than corrupting the ledger (§22).
-  if (winner.cash < finalPrice) {
-    return { ok: false, error: "Winning club cannot afford the clearing price" };
+  // The bid is a binding commitment. Payroll or another already-authorized
+  // event may have made the winner's cash negative since the bid was placed;
+  // §20 explicitly allows that settlement to push cash further negative. Do
+  // still fail closed if the durable reservation itself is missing or too
+  // small, which indicates corrupted/stale market state rather than a normal
+  // cash-negative settlement.
+  const reservation = world.marketReservations.find(
+    (candidate) => candidate.clubId === winner.id && candidate.listingId === listing.id && candidate.marketType === "TRANSFER" && candidate.releasedAt === null,
+  );
+  if (!reservation || reservation.amount < finalPrice) {
+    return { ok: false, error: "Winning bid reservation is missing or insufficient" };
   }
 
   // §27: the buyer inherits the current contract; no salary recalculation.
@@ -740,7 +703,7 @@ export function applyMaxBid(
     player: Player;
     proposedMaximum: number;
     buyerDivision: number;
-    safeMarketBudget: number;
+    immediateAvailableCash: number;
     now?: number;
     seasonRolloverAt?: number;
   }
@@ -758,7 +721,7 @@ export function applyMaxBid(
     player,
     proposedMaximum: opts.proposedMaximum,
     buyerDivision: opts.buyerDivision,
-    safeMarketBudget: opts.safeMarketBudget,
+    immediateAvailableCash: opts.immediateAvailableCash,
     existingBid: existing,
   });
   if (!validated.ok) return validated;

@@ -212,7 +212,7 @@ describe("global multiplayer world persistence", () => {
       player,
       proposedMaximum: Math.round(player.value * 1.1),
       buyerDivision: 1,
-      safeMarketBudget: 50_000_000,
+      immediateAvailableCash: 50_000_000,
       now,
     });
     expect(bid.ok).toBe(true);
@@ -252,5 +252,46 @@ describe("global multiplayer world persistence", () => {
     await persistWorld(prisma, saveId, saveId, rw);
     const reloaded2 = await loadGlobalWorld(prisma);
     expect(reloaded2!.world.marketReservations[0].releasedAt).not.toBeNull();
+  });
+
+  it("round-trips financial-intervention audit data and anti-loop fields", async () => {
+    const { saveId } = await freshGlobalWorld(902);
+    const { seasonId, world } = await withSeason(saveId);
+    const club = world.clubs[0];
+    const replacement = world.players.find((player) => player.clubId === club.id && !player.isYouth)!;
+    replacement.financialInterventionGeneratedSeasonId = seasonId;
+    const freeAgent = world.players.find((player) => player.clubId === club.id && !player.isYouth && player.id !== replacement.id)!;
+    freeAgent.clubId = null;
+    freeAgent.onSale = false;
+    const { createFreeAgentListing } = await import("../src/game/freeAgents");
+    const created = createFreeAgentListing(world, freeAgent, { blockedClubId: club.id });
+    expect(created.ok).toBe(true);
+    world.financialInterventions.push({
+      id: 990001,
+      clubId: club.id,
+      seasonId,
+      payrollCycleId: 7,
+      cashBefore: -1,
+      commitmentsBefore: 2,
+      cushionBefore: -3,
+      forcedAuctionRevenue: 0,
+      systemLiquidationRevenue: 4,
+      cashAfter: 3,
+      commitmentsAfter: 2,
+      cushionAfter: 1,
+      createdAt: Date.now(),
+      entries: [{ playerId: freeAgent.id, kind: "SYSTEM_LIQUIDATION", price: 4, replacementPlayerId: replacement.id }],
+      unableToFullyRecover: false,
+    });
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const rw = reloaded!.world;
+    expect(rw.financialInterventions).toHaveLength(1);
+    expect(rw.financialInterventions[0].entries[0].replacementPlayerId).toBe(replacement.id);
+    expect(rw.nextId).toBeGreaterThan(990001);
+    expect(rw.players.find((player) => player.id === replacement.id)?.financialInterventionGeneratedSeasonId).toBe(seasonId);
+    expect(rw.freeAgentListings.find((listing) => listing.playerId === freeAgent.id)?.blockedClubId).toBe(club.id);
   });
 });

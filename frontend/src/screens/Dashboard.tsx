@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass } from "lucide-react";
+import { Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass, AlertTriangle } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
@@ -94,6 +94,37 @@ export function Dashboard() {
             Your club may lose its league position at the end of the season if inactivity continues.
             Your club, squad and progression are retained — returning later means re-entering from the lowest available level.
           </div>
+        </div>
+      )}
+
+      {club.finance && club.finance.status !== "SAFE" && (
+        <div className="card" style={{ borderColor: club.finance.status === "NEGATIVE_CASH" ? "rgba(220,80,80,0.5)" : "rgba(240,180,41,0.5)", marginBottom: 16, padding: "18px 16px" }}>
+          <h2 className="card-title" style={{ color: club.finance.status === "NEGATIVE_CASH" ? "var(--red-2)" : "var(--gold-2)" }}>
+            <AlertTriangle size={17} /> {club.finance.status === "NEGATIVE_CASH" ? "Financial Emergency" : "Financial Warning"}
+          </h2>
+          {provisional ? (
+            <div style={{ color: "var(--text-2)", fontSize: "0.95rem", lineHeight: 1.5 }}>
+              Your funded upcoming-season salary commitments currently exceed the club's available funds
+              (financial cushion: <b style={{ color: "var(--red-2)" }}>{money(club.finance.financialCushion)}</b>).
+              Salaries are frozen while the club is provisional; the warning will be recalculated when the club activates.
+            </div>
+          ) : club.finance.status === "NEGATIVE_CASH" ? (
+            <div style={{ color: "var(--text-2)", fontSize: "0.95rem", lineHeight: 1.5 }}>
+              Current cash: <b style={{ color: "var(--red-2)" }}>{money(club.cash)}</b>.
+              If the club is still in a negative cash position when the next payroll cycle is processed,
+              a financial intervention may force players to leave.
+            </div>
+          ) : (
+            <div style={{ color: "var(--text-2)", fontSize: "0.95rem", lineHeight: 1.5 }}>
+              Your current cash does not cover your existing bids and remaining salary commitments through season end
+              (financial cushion: <b style={{ color: "var(--red-2)" }}>{money(club.finance.financialCushion)}</b>).
+              Future income may improve this position, but if your cash balance becomes negative and remains negative
+              until a later payroll cycle, players may be forced to leave the club.
+            </div>
+          )}
+          <button className="btn sm ghost" style={{ marginTop: 12 }} onClick={() => navigate("/finances")}>
+            <Wallet size={14} /> View finances
+          </button>
         </div>
       )}
 

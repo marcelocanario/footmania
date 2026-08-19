@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Dialog } from "primereact/dialog";
@@ -6,7 +6,7 @@ import { Dropdown } from "primereact/dropdown";
 import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Dumbbell, ShieldCheck, Users, Clapperboard } from "lucide-react";
-import { api, type PlayerView } from "../api/client";
+import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
@@ -54,6 +54,7 @@ export function Squad() {
   const [renewSalary, setRenewSalary] = useState(0);
   const [renewDemand, setRenewDemand] = useState(0);
   const [renewDemandsBySeason, setRenewDemandsBySeason] = useState<Record<number, number>>({});
+  const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
@@ -71,6 +72,10 @@ export function Squad() {
   const seniors = snapshot?.squad ?? [];
   const juniors = snapshot?.juniors ?? [];
   const rows = tab === "juniors" ? juniors : seniors;
+
+  useEffect(() => {
+    void api.finances().then((response) => setFinance(response.finance)).catch(() => setFinance(null));
+  }, [snapshot?.club?.cash]);
 
   const openRenew = (p: PlayerView) => {
     setSelected(p);
@@ -97,6 +102,12 @@ export function Squad() {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     }
   };
+
+  const renewalCushion = finance && selected
+    ? finance.financialCushion
+      - selected.salary * finance.remainingSeasonFraction
+      + renewSalary * finance.remainingSeasonFraction
+    : null;
 
   const saveTrainingFocus = async (focus: TrainingFocus) => {
     if (false) return;
@@ -166,9 +177,15 @@ export function Squad() {
 
   const releasePlayer = (p: PlayerView) => {
     if (false) return;
+    const projectedCushion = club?.finance
+      ? club.finance.financialCushion - p.releaseClause + p.salary * club.finance.remainingSeasonFraction
+      : null;
+    const warning = projectedCushion !== null && projectedCushion < 0
+      ? ` This would reduce your financial cushion to ${money(projectedCushion)} and may put future payroll at risk.`
+      : "";
     confirm(
       strings.squad.release,
-      strings.squad.releaseConfirm.replace("{{name}}", p.name),
+      `${strings.squad.releaseConfirm.replace("{{name}}", p.name)}${warning}`,
       async () => {
         const res = await api.releasePlayer(p.id);
         toast.current?.show({
@@ -372,8 +389,8 @@ export function Squad() {
                   <button
                     className="btn ghost danger"
                     style={{ flex: 1 }}
-                    disabled={(selectedPlayer.releaseClause ?? 0) > (club?.cash ?? 0)}
-                    title={(selectedPlayer.releaseClause ?? 0) > (club?.cash ?? 0) ? "The club cannot afford the release clause" : undefined}
+                    disabled={(selectedPlayer.releaseClause ?? 0) > (club?.finance?.immediateAvailableCash ?? club?.cash ?? 0)}
+                    title={(selectedPlayer.releaseClause ?? 0) > (club?.finance?.immediateAvailableCash ?? club?.cash ?? 0) ? "The club cannot afford the release clause after binding bid reservations" : undefined}
                     onClick={() => releasePlayer(selectedPlayer)}
                   >
                     {strings.squad.release} ({money(selectedPlayer.releaseClause ?? 0)})
@@ -417,6 +434,12 @@ export function Squad() {
               <label htmlFor="renew-salary">{strings.squad.newSalary}</label>
               <InputNumber id="renew-salary" value={renewSalary} onValueChange={(e) => setRenewSalary(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
             </div>
+            {renewalCushion !== null && renewalCushion < 0 && (
+              <div className="card" style={{ marginBottom: 10, padding: 10, fontSize: "0.88rem", color: "var(--gold-2)", borderColor: "var(--gold-2)" }}>
+                This renewal would reduce your financial cushion from <b>{money(finance?.financialCushion ?? 0)}</b> to <b style={{ color: "var(--red-2)" }}>{money(renewalCushion)}</b>.
+                You may continue, but future payroll could require financial intervention.
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
               <button className="btn ghost" style={{ flex: 1 }} onClick={() => setShowRenew(false)}>{strings.common.cancel}</button>
               <button className="btn" style={{ flex: 1 }} onClick={renew}>{strings.common.confirm}</button>

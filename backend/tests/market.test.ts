@@ -11,13 +11,11 @@ import {
   expireDueListings,
   extendDeadline,
   maximumAllowedBid,
-  onePayrollCycleReserve,
   recentTradeBaseValue,
   reconcileListingsAtRollover,
   recordTransaction,
   releaseAllReservations,
   resolveOpeningPrice,
-  safeMarketBudget,
   settleDueTransferAuctions,
   settleTransferAuction,
   transferAuctionView,
@@ -25,6 +23,7 @@ import {
   upsertReservation,
   validateMaxBid,
 } from "../src/game/market";
+import { activeBidCommitments, getFinancialCushion, getImmediateAvailableCash, remainingSalaryCommitments } from "../src/game/finance";
 import { MARKET_CONFIG } from "../src/config";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
@@ -310,7 +309,7 @@ describe("bidder-specific cap (§10/§102.13.3)", () => {
     expect(cap(5, 1)).toBeCloseTo(1.5, 5);
   });
 
-  it("caps a max bid by min(value cap, safe market budget)", () => {
+  it("caps a max bid by min(value cap, immediate available cash)", () => {
     // D1 buys from D3 (3-division pyramid) => 3.0× value cap.
     const cap = maximumAllowedBid(10_000_000, 1, 3, 3, 50_000_000);
     expect(cap).toBeCloseTo(30_000_000, 0);
@@ -352,8 +351,8 @@ describe("maximum bid validation (§15/§19/§21/§24)", () => {
     const player = { value: 10_000_000 } as World["players"][number];
     const l = listing();
 
-    expect(validateMaxBid({ listing: l, club, player, proposedMaximum: 8_000_000, buyerDivision: 1, safeMarketBudget: 100_000_000 }).ok).toBe(false);
-    expect(validateMaxBid({ listing: l, club, player, proposedMaximum: 0, buyerDivision: 1, safeMarketBudget: 100_000_000 }).ok).toBe(false);
+    expect(validateMaxBid({ listing: l, club, player, proposedMaximum: 8_000_000, buyerDivision: 1, immediateAvailableCash: 100_000_000 }).ok).toBe(false);
+    expect(validateMaxBid({ listing: l, club, player, proposedMaximum: 0, buyerDivision: 1, immediateAvailableCash: 100_000_000 }).ok).toBe(false);
   });
 
   it("rejects decreasing an existing maximum (§19)", () => {
@@ -364,50 +363,56 @@ describe("maximum bid validation (§15/§19/§21/§24)", () => {
       id: 1, marketType: "TRANSFER" as const, listingId: 1, clubId: 1, maxBid: 12_000_000,
       createdAt: 1, updatedAt: 1, initialPriorityAt: 1,
     };
-    const res = validateMaxBid({ listing: l, club, player, proposedMaximum: 11_000_000, buyerDivision: 1, safeMarketBudget: 100_000_000, existingBid: existing });
+    const res = validateMaxBid({ listing: l, club, player, proposedMaximum: 11_000_000, buyerDivision: 1, immediateAvailableCash: 100_000_000, existingBid: existing });
     expect(res.ok).toBe(false);
   });
 
-  it("rejects maximums above the safe market budget (§24)", () => {
+  it("rejects maximums above the immediately available cash (§9/§10)", () => {
     const club = makeClub(1);
     const player = { value: 10_000_000 } as World["players"][number];
     const l = listing();
-    const res = validateMaxBid({ listing: l, club, player, proposedMaximum: 20_000_000, buyerDivision: 1, safeMarketBudget: 15_000_000 });
+    const res = validateMaxBid({ listing: l, club, player, proposedMaximum: 20_000_000, buyerDivision: 1, immediateAvailableCash: 15_000_000 });
     expect(res.ok).toBe(false);
-    expect(res.ok === false && res.error).toMatch(/safe market budget/i);
+    expect(res.ok === false && res.error).toMatch(/immediately available cash/i);
   });
 });
 
-describe("financial validation (§24)", () => {
-  it("computes a safe budget from cash minus reservations, acquisition salary, and reserve", () => {
-    const club = makeClub(1, { cash: 20_000_000 });
+describe("financial cushion (§62-§64)", () => {
+  it("computes the financial cushion as cash minus bids minus remaining salaries", () => {
+    const club = makeClub(1, { cash: 10_000_000 });
     const world = makeWorld([club], []);
     world.marketReservations.push({
       id: 1, clubId: 1, listingId: 1, marketType: "TRANSFER", amount: 2_000_000, createdAt: 1, releasedAt: null,
     });
-    // No squad => annual payroll is 0, so the reserve is also 0.
-    const reserve = onePayrollCycleReserve(world, club);
-    expect(reserve).toBe(0);
-    const budget = safeMarketBudget(world, club, { acquisitionSalary: 5_000_000 });
-    expect(budget).toBe(20_000_000 - 2_000_000 - 5_000_000 - 0 - reserve);
+    expect(getImmediateAvailableCash(world, club)).toBe(8_000_000);
+    expect(remainingSalaryCommitments(world, club)).toBe(0);
+    expect(getFinancialCushion(world, club)).toBe(8_000_000);
   });
 
-  it("is conservative: uncertain income is not counted, only guaranteed income", () => {
+  it("never forecasts income and counts only current cash", () => {
     const club = makeClub(1, { cash: 10_000_000 });
     const world = makeWorld([club], []);
-    const without = safeMarketBudget(world, club, { guaranteedIncome: 0 });
-    const withGuaranteed = safeMarketBudget(world, club, { guaranteedIncome: 5_000_000 });
-    expect(withGuaranteed).toBe(without + 5_000_000);
+    // No salary commitments, no bids: cushion is exactly the cash.
+    expect(getFinancialCushion(world, club)).toBe(10_000_000);
+    // A player's salary creates a remaining commitment.
+    const rng = createRng(3);
+    const p = generatePlayer(rng, club, { id: 1, isYouth: false });
+    p.salary = 2_000_000;
+    p.payrollPaidThroughDay = 0;
+    p.payrollPaidAmount = 0;
+    p.payrollPeriodStartDay = 0;
+    world.players.push(p);
+    expect(remainingSalaryCommitments(world, club)).toBe(2_000_000);
+    expect(getFinancialCushion(world, club)).toBe(8_000_000);
   });
 
-  it("returns 0 when the club cannot cover its reserve", () => {
-    const rng = createRng(3);
-    const club = makeClub(1, { cash: 1_000_000 });
-    const player = generatePlayer(rng, club, { id: 1, isYouth: false });
-    player.salary = 5_000_000; // huge wage bill => reserve exceeds cash
-    const world = makeWorld([club], [player]);
-    expect(onePayrollCycleReserve(world, club)).toBeGreaterThan(club.cash);
-    expect(safeMarketBudget(world, club)).toBe(0);
+  it("active reservations reduce the immediate available cash (§9/§64)", () => {
+    const club = makeClub(1, { cash: 10_000_000 });
+    const world = makeWorld([club], []);
+    upsertReservation(world, { clubId: 1, listingId: 1, marketType: "TRANSFER", amount: 4_000_000 });
+    upsertReservation(world, { clubId: 1, listingId: 2, marketType: "TRANSFER", amount: 3_000_000 });
+    expect(activeBidCommitments(world, club)).toBe(7_000_000);
+    expect(getImmediateAvailableCash(world, club)).toBe(3_000_000);
   });
 });
 
@@ -424,12 +429,12 @@ describe("reservations (§23/§73)", () => {
     expect(world.marketReservations[0].releasedAt).not.toBeNull();
   });
 
-  it("a club's active reservations reduce its safe budget", () => {
+  it("a club's active reservations reduce its immediately available cash", () => {
     const club = makeClub(1, { cash: 10_000_000 });
     const world = makeWorld([club], []);
     upsertReservation(world, { clubId: 1, listingId: 1, marketType: "TRANSFER", amount: 4_000_000 });
     upsertReservation(world, { clubId: 1, listingId: 2, marketType: "TRANSFER", amount: 3_000_000 });
-    expect(safeMarketBudget(world, club)).toBe(10_000_000 - 7_000_000);
+    expect(getImmediateAvailableCash(world, club)).toBe(10_000_000 - 7_000_000);
   });
 });
 
@@ -459,7 +464,7 @@ describe("applyMaxBid integration", () => {
       player,
       proposedMaximum: 12_000_000,
       buyerDivision: 1,
-      safeMarketBudget: 20_000_000,
+      immediateAvailableCash: 20_000_000,
       now: 1_000,
     });
     expect(res.ok).toBe(true);
@@ -482,8 +487,8 @@ describe("applyMaxBid integration", () => {
     const buyer2 = makeClub(2, { cash: 40_000_000, isHuman: true });
     world.clubs.push(buyer2);
 
-    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_000_000, buyerDivision: 1, safeMarketBudget: 20_000_000, now: 1_000 });
-    const second = applyMaxBid(world, { listing, club: buyer2, player, proposedMaximum: 11_000_000, buyerDivision: 1, safeMarketBudget: 30_000_000, now: 2_000 });
+    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_000_000, buyerDivision: 1, immediateAvailableCash: 20_000_000, now: 1_000 });
+    const second = applyMaxBid(world, { listing, club: buyer2, player, proposedMaximum: 11_000_000, buyerDivision: 1, immediateAvailableCash: 30_000_000, now: 2_000 });
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.leading).toBe(true);
@@ -499,9 +504,9 @@ describe("applyMaxBid integration", () => {
     const c3 = makeClub(3, { cash: 40_000_000, isHuman: true });
     world.clubs.push(c2, c3);
 
-    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_000_000, buyerDivision: 1, safeMarketBudget: 30_000_000, now: 1_000 });
-    applyMaxBid(world, { listing, club: c2, player, proposedMaximum: 12_000_000, buyerDivision: 1, safeMarketBudget: 30_000_000, now: 2_000 });
-    applyMaxBid(world, { listing, club: c3, player, proposedMaximum: 9_500_000, buyerDivision: 1, safeMarketBudget: 30_000_000, now: 3_000 });
+    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_000_000, buyerDivision: 1, immediateAvailableCash: 30_000_000, now: 1_000 });
+    applyMaxBid(world, { listing, club: c2, player, proposedMaximum: 12_000_000, buyerDivision: 1, immediateAvailableCash: 30_000_000, now: 2_000 });
+    applyMaxBid(world, { listing, club: c3, player, proposedMaximum: 9_500_000, buyerDivision: 1, immediateAvailableCash: 30_000_000, now: 3_000 });
 
     expect(listing.currentPrice).toBe(10_100_000); // 10M + increment
     expect(listing.leadingClubId).toBe(c2.id);
@@ -510,7 +515,7 @@ describe("applyMaxBid integration", () => {
   it("rejects bids after the deadline and cannot be decreased", () => {
     const { world, buyer, player, listing } = setupWorld();
     listing.deadline = 500;
-    const late = applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 12_000_000, buyerDivision: 1, safeMarketBudget: 30_000_000, now: 600 });
+    const late = applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 12_000_000, buyerDivision: 1, immediateAvailableCash: 30_000_000, now: 600 });
     expect(late.ok).toBe(false);
   });
 });
@@ -587,7 +592,7 @@ describe("listing cancellation (§20)", () => {
     const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
-    const bid = applyMaxBid(world, { listing, club, player, proposedMaximum: 10_500_000, buyerDivision: 1, safeMarketBudget: 50_000_000 });
+    const bid = applyMaxBid(world, { listing, club, player, proposedMaximum: 10_500_000, buyerDivision: 1, immediateAvailableCash: 50_000_000 });
     expect(bid.ok).toBe(true);
     expect(cancelTransferAuction(world, listing).ok).toBe(false);
   });
@@ -620,7 +625,7 @@ describe("due listing expiry (§77)", () => {
     const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
-    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_500_000, buyerDivision: 1, safeMarketBudget: 50_000_000 });
+    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_500_000, buyerDivision: 1, immediateAvailableCash: 50_000_000 });
     listing.deadline = 100;
 
     const resolved = expireDueListings(world, 200);
@@ -641,7 +646,7 @@ describe("rollover reconciliation (§17/§102.9)", () => {
     const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
-    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_500_000, buyerDivision: 1, safeMarketBudget: 50_000_000 });
+    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_500_000, buyerDivision: 1, immediateAvailableCash: 50_000_000 });
     expect(world.marketReservations.filter((r) => r.releasedAt === null)).toHaveLength(1);
 
     const cancelled = reconcileListingsAtRollover(world, 5000);
@@ -687,8 +692,8 @@ describe("settlement (§22)", () => {
     const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
-    applyMaxBid(world, { listing, club: buyerA, player, proposedMaximum: 10_000_000, buyerDivision: 1, safeMarketBudget: 20_000_000, now: 100 });
-    applyMaxBid(world, { listing, club: buyerB, player, proposedMaximum: 12_000_000, buyerDivision: 1, safeMarketBudget: 25_000_000, now: 200 });
+    applyMaxBid(world, { listing, club: buyerA, player, proposedMaximum: 10_000_000, buyerDivision: 1, immediateAvailableCash: 20_000_000, now: 100 });
+    applyMaxBid(world, { listing, club: buyerB, player, proposedMaximum: 12_000_000, buyerDivision: 1, immediateAvailableCash: 25_000_000, now: 200 });
     return { world, seller, buyerA, buyerB, player, listing };
   }
 
@@ -757,6 +762,15 @@ describe("settlement (§22)", () => {
     expect(second.ok).toBe(false);
     // Money moved exactly once.
     expect(world.playerMarketHistory).toHaveLength(1);
+  });
+
+  it("honors a binding auction after payroll makes the winner cash-negative", () => {
+    const { world, buyerB, player, listing } = setupWorldWithBids();
+    buyerB.cash = -1;
+    const result = settleTransferAuction(world, listing, listing.deadline + 1);
+    expect(result.ok).toBe(true);
+    expect(player.clubId).toBe(buyerB.id);
+    expect(buyerB.cash).toBeLessThan(0);
   });
 
   it("settles a no-bid listing as cancelled without moving money", () => {

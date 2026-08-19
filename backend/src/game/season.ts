@@ -20,6 +20,7 @@ import {
 import { divisionForClub, lowestActiveTier } from "./multiplayer";
 import { generateSeasonalAcademyIntake, academyIntakeDone, markAcademyIntakeDone } from "./clubGenerator";
 import { generateSeniorPlayer } from "./playerGeneration";
+import { evaluateAIDecision, getImmediateAvailableCash, remainingSalaryCommitmentForPlayer, salaryCommitmentForPeriod } from "./finance";
 
 /** Latest day-of-season a deadline can resolve: the season rolls over on the
  * day after the final league round (LEAGUE_LAST_MATCH_DAY + 1), so any deadline
@@ -276,8 +277,21 @@ export function contractCycle(rng: World["rng"], world: World) {
       const offerSeasons = 1 + nextInt(rng, maxSeasons);
       const demand = calculateContractDemand(player.salary, player.overall, player.age, offerSeasons);
       // AI renewal uses the same demand model as the human player; the club
-      // only decides whether it can afford it and for how long.
-      if (club.cash > demand && demand > player.salary) {
+      // only decides whether it can afford it and for how long. The AI's hard
+      // financial safety rule (financial-control §13) is enforced with the
+      // shared commitment calculator: the new salary must not push the
+      // financial cushion below 0.
+      const currentSalaryCommitment = remainingSalaryCommitmentForPlayer(player);
+      const accruedSalaryToSettle = remainingSalaryCommitmentForPlayer(player, world.dayIndex);
+      const renewedSalaryCommitment = salaryCommitmentForPeriod(demand, world.dayIndex, gameConfig.seasonDays);
+      const affordable = evaluateAIDecision(world, club, {
+        immediateCost: accruedSalaryToSettle,
+        newBidCommitments: 0,
+        additionalSalary: 0,
+        additionalSalaryCommitment: renewedSalaryCommitment,
+        replacedSalaryCommitment: currentSalaryCommitment,
+      });
+      if (affordable && demand > player.salary) {
         settlePlayerPayroll(world, player);
         resetPayrollPeriod(player, world.dayIndex);
         player.salary = demand;
@@ -330,7 +344,7 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
 
 export function loanCycle(rng: World["rng"], world: World) {
   for (const club of world.clubs) {
-    if (club.isHuman || !chance(rng, 15)) continue;
+    if (club.isHuman || club.competitionState !== "ACTIVE" || !chance(rng, 15)) continue;
     const roster = world.players.filter(
       (p) =>
         p.clubId === club.id && !p.isYouth && !p.onSale && p.loanId === null && p.injuryDays === 0 && p.overall < 70
@@ -373,9 +387,15 @@ export function loanCycle(rng: World["rng"], world: World) {
     if (club.isHuman || !chance(rng, 12)) continue;
     const needs = squadNeeds(club, world.players);
     const candidates = world.loans.filter((l) => {
-      if (l.toClubId !== null || l.recalled) return false;
+      if (l.toClubId !== null || l.recalled || l.endDay <= world.dayIndex) return false;
       const p = world.players.find((x) => x.id === l.playerId);
-      return p && p.clubId !== club.id && needs[p.position] > 0;
+      if (!p || p.clubId === club.id || needs[p.position] <= 0) return false;
+      return evaluateAIDecision(world, club, {
+        immediateCost: 0,
+        newBidCommitments: 0,
+        additionalSalary: 0,
+        additionalSalaryCommitment: salaryCommitmentForPeriod(p.salary, world.dayIndex, Math.min(gameConfig.seasonDays, l.endDay)),
+      });
     });
     if (candidates.length === 0) continue;
     const loan = pick(rng, candidates);
@@ -419,7 +439,12 @@ export function startStadiumUpgrade(world: World, club: Club): { error?: string;
   }
   const newCapacity = club.stadiumCapacity + 5000;
   const cost = Math.round((newCapacity / 5000) ** 2 * 1_000_000);
-  if (club.cash < cost) return { error: "Not enough cash for this upgrade" };
+  // §9/§64: a new immediate expense (stadium upgrade) requires actual
+  // unreserved cash. Binding bid reservations are not available for spending,
+  // even though the cushion may be negative for humans.
+  if (getImmediateAvailableCash(world, club) < cost) {
+    return { error: "Not enough unreserved cash for this upgrade" };
+  }
   club.cash -= cost;
   club.ledger.expense.push({ code: 12, amount: cost, day: world.dayIndex, label: "Stadium expansion" });
   const upgrade = { clubId: club.id, startedDay: world.dayIndex, completesDay: seasonEndDay(world.dayIndex, gameConfig.stadiumUpgradeDays), newCapacity, cost, completed: false };

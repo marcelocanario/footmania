@@ -3,7 +3,7 @@ import { Dialog } from "primereact/dialog";
 import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Gavel, HandCoins, Users } from "lucide-react";
-import { api, type AuctionView, type FreeAgentView, type LoanView, type PlayerView } from "../api/client";
+import { api, type AuctionView, type FinanceSnapshot, type FreeAgentView, type LoanView, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { PlayerName, POSITION_CLASS, POSITION_LETTER } from "../components/PlayerName";
@@ -35,6 +35,7 @@ export function Transfers() {
   const [loanTarget, setLoanTarget] = useState<LoanView | null>(null);
   const [auctionBidTarget, setAuctionBidTarget] = useState<AuctionView | null>(null);
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
+  const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const toast = useRef<Toast>(null);
@@ -48,10 +49,11 @@ export function Transfers() {
   const loadAuctions = useCallback(async () => {
     setLoadError(null);
     try {
-      const [auctionResult, freeAgentResult, loanResult] = await Promise.all([api.listAuctions(), api.listFreeAgents(), api.listLoans()]);
+      const [auctionResult, freeAgentResult, loanResult, financeResult] = await Promise.all([api.listAuctions(), api.listFreeAgents(), api.listLoans(), api.finances()]);
       setAuctions(auctionResult.auctions);
       setFreeAgents(freeAgentResult.signings);
       setLoans(loanResult.loans);
+      setFinance(financeResult.finance);
     } catch (e) {
       setLoadError((e as Error).message);
     } finally {
@@ -155,6 +157,43 @@ export function Transfers() {
   const squad = snapshot?.squad ?? [];
   const myClubId = snapshot?.club?.id ?? null;
   const myActiveListings = auctions.filter((a) => a.sellerClubId === myClubId && a.status === "ACTIVE");
+
+  // Financial-cushion projection for a proposed maximum bid (financial-control
+  // §56). The new bid reserves `maxBid` immediately and adds a contingent
+  // salary commitment if it makes the club lead the listing.
+  const cushionProjection = (maxBid: number, salary: number, currentMax: number | null, currentlyLeading: boolean) => {
+    if (!finance) return null;
+    // The current cushion already includes any reservation/contingent salary
+    // for a listing on which the user is leading. Only an increase is new in
+    // that case. If the user is not leading, this is intentionally a
+    // conservative "if this makes you lead" projection because competing
+    // private maxima are hidden by design.
+    const existingReservation = currentlyLeading ? currentMax ?? 0 : 0;
+    const newReservation = currentlyLeading ? Math.max(existingReservation, maxBid) : Math.max(0, maxBid);
+    const bidDelta = Math.max(0, newReservation - existingReservation);
+    const salaryDelta = currentlyLeading ? 0 : salary > 0 ? salary * finance.remainingSeasonFraction : 0;
+    return finance.financialCushion - bidDelta - salaryDelta;
+  };
+  const cushionWarning = (after: number | null) => {
+    if (after === null || after >= 0) return null;
+    return (
+      <div className="card" style={{ marginBottom: 10, padding: 10, fontSize: "0.88rem", color: "var(--gold-2)", borderColor: "var(--gold-2)" }}>
+        Current financial cushion: <b>{money(finance?.financialCushion ?? 0)}</b>
+        <br />
+        After this bid: <b style={{ color: "var(--red-2)" }}>{money(after)}</b>
+        <br />
+        <span style={{ fontSize: "0.8rem", color: "var(--text-3)" }}>
+          Your cash would no longer cover your known bids and salaries through season end. You may continue, but the AI never makes this choice.
+        </span>
+      </div>
+    );
+  };
+  const loanCushionProjection = (loan: LoanView) => {
+    if (!finance || !snapshot || !loan.player) return null;
+    const end = Math.min(snapshot.save.seasonDays, loan.endDay);
+    const days = Math.max(0, end - snapshot.save.dayIndex);
+    return finance.financialCushion - (loan.player.salary * days) / snapshot.save.seasonDays;
+  };
 
   return (
     <div>
@@ -385,6 +424,7 @@ export function Transfers() {
           </label>
           <InputNumber id="fa-bid" value={freeAgentBidAmount} onValueChange={(e) => setFreeAgentBidAmount(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
         </div>
+        {cushionWarning(cushionProjection(freeAgentBidAmount, freeAgentTarget?.salary ?? 0, freeAgentTarget?.myMaxBid ?? null, freeAgentTarget?.amILeading ?? false))}
         <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 8 }}>
           The signing fee is paid to the system. Your maximum is private and cannot be lowered once submitted.
         </div>
@@ -424,6 +464,7 @@ export function Transfers() {
           </label>
           <InputNumber id="auc-bid" value={auctionBidAmount} onValueChange={(e) => setAuctionBidAmount(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
         </div>
+        {cushionWarning(cushionProjection(auctionBidAmount, auctionBidTarget?.salary ?? 0, auctionBidTarget?.myMaxBid ?? null, auctionBidTarget?.amILeading ?? false))}
         <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 8 }}>
           Your maximum is private and cannot be lowered once submitted. The market clears at the second-highest max plus increment.
         </div>
@@ -449,6 +490,12 @@ export function Transfers() {
               <div className="stat"><div className="label">Value</div><div className="value">{money(loanTarget.player.value)}</div></div>
               <div className="stat"><div className="label">Contract</div><div className="value">{seasonsOf(loanTarget.player.contractDays)}</div></div>
             </div>
+            {loanCushionProjection(loanTarget) !== null && loanCushionProjection(loanTarget)! < 0 && (
+              <div className="card" style={{ marginTop: 12, padding: 10, fontSize: "0.88rem", color: "var(--gold-2)", borderColor: "var(--gold-2)" }}>
+                This loan would reduce your financial cushion to <b style={{ color: "var(--red-2)" }}>{money(loanCushionProjection(loanTarget)!)}</b>.
+                You may continue, but future payroll could require financial intervention.
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
               <button className="btn ghost" style={{ flex: 1 }} onClick={() => setLoanTarget(null)}>{strings.common.cancel}</button>
               <button className="btn" style={{ flex: 1 }} title={strings.transfers.borrowLoanHint} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>

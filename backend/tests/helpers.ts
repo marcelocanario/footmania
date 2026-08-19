@@ -60,6 +60,7 @@ export function makeWorld(clubs: Club[], players: Player[], overrides: Partial<W
     seasonSummary: null,
     rng: createRng(42),
     contractWarnings: [],
+    financialInterventions: [],
     mp: {
       seasonId: 1,
       seasonYear: 2026,

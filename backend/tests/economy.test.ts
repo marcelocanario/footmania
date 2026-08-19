@@ -278,7 +278,7 @@ describe("season timing", () => {
     // player's payroll period before the buyer takes ownership.
     const listed = createTransferAuction(world, { player: p, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     if (!listed.ok) throw new Error(listed.error);
-    const bid = applyMaxBid(world, { listing: listed.listing, club: buyer, player: p, proposedMaximum: 2_100_000, buyerDivision: 1, safeMarketBudget: 50_000_000 });
+    const bid = applyMaxBid(world, { listing: listed.listing, club: buyer, player: p, proposedMaximum: 2_100_000, buyerDivision: 1, immediateAvailableCash: 50_000_000 });
     expect(bid.ok).toBe(true);
     const settleAt = Date.now();
     listed.listing.deadline = settleAt - 1;

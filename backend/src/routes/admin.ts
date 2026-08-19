@@ -8,6 +8,7 @@ import { ROUNDS_PER_SEASON } from "../game/multiplayer";
 import { seasonRefFor, completedRounds } from "../game/clock";
 import { budgetSettings, setBudgetSettings } from "../game/budget";
 import { readNumberSetting } from "../game/budget";
+import { getCommitmentTotals } from "../game/finance";
 
 const advanceSchema = z.object({
   // Target round to simulate through (1..14). Rounds already played are
@@ -199,6 +200,22 @@ export async function adminRoutes(app: FastifyInstance) {
       }
       avgHumansPerDivision = totalHumans / divisions.length;
     }
+    const currentSeasonInterventions = world.financialInterventions.filter((event) => event.seasonId === world.mp.seasonId);
+    const systemLiquidationMoneyCreated = currentSeasonInterventions.reduce((sum, event) => sum + event.systemLiquidationRevenue, 0);
+    const forcedAuctionSettlements = currentSeasonInterventions.reduce(
+      (sum, event) => sum + event.entries.filter((entry) => entry.kind === "FORCED_AUCTION").length,
+      0,
+    );
+    const playersLiquidated = currentSeasonInterventions.reduce(
+      (sum, event) => sum + event.entries.filter((entry) => entry.kind === "SYSTEM_LIQUIDATION").length,
+      0,
+    );
+    const unableToRecover = currentSeasonInterventions.filter((event) => event.unableToFullyRecover).length;
+    const repeatInterventionClubs = new Set(
+      currentSeasonInterventions
+        .map((event) => event.clubId)
+        .filter((clubId, index, ids) => ids.indexOf(clubId) !== index),
+    ).size;
     return {
       metrics: {
         activeHumans: world.clubs.filter((c) => c.ownerUserId !== null && c.competitionState === "ACTIVE").length,
@@ -210,6 +227,17 @@ export async function adminRoutes(app: FastifyInstance) {
         averageHumansPerDivision: Number(avgHumansPerDivision.toFixed(2)),
         divisionSizes: sizes,
         transferAuctionCount: world.transferAuctions.filter((a) => a.status === "ACTIVE").length,
+        clubsWithNegativeCushion: world.clubs.filter((club) => club.competitionState === "ACTIVE" && getCommitmentTotals(world, club).financialCushion < 0).length,
+        clubsWithNegativeCash: world.clubs.filter((club) => club.competitionState === "ACTIVE" && club.cash < 0).length,
+        financialInterventions: currentSeasonInterventions.length,
+        playersLiquidated,
+        averageInterventionSurplus: currentSeasonInterventions.length === 0
+          ? 0
+          : Number(currentSeasonInterventions.reduce((sum, event) => sum + Math.max(0, event.cushionAfter), 0) / currentSeasonInterventions.length),
+        forcedAuctionSettlements,
+        systemLiquidationMoneyCreated,
+        clubsUnableToFullyRecover: unableToRecover,
+        repeatInterventionClubs,
         liveMatchCount: world.liveMatches.length,
         joinState: world.mp.joinState,
         seasonStatus: world.mp.seasonStatus,

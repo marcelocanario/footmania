@@ -76,6 +76,7 @@ export interface ClubView {
   tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string } | null;
   trophies: Record<string, number>;
   ledger: { income: LedgerEntry[]; expense: LedgerEntry[] };
+  finance?: { activeBidCommitments: number; remainingSalaryCommitments: number; contingentSalary: number; immediateAvailableCash: number; remainingSeasonFraction: number; financialCushion: number; status: "SAFE" | "AT_RISK" | "NEGATIVE_CASH" };
 }
 
 export interface MpStatus {
@@ -224,6 +225,7 @@ export interface FinanceDetails {
   ticketPrices: [number, number, number, number];
   ticketBounds: { min: number; max: number }[];
   stadiumUpgrade: { clubId: number; startedDay: number; completesDay: number; newCapacity: number; cost: number; completed: boolean } | null;
+  nextStadiumUpgradeCost: number;
   records: CareerRecord[];
   awards: SeasonAward[];
 }
@@ -233,6 +235,18 @@ export interface LedgerEntry {
   amount: number;
   day: number;
   label: string;
+}
+
+/** Financial snapshot for the club (financial-control §55). */
+export interface FinanceSnapshot {
+  activeBidCommitments: number;
+  remainingSalaryCommitments: number;
+  contingentSalary: number;
+  financialCushion: number;
+  immediateAvailableCash: number;
+  remainingSeasonFraction: number;
+  status: "SAFE" | "AT_RISK" | "NEGATIVE_CASH";
+  nextPayroll: number | null;
 }
 
 export interface AuctionView {
@@ -481,7 +495,7 @@ export const api = {
   setTactics: (tactics: { style: number; pressing: number; direction: number }) =>
     request<{ ok: boolean }>("/api/club/tactics", { method: "POST", body: JSON.stringify(tactics) }),
   finances: () =>
-    request<{ cash: number; income: LedgerEntry[]; expense: LedgerEntry[] }>("/api/club/finances"),
+    request<{ cash: number; income: LedgerEntry[]; expense: LedgerEntry[]; finance: FinanceSnapshot }>("/api/club/finances"),
   financeDetails: () => request<FinanceDetails>("/api/club/finance-details"),
   setTicketPrices: (prices: [number, number, number, number]) =>
     request<{ ok: boolean; prices: [number, number, number, number] }>("/api/club/tickets", { method: "POST", body: JSON.stringify({ prices }) }),

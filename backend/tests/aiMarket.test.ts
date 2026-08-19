@@ -374,7 +374,7 @@ describe("AI maximum bid (§30)", () => {
       upgrade: 1.2,
       buyerDivision: 1,
       totalDivisions: 3,
-      safeMarketBudget: 250_000_000,
+      immediateAvailableCash: 250_000_000,
     });
 
     const cap = clubTransferCapMultiplier(1, 2, 3);

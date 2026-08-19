@@ -238,7 +238,7 @@ describe("auction processor settles new-format transfer listings (Phase 3)", () 
       player,
       proposedMaximum: Math.round(player.value * 1.1),
       buyerDivision: 1,
-      safeMarketBudget: 100_000_000,
+      immediateAvailableCash: 100_000_000,
     });
     expect(bid.ok).toBe(true);
     listing.deadline = Date.now() - 1; // make it due AFTER the bid was accepted
@@ -437,7 +437,7 @@ describe("free-agent market (Phase 7)", () => {
 
     // A club bids.
     const bidAt = 1_700_000_000_000 + 10_000;
-    const bid = applyFreeAgentBid(world, { listing, club: buyer, player, proposedMaximum: 2_000_000, safeMarketBudget: 200_000_000, now: bidAt });
+    const bid = applyFreeAgentBid(world, { listing, club: buyer, player, proposedMaximum: 2_000_000, immediateAvailableCash: 200_000_000, now: bidAt });
     expect(bid.ok).toBe(true);
     listing.deadline = Date.now() - 1;
     await persistWorld(prisma, saveId, saveId, world);

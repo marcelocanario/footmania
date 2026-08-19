@@ -1,8 +1,8 @@
 import { MARKET_CONFIG, gameConfig } from "../config";
 import type { Club, Loan, Player, World } from "./types";
-import { settlePlayerPayroll } from "./payroll";
+import { resetPayrollPeriod, settlePlayerPayroll } from "./payroll";
 import { seasonEndDay, loanFitsContract } from "./season";
-import { playerHasActiveListing, safeMarketBudget } from "./market";
+import { playerHasActiveListing } from "./market";
 
 /**
  * Loan market (transfer-market-overhaul Phase 9, §55-§63).
@@ -81,20 +81,26 @@ export function claimLoan(
     const secs = claimableInSeconds(loan, now);
     return { ok: false, error: `Loan becomes claimable in ${secs}s` };
   }
+  if (loan.endDay <= world.dayIndex) return { ok: false, error: "Loan listing has expired" };
   const player = world.players.find((p) => p.id === loan.playerId);
   if (!player) return { ok: false, error: "Player not found" };
   if (player.loanId !== null && player.loanId !== loan.id) return { ok: false, error: "Player is already on loan" };
   if (!loanFitsContract(world.dayIndex, loan.endDay, player.contractDays)) {
     return { ok: false, error: "Loan duration exceeds the player's remaining contract" };
   }
-  // §56: borrower pays 100% of the salary; affordability check uses the same
-  // shared safe-budget validator as auction/free-agent bids (§24/§102.10), not
-  // a naive `cash >= salary` comparison that ignores other committed payroll.
-  const budget = safeMarketBudget(world, club, { acquisitionSalary: player.salary });
-  if (budget <= 0) return { ok: false, error: "Club cannot afford the player's salary" };
+  // §56: the borrower pays 100% of the salary during the loan, but a loan
+  // claim creates NO immediate fee and wages are only due at payroll. The club
+  // is warned (human) or must stay cushion-safe (AI, enforced at the strategy
+  // layer). Only a binding immediate obligation is blocked here, so there is
+  // no immediate-cash check for the claim itself.
 
   // Atomic claim: within the caller's lock + transaction this is the only
   // mutation of this listing, so FCFS is guaranteed (§58).
+  // Settle the lender's accrued wages before ownership moves, then start the
+  // borrower's payroll clock at the claim day. This keeps the financial
+  // commitment horizon aligned with who actually owes the wages.
+  settlePlayerPayroll(world, player);
+  resetPayrollPeriod(player, world.dayIndex);
   loan.toClubId = club.id;
   player.clubId = club.id;
   player.loanId = loan.id;

@@ -5,6 +5,7 @@ import { isIntervalDay } from "./calendar";
 import { contractCycle, loanCycle, settlePayroll, stadiumCycle, weeklyUpdate } from "./season";
 import { gameConfig } from "../config";
 import { evaluateInactivity } from "./multiplayer";
+import { runFinancialIntervention } from "./finance";
 
 /**
  * Date-aware daily processing (worker plan §2/§3).
@@ -117,8 +118,30 @@ export function processDailyDate(
   dailyDevelopment(world);
 
   if (isIntervalDay(world.dayIndex, gameConfig.payrollIntervalDays)) {
+    // One-payroll-cycle grace period (financial-control §19/§20): a club that
+    // was already cash-negative BEFORE this payroll and remains cash-negative
+    // AFTER it enters financial intervention. A payroll that merely pushes a
+    // previously positive club negative only warns (NEGATIVE_CASH display).
+    const wasNegativeBeforePayroll = world.clubs.filter((club) => club.competitionState === "ACTIVE" && club.cash < 0);
     settlePayroll(rng, world);
     executed.push(PAYROLL);
+    for (const club of world.clubs) {
+      if (club.competitionState !== "ACTIVE") continue;
+      const wasNegative = wasNegativeBeforePayroll.some((c) => c.id === club.id);
+      if (wasNegative && club.cash < 0) {
+        const intervention = runFinancialIntervention(world, club, {
+          seasonId: world.mp.seasonId,
+          payrollCycleId: world.dayIndex,
+          now: now,
+        });
+        // `executed` is a per-date ledger, not a per-club result. Multiple
+        // clubs may enter intervention on the same payroll date, but the
+        // DailyExecution key permits only one row for this execution type.
+        if (intervention.ok && !executed.includes("FINANCIAL_INTERVENTION")) {
+          executed.push("FINANCIAL_INTERVENTION");
+        }
+      }
+    }
   }
   if (isIntervalDay(world.dayIndex, gameConfig.weeklyIntervalDays)) {
     weeklyUpdate(rng, world);

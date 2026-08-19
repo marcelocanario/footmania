@@ -10,7 +10,6 @@ import {
   releaseAllReservations,
   releaseReservation,
   roundToSensibleIncrement,
-  safeMarketBudget,
   upsertReservation,
 } from "./market";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
@@ -25,7 +24,7 @@ import { DEVELOPMENT } from "./constants";
  * is presented as a signing competition: clubs bid only on the signing fee,
  * the winner pays the SYSTEM (money leaves the economy, §44), and the player
  * signs the predefined salary + contract duration generated at listing time
- * (§46). There is no player-value cap for free agents — only SafeMarketBudget
+ * (§46). There is no player-value cap for free agents — only immediate cash
  * (§43). Unsold listings relist at progressively lower opening multipliers
  * (§54).
  */
@@ -136,10 +135,29 @@ export function contractSeasonsForAge(age: number, version = 0): number {
 export function createFreeAgentListing(
   world: World,
   player: Player,
-  opts: { now?: number; relistStage?: number; previousListingId?: number | null } = {}
+  opts: { now?: number; relistStage?: number; previousListingId?: number | null; blockedClubId?: number | null } = {}
 ): { ok: true; listing: FreeAgentListing } | { ok: false; error: string } {
   const now = opts.now ?? Date.now();
   if (player.clubId !== null) return { ok: false, error: "Player is not a free agent" };
+  const prepared = prepareFreeAgentListing(world, player, { ...opts, now });
+  if (!prepared.ok) return prepared;
+  world.freeAgentListings.push(prepared.listing);
+  return prepared;
+}
+
+/**
+ * Prepare a listing without publishing it. The intervention engine uses this
+ * as a preflight step so every required listing is known to be valid before
+ * it starts mutating players/cash; the caller must push the returned listing
+ * exactly once after the player becomes a free agent.
+ */
+export function prepareFreeAgentListing(
+  world: World,
+  player: Player,
+  opts: { now?: number; relistStage?: number; previousListingId?: number | null; blockedClubId?: number | null; allowOwnedPlayer?: boolean } = {}
+): { ok: true; listing: FreeAgentListing } | { ok: false; error: string } {
+  const now = opts.now ?? Date.now();
+  if (!opts.allowOwnedPlayer && player.clubId !== null) return { ok: false, error: "Player is not a free agent" };
   if (player.isYouth) return { ok: false, error: "Youth players cannot be free-agent listed" };
   if (playerHasActiveListing(world, player)) {
     return { ok: false, error: "This player already has an active market listing" };
@@ -170,16 +188,16 @@ export function createFreeAgentListing(
     winningClubId: null,
     finalPrice: null,
     previousListingId: opts.previousListingId ?? null,
+    blockedClubId: opts.blockedClubId ?? null,
     softClosed: false,
     softCloseExtensions: 0,
   };
-  world.freeAgentListings.push(listing);
   return { ok: true, listing };
 }
 
 /**
  * Submit/increase a private maximum signing-fee bid on a free-agent listing.
- * Reuses the proxy engine; NO player-value cap (§43) — only SafeMarketBudget.
+ * Reuses the proxy engine; NO player-value cap (§43) — only immediate cash.
  */
 export function applyFreeAgentBid(
   world: World,
@@ -188,7 +206,7 @@ export function applyFreeAgentBid(
     club: Club;
     player: Player;
     proposedMaximum: number;
-    safeMarketBudget: number;
+    immediateAvailableCash: number;
     now?: number;
     seasonRolloverAt?: number;
   }
@@ -199,6 +217,9 @@ export function applyFreeAgentBid(
 
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
   if (now >= listing.deadline) return { ok: false, error: "Listing has closed" };
+  if (player.id !== listing.playerId || player.clubId !== null || player.isYouth) {
+    return { ok: false, error: "Player is no longer available as a free agent" };
+  }
   if (!Number.isFinite(opts.proposedMaximum) || opts.proposedMaximum <= 0) {
     return { ok: false, error: "Maximum bid must be positive" };
   }
@@ -209,9 +230,16 @@ export function applyFreeAgentBid(
   if (existing === undefined && opts.proposedMaximum < listing.openingPrice) {
     return { ok: false, error: "Maximum must be at least the opening price" };
   }
-  // §43: free agents have no player-value cap — only SafeMarketBudget.
-  if (opts.proposedMaximum > opts.safeMarketBudget) {
-    return { ok: false, error: "Maximum exceeds your safe market budget" };
+  // §35: the former club of a system-liquidated player cannot bid on the
+  // resulting free-agent listing (financial-control §35/§36).
+  if (listing.blockedClubId === club.id) {
+    return { ok: false, error: "Your club is not allowed to bid on this listing" };
+  }
+  // §11/§9: free agents have no player-value cap; the only financial ceiling is
+  // the hard immediate-cash rule (unreserved actual cash). Humans may make the
+  // cushion negative; AI applies its own stricter guardrail at the strategy layer.
+  if (opts.proposedMaximum > opts.immediateAvailableCash) {
+    return { ok: false, error: "Maximum exceeds your immediately available cash" };
   }
 
   const maxBid = Math.round(opts.proposedMaximum);
@@ -285,6 +313,7 @@ export function settleFreeAgentListing(
     .filter((b) => b.listingId === listing.id)
     .map((b) => ({ clubId: b.clubId, maxBid: b.maxBid, initialPriorityAt: b.initialPriorityAt }));
   const player = world.players.find((p) => p.id === listing.playerId);
+  if (!player || player.clubId !== null || player.isYouth) return { ok: false, error: "Player is no longer available as a free agent" };
 
   // No bids: the listing expires for relisting (§54) rather than settling.
   if (bids.length === 0) {
@@ -297,11 +326,15 @@ export function settleFreeAgentListing(
   if (winnerId === null) return { ok: false, error: "No winner could be determined" };
   const winner = world.clubs.find((c) => c.id === winnerId);
   if (!winner) return { ok: false, error: "Winning club not found" };
-  if (!player) return { ok: false, error: "Player not found" };
-
   const finalPrice = calculateCurrentPrice({ openingPrice: listing.openingPrice, bidIncrement: listing.bidIncrement, bids });
-  if (winner.cash < finalPrice) {
-    return { ok: false, error: "Winning club cannot afford the clearing price" };
+  // A leading free-agent bid is a binding commitment. Payroll may have pushed
+  // the winner cash-negative since the bid was placed; the settlement remains
+  // valid (§20). Only a missing/insufficient reservation is an invalid state.
+  const reservation = world.marketReservations.find(
+    (candidate) => candidate.clubId === winner.id && candidate.listingId === listing.id && candidate.marketType === "FREE_AGENT" && candidate.releasedAt === null,
+  );
+  if (!reservation || reservation.amount < finalPrice) {
+    return { ok: false, error: "Winning bid reservation is missing or insufficient" };
   }
 
   // Winner pays the system: cash leaves the economy, no club is credited (§44).
@@ -355,7 +388,16 @@ export function settleDueFreeAgentListings(world: World, now: number): number {
   for (const listing of world.freeAgentListings) {
     if (listing.status !== "ACTIVE" || listing.deadline > now) continue;
     const result = settleFreeAgentListing(world, listing, now);
-    if (result.ok) settled += 1;
+    if (result.ok) {
+      settled += 1;
+    } else {
+      // Never leave a due listing retrying forever after a stale/corrupt
+      // reservation or player reference. No ownership/payment mutation has
+      // occurred on the failed path, so cancelling is the safe boundary.
+      releaseAllReservations(world, listing.id, "FREE_AGENT");
+      listing.status = "CANCELLED";
+      listing.completedAt = now;
+    }
   }
   return settled;
 }
@@ -374,6 +416,7 @@ export function relistFreeAgent(world: World, listing: FreeAgentListing, now: nu
     now,
     relistStage: listing.relistStage + 1,
     previousListingId: listing.id,
+    blockedClubId: listing.blockedClubId,
   });
   return created.ok ? created.listing.id : null;
 }

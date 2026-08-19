@@ -69,6 +69,13 @@ export interface Player {
   generatedClubHighestDivision?: number | null;
   /** Raw unshifted birth-quality Z (player-generation §37 tier basis). */
   rawZ?: number | null;
+  /**
+   * Season id in which this player was generated as a financial-intervention
+   * replacement (financial-control §31). While set to the current season the
+   * player cannot be system-liquidated again (no repeated system-funded
+   * creation → liquidation loops); eligibility resumes the following season.
+   */
+  financialInterventionGeneratedSeasonId?: number | null;
 }
 
 export interface LedgerEntry {
@@ -393,6 +400,14 @@ export interface FreeAgentListing {
   winningClubId: number | null;
   finalPrice: number | null;
   previousListingId: number | null;
+  /**
+   * Club forbidden from bidding on this specific listing (financial-control
+   * §35). Set to the former club when a system-liquidated player is listed so
+   * the club cannot immediately re-sign the player it lost through financial
+   * intervention. Null = no restriction; the block ends once another club
+   * signs the player (§36).
+   */
+  blockedClubId: number | null;
   /** True once the deadline was extended by a soft-close competitive bid. */
   softClosed: boolean;
   /** Number of soft-close extensions applied so far (bounds §17/§18). */
@@ -544,6 +559,42 @@ export interface SeasonAllocation {
   issuedAt: number;
 }
 
+/** One child record of a financial intervention (financial-control §53). */
+export interface FinancialInterventionEntry {
+  playerId: number;
+  /** FORCED_AUCTION | FORCED_AUCTION_CANCELLED | SYSTEM_LIQUIDATION */
+  kind: string;
+  price: number | null;
+  replacementPlayerId: number | null;
+}
+
+/**
+ * Audit record for one financial intervention run (financial-control §53).
+ * Idempotency key: (clubId, seasonId, payrollCycleId) — the intervention for a
+ * payroll cycle may execute at most once (§52).
+ */
+export interface FinancialIntervention {
+  id: number;
+  clubId: number;
+  seasonId: number;
+  /** dayIndex of the payroll cycle that triggered the intervention. */
+  payrollCycleId: number;
+  cashBefore: number;
+  /** Active bids + remaining salaries + contingent leading-bid salaries. */
+  commitmentsBefore: number;
+  cushionBefore: number;
+  forcedAuctionRevenue: number;
+  systemLiquidationRevenue: number;
+  cashAfter: number;
+  /** Active bids + remaining salaries + contingent leading-bid salaries. */
+  commitmentsAfter: number;
+  cushionAfter: number;
+  createdAt: number;
+  entries: FinancialInterventionEntry[];
+  /** True when even the best liquidation set could not fully recover the club. */
+  unableToFullyRecover: boolean;
+}
+
 export interface MpMembershipEntry {
   divisionId: number;
   clubId: number;
@@ -641,6 +692,9 @@ export interface World {
   seasonSummary: SeasonSummary | null;
   rng: RngState;
   contractWarnings: number[];
+  // Financial-intervention audit records (financial-control §53). Persisted for
+  // disputes and anti-exploit analysis.
+  financialInterventions: FinancialIntervention[];
   // Multiplayer state (see MpState).
   mp: MpState;
   // Multiplayer: clubs waiting for next season (post-lock joins, returning).

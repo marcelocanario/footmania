@@ -62,6 +62,9 @@ model Save {
   pendingMatchIdsJson String?
   // Player-generation idempotency ledger (academy intake, club creation).
   generationEventsJson String?
+  // Financial-intervention audit records (financial-control §53). JSON because
+  // they are write-once audit data and never queried relationally.
+  financialInterventionsJson String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -200,6 +203,10 @@ model Player {
   generationType String?
   generatedClubHighestDivision Int?
   rawZ Float?
+  // Season in which this player was generated as a financial-intervention
+  // replacement (financial-control §31). Prevents repeated system-funded
+  // liquidation within the same season.
+  financialInterventionGeneratedSeasonId Int?
 
   @@id([saveId, id])
   @@index([saveId, clubId])
@@ -539,6 +546,9 @@ model FreeAgentListing {
   winningClubId      Int?
   finalPrice         Int?
   previousListingId  Int?
+  // Former club forbidden from bidding on this specific listing after a
+  // financial-intervention liquidation (financial-control §35/§36).
+  blockedClubId      Int?
   softClosed         Boolean
   softCloseExtensions Int
 

@@ -6,9 +6,10 @@ import { liveStateView } from "../services/liveView";
 import { withGlobalLock } from "../services/lock";
 import { multiplayerDayLabel } from "../game/calendar";
 import { releasePlayer } from "../game/transfers";
-import { applyMaxBid, auctionOpeningRange, cancelTransferAuction, createTransferAuction, recentTradeBaseValue, safeMarketBudget, transferCooldownError, transferAuctionView } from "../game/market";
+import { applyMaxBid, auctionOpeningRange, cancelTransferAuction, createTransferAuction, recentTradeBaseValue, transferCooldownError, transferAuctionView } from "../game/market";
 import { applyFreeAgentBid, freeAgentListingView } from "../game/freeAgents";
 import { cancelLoanListing, claimLoan, claimableInSeconds, offerPlayerForLoan } from "../game/loans";
+import { getCommitmentTotals, getImmediateAvailableCash, financialState, remainingSeasonFraction } from "../game/finance";
 import { calculateReleaseClause, remainingSeasons } from "../game/economy";
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
@@ -364,7 +365,7 @@ export async function gameRoutes(app: FastifyInstance) {
         player,
         proposedMaximum: parsed.data.maxBid,
         buyerDivision: divisionForClub(world, club.id),
-        safeMarketBudget: safeMarketBudget(world, club, { acquisitionSalary: player.salary }),
+        immediateAvailableCash: getImmediateAvailableCash(world, club),
         seasonRolloverAt: nextMonthStart(world),
       });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
@@ -402,7 +403,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = listing ? world.players.find((candidate) => candidate.id === listing.playerId) : undefined;
       if (!listing || !player) return { error: { code: 404, body: { error: "Free-agent listing not found" } } };
-      const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, safeMarketBudget: safeMarketBudget(world, club, { acquisitionSalary: listing.demandedSalary }), seasonRolloverAt: nextMonthStart(world) });
+      const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, immediateAvailableCash: getImmediateAvailableCash(world, club), seasonRolloverAt: nextMonthStart(world) });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: result };
     });
@@ -514,10 +515,21 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const club = userClub(loaded.world, req.user!.id);
     if (!club) return reply.code(400).send({ error: "You have no club" });
+    const totals = getCommitmentTotals(loaded.world, club);
     return {
       cash: club.cash,
       income: club.ledger.income.slice(-30).reverse(),
       expense: club.ledger.expense.slice(-30).reverse(),
+      finance: {
+        activeBidCommitments: totals.activeBidCommitments,
+        remainingSalaryCommitments: totals.remainingSalaryCommitments,
+        contingentSalary: totals.contingentSalary,
+        financialCushion: totals.financialCushion,
+        immediateAvailableCash: totals.immediateAvailableCash,
+        remainingSeasonFraction: club.competitionState === "PROVISIONAL" ? 1 : remainingSeasonFraction(loaded.world),
+        status: financialState(loaded.world, club),
+        nextPayroll: nextPayrollTimestamp(loaded.world),
+      },
     };
   });
 
@@ -528,10 +540,12 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!club) return reply.code(400).send({ error: "You have no club" });
     const division = divisionForClub(loaded.world, club.id);
     const reference = TICKET_PRICES[Math.min(5, divisionTicketTier(division))].map((x) => Math.max(1, Math.round(x / 200)));
+    const nextCapacity = club.stadiumCapacity + 5000;
     return {
       ticketPrices: loaded.world.ticketPrices[club.id] ?? reference,
       ticketBounds: reference.map((x) => ({ min: Math.max(1, Math.round(x * 0.5)), max: Math.round(x * 2.5) })),
       stadiumUpgrade: loaded.world.stadiumUpgrades.find((u) => u.clubId === club.id && !u.completed) ?? null,
+      nextStadiumUpgradeCost: Math.round((nextCapacity / 5000) ** 2 * 1_000_000),
        records: loaded.world.records,
       awards: loaded.world.seasonAwards.slice(-20).reverse(),
     };
@@ -627,6 +641,16 @@ function nextMonthStart(world: World): number {
   const year = world.mp.seasonYear;
   const month = world.mp.seasonMonth;
   return month === 12 ? Date.UTC(year + 1, 0, 1) : Date.UTC(year, month, 1);
+}
+
+/** Real timestamp of the next payroll cycle (UTC midnight of that game-day). */
+function nextPayrollTimestamp(world: World): number | null {
+  const interval = gameConfig.payrollIntervalDays;
+  const day = world.dayIndex;
+  const next = Math.ceil((day + 1) / interval) * interval;
+  if (next <= gameConfig.seasonDays) return Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, next);
+  // Payroll resumes on the first interval day of the next funded season.
+  return Date.UTC(world.mp.seasonYear, world.mp.seasonMonth, interval);
 }
 
 function replyFrom(res: { error?: { code: number; body: unknown }; value?: unknown }, reply: import("fastify").FastifyReply) {

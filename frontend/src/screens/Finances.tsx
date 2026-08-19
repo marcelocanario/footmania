@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownRight, ArrowUpRight, Wallet, Building2 } from "lucide-react";
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, Wallet, Building2, TrendingDown } from "lucide-react";
 import { Toast } from "primereact/toast";
-import { api, type FinanceDetails, type LedgerEntry } from "../api/client";
+import { api, type FinanceDetails, type FinanceSnapshot, type LedgerEntry } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { money, num } from "../format";
+
+const STATUS_LABEL: Record<FinanceSnapshot["status"], string> = {
+  SAFE: "SAFE",
+  AT_RISK: "AT RISK",
+  NEGATIVE_CASH: "FINANCIAL EMERGENCY",
+};
 
 export function Finances() {
   const { snapshot, refresh } = useGame();
@@ -13,6 +19,7 @@ export function Finances() {
   const [busy, setBusy] = useState(false);
   const [details, setDetails] = useState<FinanceDetails | null>(null);
   const [prices, setPrices] = useState<number[]>([]);
+  const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const toast = useRef<Toast>(null);
 
   useEffect(() => {
@@ -21,6 +28,7 @@ export function Finances() {
       const res = await api.finances();
       setIncome(res.income);
       setExpense(res.expense);
+      setFinance(res.finance);
       const financeDetails = await api.financeDetails();
       setDetails(financeDetails);
       setPrices([...financeDetails.ticketPrices]);
@@ -98,9 +106,67 @@ export function Finances() {
           {details?.stadiumUpgrade ? (
             <div className="hint" style={{ marginTop: 10 }}>Expansion completes on day {details.stadiumUpgrade.completesDay}</div>
           ) : (
-            <button className="btn sm" style={{ marginTop: 12 }} disabled={busy} onClick={upgrade}>Expand by 5,000 seats</button>
+            <>
+              {finance && details && finance.financialCushion >= 0 && finance.financialCushion - details.nextStadiumUpgradeCost < 0 && (
+                <div className="hint" style={{ marginTop: 10, color: "var(--gold-2)" }}>
+                  This upgrade would reduce your financial cushion to {money(finance.financialCushion - details.nextStadiumUpgradeCost)}.
+                </div>
+              )}
+              <button className="btn sm" style={{ marginTop: 12 }} disabled={busy} onClick={upgrade}>Expand by 5,000 seats</button>
+            </>
           )}
         </div>
+      </div>
+
+      <div className="card stagger" style={{ marginTop: 16 }}>
+        <div className="kicker" style={{ marginBottom: 8 }}>Financial cushion</div>
+        <div className="grid cols-2" style={{ gap: 6, maxWidth: 560 }}>
+          <span className="hint">Reserved bids</span>
+          <b style={{ textAlign: "right", color: "var(--gold-2)" }}>{money(finance?.activeBidCommitments ?? 0)}</b>
+          <span className="hint">Remaining season salaries</span>
+          <b style={{ textAlign: "right", color: "var(--gold-2)" }}>{money(finance?.remainingSalaryCommitments ?? 0)}</b>
+          {finance && finance.contingentSalary > 0 && (
+            <>
+              <span className="hint">Contingent (leading bids)</span>
+              <b style={{ textAlign: "right", color: "var(--gold-2)" }}>{money(finance.contingentSalary)}</b>
+            </>
+          )}
+          <span className="hint" style={{ borderTop: "1px solid var(--line, #333)", paddingTop: 6 }}>Financial cushion</span>
+          <b
+            style={{
+              textAlign: "right",
+              borderTop: "1px solid var(--line, #333)",
+              paddingTop: 6,
+              fontFamily: "var(--font-display)",
+              fontSize: "1.15rem",
+              color: (finance?.financialCushion ?? 0) >= 0 ? "var(--grass-2)" : "var(--red-2)",
+            }}
+          >
+            {money(finance?.financialCushion ?? 0)}
+          </b>
+        </div>
+        {finance && (
+          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className={`chip ${finance.status === "SAFE" ? "" : ""}`} style={statusChipStyle(finance.status)}>
+              Status: {STATUS_LABEL[finance.status]}
+            </span>
+            {finance.nextPayroll !== null && (
+              <span className="hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <TrendingDown size={13} /> Next payroll: {formatPayroll(finance.nextPayroll)}
+              </span>
+            )}
+          </div>
+        )}
+        {finance && finance.status !== "SAFE" && (
+          <div className="card" style={{ marginTop: 12, padding: 12, fontSize: "0.9rem", color: "var(--red-2)", background: "var(--red-1, #2a1515)" }}>
+            <AlertTriangle size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+            {club?.competitionState === "PROVISIONAL"
+              ? `Your funded upcoming-season salary commitments currently exceed available funds. Salaries are frozen while the club is provisional; the warning will be recalculated when the club activates.`
+              : finance.status === "NEGATIVE_CASH"
+              ? `Current cash: ${money(club?.cash ?? 0)}. If the club is still in a negative cash position when the next payroll cycle is processed, a financial intervention may force players to leave.`
+              : `Your current cash does not cover your existing bids and remaining salary commitments through season end. Future income may improve this position, but if your cash balance becomes negative and remains negative until a later payroll cycle, players may be forced to leave the club.`}
+          </div>
+        )}
       </div>
 
       <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
@@ -147,4 +213,21 @@ export function Finances() {
       </div>
     </div>
   );
+}
+
+function statusChipStyle(status: FinanceSnapshot["status"]): React.CSSProperties {
+  if (status === "NEGATIVE_CASH") return { color: "var(--red-2)", borderColor: "var(--red-2)" };
+  if (status === "AT_RISK") return { color: "var(--gold-2)", borderColor: "var(--gold-2)" };
+  return { color: "var(--grass-2)", borderColor: "var(--grass-2)" };
+}
+
+function formatPayroll(ts: number): string {
+  const diff = ts - Date.now();
+  if (diff <= 0) return "now";
+  const days = Math.floor(diff / 86_400_000);
+  const hours = Math.floor((diff % 86_400_000) / 3_600_000);
+  if (days > 0) return `${days}d ${hours}h`;
+  const minutes = Math.floor((diff % 3_600_000) / 60_000);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${Math.max(1, minutes)}m`;
 }

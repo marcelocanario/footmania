@@ -132,7 +132,7 @@ const gameConfigSchema = z
       startMultiplier: 0.1,
       durationHours: 24,
       relistMultipliers: [0.1, 0.075, 0.05, 0.025],
-      // Null => no player-value cap; only SafeMarketBudget applies.
+      // Null => no player-value cap; only the immediate-cash rule applies.
       valueBasedMaximumMultiplier: null,
       salaryKernelBandwidthLogValue: Math.log(2),
       salaryEffectiveSampleTarget: 25,
@@ -145,15 +145,6 @@ const gameConfigSchema = z
       contractAgeMidpointOffset: 1.0,
       contractAgeScaleSigmaMultiplier: 0.625,
       allowAcrossSeasonRollover: true,
-    },
-
-    finance: {
-      // P10 conservative quantile for uncertain recurring income.
-      uncertainIncomeQuantile: 0.1,
-      // Shrinkage constant w = n / (n + K) toward the division distribution.
-      clubIncomeShrinkageK: 8,
-      // Liquidity reserve in payroll cycles (>= 1).
-      reservePayrollCycles: 1,
     },
 
     // Division → ticket-tier mapping for pricing/attendance. The division
@@ -217,8 +208,6 @@ const gameConfigSchema = z
       desiredSeniorSquadSize: 26,
       // Players below this overall count as "adequate" for depth protection.
       depthReplacementOverallFloor: 60,
-      // Financial pressure ratio: cash < salary × ratio triggers pressure.
-      financialPressureCashToSalaryRatio: 3,
       // Market-opportunity horizon: how many recent days count as "few players
       // available" when a club over-stocks a position.
       marketOpportunityLookbackDays: 5,

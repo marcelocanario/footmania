@@ -122,25 +122,25 @@ describe("free-agent proxy bidding (§43)", () => {
     const club2 = makeClubFn(2);
     world.clubs.push(club, club2);
 
-    const r1 = applyFreeAgentBid(world, { listing, club, player: fa, proposedMaximum: 1_000_000, safeMarketBudget: 50_000_000, now: 1_700_000_000_000 });
+    const r1 = applyFreeAgentBid(world, { listing, club, player: fa, proposedMaximum: 1_000_000, immediateAvailableCash: 50_000_000, now: 1_700_000_000_000 });
     expect(r1.ok).toBe(true);
     expect(listing.currentPrice).toBe(listing.openingPrice); // single bid
-    const r2 = applyFreeAgentBid(world, { listing, club: club2, player: fa, proposedMaximum: 1_500_000, safeMarketBudget: 50_000_000, now: 1_700_000_000_000 });
+    const r2 = applyFreeAgentBid(world, { listing, club: club2, player: fa, proposedMaximum: 1_500_000, immediateAvailableCash: 50_000_000, now: 1_700_000_000_000 });
     expect(r2.ok).toBe(true);
     // second-highest + increment
     expect(listing.currentPrice).toBeGreaterThan(1_000_000);
     expect(listing.leadingClubId).toBe(club2.id);
   });
 
-  it("enforces SafeMarketBudget but has NO player-value cap (§43)", () => {
+  it("enforces immediate cash but has NO player-value cap (§43)", () => {
     const { world, listing, fa } = setupWorld();
     const rich = makeClubFn(1);
     world.clubs.push(rich);
     // value cap would reject >15M (1.5x), but FA allows well above value.
-    const r = applyFreeAgentBid(world, { listing, club: rich, player: fa, proposedMaximum: 20_000_000, safeMarketBudget: 50_000_000, now: 1_700_000_000_000 });
+    const r = applyFreeAgentBid(world, { listing, club: rich, player: fa, proposedMaximum: 20_000_000, immediateAvailableCash: 50_000_000, now: 1_700_000_000_000 });
     expect(r.ok).toBe(true);
     const poor = makeClubFn(2, { cash: 100_000 });
-    const r2 = applyFreeAgentBid(world, { listing, club: poor, player: fa, proposedMaximum: 5_000_000, safeMarketBudget: 100, now: 1_700_000_000_000 });
+    const r2 = applyFreeAgentBid(world, { listing, club: poor, player: fa, proposedMaximum: 5_000_000, immediateAvailableCash: 100, now: 1_700_000_000_000 });
     expect(r2.ok).toBe(false);
   });
 });
@@ -155,7 +155,7 @@ describe("free-agent settlement (§44/§46)", () => {
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
     const bidAt = 1_700_000_000_000 + 10_000;
-    const r = applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, safeMarketBudget: 50_000_000, now: bidAt });
+    const r = applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, immediateAvailableCash: 50_000_000, now: bidAt });
     expect(r.ok).toBe(true);
     const settleAt = 1_700_000_000_000 + 100_000;
     listing.deadline = settleAt - 1;
@@ -173,6 +173,24 @@ describe("free-agent settlement (§44/§46)", () => {
     // Transaction recorded.
     expect(world.playerMarketHistory.length).toBe(1);
     expect(world.playerMarketHistory[0].type).toBe("FREE_AGENT_SIGNING");
+  });
+
+  it("honors a binding signing bid after payroll makes the winner cash-negative", () => {
+    const rng = createRng(2);
+    const fa = freePlayer(rng, 2, { value: 10_000_000, salary: 800_000, age: 27 });
+    const winner = makeClubFn(2, { cash: 50_000_000 });
+    const world = makeWorld([winner], [fa]);
+    const created = createFreeAgentListing(world, fa, { now: 1_700_000_000_000 });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+    const bid = applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, immediateAvailableCash: 50_000_000, now: 1_700_000_000_001 });
+    expect(bid.ok).toBe(true);
+    winner.cash = -100;
+    listing.deadline = 1_700_000_000_100;
+    const result = settleFreeAgentListing(world, listing, listing.deadline + 1);
+    expect(result.ok).toBe(true);
+    expect(fa.clubId).toBe(winner.id);
+    expect(winner.cash).toBeLessThan(0);
   });
 
   it("cancels a no-bid listing so it can relist (§54)", () => {
@@ -211,6 +229,20 @@ describe("free-agent relisting (§54)", () => {
     expect(active[0].relistStage).toBe(1);
   });
 
+  it("carries the former-club block across no-bid relists", () => {
+    const fa = freePlayer(createRng(3), 3, { value: 10_000_000 });
+    const formerClub = makeClubFn(3);
+    const world = makeWorld([formerClub], [fa]);
+    const created = createFreeAgentListing(world, fa, { now: 1_700_000_000_000, blockedClubId: formerClub.id });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+    const now = 1_700_000_000_000 + 100_000;
+    listing.deadline = now - 1;
+    expect(relistDueFreeAgents(world, now)).toBe(1);
+    const active = world.freeAgentListings.find((candidate) => candidate.status === "ACTIVE");
+    expect(active?.blockedClubId).toBe(formerClub.id);
+  });
+
   it("does not relist a listing that had bids", () => {
     const rng = createRng(1);
     const fa = freePlayer(rng, 1, { value: 10_000_000, salary: 800_000, age: 27 });
@@ -220,7 +252,7 @@ describe("free-agent relisting (§54)", () => {
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
     const bidAt = 1_700_000_000_000 + 10_000;
-    applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, safeMarketBudget: 50_000_000, now: bidAt });
+    applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, immediateAvailableCash: 50_000_000, now: bidAt });
     const now = 1_700_000_000_000 + 100_000;
     listing.deadline = now - 1;
 

@@ -155,6 +155,7 @@ export function deserializeWorld(json: string): World {
    world.marketReservations ??= [];
    world.playerMarketHistory ??= [];
    world.aiEvaluations ??= [];
+   world.financialInterventions ??= [];
    world.mpQueue ??= [];
    world.liveMatches ??= legacyLiveMatch ? [legacyLiveMatch] : [];
    world.seasonAllocations ??= [];
@@ -338,6 +339,7 @@ export async function persistWorld(
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
           generationEventsJson: world.generationEvents ? JSON.stringify(world.generationEvents) : null,
+          financialInterventionsJson: world.financialInterventions ? JSON.stringify(world.financialInterventions) : null,
           revision: { increment: 1 },
         },
       });
@@ -359,6 +361,7 @@ export async function persistWorld(
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
           generationEventsJson: world.generationEvents ? JSON.stringify(world.generationEvents) : null,
+          financialInterventionsJson: world.financialInterventions ? JSON.stringify(world.financialInterventions) : null,
           revision: { increment: 1 },
         },
       });
@@ -504,15 +507,16 @@ export async function persistWorld(
            deadline: BigInt(l.deadline),
            status: l.status,
            completedAt: l.completedAt !== null ? BigInt(l.completedAt) : null,
-           winningClubId: l.winningClubId,
-           finalPrice: l.finalPrice,
-           previousListingId: l.previousListingId,
-           softClosed: l.softClosed,
-           softCloseExtensions: l.softCloseExtensions,
-         })),
-       });
-     }
-     if (world.marketReservations.length > 0) {
+            winningClubId: l.winningClubId,
+            finalPrice: l.finalPrice,
+            previousListingId: l.previousListingId,
+            blockedClubId: l.blockedClubId,
+            softClosed: l.softClosed,
+            softCloseExtensions: l.softCloseExtensions,
+          })),
+        });
+      }
+      if (world.marketReservations.length > 0) {
        await tx.marketReservation.createMany({
          data: world.marketReservations.map((r) => ({
            id: r.id,
@@ -723,6 +727,7 @@ function playerRow(p: Player, saveId: number) {
     generationType: p.generationType ?? null,
     generatedClubHighestDivision: p.generatedClubHighestDivision ?? null,
     rawZ: p.rawZ ?? null,
+    financialInterventionGeneratedSeasonId: p.financialInterventionGeneratedSeasonId ?? null,
   };
 }
 
@@ -775,7 +780,7 @@ function statRow(m: Match, saveId: number) {
 
 async function rebuildWorld(
   prisma: PrismaClient,
-  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null; generationEventsJson?: string | null }
+  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null; generationEventsJson?: string | null; financialInterventionsJson?: string | null }
 ): Promise<World> {
    const [
      clubRows,
@@ -943,6 +948,7 @@ async function rebuildWorld(
         generationType: (r as unknown as { generationType?: string | null }).generationType ?? null,
         generatedClubHighestDivision: (r as unknown as { generatedClubHighestDivision?: number | null }).generatedClubHighestDivision ?? null,
         rawZ: (r as unknown as { rawZ?: number | null }).rawZ ?? null,
+        financialInterventionGeneratedSeasonId: (r as unknown as { financialInterventionGeneratedSeasonId?: number | null }).financialInterventionGeneratedSeasonId ?? null,
       } as Player;
    });
 
@@ -1099,6 +1105,7 @@ async function rebuildWorld(
      winningClubId: l.winningClubId,
      finalPrice: l.finalPrice,
      previousListingId: l.previousListingId,
+     blockedClubId: l.blockedClubId ?? null,
      softClosed: l.softClosed,
      softCloseExtensions: l.softCloseExtensions,
    }));
@@ -1204,9 +1211,10 @@ async function rebuildWorld(
      mpClubSeasons: [],
      mpActivities: [],
      mpAudits: [],
-     seasonHistory: [],
-     generationEvents: [],
-   };
+      seasonHistory: [],
+      generationEvents: [],
+      financialInterventions: [],
+    };
    world.rng.state = Number(saveRow.rngState);
    world.nextId =
      Math.max(
@@ -1242,8 +1250,16 @@ async function rebuildWorld(
     relegationStatus: cs.relegationStatus,
   }));
   world.mpActivities = (mpActivityRows ?? []).map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: a.occurredAt.getTime(), metadata: a.metadata }));
-  world.pendingDayEvents = jsonOr<string[] | undefined>(saveRow.pendingEventsJson, undefined);
-  world.pendingDayMatchIds = jsonOr<number[] | undefined>(saveRow.pendingMatchIdsJson, undefined);
-  world.generationEvents = jsonOr<string[]>(saveRow.generationEventsJson, []);
-  return world;
+   world.pendingDayEvents = jsonOr<string[] | undefined>(saveRow.pendingEventsJson, undefined);
+   world.pendingDayMatchIds = jsonOr<number[] | undefined>(saveRow.pendingMatchIdsJson, undefined);
+   world.generationEvents = jsonOr<string[]>(saveRow.generationEventsJson, []);
+   world.financialInterventions = jsonOr<World["financialInterventions"]>((saveRow as unknown as { financialInterventionsJson?: string | null }).financialInterventionsJson, []);
+   const persistedIds = [
+     ...marketBidRows.map((row) => row.id),
+     ...marketReservationRows.map((row) => row.id),
+     ...playerMarketTransactionRows.map((row) => row.id),
+     ...world.financialInterventions.map((event) => event.id),
+   ];
+   if (persistedIds.length > 0) world.nextId = Math.max(world.nextId, Math.max(...persistedIds) + 1);
+   return world;
 }

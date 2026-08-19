@@ -3,6 +3,7 @@ import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { sortedStandings, getPosition } from "../game/league";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { gameConfig } from "../config";
+import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
   return {
@@ -180,6 +181,20 @@ export function buildSnapshot(world: World, clubId: number) {
           coachName: club.coachName,
           trainingFocus: club.trainingFocus,
           competitionState: club.competitionState,
+          // Financial snapshot (financial-control §55): the derived cushion and
+          // warning state, computed authoritatively on the server.
+          finance: (() => {
+            const totals = getCommitmentTotals(world, club);
+            return {
+              activeBidCommitments: totals.activeBidCommitments,
+              remainingSalaryCommitments: totals.remainingSalaryCommitments,
+              contingentSalary: totals.contingentSalary,
+              immediateAvailableCash: totals.immediateAvailableCash,
+              remainingSeasonFraction: club.competitionState === "PROVISIONAL" ? 1 : remainingSeasonFraction(world),
+              financialCushion: totals.financialCushion,
+              status: financialState(world, club),
+            };
+          })(),
           tactics: club.tactics
             ? {
                 formation: club.tactics.formation,

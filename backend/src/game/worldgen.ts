@@ -42,6 +42,7 @@ export function generateWorld(seed: number): World {
     seasonSummary: null,
     rng,
     contractWarnings: [],
+    financialInterventions: [],
     mp: {
       seasonId: 0,
       seasonYear: 1,
