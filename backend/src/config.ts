@@ -57,9 +57,38 @@ const gameConfigSchema = z
   renewalSkillExponent: nonNegativeNumber,
   renewalMaxRaise: nonNegativeNumber,
   renewalAgeCurve: ageCurveSchema,
-  releaseClauseRemainingValuePct: nonNegativeNumber,
-})
+    releaseClauseRemainingValuePct: nonNegativeNumber,
+    playerGeneration: z.object({
+      playerQualitySpreadFraction: nonNegativeNumber,
+      divisionSpanSigmas: nonNegativeNumber,
+      academyPedigreeSigmas: nonNegativeNumber,
+    }),
+    playerGenerationRules: z.object({
+      initialSeniorSquadSize: z.number().int().min(1),
+      initialAcademySize: z.number().int().min(1),
+      academyRosterLimit: z.number().int().min(1),
+      seasonalAcademyIntake: z.number().int().min(0),
+      academyMinAge: z.number().int().min(1),
+      academyMaxAge: z.number().int().min(1),
+      academyPromotionAge: z.number().int().min(1),
+      academyContractSeasons: z.number().int().min(1),
+    }),
+  })
   .superRefine((cfg, ctx) => {
+    if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `academyMinAge (${cfg.playerGenerationRules.academyMinAge}) must be <= academyMaxAge (${cfg.playerGenerationRules.academyMaxAge})`,
+        path: ["playerGenerationRules"],
+      });
+    }
+    if (cfg.playerGenerationRules.academyRosterLimit < cfg.playerGenerationRules.initialAcademySize) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `academyRosterLimit (${cfg.playerGenerationRules.academyRosterLimit}) must be >= initialAcademySize (${cfg.playerGenerationRules.initialAcademySize})`,
+        path: ["playerGenerationRules"],
+      });
+    }
     const matchDays = cfg.league.turns * (cfg.league.teams - 1);
     const lastMatchDay = cfg.league.startDay + (matchDays - 1) * cfg.league.matchIntervalDays;
     if (lastMatchDay >= cfg.seasonDays) {
@@ -137,12 +166,12 @@ const gameConfigSchema = z
       curveK: 0.5,
     },
 
-    // Match comeback-damping strength gap (see match.ts). When the attacking
-    // side leads by 2+ goals and the defending club's strength bucket exceeds
-    // the attacker's by at least this many buckets, comeback probability is
-    // suppressed (replaces the old club.level >= 8 difference).
+    // Match-engine balance values. When the attacking side leads by 2+ goals
+    // and the defending club's strength bucket exceeds the attacker's by at
+    // least comebackRepGap buckets, comeback probability is suppressed.
     match: {
       comebackRepGap: 2,
+      homeAdvantageStrength: 0.6,
     },
 
     aiSelling: {
@@ -343,6 +372,24 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     33: 0.75, 34: 0.7, 35: 0.65, 36: 0.6, 37: 0.55, 38: 0.5, 39: 0.45, 40: 0.4,
   },
   releaseClauseRemainingValuePct: 0.5,
+  // Division-driven player quality (plans/4. player-generation.md §68). These
+  // are the only three designer-facing quality-balance knobs; the top/bottom
+  // division means and all age baselines are derived mathematically from them.
+  playerGeneration: {
+    playerQualitySpreadFraction: 0.06,
+    divisionSpanSigmas: 3.0,
+    academyPedigreeSigmas: 0.3,
+  },
+  playerGenerationRules: {
+    initialSeniorSquadSize: 28,
+    initialAcademySize: 8,
+    academyRosterLimit: 12,
+    seasonalAcademyIntake: 2,
+    academyMinAge: 16,
+    academyMaxAge: 19,
+    academyPromotionAge: 21,
+    academyContractSeasons: 4,
+  },
 };
 
 /** Validates a raw config object against the game config schema (throws on failure). */

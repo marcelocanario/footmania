@@ -3,7 +3,7 @@ import type { World } from "../game/types";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave } from "./saveService";
 import { seasonRefFor, seasonKey, joinLockRound } from "../game/clock";
 import { MP_CONFIG } from "../config";
-import { initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, syncMemberships, syncClubSeasons } from "../game/multiplayer";
+import { initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, syncMemberships, syncClubSeasons, recordDivision, recordInitialDivision } from "../game/multiplayer";
 import { rolloverSeason } from "../game/season";
 import { advanceLiveMatches, playFixtureInstant } from "../game/world";
 import { releaseAllReservations, settleDueTransferAuctions } from "../game/market";
@@ -259,6 +259,7 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   // 3. Move humans to their new tiers, activate provisional clubs at lowest tier.
   const activeIds = [...assignments.keys()];
   const provisional = world.clubs.filter((c) => c.competitionState === "PROVISIONAL" && c.ownerUserId !== null);
+  const provisionalIds = new Set(provisional.map((club) => club.id));
   const lowestTier = activeIds.length > 0 ? Math.max(...assignments.values()) : 1;
   const byTier = new Map<number, { clubId: number; timezone: string | null }[]>();
   for (const [clubId, tier] of assignments) {
@@ -306,7 +307,22 @@ export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
   world.mp.lastProcessedGameDay = 0;
   // A fresh season starts with the real clock (or admin re-arms manual mode).
   world.mp.manualRound = null;
-  // Fresh season standings already created by rebuildTierDivisions.
+
+  // 6. The club has now actually entered its new division: record the
+  //    highest-ever division reached (player-generation §21). Promotion is not
+  //    enough — the club must be in the higher division before receiving
+  //    permanent historical credit. Runs before the new academy intake below.
+  for (const [clubId, tier] of assignments) {
+    recordDivision(world, clubId, tier);
+  }
+  for (const club of world.clubs.filter((c) => c.competitionState === "ACTIVE")) {
+    const division = divisionsInSeason(world, newSeason.seasonId).find((d) => d.standings[club.id] !== undefined);
+    if (division) {
+      if (provisionalIds.has(club.id)) recordInitialDivision(world, club.id, tierOf(division));
+      else recordDivision(world, club.id, tierOf(division));
+    }
+  }
+
   // Season rollover housekeeping on players (aging, contracts) — reuses the
   // existing single-player rollover minus structure rebuild.
   rolloverSeason(world.rng, world);

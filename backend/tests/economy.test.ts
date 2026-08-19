@@ -100,7 +100,6 @@ describe("player value", () => {
   it("value does not change when a player moves between clubs", () => {
     const clubA = makeClub();
     const clubB = makeClub();
-    clubB.level = 5;
     const rng = createRng(9);
     const p = generatePlayer(rng, clubA, { id: 1 });
     const before = p.value;

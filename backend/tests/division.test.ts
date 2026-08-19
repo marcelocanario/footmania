@@ -67,16 +67,20 @@ describe("divisionForClub", () => {
 });
 
 describe("recordDivision / highestDivision", () => {
-  it("records the all-time highest division reached", () => {
+  it("records the all-time highest (best = lowest number) division reached", () => {
     const world = generateWorld(7);
     const club = makeHumanClub(world, 3, "Climber FC");
     expect(club.highestDivision).toBe(1);
+    // Relegation to a weaker (higher-numbered) division never downgrades the
+    // historical best.
     recordDivision(world, club.id, 2);
-    expect(club.highestDivision).toBe(2);
+    expect(club.highestDivision).toBe(1);
+    // Playing in a higher (lower-numbered) division upgrades it.
     recordDivision(world, club.id, 1);
-    expect(club.highestDivision).toBe(2);
+    expect(club.highestDivision).toBe(1);
+    // Returning to a weaker division again does not erase the milestone.
     recordDivision(world, club.id, 5);
-    expect(club.highestDivision).toBe(5);
+    expect(club.highestDivision).toBe(1);
   });
 
   it("filler AI clubs start with their tier as highestDivision", () => {

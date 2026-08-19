@@ -15,7 +15,7 @@ import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanL
 import { roundLabelFor, findCompetition } from "../game/world";
 import { recordActivity } from "../game/multiplayer";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
-import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
+import { lineupForMatch, peekLineup, applySavedLineup, divisionTicketTier } from "../game/club";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer, startStadiumUpgrade } from "../game/season";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
@@ -526,7 +526,8 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const club = userClub(loaded.world, req.user!.id);
     if (!club) return reply.code(400).send({ error: "You have no club" });
-    const reference = TICKET_PRICES[Math.min(5, Math.round(club.level / 5))].map((x) => Math.max(1, Math.round(x / 200)));
+    const division = divisionForClub(loaded.world, club.id);
+    const reference = TICKET_PRICES[Math.min(5, divisionTicketTier(division))].map((x) => Math.max(1, Math.round(x / 200)));
     return {
       ticketPrices: loaded.world.ticketPrices[club.id] ?? reference,
       ticketBounds: reference.map((x) => ({ min: Math.max(1, Math.round(x * 0.5)), max: Math.round(x * 2.5) })),
@@ -547,7 +548,8 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "ticket_prices", async (world, clubId) => {
       const club = world.clubs.find((c) => c.id === clubId)!;
-      const reference = TICKET_PRICES[Math.min(5, Math.round(club.level / 5))].map((x) => Math.max(1, Math.round(x / 200)));
+      const division = divisionForClub(world, clubId);
+      const reference = TICKET_PRICES[Math.min(5, divisionTicketTier(division))].map((x) => Math.max(1, Math.round(x / 200)));
       const valid = parsed.data.prices.every((price, i) => price >= Math.max(1, Math.round(reference[i] * 0.5)) && price <= Math.round(reference[i] * 2.5));
       if (!valid) return { error: { code: 400, body: { error: "Ticket prices are outside the allowed range" } } };
       world.ticketPrices[club.id] = parsed.data.prices as [number, number, number, number];

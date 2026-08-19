@@ -97,6 +97,21 @@ describe("game config validation", () => {
     renewalMaxRaise: 0.15,
     renewalAgeCurve: { 20: 1.3, 28: 1 },
     releaseClauseRemainingValuePct: 0.5,
+    playerGeneration: {
+      playerQualitySpreadFraction: 0.06,
+      divisionSpanSigmas: 3.0,
+      academyPedigreeSigmas: 0.3,
+    },
+    playerGenerationRules: {
+      initialSeniorSquadSize: 28,
+      initialAcademySize: 8,
+      academyRosterLimit: 12,
+      seasonalAcademyIntake: 2,
+      academyMinAge: 16,
+      academyMaxAge: 19,
+      academyPromotionAge: 21,
+      academyContractSeasons: 4,
+    },
   };
 
   it("accepts the derived league math from the shipped config", () => {

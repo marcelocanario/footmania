@@ -77,7 +77,7 @@ export async function savesRoutes(app: FastifyInstance) {
               name: club.name,
               shortName: club.shortName,
               country: club.country,
-              level: club.level,
+              highestDivision: club.highestDivision,
               cash: club.cash,
               competitionState: club.competitionState,
               timezone: club.timezone,

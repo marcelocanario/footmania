@@ -174,12 +174,12 @@ describe("AI replacement preserves standings identity", () => {
     const { world, seasonId } = seasonWorld(31);
     const division = world.competitions.find((c) => c.kind === "division")!;
     const club = createHumanClub(world, { userId: 3131, clubName: "Own Assets FC", country: "BRA", timezone: "UTC" });
-    const ownLevel = club.level;
     const ownCapacity = club.stadiumCapacity;
+    const ownCash = club.cash;
     const result = placeNewClub(world, club.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(result.kind).toBe("active");
-    expect(world.clubs.find((candidate) => candidate.id === club.id)?.level).toBe(ownLevel);
     expect(world.clubs.find((candidate) => candidate.id === club.id)?.stadiumCapacity).toBe(ownCapacity);
+    expect(world.clubs.find((candidate) => candidate.id === club.id)?.cash).toBe(ownCash);
     expect(division.standings[club.id]).toBeDefined();
   });
 });

@@ -542,7 +542,7 @@ function possessionDuel(rng: RngState, lm: LiveRuntime, ctx: RatingContext): num
   const div = possessionDiv(lm.year);
   let dBall = 1 + (mfBall - mfOff) / div;
   let dOff = 1 + (mfOff - mfBall) / div;
-  if (!lm.homeNeutral && ballSide === 0) dBall += 0.3;
+  if (!lm.homeNeutral && ballSide === 0) dBall += MARKET_CONFIG.match.homeAdvantageStrength;
   if (dBall < 0.2) dBall = 0.2;
   if (dOff < 0.2) dOff = 0.2;
   const pick = weightedPick(rng, [55 * dBall, 45 * dOff]);
@@ -559,7 +559,7 @@ function shotDuel(rng: RngState, lm: LiveRuntime, ctx: RatingContext): number {
   let dAtt = 1 + (attStr - defStr) / div;
   let dDef = 1 + (defStr - attStr) / div;
   if (defStr === 0) dDef = 0.1;
-  if (!lm.homeNeutral && attSide === 0) dAtt += 0.3;
+  if (!lm.homeNeutral && attSide === 0) dAtt += MARKET_CONFIG.match.homeAdvantageStrength;
   if (attStr === 0) dAtt = 0.1;
   if (dAtt < 0.2) dAtt = 0.2;
   if (dDef < 0.2) dDef = 0.2;

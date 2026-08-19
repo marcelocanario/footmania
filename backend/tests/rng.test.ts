@@ -33,6 +33,33 @@ describe("rng distribution helpers", () => {
     expect(mean).toBeGreaterThan(0.2);
   });
 
+  it("truncatedNormal is a TRUE truncated normal: symmetric for ±3, no clamping pile-up", () => {
+    const n = 200000;
+    const rng = createRng(2024);
+    const values: number[] = [];
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const x = truncatedNormal(rng, 0, 1, -3, 3);
+      values.push(x);
+      sum += x;
+    }
+    // Truncation at ±3 barely reduces the stdDev below 1 (0.9890).
+    const mean = sum / n;
+    const variance = values.reduce((s, x) => s + (x - mean) ** 2, 0) / n;
+    expect(mean).toBeCloseTo(0, 0.01);
+    expect(Math.sqrt(variance)).toBeCloseTo(0.989, 0.01);
+    // No value sits exactly at the bounds (inverse-CDF sampling never clamps).
+    expect(values.some((x) => x === 3)).toBe(false);
+    expect(values.some((x) => x === -3)).toBe(false);
+    // Center substantially denser than tails + symmetry.
+    const center = values.filter((x) => Math.abs(x) < 1).length / n;
+    const tailHigh = values.filter((x) => x > 2).length / n;
+    const tailLow = values.filter((x) => x < -2).length / n;
+    expect(center).toBeGreaterThan(0.65);
+    expect(center).toBeLessThan(0.72);
+    expect(Math.abs(tailHigh - tailLow) / n).toBeLessThan(0.005);
+  });
+
   it("beta stays within [0,1], is deterministic, and concentrates around its mean", () => {
     const rng1 = createRng(99);
     const rng2 = createRng(99);

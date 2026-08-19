@@ -169,5 +169,45 @@
   // Fraction of the remaining contract value (salary x seasons left) the club
   // must pay to release the player early.
   // (e.g. 0.5 = releasing a player costs 50% of his remaining contract value.)
-  "releaseClauseRemainingValuePct": 0.5
+  "releaseClauseRemainingValuePct": 0.5,
+
+  // --- Player generation (plans/4. player-generation.md) ---
+  //
+  // Division-driven player quality model. New senior squads draw from
+  //   OVR = mu(division) + sigma * Z,  Z ~ TruncatedNormal(0,1,-3,3)
+  // and youth from the same model with an academy-pedigree mean shift. Only
+  // these three knobs tune the balance; everything else (top/bottom division
+  // means, age baselines, potential) is mathematically derived.
+  "playerGeneration": {
+    // Individual quality spread as a fraction of the global OVR range.
+    // sigma = playerQualitySpreadFraction * (OVR_MAX - OVR_MIN).
+    // (e.g. 0.06 = sigma ~5.94 OVR on a 1-100 scale.)
+    "playerQualitySpreadFraction": 0.06,
+    // Distance in sigmas from the lowest division mean to the top-division mean.
+    // (e.g. 3.0 = ~18 OVR spread across the full pyramid on a 1-100 scale.)
+    "divisionSpanSigmas": 3.0,
+    // Academy pedigree strength in sigmas: the strongest possible pedigree
+    // shifts the youth mean by this many sigmas.
+    // (e.g. 0.30 = ~1.8 OVR for a current-and-historical Division 1 academy.)
+    "academyPedigreeSigmas": 0.30
+  },
+
+  // --- Structural academy/squad rules (plans/4. player-generation.md §42) ---
+  "playerGenerationRules": {
+    // Fixed senior squad size for a newly created club.
+    "initialSeniorSquadSize": 28,
+    // Youth players generated for a newly created club.
+    "initialAcademySize": 8,
+    // Maximum youth roster size; unused seasonal intake slots are lost.
+    "academyRosterLimit": 12,
+    // New youth recruits per season at the season-intake point.
+    "seasonalAcademyIntake": 2,
+    // Youth age range for generation.
+    "academyMinAge": 16,
+    "academyMaxAge": 19,
+    // Age at which youth are automatically promoted to the senior squad.
+    "academyPromotionAge": 21,
+    // Contract length (seasons) for newly generated youth.
+    "academyContractSeasons": 4
+  }
 }

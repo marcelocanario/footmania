@@ -18,7 +18,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     abandonmentEligibleAt: null,
     liveMatchAt: null,
     country: "BRA",
-    level: 20,
     highestDivision: 1,
     cash: 10_000_000,
     stadiumName: "St",

@@ -13,7 +13,6 @@ export function makeClub(overrides: Partial<Club> = {}): Club {
     abandonmentEligibleAt: null,
     liveMatchAt: null,
     country: "BRA",
-    level: 20,
     highestDivision: 1,
     cash: 100_000_000,
     stadiumName: "St",
@@ -87,6 +86,7 @@ export function makeWorld(clubs: Club[], players: Player[], overrides: Partial<W
     mpActivities: [],
     mpAudits: [],
     seasonHistory: [],
+    generationEvents: [],
     ...overrides,
   };
 }

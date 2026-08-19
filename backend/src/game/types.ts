@@ -60,6 +60,15 @@ export interface Player {
   loanId: number | null;
   developmentProfile: PlayerDevelopmentProfile;
   recentMinutes: number[];
+  // Immutable player-origin metadata (player-generation §50). Null for players
+  // migrated from saves created before this generator landed.
+  generatedClubId?: number | null;
+  generatedDivision?: number | null;
+  generatedSeasonId?: number | null;
+  generationType?: string | null;
+  generatedClubHighestDivision?: number | null;
+  /** Raw unshifted birth-quality Z (player-generation §37 tier basis). */
+  rawZ?: number | null;
 }
 
 export interface LedgerEntry {
@@ -110,11 +119,9 @@ export interface Club {
   country: string;
   // Highest division this club has ever reached (1 = strongest). Historical
   // milestone, independent of the current division (which is derived from
-  // membership state via divisionForClub).
+  // membership state via divisionForClub). Updated only once the club actually
+  // enters a higher division (player-generation §20-§21).
   highestDivision: number;
-  // DEPRECATED: still read by the (soon-to-be-overhauled) player-generation
-  // code. Every other subsystem derives strength from divisionForClub.
-  level: number;
   cash: number;
   stadiumName: string;
   stadiumCapacity: number;
@@ -654,6 +661,9 @@ export interface World {
   mpAudits: MpAuditEntry[];
   // Multiplayer: final standings snapshots for completed seasons (plan §70).
   seasonHistory: SeasonHistoryEntry[];
+  // Idempotency ledger for player generation events (player-generation §45/§46).
+  // Keys: "academy-intake:{clubId}:{seasonId}", "club-creation:{clubId}".
+  generationEvents: string[];
   pendingDayEvents?: string[];
   pendingDayMatchIds?: number[];
 }

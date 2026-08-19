@@ -60,6 +60,8 @@ model Save {
   seasonHistoryJson String?
   pendingEventsJson  String?
   pendingMatchIdsJson String?
+  // Player-generation idempotency ledger (academy intake, club creation).
+  generationEventsJson String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -114,10 +116,9 @@ model Club {
   name             String
   shortName        String
   country          String
+  // Highest division this club has ever reached (1 = strongest). Historical
+  // milestone, updated only once the club actually enters a higher division.
   highestDivision  Int      @default(1)
-  // DEPRECATED: still read by the (soon-to-be-overhauled) player-generation
-  // code; every other subsystem derives strength from divisionForClub.
-  level            Int
   cash             Int
   stadiumName      String
   stadiumCapacity  Int
@@ -191,6 +192,14 @@ model Player {
   developmentRate Float?
   developmentVolatility Float?
   recentMinutesJson String?
+  // Immutable player-origin metadata (player-generation §50). Null for players
+  // migrated from saves created before this generator landed.
+  generatedClubId Int?
+  generatedDivision Int?
+  generatedSeasonId Int?
+  generationType String?
+  generatedClubHighestDivision Int?
+  rawZ Float?
 
   @@id([saveId, id])
   @@index([saveId, clubId])

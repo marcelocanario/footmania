@@ -163,6 +163,7 @@ export function deserializeWorld(json: string): World {
    world.mpActivities ??= [];
    world.mpAudits ??= [];
    world.seasonHistory ??= [];
+   world.generationEvents ??= [];
 
   for (const club of world.clubs) {
     club.ledger ??= { income: [], expense: [] };
@@ -336,6 +337,7 @@ export async function persistWorld(
           seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
+          generationEventsJson: world.generationEvents ? JSON.stringify(world.generationEvents) : null,
           revision: { increment: 1 },
         },
       });
@@ -356,6 +358,7 @@ export async function persistWorld(
           seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
+          generationEventsJson: world.generationEvents ? JSON.stringify(world.generationEvents) : null,
           revision: { increment: 1 },
         },
       });
@@ -645,7 +648,6 @@ function clubRow(c: Club, saveId: number) {
      shortName: c.shortName,
      country: c.country,
      highestDivision: c.highestDivision,
-     level: c.level,
      cash: c.cash,
      stadiumName: c.stadiumName,
      stadiumCapacity: c.stadiumCapacity,
@@ -715,6 +717,12 @@ function playerRow(p: Player, saveId: number) {
     developmentRate: p.developmentProfile?.developmentRate ?? null,
     developmentVolatility: p.developmentProfile?.developmentVolatility ?? null,
     recentMinutesJson: JSON.stringify(p.recentMinutes ?? []),
+    generatedClubId: p.generatedClubId ?? null,
+    generatedDivision: p.generatedDivision ?? null,
+    generatedSeasonId: p.generatedSeasonId ?? null,
+    generationType: p.generationType ?? null,
+    generatedClubHighestDivision: p.generatedClubHighestDivision ?? null,
+    rawZ: p.rawZ ?? null,
   };
 }
 
@@ -767,7 +775,7 @@ function statRow(m: Match, saveId: number) {
 
 async function rebuildWorld(
   prisma: PrismaClient,
-  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null }
+  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null; generationEventsJson?: string | null }
 ): Promise<World> {
    const [
      clubRows,
@@ -855,7 +863,6 @@ async function rebuildWorld(
       liveMatchAt: r2.liveMatchAt !== null && r2.liveMatchAt !== undefined ? Number(r2.liveMatchAt) : null,
       country: r.country,
       highestDivision: r2.highestDivision ?? 1,
-      level: r.level,
       cash: r.cash,
       stadiumName: r.stadiumName,
       stadiumCapacity: r.stadiumCapacity,
@@ -928,9 +935,15 @@ async function rebuildWorld(
        suspendedGames: r.suspendedGames,
        morale: r.morale,
        loanId: r.loanId,
-       developmentProfile: profile,
-       recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
-     } as Player;
+        developmentProfile: profile,
+        recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
+        generatedClubId: (r as unknown as { generatedClubId?: number | null }).generatedClubId ?? null,
+        generatedDivision: (r as unknown as { generatedDivision?: number | null }).generatedDivision ?? null,
+        generatedSeasonId: (r as unknown as { generatedSeasonId?: number | null }).generatedSeasonId ?? null,
+        generationType: (r as unknown as { generationType?: string | null }).generationType ?? null,
+        generatedClubHighestDivision: (r as unknown as { generatedClubHighestDivision?: number | null }).generatedClubHighestDivision ?? null,
+        rawZ: (r as unknown as { rawZ?: number | null }).rawZ ?? null,
+      } as Player;
    });
 
   for (const player of players) {
@@ -1192,6 +1205,7 @@ async function rebuildWorld(
      mpActivities: [],
      mpAudits: [],
      seasonHistory: [],
+     generationEvents: [],
    };
    world.rng.state = Number(saveRow.rngState);
    world.nextId =
@@ -1230,5 +1244,6 @@ async function rebuildWorld(
   world.mpActivities = (mpActivityRows ?? []).map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: a.occurredAt.getTime(), metadata: a.metadata }));
   world.pendingDayEvents = jsonOr<string[] | undefined>(saveRow.pendingEventsJson, undefined);
   world.pendingDayMatchIds = jsonOr<number[] | undefined>(saveRow.pendingMatchIdsJson, undefined);
+  world.generationEvents = jsonOr<string[]>(saveRow.generationEventsJson, []);
   return world;
 }

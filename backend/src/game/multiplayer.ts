@@ -1,15 +1,14 @@
 import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRow, World } from "./types";
 import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStandings, updateStandings } from "./league";
-import { generatePlayer } from "./player";
 import { simulateMatch } from "./match";
 import { kickoffForRound, seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
 import { gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
-import { resetPayrollPeriod } from "./payroll";
 import { overallFromSkills } from "./rating";
 import { tierBudget, proratedBudget, performanceModifier } from "./budget";
 import { releaseAllReservations } from "./market";
+import { generateNewClubRoster, totalDivisionsForGeneration } from "./clubGenerator";
 import type { PrismaClient } from "@prisma/client";
 
 export const CLUBS_PER_DIVISION = gameConfig.league.teams;
@@ -140,9 +139,29 @@ export function divisionForClub(world: World, clubId: number): number {
   return history[0]?.tier ?? 1;
 }
 
+/**
+ * Record a club's division for the season it is about to play. The highest-ever
+ * division reached only updates once the club actually enters a higher division
+ * (lower number), never merely when promotion is secured (player-generation
+ * §21). Division 1 = strongest; larger numbers are weaker.
+ */
 export function recordDivision(world: World, clubId: number, division: number): void {
   const club = clubById(world, clubId);
-  if (club) club.highestDivision = Math.max(club.highestDivision, division);
+  if (club) club.highestDivision = Math.min(club.highestDivision, division);
+}
+
+/**
+ * Set the first real competitive division for a newly created club. New clubs
+ * receive a roster before placement, so their provisional generation context
+ * must not be treated as a historical Division-1 achievement.
+ */
+export function recordInitialDivision(world: World, clubId: number, division: number): void {
+  const club = clubById(world, clubId);
+  if (!club) return;
+  const creationKey = `club-creation:${clubId}`;
+  const hasPriorSeason = world.mpClubSeasons.some((entry) => entry.clubId === clubId);
+  if (world.generationEvents.includes(creationKey) && !hasPriorSeason) club.highestDivision = division;
+  else recordDivision(world, clubId, division);
 }
 
 export function auditMultiplayerEvent(
@@ -175,15 +194,12 @@ export function firstReplaceableAIDivision(world: World, seasonId: number, tier:
 }
 
 /** Create a filler AI club with a generated squad. */
-export function createFillerAI(world: World, tier: number): Club {
+export function createFillerAI(world: World, tier: number, seasonId?: number): Club {
   const rng = world.rng;
   const id = world.nextId++;
   const city = pickCity(rng);
   const name = `${city} FC`;
   const country = "BRA";
-  // Division 1 filler should be a competitive benchmark (level ~20); lower
-  // tiers drop off so the pyramid has sporting meaning.
-  const level = Math.max(5, Math.round(21 - (tier - 1) * 4));
   const club: Club = {
     id,
     name,
@@ -196,10 +212,9 @@ export function createFillerAI(world: World, tier: number): Club {
     liveMatchAt: null,
     country,
     highestDivision: tier,
-    level,
     cash: STARTING_CASH(tier),
     stadiumName: `${city} Stadium`,
-    stadiumCapacity: Math.max(10000, Math.min(60000, level * 1100 + nextInt(rng, 15000))),
+    stadiumCapacity: Math.max(10000, Math.min(60000, tier * 1100 + nextInt(rng, 15000))),
     primaryColor: "#334455",
     secondaryColor: "#112233",
     coachName: generateName(rng, country),
@@ -212,7 +227,14 @@ export function createFillerAI(world: World, tier: number): Club {
     trophies: {},
   };
   world.clubs.push(club);
-  populatePlayers(rng, world, club);
+  generateNewClubRoster({
+    world,
+    club,
+    currentDivision: tier,
+    highestDivisionReached: tier,
+    totalDivisions: totalDivisionsForGeneration(world, seasonId),
+    seasonId: (seasonId ?? world.mp.seasonId) || null,
+  });
   return club;
 }
 
@@ -238,29 +260,6 @@ function randomTactics(rng: ReturnType<typeof createRng>) {
 
 function STARTING_CASH(tier: number): number {
   return Math.max(1_000_000, 3_500_000 * Math.pow(0.72, Math.max(0, tier - 1)));
-}
-
-function populatePlayers(rng: ReturnType<typeof createRng>, world: World, club: Club) {
-  const seniorCount = 25 + nextInt(rng, 6);
-  const juniorCount = 8 + nextInt(rng, 5);
-  for (let i = 0; i < seniorCount; i++) {
-    const p = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
-    world.players.push(p);
-  }
-  for (let i = 0; i < juniorCount; i++) {
-    const p = generatePlayer(rng, club, { isYouth: true, id: world.nextId++, seed: world.seed });
-    world.players.push(p);
-  }
-  const squad = () => world.players.filter((p) => p.clubId === club.id);
-  for (const pos of [0, 2, 1] as const) {
-    if (squad().filter((p) => p.position === pos).length === 0) {
-      const p = generatePlayer(rng, club, { position: pos, id: world.nextId++, seed: world.seed });
-      world.players.push(p);
-    }
-  }
-  const gks = squad().filter((p) => p.position === 0).sort((a, b) => b.overall - a.overall);
-  if (gks.length > 0) club.captainId = gks[0].id;
-  club.penaltyTakerId = squad().filter((p) => p.position === 4).sort((a, b) => b.overall - a.overall)[0]?.id ?? gks[0]?.id ?? null;
 }
 
 export interface SeasonContext {
@@ -421,7 +420,7 @@ export function ensureDivisionFull(world: World, comp: Competition): number {
   const existing = Object.keys(comp.standings).map(Number);
   const needed = CLUBS_PER_DIVISION - existing.length;
   for (let i = 0; i < needed; i++) {
-    const ai = createFillerAI(world, tierOf(comp));
+    const ai = createFillerAI(world, tierOf(comp), comp.seasonId);
     comp.standings[ai.id] = emptyStandingsRow(ai.id);
   }
   return needed;
@@ -435,6 +434,7 @@ export function replaceClubInDivision(world: World, comp: Competition, oldClubId
   row.clubId = newClubId;
   comp.standings[newClubId] = row;
   comp.config.clubs = Object.keys(comp.standings).map(Number);
+  recordInitialDivision(world, newClubId, tierOf(comp));
   // Historical fixtures keep their original club IDs; only future fixtures get
   // the new identity.
   for (const f of world.fixtures) {

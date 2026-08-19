@@ -2,7 +2,6 @@ import type { Club, Player, World } from "./types";
 import { chance, nextInt, pick } from "./rng";
 import {
   aging,
-  generatePlayer,
   potentialGrowth,
   shouldRetire,
 } from "./player";
@@ -18,6 +17,9 @@ import {
   calculateReleaseClause,
   remainingSeasons,
 } from "./economy";
+import { divisionForClub, lowestActiveTier } from "./multiplayer";
+import { generateSeasonalAcademyIntake, academyIntakeDone, markAcademyIntakeDone } from "./clubGenerator";
+import { generateSeniorPlayer } from "./playerGeneration";
 
 /** Latest day-of-season a deadline can resolve: the season rolls over on the
  * day after the final league round (LEAGUE_LAST_MATCH_DAY + 1), so any deadline
@@ -37,7 +39,6 @@ export function loanFitsContract(startDay: number, endDay: number, contractDays:
 }
 
 export const SENIOR_SQUAD_LIMIT = 35;
-const ACADEMY_TARGET = 8;
 
 export function fairSalaryForPlayer(player: Player): number {
   return calculateBaseSalary(player.overall, player.age);
@@ -474,18 +475,42 @@ export function rolloverSeason(rng: World["rng"], world: World): void {
         world.news.push({ dayIndex: world.dayIndex, text: `${j.name} reached 21 but could not be promoted because the professional squad is full`, kind: "academy", clubId: club.id });
       }
     }
-    juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
-    squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
-    const need = Math.max(0, ACADEMY_TARGET - juniors.length);
-    for (let i = 0; i < need; i++) {
-      const youth = generatePlayer(rng, club, { isYouth: true, id: world.nextId++, seed: world.seed });
-      resetPayrollPeriod(youth, world.dayIndex);
-      world.players.push(youth);
-      world.news.push({ dayIndex: world.dayIndex, text: `${youth.name} joined the youth academy`, kind: "academy", clubId: club.id });
+    // Fixed seasonal academy intake (player-generation §42-§45): after aging
+    // and promotion, generate the fixed intake subject only to academy roster
+    // slots. Unused intake slots are lost — never banked, and releasing youth
+    // cannot increase the quota. Idempotent per club/season.
+    const seasonId = world.mp.seasonId;
+    if (seasonId !== 0 && !academyIntakeDone(world, club.id, seasonId)) {
+      generateSeasonalAcademyIntake({
+        world,
+        club,
+        currentDivision: divisionForClub(world, club.id),
+        highestDivisionReached: club.highestDivision,
+        totalDivisions: Math.max(1, lowestActiveTier(world, seasonId)),
+        seasonId,
+      });
+      markAcademyIntakeDone(world, club.id, seasonId);
     }
+    squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
     if (squad.length < 20) {
+      const division = divisionForClub(world, club.id);
+      const totalDivisions = Math.max(1, lowestActiveTier(world, seasonId));
       for (let i = squad.length; i < 20; i++) {
-        const p = generatePlayer(rng, club, { id: world.nextId++, seed: world.seed });
+        const slot = i;
+        const p = generateSeniorPlayer({
+          id: world.nextId++,
+          clubId: club.id,
+          country: club.country,
+          position: 3,
+          isYouth: false,
+          currentDivision: division,
+          highestDivisionReached: club.highestDivision,
+          totalDivisions,
+          seasonId,
+          generationType: "replacement",
+          seed: world.seed,
+          slot,
+        });
         resetPayrollPeriod(p, world.dayIndex);
         world.players.push(p);
       }

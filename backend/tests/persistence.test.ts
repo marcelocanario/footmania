@@ -163,6 +163,34 @@ describe("global multiplayer world persistence", () => {
     expect(after!.save.revision).toBeGreaterThan(rev0);
   });
 
+  it("round-trips player-origin metadata and the generation-events ledger (spec §45/§50)", async () => {
+    const { saveId } = await freshGlobalWorld(4242);
+    const { seasonId, world } = await withSeason(saveId);
+    // Tag a generated player with origin metadata.
+    const player = world.players.find((p) => !p.isYouth)!;
+    player.generatedClubId = world.clubs[0].id;
+    player.generatedDivision = 2;
+    player.generatedSeasonId = seasonId;
+    player.generationType = "initial-senior";
+    player.generatedClubHighestDivision = 1;
+    player.rawZ = 1.234;
+    // Record an intake ledger event.
+    world.generationEvents.push("academy-intake:1:7");
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const rw = reloaded!.world;
+    const rp = rw.players.find((p) => p.id === player.id)!;
+    expect(rp.generatedClubId).toBe(world.clubs[0].id);
+    expect(rp.generatedDivision).toBe(2);
+    expect(rp.generatedSeasonId).toBe(seasonId);
+    expect(rp.generationType).toBe("initial-senior");
+    expect(rp.generatedClubHighestDivision).toBe(1);
+    expect(rp.rawZ).toBeCloseTo(1.234, 5);
+    expect(rw.generationEvents).toContain("academy-intake:1:7");
+  });
+
   it("round-trips market listings, bids, reservations, history, and AI evaluations", async () => {
     const { saveId } = await freshGlobalWorld(901);
     const { seasonId, world } = await withSeason(saveId);
