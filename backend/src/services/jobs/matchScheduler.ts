@@ -1,7 +1,6 @@
 import type { JobContext, JobResult } from "./runner";
 import { processDueFixtures, advanceLiveMatches, syncCompletedRounds } from "../../game/world";
 import { simulateThroughRound } from "../../game/multiplayer";
-import { seasonRefFor } from "../../game/clock";
 
 /**
  * Match scheduler (worker plan §1).
@@ -30,12 +29,6 @@ export async function matchScheduler(ctx: JobContext): Promise<JobResult> {
     const finished = advanceLiveMatches(world, now);
     return { changed: finished.length > 0 || before !== liveProgressSignature(world) };
   }
-
-  const realRef = seasonRefFor(new Date(now));
-  const worldOrder = world.mp.seasonYear * 12 + (world.mp.seasonMonth - 1);
-  const realOrder = realRef.year * 12 + (realRef.month - 1);
-  // A forced/admin future season owns its clock until real time catches up.
-  if (worldOrder > realOrder) return { changed: false };
 
   const completedBefore = world.mp.completedRounds;
   const statusBefore = world.mp.seasonStatus;

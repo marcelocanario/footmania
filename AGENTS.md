@@ -21,6 +21,11 @@ single-player/career mode.
 A change is **not** complete until every applicable item below passes. Never
 declare a change complete based only on "it looks right".
 
+Tests and builds are slow. Run them **once at the end of all changes**, after
+the full implementation is done — never after each individual step or edit.
+Iterate on code without running the suite in between; only the final state of
+the change needs to be verified.
+
 ### 1. Backend build
 
 ```bash

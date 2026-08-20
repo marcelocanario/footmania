@@ -1,4 +1,4 @@
-import { MARKET_CONFIG, gameConfig } from "../config";
+import { MARKET_CONFIG, gameConfig, scaleReferenceSeasonFlow } from "../config";
 import type { Club, FreeAgentListing, Player, World } from "./types";
 import {
   calculateCurrentPrice,
@@ -55,7 +55,7 @@ export function marketSalaryForPlayer(world: World, player: Player, version = 0)
     (p) => p.clubId !== null && !p.isYouth && p.value > 0 && p.salary > 0 && p.id !== player.id
   );
   if (comparables.length === 0) {
-    return Math.max(gameConfig.salaryFloor, roundToSensibleIncrement(player.value * 0.08));
+    return Math.max(scaleReferenceSeasonFlow(gameConfig.salaryFloor), roundToSensibleIncrement(player.value * 0.08));
   }
 
   let h = cfg.salaryKernelBandwidthLogValue;
@@ -104,7 +104,7 @@ export function marketSalaryForPlayer(world: World, player: Player, version = 0)
   const pct = (q: number) => sortedSalaries[Math.min(sortedSalaries.length - 1, Math.floor(q * sortedSalaries.length))] ?? 0;
   const floor = pct(cfg.salaryPercentileFloor);
   const ceil = pct(cfg.salaryPercentileCeiling);
-  return Math.max(gameConfig.salaryFloor, roundToSensibleIncrement(Math.max(floor, Math.min(ceil, marketSalary))));
+  return Math.max(scaleReferenceSeasonFlow(gameConfig.salaryFloor), roundToSensibleIncrement(Math.max(floor, Math.min(ceil, marketSalary))));
 }
 
 /**

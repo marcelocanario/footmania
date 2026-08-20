@@ -1,4 +1,4 @@
-import { MARKET_CONFIG } from "../config";
+import { MARKET_CONFIG, gameConfig } from "../config";
 import type {
   Club,
   MarketBid,
@@ -204,8 +204,10 @@ export function extendDeadline(opts: {
     return listing.deadline;
   }
   let deadline = Math.max(now, listing.deadline) + extensionMs;
-  // A club-to-club auction may not cross season rollover (§17).
-  if (seasonRolloverAt !== undefined) deadline = Math.min(deadline, seasonRolloverAt);
+  // Auctions and soft-close extensions use absolute real time and may cross a
+  // season boundary. The legacy argument is retained for callers compiled
+  // against the old signature but no longer truncates the deadline.
+  void seasonRolloverAt;
   return deadline;
 }
 
@@ -423,7 +425,7 @@ export function createTransferAuction(
   const resolved = resolveOpeningPrice(world, player, opts.openingPrice);
   if (!resolved.ok) return resolved;
   const openingPrice = resolved.openingPrice;
-  const deadline = now + MARKET_CONFIG.transferAuction.durationHours * 60 * 60 * 1000;
+  const deadline = now + gameConfig.auctionDurationDays * 24 * 60 * 60 * 1000;
   // §17: club-to-club auction may not cross season rollover.
   if (opts.seasonRolloverAt !== undefined && deadline > opts.seasonRolloverAt) {
     return { ok: false, error: "The auction would cross the season rollover boundary" };
@@ -450,6 +452,7 @@ export function createTransferAuction(
     cancelledAt: null,
     softClosed: false,
     softCloseExtensions: 0,
+    deadlineVersion: 0,
   };
   world.transferAuctions.push(listing);
   player.onSale = true;
@@ -791,6 +794,7 @@ export function applyMaxBid(
     listing.deadline = newDeadline;
     listing.softClosed = true;
     listing.softCloseExtensions += 1;
+    listing.deadlineVersion = (listing.deadlineVersion ?? 0) + 1;
   }
 
   // §23: leading clubs reserve their full private maximum. Every club that is

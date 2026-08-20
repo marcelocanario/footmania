@@ -58,11 +58,49 @@ export function createLeagueFixtures(
         homeClubId: home,
         awayClubId: away,
         dayIndex: day,
+        scheduledSeasonDayIndex: day,
         played: false,
       });
     }
   });
   return fixtures;
+}
+
+/** Validate the structural guarantees of a complete even-team double round robin. */
+export function validateDoubleRoundRobinFixtures(fixtures: Fixture[], clubIds: number[], turns = 2): void {
+  if (clubIds.length < 4 || clubIds.length % 2 !== 0) throw new Error("A division must contain an even number of at least four clubs");
+  const rounds = turns * (clubIds.length - 1);
+  const byRound = new Map<number, Fixture[]>();
+  for (const fixture of fixtures) {
+    const round = byRound.get(fixture.round) ?? [];
+    round.push(fixture);
+    byRound.set(fixture.round, round);
+  }
+  if (byRound.size !== rounds) throw new Error(`Expected ${rounds} rounds, got ${byRound.size}`);
+  if (fixtures.length !== rounds * clubIds.length / 2) throw new Error("Fixture count does not form a complete round robin");
+
+  const counts = new Map<number, { total: number; home: number; away: number }>();
+  for (const id of clubIds) counts.set(id, { total: 0, home: 0, away: 0 });
+  const pairs = new Map<string, { home: number; away: number }[]>();
+  for (const fixture of fixtures) {
+    const home = counts.get(fixture.homeClubId);
+    const away = counts.get(fixture.awayClubId);
+    if (!home || !away || fixture.homeClubId === fixture.awayClubId) throw new Error("Fixture contains an invalid club");
+    home.total += 1;
+    home.home += 1;
+    away.total += 1;
+    away.away += 1;
+    const key = [fixture.homeClubId, fixture.awayClubId].sort((a, b) => a - b).join(":");
+    const pair = pairs.get(key) ?? [];
+    pair.push({ home: fixture.homeClubId, away: fixture.awayClubId });
+    pairs.set(key, pair);
+  }
+  for (const value of counts.values()) {
+    if (value.total !== rounds || value.home !== rounds / 2 || value.away !== rounds / 2) throw new Error("Club home/away balance is invalid");
+  }
+  if (pairs.size !== clubIds.length * (clubIds.length - 1) / 2 || [...pairs.values()].some((pair) => pair.length !== turns || new Set(pair.map((leg) => `${leg.home}:${leg.away}`)).size !== 2)) {
+    throw new Error("Every pair must meet once at home and once away");
+  }
 }
 
 export function emptyStandingsRow(clubId: number): StandingsRow {

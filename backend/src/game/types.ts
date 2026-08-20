@@ -224,6 +224,8 @@ export interface Fixture {
   // Multiplayer: real kickoff timestamp (epoch ms). The match auto-plays at
   // this time whether humans are present or not.
   kickoffAt?: number;
+  /** Immutable zero-based game-calendar day on which this round is played. */
+  scheduledSeasonDayIndex?: number;
   // Identity at the time this fixture was scheduled/played.  Competition
   // slots can change from filler AI to a human during a season, while the
   // historical participant/result must remain renderable after the filler is
@@ -281,6 +283,16 @@ export interface MatchStats {
   away: TeamMatchStats;
 }
 
+/** Optional instant-simulation diagnostics; never required for persisted matches. */
+export interface MatchSimulationDiagnostics {
+  actionCounts: Record<string, number>;
+  phaseResidenceSeconds: Record<string, number>;
+  restartCounts: Record<string, number>;
+  possessionStarts: number;
+  deadBallSeconds: number;
+  controlledBallSeconds: [number, number];
+}
+
 export interface LiveCardState {
   playerId: number;
   /** YELLOW | RED | YELLOW_RED */
@@ -329,9 +341,12 @@ export interface Match {
   events: MatchEvent[];
   stats: MatchStats;
   extraTime?: boolean;
+  scheduledAt?: number;
   minuteEvents: MatchEvent[][];
   // not persisted — used for activity tracking
   minutes?: Record<number, number>;
+  /** not persisted — available for calibration/instrumentation consumers */
+  simulationDiagnostics?: MatchSimulationDiagnostics;
 }
 
 export interface SubSlots {
@@ -493,6 +508,8 @@ export interface TransferAuction {
   softClosed: boolean;
   /** Number of soft-close extensions applied so far (bounds §17/§18). */
   softCloseExtensions: number;
+  /** Incremented whenever the persisted real-time deadline is replaced. */
+  deadlineVersion?: number;
 }
 
 /** Free-agent listing (transfer-market-overhaul §70). Phase 7 lifecycle. */
@@ -630,8 +647,34 @@ export interface SeasonSummary {
 
 export type ClubCompetitionState = "NEW" | "PROVISIONAL" | "ACTIVE" | "DORMANT";
 
+export type RolloverWorkflowStep =
+  | "SEASON_RESULTS_FINALIZE"
+  | "INTERSEASON_START"
+  | "PROMOTION_RELEGATION"
+  | "DIVISION_RESTRUCTURE"
+  | "WAITING_POOL_ASSIGNMENT"
+  | "NEXT_SEASON_BUDGET_ALLOCATION"
+  | "CONTRACT_END_PROCESSING"
+  | "SEASONAL_ACADEMY_INTAKE"
+  | "NEXT_SEASON_PREPARATION_OPEN"
+  | "NEXT_SEASON_FIXTURE_GENERATION"
+  | "NEXT_SEASON_STRUCTURE_VALIDATE"
+  | "SEASON_ROLLOVER_COMMIT";
+
+export interface RolloverContext {
+  sourceSeasonId: number;
+  targetSeasonId: number;
+  targetYear: number;
+  targetMonth: number;
+  assignments: Record<string, number>;
+  abandonedClubIds: number[];
+  provisionalClubIds: number[];
+  completedSteps: RolloverWorkflowStep[];
+}
+
 export interface MpState {
-  // Current season identity (calendar month) and its DB row id.
+  // Current season identity and its DB row id. Year/month are display metadata
+  // retained for compatibility with old saves, not competition timing.
   seasonId: number;
   seasonYear: number;
   seasonMonth: number;
@@ -656,6 +699,23 @@ export interface MpState {
   manualRound: number | null;
   // Resumable rollover phase (plan §58): null when no rollover is in progress.
   rolloverPhase: string | null;
+  absoluteGameDay?: number;
+  seasonNumber?: number;
+  seasonDayIndex?: number;
+  phase?: "ACTIVE" | "INTERSEASON";
+  lastAdvancedAt?: number | null;
+  clockVersion?: number;
+  startAbsoluteGameDay?: number;
+  /** Wall-clock instant corresponding to Season Day 1. */
+  seasonStartAt?: number | null;
+  /** Durable context shared by independently executable rollover steps. */
+  rolloverContext?: RolloverContext | null;
+  /** One-time economic conversion marker for the 30 -> 35 day migration. */
+  calendarMigrationVersion?: number;
+  /** Absolute end day for loans, keyed by loan ID. */
+  loanEndAbsoluteGameDays?: Record<string, number>;
+  /** Absolute completion day for stadium upgrades, keyed by club ID. */
+  stadiumCompletionAbsoluteGameDays?: Record<string, number>;
 }
 
 export interface MpQueueEntry {

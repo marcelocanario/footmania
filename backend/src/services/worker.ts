@@ -1,26 +1,13 @@
 import type { PrismaClient } from "@prisma/client";
-import { runJob } from "./jobs/runner";
-import { seasonScheduler } from "./jobs/seasonScheduler";
-import { matchScheduler } from "./jobs/matchScheduler";
-import { auctionProcessor } from "./jobs/auctionProcessor";
-import { dailyProcessor } from "./jobs/dailyProcessor";
-import { notificationProcessor } from "./jobs/notificationProcessor";
-import { aiMarketProcessor } from "./jobs/aiMarketProcessor";
+import { schedulerProcessor } from "./jobs/schedulerProcessor";
+import { loadGlobalWorld } from "./saveService";
 
 /**
  * Server-authoritative clock worker orchestrator (worker plan §1).
  *
- * Each responsibility is an independently schedulable job with its own
- * interval. Jobs all share the global in-process lock and the revision-checked
- * persist, so they serialize safely today and can be moved to separate worker
- * processes later without changing job bodies.
- *
- * The plan deliberately moves away from one giant all-purpose ticker:
- *  - seasonScheduler: month-boundary rollover + interrupted-rollover recovery;
- *  - matchScheduler: round sync, due kickoffs, live-match advancement;
- *  - auctionProcessor: minute-resolution timestamped auction settlement;
- *  - dailyProcessor: date-aware catch-up of development/payroll/contracts/etc;
- *  - notificationProcessor: inactivity warning notifications.
+ * The durable scheduler is the only authoritative worker path. It claims
+ * timestamped events and game-day events from the database, so a restart or
+ * second process cannot silently create a parallel civil-month schedule.
  */
 
 export interface WorkerOptions {
@@ -30,15 +17,11 @@ export interface WorkerOptions {
   dailyIntervalMs?: number;
   notificationIntervalMs?: number;
   aiMarketIntervalMs?: number;
+  schedulerIntervalMs?: number;
 }
 
 export function startWorker(prisma: PrismaClient, intervalMs: number, opts: WorkerOptions = {}) {
-  const seasonInterval = opts.seasonIntervalMs ?? intervalMs;
-  const matchInterval = opts.matchIntervalMs ?? intervalMs;
-  const auctionInterval = opts.auctionIntervalMs ?? Math.min(intervalMs, 5000);
-  const dailyInterval = opts.dailyIntervalMs ?? Math.max(intervalMs, 60_000);
-  const notificationInterval = opts.notificationIntervalMs ?? intervalMs;
-  const aiMarketInterval = opts.aiMarketIntervalMs ?? Math.max(intervalMs, 120_000);
+  const schedulerInterval = opts.schedulerIntervalMs ?? 10_000;
 
   const timers: ReturnType<typeof setInterval>[] = [];
 
@@ -58,19 +41,14 @@ export function startWorker(prisma: PrismaClient, intervalMs: number, opts: Work
     return () => clearInterval(timer);
   };
 
-  const stopSeason = schedule("season", seasonInterval, () => runJob(prisma, "season", seasonScheduler));
-  const stopMatch = schedule("match", matchInterval, () => runJob(prisma, "match", matchScheduler));
-  const stopAuctions = schedule("auctions", auctionInterval, () => runJob(prisma, "auctions", auctionProcessor));
-  const stopDaily = schedule("daily", dailyInterval, () => runJob(prisma, "daily", dailyProcessor));
-  const stopNotifications = schedule("notifications", notificationInterval, () => runJob(prisma, "notifications", notificationProcessor));
-  const stopAiMarket = schedule("aiMarket", aiMarketInterval, () => runJob(prisma, "aiMarket", aiMarketProcessor));
+  const runScheduler = async () => {
+    const loaded = await loadGlobalWorld(prisma);
+    if (!loaded) return { changed: false };
+    return schedulerProcessor({ prisma, saveId: loaded.save.id, revision: loaded.save.revision, world: loaded.world });
+  };
+  const stopScheduler = schedule("scheduler", schedulerInterval, runScheduler);
 
   return () => {
-    stopSeason();
-    stopMatch();
-    stopAuctions();
-    stopDaily();
-    stopNotifications();
-    stopAiMarket();
+    stopScheduler();
   };
 }

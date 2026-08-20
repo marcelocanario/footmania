@@ -93,6 +93,71 @@ model Save {
   marketReservations MarketReservation[]
   playerMarketTransactions PlayerMarketTransaction[]
   aiEvaluations  AiEvaluation[]
+  gameClock       GameClock?
+  scheduledEvents ScheduledEvent[]
+  schedulerAudits AdminSchedulerAudit[]
+}
+
+// Persistent authoritative clock for the global world.
+model GameClock {
+  id              String   @id
+  saveId          Int      @unique
+  save            Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  absoluteGameDay Int
+  seasonId        Int
+  seasonNumber    Int
+  seasonDayIndex  Int
+  phase           String
+  lastAdvancedAt  DateTime
+  version         Int      @default(0)
+}
+
+model ScheduledEvent {
+  id                    String   @id @default(uuid())
+  saveId                Int
+  save                  Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  type                  String
+  timeBasis             String
+  dueAbsoluteGameDay    Int?
+  dueAt                 DateTime?
+  phase                 String?
+  priority              Int
+  entityType            String?
+  entityId              String?
+  payloadJson           String   @default("{}")
+  idempotencyKey        String   @unique
+  status                String   @default("PENDING")
+  attempts              Int      @default(0)
+  maxAttempts           Int      @default(3)
+  createdAt             DateTime @default(now())
+  startedAt             DateTime?
+  completedAt           DateTime?
+  lastError             String?
+  executionSource       String   @default("AUTOMATIC")
+  executedByAdminUserId Int?
+  version               Int      @default(0)
+
+  @@index([status, timeBasis, dueAbsoluteGameDay])
+  @@index([status, timeBasis, dueAt])
+  @@index([entityType, entityId])
+  @@index([type, status])
+}
+
+model AdminSchedulerAudit {
+  id          String   @id @default(uuid())
+  saveId      Int
+  save        Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  adminUserId Int
+  action      String
+  targetType  String
+  targetId    String?
+  beforeJson  String
+  afterJson   String
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([saveId, createdAt])
+  @@index([adminUserId, createdAt])
 }
 
 model Club {
@@ -288,6 +353,7 @@ model Fixture {
   tie           Int?
   // Multiplayer: real kickoff timestamp (epoch ms). Null for legacy rows.
   kickoffAt     BigInt?
+  scheduledSeasonDayIndex Int?
   homeClubNameSnapshot String?
   awayClubNameSnapshot String?
 
@@ -310,6 +376,7 @@ model Match {
   attendance       Int
   gateRevenue      Int
   extraTime        Boolean
+  scheduledAt      BigInt?
 
   @@id([saveId, id])
   @@index([saveId])
@@ -482,6 +549,7 @@ model TransferAuction {
   cancelledAt           BigInt?
   softClosed            Boolean
   softCloseExtensions   Int
+  deadlineVersion       Int      @default(0)
 
   @@id([saveId, id])
   @@index([saveId, status])
@@ -595,8 +663,8 @@ model AiEvaluation {
 // Multiplayer league system
 // ---------------------------------------------------------------------------
 
-// One synchronized season = one calendar month. All divisions share the same
-// global season. See plans/1. multiplayer.md.
+// One synchronized season = one derived game-calendar cycle. Legacy year/month
+// fields remain as display metadata for old saves only.
 model MpSeason {
   id                 Int      @id @default(autoincrement())
   year               Int
@@ -612,6 +680,10 @@ model MpSeason {
   // OPEN | LOCKED — the authoritative join gate (set transactionally).
   joinState          String   @default("OPEN")
   createdAt          DateTime @default(now())
+  seasonNumber       Int      @default(0)
+  startAbsoluteGameDay Int    @default(0)
+  endAbsoluteGameDay Int      @default(0)
+  calendarVersion    Int      @default(1)
 
   divisions          Competition[]
   clubSeasons        MpClubSeason[]

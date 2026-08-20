@@ -5,6 +5,7 @@ import { applyFreeAgentBid } from "./freeAgents";
 import { aiAffordableCommitment, getFinancialCushion } from "./finance";
 import { positionCount } from "./club";
 import { createRng, nextDouble } from "./rng";
+import { divisionForClub, lowestActiveTier } from "./multiplayer";
 
 /**
  * AI Selling (transfer-market-overhaul Phase 5, §35-§40).
@@ -728,4 +729,35 @@ export function runAiFreeAgentBidding(
     }
   }
   return allBids;
+}
+
+/** Execute one durable, game-clock-owned AI market tick. */
+export function runAiMarketTick(world: World, now = Date.now()): boolean {
+  const divisionByClub = new Map<number, number>();
+  for (const club of world.clubs) {
+    if (club.isHuman || club.ownerUserId !== null || club.competitionState !== "ACTIVE") continue;
+    divisionByClub.set(club.id, divisionForClub(world, club.id));
+  }
+  const totalDivisions = Math.max(1, lowestActiveTier(world, world.mp.seasonId));
+  const remainingDays = Math.max(1, gameConfig.seasonDays - (world.mp.seasonDayIndex ?? world.dayIndex));
+  const seasonRolloverAt = now + remainingDays * 24 * 60 * 60 * 1000;
+  const created = runAiSelling(world, {
+    divisionByClub,
+    totalDivisions,
+    now,
+    seasonRolloverAt,
+    maxClubs: MARKET_CONFIG.aiSelling.clubsPerTick,
+  });
+  const bids = runAiBuying(world, {
+    divisionByClub,
+    totalDivisions,
+    now,
+    seasonRolloverAt,
+    maxClubs: MARKET_CONFIG.aiBuying.clubsPerTick,
+  });
+  const freeAgentBids = runAiFreeAgentBidding(world, {
+    now,
+    maxClubs: MARKET_CONFIG.aiBuying.clubsPerTick,
+  });
+  return created.length > 0 || bids.length > 0 || freeAgentBids.length > 0;
 }

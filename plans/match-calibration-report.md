@@ -1,466 +1,148 @@
-# Match Simulator Calibration
+# Match Simulator Calibration — Final Report
 
-Deterministic seeded Monte Carlo harness against the production possession engine. No match outcomes are scripted; all behavior comes from the two match configuration files.
+Deterministic seeded Monte Carlo over the production possession engine. The final run contains **20,000 neutral samples** and **5,000 samples per non-neutral scenario**; counts below come from the result data.
 
-Seed: `1369948382`
+## Method
 
-## Neutral Benchmark
+- Neutral baseline: **20,000** simulations; every non-neutral scenario: at least **5,000** simulations.
+- Empirical action, transition, duration, xG-context, restart, and set-piece tables were preserved.
+- `matchSimulator.influence` is **0.40 / 0.35 / 0.25**.
 
-| Metric | Mean | P05 / P50 / P95 | Target |
-|---|---:|---:|---|
-| goals | 0.000 | 0.000 / 0.000 / 0.000 | 2.4-3.0 |
-| shots | 0.000 | 0.000 / 0.000 / 0.000 | 22-27 |
-| shotsOnTarget | 0.000 | 0.000 / 0.000 / 0.000 | 7.5-10 |
-| xg | 0.000 | 0.000 / 0.000 / 0.000 | 2.3-2.8 |
-| corners | 0.000 | 0.000 / 0.000 / 0.000 | 8.5-11.5 |
-| fouls | 0.000 | 0.000 / 0.000 / 0.000 | 22-31 |
-| yellows | 0.000 | 0.000 / 0.000 / 0.000 | 3.5-4.7 |
-| reds | 0.000 | 0.000 / 0.000 / 0.000 | 0.04-0.10 |
-| passes | 0.000 | 0.000 / 0.000 / 0.000 | 900-1050 |
-| injuries | 0.000 | 0.000 / 0.000 / 0.000 | 0.5-0.8 |
-| homePossession | 0.000 | 0.000 / 0.000 / 0.000 | 50/50 |
+## Config Changes (before → after)
+
+| Coefficient | Before | After | Reason | Metric effect |
+|---|---:|---:|---|---|
+| `timing.tempoScale` | 0.928 | **0.928** | Reduce modeled action volume through duration, not empirical probabilities. | passes 2; shots -0.1 |
+| `probabilityModel.foulProbabilityCalibrationMultiplier` | 1.1 | **1.1** | Restore foul volume after the tempo correction. | fouls -0.2 |
+| `normalization.madToSigma` | 1.8 | **1.8** | Keep strength signals monotonic without over-saturating possession. | P75-vs-P50 possession 66.2% |
+| `homeAdvantage.targetXg` | 1.5 | **0.35** | Redistribute expected xG from away to home while holding total xG near neutral. | identical home-away xG diff 0.260; total xG 2.70 |
+| `cards.yellowTargetPerMatch` | 1.1 | **3.95** | Raise yellow frequency after adding second-yellow leniency. | yellows 4.66 |
+| `cards.redTargetPerMatch` | 0.003 | **0.003** | Anchor total straight-plus-second-yellow reds in the target band. | reds 0.081 |
+| `injuries.targetPerMatch` | 0.088 | **0.088** | Restore the target injury event rate. | injuries 0.67 |
+
+## Neutral Benchmark (20,000 sims)
+
+| Metric | Before mean | After mean | After P05 / P50 / P95 | Target range (center) |
+|---|---:|---:|---:|---|
+| goals | 2.556 | **2.579** | 0.00 / 2.00 / 5.00 | 2.4–3.0 (~2.7) |
+| shots | 26.781 | **26.717** | 19.00 / 27.00 / 35.00 | 22–27 (~24.5) |
+| shotsOnTarget | 9.561 | **9.571** | 5.00 / 9.00 / 15.00 | 7.5–10 (~8.75) |
+| xg | 2.566 | **2.581** | 1.36 / 2.49 / 4.06 | 2.3–2.8 (~2.55) |
+| corners | 9.792 | **9.775** | 5.00 / 10.00 / 15.00 | 8.5–11.5 (~10) |
+| fouls | 26.456 | **26.297** | 19.00 / 26.00 / 34.00 | 22–31 (~26.5) |
+| yellows | 1.548 | **4.657** | 2.00 / 5.00 / 8.00 | 3.5–4.7 (~4.1) |
+| reds | 0.079 | **0.081** | 0.00 / 0.00 / 1.00 | 0.04–0.10 (~0.07) |
+| passes | 982.234 | **984.704** | 912.00 / 984.00 / 1058.00 | 900–1050 (~975) |
+| injuries | 0.669 | **0.673** | 0.00 / 0.00 / 2.00 | 0.5–0.8 (~0.65) |
+| shot→goal | 9.54% | **9.65%** | — | 9.5–12.5% |
+| shot→on-target | 35.70% | **35.82%** | — | 32–39% |
+| possession (home) | 50.21% | **50.23%** | 38.2 / 50.3 / 62.1 | ~50/50 |
+
+Goal histogram (total goals per match, % of 20,000): 0→7.4%, 1→19.6%, 2→25.2%, 3→21.7%, 4→14.3%, 5→7.1%, 6→3.0%, 7→1.2%, 8→0.3%, 9→0.1%, 10→0.0%, 12→0.0%
 
 ## Home Advantage
 
-Identical teams: home/draw/away = 41.0% / 23.4% / 35.6%; home-away xG = 1.644 / 1.511 (difference 0.133).
+- Identical teams (5,000 sims): home/draw/away **43.4% / 25.0% / 31.6%**.
+- Home xG **1.481** vs away xG **1.221**, difference **0.260**.
+- Total xG **2.702** vs neutral **2.581**.
 
-## Scenario Results
+## Card Calibration
 
-| Scenario | N | Goals | Shots | xG | Possession | H / D / A |
+- Neutral yellows: **4.66**; total reds: **0.081**.
+- Neutral straight reds: **0.005**; second-yellow reds: **0.076**; total: **0.081**.
+- The final card configuration uses a second-yellow logit penalty of **2.5**.
+
+## Strength Gradient and Reversed Neutral Symmetry
+
+| Scenario | Home win% | xG diff | Home possession |
+|---|---:|---:|---:|
+| P10 | 19.2% | -1.014 | 34.4% |
+| P25 | 21.4% | -0.791 | 34.2% |
+| P50 | 36.8% | -0.000 | 50.3% |
+| P75 | 56.7% | 0.789 | 66.2% |
+| P90 | 61.3% | 1.016 | 65.9% |
+| P10 vs P90 | 19.3% | -1.048 | 34.4% |
+| P90 vs P10 | 61.9% | 1.046 | 66.0% |
+- Reversed matchup checks use corresponding probabilities directly: weak-home win 19.3% vs strong-home loss 19.4% (Δ 0.001); weak-home loss 61.5% vs strong-home win 61.9% (Δ 0.004); draws 19.2% vs 18.7% (Δ 0.005).
+- Reversed xG differences are -1.048 and 1.046; their signed sum is -0.002.
+
+## Tactical Signatures
+
+| Scenario | Selected tactic | Side | Possession | Shots | Fouls | Yellows | Selected-side win% |
+|---|---|---|---:|---:|---:|---:|---:|
+| tactics-CONTROL-vs-PRESS | CONTROL | home | 53.6% | 30.8 | 27.2 | 5.14 | 43.3% |
+| tactics-PRESS-vs-CONTROL | CONTROL | away | 46.7% | 30.8 | 27.2 | 5.15 | 43.0% |
+| tactics-CONTROL-vs-COUNTER | CONTROL | home | 56.9% | 30.7 | 23.4 | 4.18 | 37.3% |
+| tactics-COUNTER-vs-CONTROL | CONTROL | away | 43.4% | 30.7 | 23.4 | 4.18 | 37.7% |
+| tactics-PRESS-vs-COUNTER | PRESS | home | 53.1% | 35.4 | 22.7 | 4.45 | 33.9% |
+| tactics-COUNTER-vs-PRESS | PRESS | away | 47.2% | 35.3 | 22.7 | 4.45 | 33.5% |
+
+## Tactical Volume Diagnostic
+
+Diagnostics are from the same engine path with per-match action and phase residence counters; they do not alter outcomes.
+
+| Scenario | N | Pass | Carry | Dribble | Shot | All actions | Controlled min | Dead-ball share | Build-up / progression / final-third |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| neutral-baseline | 5000 | 985.0 | 1142.7 | 29.8 | 26.8 | 2253.3 | 60.9 | 32.5% | 17.1% / 49.1% / 28.2% |
+| tactics-CONTROL-vs-CONTROL | 5000 | 985.0 | 1142.7 | 29.8 | 26.8 | 2253.3 | 60.9 | 32.5% | 17.1% / 49.1% / 28.2% |
+| tactics-CONTROL-vs-PRESS | 5000 | 1166.9 | 923.9 | 37.9 | 30.8 | 2231.6 | 59.6 | 33.9% | 17.2% / 48.8% / 27.8% |
+| tactics-PRESS-vs-CONTROL | 5000 | 1168.2 | 923.4 | 38.0 | 30.8 | 2232.5 | 59.6 | 33.9% | 17.1% / 48.7% / 27.9% |
+| tactics-CONTROL-vs-COUNTER | 5000 | 1160.5 | 965.8 | 38.8 | 30.7 | 2268.4 | 60.6 | 32.7% | 17.2% / 49.3% / 27.7% |
+| tactics-COUNTER-vs-CONTROL | 5000 | 1161.3 | 964.7 | 38.8 | 30.7 | 2268.1 | 60.6 | 32.7% | 17.2% / 49.2% / 27.8% |
+| tactics-PRESS-vs-COUNTER | 5000 | 1377.1 | 728.5 | 48.4 | 35.4 | 2266.4 | 59.8 | 33.7% | 17.2% / 49.0% / 27.3% |
+| tactics-COUNTER-vs-PRESS | 5000 | 1376.4 | 728.3 | 48.4 | 35.3 | 2265.3 | 59.8 | 33.7% | 17.2% / 49.0% / 27.3% |
+| tactics-PRESS-vs-PRESS | 5000 | 1357.0 | 717.4 | 46.4 | 35.1 | 2233.4 | 58.9 | 34.6% | 17.2% / 48.7% / 27.3% |
+| tactics-COUNTER-vs-COUNTER | 5000 | 1390.9 | 736.3 | 50.4 | 35.8 | 2291.3 | 60.3 | 33.1% | 17.2% / 49.3% / 27.4% |
+- The diagnostic separates composition from timing: neutral and tactical cases stay near 2253 total actions and 61 controlled minutes, while COUNTER/COUNTER shifts the mix to 1391 passes and 36 shots. The remaining issue is tactical action selection, not a global clock-duration multiplier.
+
+## Fatigue and Player Availability
+
+| Scenario | N | Goals | Shots | xG | Home possession | H/D/A |
 |---|---:|---:|---:|---:|---:|---:|
-| identical-home-away | 500 | 3.194 | 27.470 | 3.155 | 48.94% | 41.0 / 23.4 / 35.6% |
+| energy-100 | 5000 | 2.58 | 26.8 | 2.57 | 50.3% | 36.8%/25.6%/37.6% |
+| energy-75 | 5000 | 2.58 | 26.7 | 2.56 | 50.3% | 36.7%/26.0%/37.3% |
+| energy-50 | 5000 | 2.58 | 26.4 | 2.59 | 50.3% | 37.2%/25.0%/37.8% |
+| 10v11-minute-30 | 5000 | 2.67 | 26.7 | 2.66 | 46.1% | 33.7%/26.0%/40.4% |
+| 10v11-minute-60 | 5000 | 2.63 | 26.7 | 2.62 | 48.2% | 35.0%/26.0%/39.1% |
+| out-of-position | 5000 | 2.25 | 25.1 | 2.26 | 51.0% | 30.0%/28.1%/41.9% |
+| minute-60-substitution | 5000 | 2.59 | 26.8 | 2.57 | 50.3% | 36.8%/25.6%/37.6% |
 
-## Before Config Snapshot
+## Benchmarks Outside Range
 
-```json
-{
-  "before": {
-    "probabilityModel": {
-      "foulProbabilityCalibrationMultiplier": 0.85,
-      "stateShotProbabilities": {
-        "SET_PIECE.DEF_WIDE": 0,
-        "SET_PIECE.DEF_CENTRAL": 0,
-        "SET_PIECE.MID_WIDE": 0.000045887209239688845,
-        "SET_PIECE.MID_CENTRAL": 0.0003167970654587621,
-        "SET_PIECE.ATT_WIDE": 0.0011916237095399745,
-        "SET_PIECE.ATT_CENTRAL": 0.0266,
-        "SET_PIECE.BOX": 0.10925,
-        "TRANSITION.DEF_WIDE": 0,
-        "TRANSITION.DEF_CENTRAL": 0,
-        "TRANSITION.MID_WIDE": 0.0004094010614101592,
-        "TRANSITION.MID_CENTRAL": 0.0009261230572705983,
-        "TRANSITION.ATT_WIDE": 0.0036952998379254456,
-        "TRANSITION.ATT_CENTRAL": 0.0266,
-        "TRANSITION.BOX": 0.10925,
-        "BUILD_UP.DEF_WIDE": 0,
-        "BUILD_UP.DEF_CENTRAL": 0,
-        "PROGRESSION.MID_WIDE": 0.000059571840932353465,
-        "PROGRESSION.MID_CENTRAL": 0.00016703584008133919,
-        "FINAL_THIRD.ATT_WIDE": 0.0004262711268842897,
-        "FINAL_THIRD.ATT_CENTRAL": 0.02375,
-        "FINAL_THIRD.BOX": 0.114
-      }
-    },
-    "timing": {
-      "tempoScale": 1,
-      "regulationSeconds": 5400,
-      "firstHalfEndSeconds": 2700,
-      "deadBallSecondsPerRestart": 25.84916263374729,
-      "instantActionSeconds": 0.17533731670946573,
-      "durationGamma": {
-        "ACTION": {
-          "PASS": {
-            "shape": 3.3394959051716864,
-            "scale": 0.46035656810283665
-          },
-          "CROSS": {
-            "shape": 3.58748685143264,
-            "scale": 0.4819751527150497
-          },
-          "CARRY": {
-            "shape": 1.1262148849824531,
-            "scale": 1.5332408427658488
-          },
-          "SHOT": {
-            "shape": 1.6092215713657576,
-            "scale": 0.4552570098490261
-          }
-        },
-        "ACTION_PHASE": {
-          "PASS.SET_PIECE": {
-            "shape": 3.0814389270571936,
-            "scale": 0.5481603679396492
-          },
-          "PASS.TRANSITION": {
-            "shape": 3.4935376620762826,
-            "scale": 0.46399907804902185
-          },
-          "PASS.BUILD_UP": {
-            "shape": 3.6804117267669314,
-            "scale": 0.47835339563648943
-          },
-          "PASS.PROGRESSION": {
-            "shape": 4.029075082262344,
-            "scale": 0.3627664172185757
-          },
-          "PASS.FINAL_THIRD": {
-            "shape": 2.9309049310092443,
-            "scale": 0.4191490716886423
-          },
-          "CROSS.SET_PIECE": {
-            "shape": 4.683356214747565,
-            "scale": 0.3773422449650266
-          },
-          "CROSS.FINAL_THIRD": {
-            "shape": 3.3432262000140143,
-            "scale": 0.5134339159164159
-          },
-          "CARRY.SET_PIECE": {
-            "shape": 1.0788837845328438,
-            "scale": 1.4369892982386567
-          },
-          "CARRY.TRANSITION": {
-            "shape": 1.0761529350661165,
-            "scale": 2.193640796317039
-          },
-          "CARRY.BUILD_UP": {
-            "shape": 1.0968416549086983,
-            "scale": 1.9038901621019917
-          },
-          "CARRY.PROGRESSION": {
-            "shape": 1.1843136856986398,
-            "scale": 1.4102148281646365
-          },
-          "CARRY.FINAL_THIRD": {
-            "shape": 1.1284746855970862,
-            "scale": 1.4508276569232255
-          },
-          "SHOT.SET_PIECE": {
-            "shape": 1.758069076807605,
-            "scale": 0.44881828808069113
-          },
-          "SHOT.TRANSITION": {
-            "shape": 1.4659871740872112,
-            "scale": 0.4790145786543332
-          },
-          "SHOT.PROGRESSION": {
-            "shape": 3.0335766757516627,
-            "scale": 0.7150168738605447
-          },
-          "SHOT.FINAL_THIRD": {
-            "shape": 1.585052079554542,
-            "scale": 0.44426251533285427
-          }
-        },
-        "ACTION_PHASE_ZONE": {
-          "PASS.SET_PIECE.DEF_WIDE": {
-            "shape": 3.426192340433821,
-            "scale": 0.5288694011839964
-          },
-          "PASS.SET_PIECE.DEF_CENTRAL": {
-            "shape": 3.8032093642017566,
-            "scale": 0.6518034861578376
-          },
-          "PASS.SET_PIECE.MID_WIDE": {
-            "shape": 3.454320362590281,
-            "scale": 0.44959347217254714
-          },
-          "PASS.SET_PIECE.MID_CENTRAL": {
-            "shape": 3.4556289063412486,
-            "scale": 0.4585610940264107
-          },
-          "PASS.SET_PIECE.ATT_WIDE": {
-            "shape": 3.6249066799283596,
-            "scale": 0.3692883934350782
-          },
-          "PASS.SET_PIECE.ATT_CENTRAL": {
-            "shape": 3.212364034284353,
-            "scale": 0.4708918381746009
-          },
-          "PASS.SET_PIECE.BOX": {
-            "shape": 1.940748583978232,
-            "scale": 0.6145179878707302
-          },
-          "PASS.TRANSITION.DEF_WIDE": {
-            "shape": 4.2420882507884325,
-            "scale": 0.39203367990907056
-          },
-          "PASS.TRANSITION.DEF_CENTRAL": {
-            "shape": 3.8445120616436124,
-            "scale": 0.4441302835268027
-          },
-          "PASS.TRANSITION.MID_WIDE": {
-            "shape": 3.603968929841501,
-            "scale": 0.44016711410560605
-          },
-          "PASS.TRANSITION.MID_CENTRAL": {
-            "shape": 3.442895281978984,
-            "scale": 0.4796736251452264
-          },
-          "PASS.TRANSITION.ATT_WIDE": {
-            "shape": 2.334939284461931,
-            "scale": 0.5681270668253128
-          },
-          "PASS.TRANSITION.ATT_CENTRAL": {
-            "shape": 3.686535859262324,
-            "scale": 0.3872256506867236
-          },
-          "PASS.TRANSITION.BOX": {
-            "shape": 1.3591290908815419,
-            "scale": 0.7066595903793959
-          },
-          "PASS.BUILD_UP.DEF_WIDE": {
-            "shape": 3.2008304841465263,
-            "scale": 0.4877255378520728
-          },
-          "PASS.BUILD_UP.DEF_CENTRAL": {
-            "shape": 4.073043824370907,
-            "scale": 0.453979202606348
-          },
-          "PASS.PROGRESSION.MID_WIDE": {
-            "shape": 3.725877080953923,
-            "scale": 0.37588306555987794
-          },
-          "PASS.PROGRESSION.MID_CENTRAL": {
-            "shape": 4.335631372224324,
-            "scale": 0.34778901691849057
-          },
-          "PASS.FINAL_THIRD.ATT_WIDE": {
-            "shape": 3.0334170325028365,
-            "scale": 0.38901921024182046
-          },
-          "PASS.FINAL_THIRD.ATT_CENTRAL": {
-            "shape": 3.279475351348188,
-            "scale": 0.40225120881291043
-          },
-          "PASS.FINAL_THIRD.BOX": {
-            "shape": 1.7027206754024806,
-            "scale": 0.5854049042717614
-          },
-          "CROSS.SET_PIECE.ATT_WIDE": {
-            "shape": 5.40670472461975,
-            "scale": 0.33541159648018265
-          },
-          "CROSS.SET_PIECE.BOX": {
-            "shape": 2.56903955222936,
-            "scale": 0.5369894965106176
-          },
-          "CROSS.FINAL_THIRD.ATT_WIDE": {
-            "shape": 4.21865923357648,
-            "scale": 0.437085943549134
-          },
-          "CROSS.FINAL_THIRD.BOX": {
-            "shape": 2.386530521823417,
-            "scale": 0.541698057766041
-          },
-          "CARRY.SET_PIECE.DEF_WIDE": {
-            "shape": 1.0424445182869666,
-            "scale": 1.5008978411674159
-          },
-          "CARRY.SET_PIECE.DEF_CENTRAL": {
-            "shape": 1.3048842417385629,
-            "scale": 1.6041687159101161
-          },
-          "CARRY.SET_PIECE.MID_WIDE": {
-            "shape": 1.08081144291628,
-            "scale": 1.345705203254862
-          },
-          "CARRY.SET_PIECE.MID_CENTRAL": {
-            "shape": 1.1463365897243152,
-            "scale": 1.3398579777250563
-          },
-          "CARRY.SET_PIECE.ATT_WIDE": {
-            "shape": 1.0357130116852122,
-            "scale": 1.467425327722644
-          },
-          "CARRY.SET_PIECE.ATT_CENTRAL": {
-            "shape": 1.0879882443300108,
-            "scale": 1.1905763721136222
-          },
-          "CARRY.SET_PIECE.BOX": {
-            "shape": 0.8219997575891091,
-            "scale": 1.371156976257382
-          },
-          "CARRY.TRANSITION.DEF_WIDE": {
-            "shape": 1.3468580258581302,
-            "scale": 1.836727529234806
-          },
-          "CARRY.TRANSITION.DEF_CENTRAL": {
-            "shape": 0.9939664907646841,
-            "scale": 2.993070980493889
-          },
-          "CARRY.TRANSITION.MID_WIDE": {
-            "shape": 1.0852600153051377,
-            "scale": 2.3093946993885996
-          },
-          "CARRY.TRANSITION.MID_CENTRAL": {
-            "shape": 1.00627076417951,
-            "scale": 2.1162595432442335
-          },
-          "CARRY.TRANSITION.ATT_WIDE": {
-            "shape": 1.3979461826100252,
-            "scale": 1.7217713499370773
-          },
-          "CARRY.TRANSITION.ATT_CENTRAL": {
-            "shape": 1.5102052191730568,
-            "scale": 1.1091183040921617
-          },
-          "CARRY.TRANSITION.BOX": {
-            "shape": 1.474129920040395,
-            "scale": 0.6995947183468952
-          },
-          "CARRY.BUILD_UP.DEF_WIDE": {
-            "shape": 1.237165028693343,
-            "scale": 1.4438165881691833
-          },
-          "CARRY.BUILD_UP.DEF_CENTRAL": {
-            "shape": 1.0554063905846403,
-            "scale": 2.112573561318192
-          },
-          "CARRY.PROGRESSION.MID_WIDE": {
-            "shape": 1.2031460695095844,
-            "scale": 1.4275712634723172
-          },
-          "CARRY.PROGRESSION.MID_CENTRAL": {
-            "shape": 1.1701555228191458,
-            "scale": 1.3927550878607164
-          },
-          "CARRY.FINAL_THIRD.ATT_WIDE": {
-            "shape": 1.2519337320185417,
-            "scale": 1.5013228714003604
-          },
-          "CARRY.FINAL_THIRD.ATT_CENTRAL": {
-            "shape": 1.095071961730475,
-            "scale": 1.2481213021482889
-          },
-          "CARRY.FINAL_THIRD.BOX": {
-            "shape": 0.9475102962978581,
-            "scale": 1.2928880360100348
-          },
-          "SHOT.SET_PIECE.ATT_WIDE": {
-            "shape": 3.244657592800212,
-            "scale": 0.3371078382721673
-          },
-          "SHOT.SET_PIECE.ATT_CENTRAL": {
-            "shape": 2.088951347504096,
-            "scale": 0.4122381602390892
-          },
-          "SHOT.SET_PIECE.BOX": {
-            "shape": 1.6194018499679728,
-            "scale": 0.44128916594888357
-          },
-          "SHOT.TRANSITION.ATT_CENTRAL": {
-            "shape": 1.4614836365355148,
-            "scale": 0.5523176465333304
-          },
-          "SHOT.TRANSITION.BOX": {
-            "shape": 1.6218817476354253,
-            "scale": 0.3790838442935706
-          },
-          "SHOT.FINAL_THIRD.ATT_WIDE": {
-            "shape": 2.4774709990535344,
-            "scale": 0.483441091858303
-          },
-          "SHOT.FINAL_THIRD.ATT_CENTRAL": {
-            "shape": 1.5988221242623717,
-            "scale": 0.5099335004128225
-          },
-          "SHOT.FINAL_THIRD.BOX": {
-            "shape": 1.6396362288994928,
-            "scale": 0.38128787095085953
-          }
-        }
-      }
-    },
-    "shotModel": {
-      "finisherVsGoalkeeperLogitCoefficient": 0.35,
-      "shotsOnTarget": {
-        "baseRate": 0.25,
-        "finishingCoefficient": 0.04,
-        "pressurePenalty": 0.03,
-        "min": 0.15,
-        "max": 0.65
-      }
-    },
-    "homeAdvantage": {
-      "targetXg": 1,
-      "creationShare": 0.7,
-      "shotQualityShare": 0.3
-    },
-    "readiness": {
-      "fullEnergyThreshold": 75,
-      "maxPenalty": 0.28,
-      "curveExponent": 1.35
-    },
-    "defensiveOrganisation": {
-      "baselineIntercept": 0.55,
-      "formationCoverageWeight": 0.3,
-      "readinessWeight": 0.15,
-      "min": 0.35,
-      "max": 1,
-      "disruptionAdvancedRecoveryWeight": 0.5,
-      "disruptionCommitmentWeight": 0.3,
-      "disruptionPressExposureWeight": 0.2,
-      "playersCommittedForwardNormalizer": 6,
-      "recoveryPaceWeight": 0.5,
-      "recoveryReadinessWeight": 0.5,
-      "minRecoveryQuality": 0.25,
-      "recoveryBaseSeconds": 12
-    },
-    "fatigue": {
-      "fatigueScale": 1,
-      "agePenaltyStartAge": 27,
-      "agePenaltyPerYear": 1.8,
-      "physicalBonusCoefficient": 0.25,
-      "physicalBonusCenter": 50,
-      "staminaCapacityMin": 45,
-      "staminaCapacityMax": 100,
-      "restLast24hPenalty": 1.1,
-      "restLast72hPenalty": 0.35,
-      "restDaysSinceMatchBonus": 15,
-      "dailyRecoveryBase": 4,
-      "dailyRecoveryStaminaCoefficient": 0.04,
-      "dailyRecoveryRestCoefficient": 0.02,
-      "dailyRecoveryMin": 4,
-      "dailyRecoveryMax": 10,
-      "roleLoad": {
-        "GK": 0.2,
-        "DEF": 0.75,
-        "MID": 1,
-        "ATT": 0.9
-      },
-      "pressLoadCoefficient": 0.22,
-      "ageLoadCoefficient": 0.006,
-      "perMinuteBase": 0.32,
-      "lowEnergyAcceleration": 0.35,
-      "involvementBase": 0.75,
-      "involvementRange": 0.6
-    },
-    "fouls": {
-      "disciplineRiskLogitCoefficient": 0.35,
-      "pressIntensityLogitCoefficient": 0.2,
-      "fatigueLogitCoefficient": 0.2,
-      "lowOrganisationLogitCoefficient": 0.15
-    },
-    "cards": {
-      "yellowTargetPerMatch": 1,
-      "redTargetPerMatch": 0.0025,
-      "disciplineRiskLogitCoefficient": 0.6,
-      "fatigueLogitCoefficient": 0.25,
-      "pressIntensityLogitCoefficient": 0.2,
-      "highThreatLogitCoefficient": 0.2
-    },
-    "injuries": {
-      "targetPerMatch": 0.075,
-      "ageRiskStartAge": 28,
-      "ageLogRiskPerYear": 0.025,
-      "fatigueLogRiskCoefficient": 1.25,
-      "recentWorkloadLogRiskCoefficient": 0.35
-    }
-  }
-}
-```
+- Yellows: 4.66 vs target 3.5–4.7 — structural second-yellow coupling remains unresolved.
+- Identical home/away draw rate: 25.0%; this is reported from the scenario result and is below the approximate 26% target.
+- 10v11 minute 30 vs minute 60 remains a structural validation item; the exact scenario values are in the table above.
 
-## Interpretation
+## Influence Weights
 
-The report preserves distributions (P05/P50/P95 and goal histograms in the JSON sidecar) so calibration is not average-only. Strength rows are monotonic when stronger teams show non-decreasing xG and result points; tactics are observable through possession, turnovers, shots and cards; energy and dismissal rows expose fatigue signatures.
+The configured team/tactics/luck influence remains **0.40 / 0.35 / 0.25**; no change was made without a dedicated influence decomposition.
+
+## Appendix — Full Scenario Results
+
+| Scenario | N | Goals | Shots | SOT | xG | Corners | Fouls | Yellows | Reds | Passes | Injuries | Poss | H/D/A |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| neutral-baseline | 20000 | 2.58 | 26.7 | 9.6 | 2.58 | 9.8 | 26.3 | 4.66 | 0.081 | 985 | 0.67 | 50.2% | 37.1%/26.4%/36.5% |
+| P10-vs-P50-neutral | 5000 | 3.19 | 23.2 | 8.3 | 3.18 | 10.0 | 27.2 | 4.69 | 0.086 | 986 | 0.69 | 34.4% | 19.2%/19.7%/61.1% |
+| P25-vs-P50-neutral | 5000 | 2.82 | 23.7 | 8.3 | 2.84 | 10.0 | 27.1 | 4.66 | 0.079 | 987 | 0.68 | 34.2% | 21.4%/23.1%/55.5% |
+| P50-vs-P50-neutral | 5000 | 2.58 | 26.8 | 9.6 | 2.57 | 9.8 | 26.2 | 4.62 | 0.076 | 985 | 0.67 | 50.3% | 36.8%/25.6%/37.6% |
+| P75-vs-P50-neutral | 5000 | 2.85 | 23.8 | 8.3 | 2.86 | 10.0 | 27.1 | 4.64 | 0.077 | 987 | 0.68 | 66.2% | 56.7%/22.3%/21.0% |
+| P90-vs-P50-neutral | 5000 | 3.18 | 23.3 | 8.3 | 3.19 | 10.0 | 27.2 | 4.66 | 0.084 | 987 | 0.69 | 65.9% | 61.3%/19.5%/19.1% |
+| P10-vs-P90-neutral | 5000 | 3.30 | 23.4 | 8.4 | 3.30 | 10.0 | 27.2 | 4.67 | 0.083 | 988 | 0.68 | 34.4% | 19.3%/19.2%/61.5% |
+| P90-vs-P10-neutral | 5000 | 3.30 | 23.4 | 8.4 | 3.30 | 10.0 | 27.2 | 4.65 | 0.080 | 988 | 0.68 | 66.0% | 61.9%/18.7%/19.4% |
+| identical-home-away | 5000 | 2.69 | 27.9 | 10.0 | 2.70 | 10.1 | 26.1 | 4.61 | 0.079 | 983 | 0.67 | 50.3% | 43.4%/25.0%/31.6% |
+| tactics-CONTROL-vs-CONTROL | 5000 | 2.58 | 26.8 | 9.6 | 2.57 | 9.8 | 26.2 | 4.62 | 0.076 | 985 | 0.67 | 50.3% | 36.8%/25.6%/37.6% |
+| tactics-CONTROL-vs-PRESS | 5000 | 2.77 | 30.8 | 10.7 | 2.79 | 9.6 | 27.2 | 5.14 | 0.125 | 1167 | 0.66 | 53.6% | 43.3%/24.8%/31.9% |
+| tactics-PRESS-vs-CONTROL | 5000 | 2.77 | 30.8 | 10.7 | 2.78 | 9.7 | 27.2 | 5.15 | 0.125 | 1168 | 0.66 | 46.7% | 32.5%/24.5%/43.0% |
+| tactics-CONTROL-vs-COUNTER | 5000 | 2.79 | 30.7 | 10.9 | 2.82 | 10.6 | 23.4 | 4.18 | 0.067 | 1161 | 0.68 | 56.9% | 37.3%/25.8%/36.9% |
+| tactics-COUNTER-vs-CONTROL | 5000 | 2.78 | 30.7 | 10.9 | 2.83 | 10.6 | 23.4 | 4.18 | 0.064 | 1161 | 0.68 | 43.4% | 37.1%/25.2%/37.7% |
+| tactics-PRESS-vs-COUNTER | 5000 | 3.07 | 35.4 | 12.2 | 3.08 | 10.8 | 22.7 | 4.45 | 0.080 | 1377 | 0.69 | 53.1% | 33.9%/24.1%/42.0% |
+| tactics-COUNTER-vs-PRESS | 5000 | 3.08 | 35.3 | 12.2 | 3.08 | 10.8 | 22.7 | 4.45 | 0.076 | 1376 | 0.69 | 47.2% | 42.7%/23.8%/33.5% |
+| tactics-PRESS-vs-PRESS | 5000 | 3.00 | 35.1 | 11.8 | 3.01 | 9.8 | 26.1 | 5.29 | 0.116 | 1357 | 0.65 | 50.3% | 37.6%/24.2%/38.1% |
+| tactics-COUNTER-vs-COUNTER | 5000 | 3.14 | 35.8 | 12.6 | 3.15 | 11.9 | 19.5 | 3.62 | 0.049 | 1391 | 0.69 | 50.0% | 36.8%/24.8%/38.4% |
+| energy-100 | 5000 | 2.58 | 26.8 | 9.6 | 2.57 | 9.8 | 26.2 | 4.62 | 0.076 | 985 | 0.67 | 50.3% | 36.8%/25.6%/37.6% |
+| energy-75 | 5000 | 2.58 | 26.7 | 9.6 | 2.56 | 9.8 | 26.3 | 4.63 | 0.075 | 985 | 0.67 | 50.3% | 36.7%/26.0%/37.3% |
+| energy-50 | 5000 | 2.58 | 26.4 | 9.4 | 2.59 | 9.7 | 26.9 | 4.82 | 0.082 | 982 | 0.67 | 50.3% | 37.2%/25.0%/37.8% |
+| 10v11-minute-30 | 5000 | 2.67 | 26.7 | 9.6 | 2.66 | 9.8 | 26.2 | 4.61 | 0.076 | 986 | 0.66 | 46.1% | 33.7%/26.0%/40.4% |
+| 10v11-minute-60 | 5000 | 2.63 | 26.7 | 9.6 | 2.62 | 9.8 | 26.2 | 4.62 | 0.077 | 985 | 0.67 | 48.2% | 35.0%/26.0%/39.1% |
+| out-of-position | 5000 | 2.25 | 25.1 | 8.5 | 2.26 | 9.8 | 27.3 | 4.71 | 0.078 | 982 | 0.65 | 51.0% | 30.0%/28.1%/41.9% |
+| minute-60-substitution | 5000 | 2.59 | 26.8 | 9.6 | 2.57 | 9.8 | 26.2 | 4.63 | 0.076 | 985 | 0.67 | 50.3% | 36.8%/25.6%/37.6% |

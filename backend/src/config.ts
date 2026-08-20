@@ -18,14 +18,24 @@ const ageCurveSchema = z.record(z.string(), z.number()).refine(
   { message: "age curve keys must be numeric ages" }
 );
 
+const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time must be HH:MM in UTC");
+
 const gameConfigSchema = z
   .object({
-    seasonDays: z.number().int().min(2),
     league: z.object({
-      teams: z.number().int().min(2),
+      teams: z.number().int().min(4),
       turns: z.number().int().min(1),
       startDay: z.number().int().min(0),
-      matchIntervalDays: z.number().int().min(1),
+      restDaysBetweenMatches: z.number().int().min(0),
+    }),
+    interseasonDays: z.number().int().min(1),
+    scheduler: z.object({
+      gameDayRolloverUtc: timeSchema,
+      leagueMatchStartUtc: timeSchema,
+      leaseSeconds: z.number().int().min(5).default(30),
+    }),
+    economy: z.object({
+      referenceSeasonDays: z.number().int().min(1),
     }),
     payrollIntervalDays: z.number().int().min(1),
     weeklyIntervalDays: z.number().int().min(1),
@@ -110,14 +120,29 @@ const gameConfigSchema = z
         path: ["playerGenerationRules"],
       });
     }
-    const matchDays = cfg.league.turns * (cfg.league.teams - 1);
-    const lastMatchDay = cfg.league.startDay + (matchDays - 1) * cfg.league.matchIntervalDays;
-    if (lastMatchDay >= cfg.seasonDays) {
+    if (cfg.league.teams % 2 !== 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `lastMatchDay (${lastMatchDay}) must be < seasonDays (${cfg.seasonDays})`,
+        message: `league.teams (${cfg.league.teams}) must be even`,
+        path: ["league", "teams"],
+      });
+    }
+    const roundsPerSeason = cfg.league.turns * (cfg.league.teams - 1);
+    const matchSpacingDays = cfg.league.restDaysBetweenMatches + 1;
+    const lastLeagueMatchDayIndex = cfg.league.startDay + (roundsPerSeason - 1) * matchSpacingDays;
+    const seasonDays = lastLeagueMatchDayIndex + 1 + cfg.interseasonDays;
+    if (roundsPerSeason <= 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "roundsPerSeason must be positive", path: ["league"] });
+    }
+    if (lastLeagueMatchDayIndex >= seasonDays) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `lastLeagueMatchDayIndex (${lastLeagueMatchDayIndex}) must be < seasonDays (${seasonDays})`,
         path: ["league"],
       });
+    }
+    if (seasonDays - (lastLeagueMatchDayIndex + 1) !== cfg.interseasonDays) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "interseasonDays must equal the derived season remainder", path: ["interseasonDays"] });
     }
   });
 
@@ -334,11 +359,18 @@ const gameConfigSchema = z
   expectedMeaningfulSigningsPerSeason: 2,
 } as const;
 
-export type GameConfig = z.infer<typeof gameConfigSchema>;
+export type GameConfig = z.infer<typeof gameConfigSchema> & {
+  roundsPerSeason: number;
+  matchSpacingDays: number;
+  lastLeagueMatchDayIndex: number;
+  seasonDays: number;
+};
 
 const DEFAULT_GAME_CONFIG: GameConfig = {
-  seasonDays: 30,
-  league: { teams: 8, turns: 2, startDay: 1, matchIntervalDays: 2 },
+  league: { teams: 8, turns: 2, startDay: 1, restDaysBetweenMatches: 1 },
+  interseasonDays: 7,
+  scheduler: { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+  economy: { referenceSeasonDays: 30 },
   payrollIntervalDays: 7,
   weeklyIntervalDays: 7,
   transferIntervalDays: 1,
@@ -403,15 +435,49 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   matchSimulator: {
     influence: { team: 0.4, tactics: 0.35, luck: 0.25 },
   },
+  roundsPerSeason: 14,
+  matchSpacingDays: 2,
+  lastLeagueMatchDayIndex: 27,
+  seasonDays: 35,
 };
 
 /** Validates a raw config object against the game config schema (throws on failure). */
 export function parseGameConfig(raw: unknown): GameConfig {
-  const parsed = gameConfigSchema.safeParse(raw);
+  // Accept the pre-overhaul shape as an input migration convenience. The
+  // shipped config and all runtime values use the derived calendar fields;
+  // legacy `seasonDays` is never read by the game after this normalization.
+  let normalized = raw as Record<string, unknown>;
+  if (normalized && typeof normalized === "object" && "seasonDays" in normalized) {
+    const legacy = normalized as Record<string, unknown>;
+    const legacyLeague = (legacy.league ?? {}) as Record<string, unknown>;
+    const seasonDays = Number(legacy.seasonDays);
+    const matchIntervalDays = Number(legacyLeague.matchIntervalDays);
+    const last = Number(legacyLeague.startDay ?? 0) + (Number(legacyLeague.turns ?? 0) * (Number(legacyLeague.teams ?? 0) - 1) - 1) * matchIntervalDays;
+    if (seasonDays <= last) throw new Error(`Invalid game.config.jsonc: lastMatchDay (${last}) must be < seasonDays (${seasonDays})`);
+    normalized = {
+      ...legacy,
+      league: { ...legacyLeague, restDaysBetweenMatches: matchIntervalDays - 1 },
+      interseasonDays: seasonDays - (last + 1),
+      scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+      economy: legacy.economy ?? { referenceSeasonDays: 30 },
+    };
+    delete normalized.seasonDays;
+    delete (normalized.league as Record<string, unknown>).matchIntervalDays;
+  }
+  const parsed = gameConfigSchema.safeParse(normalized);
   if (!parsed.success) {
     throw new Error(`Invalid game.config.jsonc: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
-  return parsed.data;
+  const data = parsed.data;
+  const roundsPerSeason = data.league.turns * (data.league.teams - 1);
+  const matchSpacingDays = data.league.restDaysBetweenMatches + 1;
+  const lastLeagueMatchDayIndex = data.league.startDay + (roundsPerSeason - 1) * matchSpacingDays;
+  return Object.assign(data, {
+    roundsPerSeason,
+    matchSpacingDays,
+    lastLeagueMatchDayIndex,
+    seasonDays: lastLeagueMatchDayIndex + 1 + data.interseasonDays,
+  });
 }
 
 /**
@@ -472,4 +538,19 @@ export const gameConfig = loadGameConfig();
 export const LEAGUE_MATCH_DAYS = gameConfig.league.turns * (gameConfig.league.teams - 1);
 
 /** Derived: the day of the final league round. */
-export const LEAGUE_LAST_MATCH_DAY = gameConfig.league.startDay + (LEAGUE_MATCH_DAYS - 1) * gameConfig.league.matchIntervalDays;
+export const LEAGUE_LAST_MATCH_DAY = gameConfig.lastLeagueMatchDayIndex;
+
+/** Ratio used to preserve the calibrated money-per-game-day rate. */
+export function seasonFlowScale(config: Pick<GameConfig, "seasonDays" | "economy"> = gameConfig): number {
+  return config.seasonDays / config.economy.referenceSeasonDays;
+}
+
+/** Scale an amount calibrated as a reference-season flow. */
+export function scaleReferenceSeasonFlow(amount: number, config: Pick<GameConfig, "seasonDays" | "economy"> = gameConfig): number {
+  return Math.round(amount * seasonFlowScale(config));
+}
+
+/** Parse a configured HH:MM UTC value into its hour component. */
+export function configuredUtcHour(value: string): number {
+  return Number(value.slice(0, 2));
+}

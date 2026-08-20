@@ -54,6 +54,8 @@ export function offerPlayerForLoan(
     claimableAt: now + exposureMs,
   };
   world.loans.push(loan);
+  world.mp.loanEndAbsoluteGameDays ??= {};
+  world.mp.loanEndAbsoluteGameDays[String(loan.id)] = (world.mp.absoluteGameDay ?? world.dayIndex) + (endDay - startDay);
   player.loanId = loan.id;
   return { ok: true, loan };
 }
@@ -81,7 +83,9 @@ export function claimLoan(
     const secs = claimableInSeconds(loan, now);
     return { ok: false, error: `Loan becomes claimable in ${secs}s` };
   }
-  if (loan.endDay <= world.dayIndex) return { ok: false, error: "Loan listing has expired" };
+  const currentAbsolute = world.mp.absoluteGameDay ?? world.dayIndex;
+  const absoluteEnd = world.mp.loanEndAbsoluteGameDays?.[String(loan.id)] ?? loan.endDay;
+  if (absoluteEnd <= currentAbsolute) return { ok: false, error: "Loan listing has expired" };
   const player = world.players.find((p) => p.id === loan.playerId);
   if (!player) return { ok: false, error: "Player not found" };
   if (player.loanId !== null && player.loanId !== loan.id) return { ok: false, error: "Player is already on loan" };

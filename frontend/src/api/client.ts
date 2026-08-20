@@ -106,6 +106,88 @@ export interface MpStatus {
   } | null;
 }
 
+export interface SchedulerClockView {
+  absoluteGameDay: number;
+  seasonId: number;
+  seasonNumber: number;
+  seasonDayIndex: number;
+  seasonDay: number;
+  seasonDays: number;
+  phase: "ACTIVE" | "INTERSEASON";
+  lastAdvancedAt: string;
+  nextAutomaticDayAdvance: string | null;
+  lastDayAdvance: string;
+  health: "HEALTHY" | "OVERDUE" | "FAILED_EVENTS" | "SCHEDULER_REQUIRES_ADMIN_REVIEW";
+  pendingEvents: number;
+  overdueEvents: number;
+  failedEvents: number;
+  oldestOverdueSeconds: number;
+}
+
+export interface ScheduledEventView {
+  id: string;
+  type: string;
+  timeBasis: "GAME_DAY" | "REAL_TIME";
+  dueAbsoluteGameDay: number | null;
+  dueAt: string | null;
+  phase: "BEGIN_OF_DAY" | "INTRADAY" | "END_OF_DAY" | null;
+  priority: number;
+  entityType: string | null;
+  entityId: string | null;
+  status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+  attempts: number;
+  lastError: string | null;
+  executionSource: string;
+}
+
+export interface SchedulerMatchView {
+  id: number;
+  seasonId: number;
+  round: number;
+  division: string;
+  homeClub: string;
+  awayClub: string;
+  scheduledGameDay: number;
+  scheduledAt: number | null;
+  status: string;
+  event: ScheduledEventView | null;
+}
+
+export interface SchedulerAuctionView {
+  id: number;
+  player: string;
+  seller: string;
+  displayedBid: number;
+  leadingMaxBid: number | null;
+  bidCount: number;
+  createdAt: number;
+  endsAt: number;
+  status: string;
+  event: ScheduledEventView | null;
+}
+
+export interface SchedulerAuditView {
+  id: string;
+  adminUserId: number;
+  action: string;
+  targetType: string;
+  targetId: string | null;
+  beforeJson: string;
+  afterJson: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface SchedulerPreviewEntry {
+  seasonDayIndex: number;
+  seasonDay: number;
+  label: string;
+  round: number | null;
+  phase: string;
+  payroll: boolean;
+  weeklySimulation: boolean;
+}
+
 export interface SeasonHistoryView {
   seasonId: number;
   seasonKey: string;
@@ -554,13 +636,49 @@ export const api = {
 
   // Admin (manual clock / settings)
   adminStatus: () =>
-    request<{ world: { seasonKey: string; seasonStatus: string; completedRounds: number; joinState: string; joinLockRound: number; manualRound: number | null; realCompletedRounds: number; divisionCount: number; clubCount: number; humanClubCount: number; liveMatchCount: number } | null }>("/api/admin/status"),
+    request<{ world: { seasonKey: string; seasonStatus: string; completedRounds: number; joinState: string; joinLockRound: number; manualRound: number | null; realCompletedRounds: number; roundsPerSeason: number; divisionCount: number; clubCount: number; humanClubCount: number; liveMatchCount: number } | null }>("/api/admin/status"),
   adminAdvanceRound: (round: number) =>
     request<{ ok: boolean; from: number; to: number; joinState: string; joinLockRound: number }>("/api/admin/advance-round", { method: "POST", body: JSON.stringify({ round }) }),
   adminSetRound: (round: number) =>
     request<{ ok: boolean; manualRound: number }>("/api/admin/set-round", { method: "POST", body: JSON.stringify({ round }) }),
   adminClearManual: () =>
     request<{ ok: boolean }>("/api/admin/clear-manual", { method: "POST" }),
-  adminRollover: () =>
-    request<{ ok: boolean; season: { seasonId: number; year: number; month: number } }>("/api/admin/rollover", { method: "POST" }),
+  adminRollover: (reason?: string) =>
+    request<{ ok: boolean; season: { seasonId: number; year: number; month: number } }>("/api/admin/rollover", { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerClock: () =>
+    request<{ clock: SchedulerClockView }>("/api/admin/scheduler/clock"),
+  adminSchedulerEvents: () =>
+    request<{ events: ScheduledEventView[] }>("/api/admin/scheduler/events?limit=200"),
+  adminSchedulerAdvanceDay: (reason?: string) =>
+    request<{ clock: SchedulerClockView }>("/api/admin/scheduler/day/advance", { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerAdvanceMany: (days: number, reason?: string) =>
+    request<{ clock: SchedulerClockView }>("/api/admin/scheduler/day/advance-many", { method: "POST", body: JSON.stringify({ days, reason }) }),
+  adminSchedulerForceAdvance: (reason: string) =>
+    request<{ clock: SchedulerClockView }>("/api/admin/scheduler/day/force-advance", { method: "POST", body: JSON.stringify({ confirmation: "FORCE", reason }) }),
+  adminSchedulerScan: () =>
+    request<{ executed: number }>("/api/admin/scheduler/scan", { method: "POST" }),
+  adminSchedulerExecuteEvent: (eventId: string, reason?: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/events/${eventId}/execute`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerRetryEvent: (eventId: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/events/${eventId}/retry`, { method: "POST" }),
+  adminSchedulerCancelEvent: (eventId: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/events/${eventId}/cancel`, { method: "POST" }),
+  adminSchedulerRollover: (reason: string) =>
+    request<{ season: { seasonId: number; year: number; month: number } }>("/api/admin/scheduler/rollover", { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerMatches: () =>
+    request<{ matches: SchedulerMatchView[] }>("/api/admin/scheduler/matches"),
+  adminSchedulerStartMatch: (matchId: number, reason?: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/matches/${matchId}/start`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerResolveMatch: (matchId: number, reason?: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/matches/${matchId}/resolve`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerAuctions: () =>
+    request<{ auctions: SchedulerAuctionView[] }>("/api/admin/scheduler/auctions"),
+  adminSchedulerEndAuction: (auctionId: number, reason?: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/auctions/${auctionId}/end`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerExtendAuction: (auctionId: number, minutes: number, reason?: string) =>
+    request(`/api/admin/scheduler/auctions/${auctionId}/extend`, { method: "POST", body: JSON.stringify({ minutes, reason }) }),
+  adminSchedulerAudit: () =>
+    request<{ audit: SchedulerAuditView[] }>("/api/admin/scheduler/audit?limit=100"),
+  adminSchedulerPreview: (seasonId: number) =>
+    request<{ seasonId: number; season: SchedulerPreviewEntry[] }>(`/api/admin/scheduler/season/${seasonId}`),
 };

@@ -1,4 +1,4 @@
-import type { Club, LiveCardState, LiveInjuryState, LiveMatchState, LiveSubstitutionState, LiveTactics, MatchEvent, Player, RngState, TeamMatchStats, World } from "./types";
+import type { Club, LiveCardState, LiveInjuryState, LiveMatchState, LiveSubstitutionState, LiveTactics, MatchEvent, MatchSimulationDiagnostics, Player, RngState, TeamMatchStats, World } from "./types";
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
 import { nextDouble, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
@@ -289,6 +289,10 @@ interface Engine {
   deadBallSeconds: number;
   controlledOnlySeconds: number;
   actions: number;
+  actionCounts: Record<string, number>;
+  phaseResidenceSeconds: Record<MatchPhase, number>;
+  restartCounts: Record<string, number>;
+  possessionStarts: number;
 }
 
 function sideOf(eng: Engine, side: 0 | 1): Side {
@@ -386,6 +390,14 @@ function involvedPlayers(side: Side, zone: MatchZone): { ps: LivePlayerState; we
   }
   return out;
 }
+
+/** Local support relative to the eleven-player formation reference. */
+function localDensity(side: Side, zone: MatchZone): number {
+  const expected = side.expectedSupport[zone] ?? 0;
+  if (expected <= 0) return 1;
+  return clamp((side.support[zone] ?? 0) / expected, 0, 1);
+}
+
 /** Weighted mean usable attribute over local involvement (§9 ball security). */
 function localQuality(side: Side, zone: MatchZone, key: "tech" | "pace" | "physical" | "finishing" | "gk" | "discipline"): number {
   const local = involvedPlayers(side, zone);
@@ -409,7 +421,10 @@ function actionQualityFor(side: Side, zone: MatchZone, action: string): number {
     const ws = local.map((l) => l.weight);
     sum += w * weightedMean(values, ws);
   }
-  return sum;
+  // A weighted mean alone hides a missing player when the remaining players
+  // are near-average. Local density keeps the effect zone-specific: losing a
+  // player reduces execution in the zones that player normally supports.
+  return sum * localDensity(side, zone);
 }
 
 function defensiveResistanceFor(side: Side, zone: MatchZone, action: string): number {
@@ -425,7 +440,7 @@ function defensiveResistanceFor(side: Side, zone: MatchZone, action: string): nu
     const ws = local.map((l) => l.weight);
     sum += w * weightedMean(values, ws);
   }
-  return sum;
+  return sum * localDensity(side, zone);
 }
 
 // ---------------------------------------------------------------------------
@@ -707,11 +722,10 @@ function controlFailureStep(eng: Engine): FailureAction | null {
 
 function contextUtility(eng: Engine, action: string): number {
   let cu = 0;
-  // Home advantage creation multiplier (§29): only attacking progression /
-  // chance-intent utility when home and in an advanced zone.
-  const att = eng.possessionSide;
+  // Home advantage creation redistribution (§29): shift attacking
+  // progression/chance-intent utility between home and away in advanced zones.
   const homeNeutral = eng.st.homeNeutral;
-  if (att === 0 && !homeNeutral) {
+  if (!homeNeutral) {
     const rank = LONG_RANK[eng.zone];
     if (rank >= 1 && (action === "PASS" || action === "CARRY" || action === "CROSS" || action === "DRIBBLE")) {
       cu += Math.log(creationMultiplier(eng));
@@ -721,12 +735,14 @@ function contextUtility(eng: Engine, action: string): number {
   return cu;
 }
 
-let _creationMultiplier: number | null = null;
+let _creationMultiplier: [number | null, number | null] = [null, null];
 function creationMultiplier(eng: Engine): number {
-  if (_creationMultiplier !== null) return _creationMultiplier;
+  const side = eng.possessionSide;
+  if (_creationMultiplier[side] !== null) return _creationMultiplier[side] as number;
   const baseTeamXg = MS.validation.reference["TEAM_MATCH.xG"]?.mean ?? 1.28;
-  const m = 1 + MS.homeAdvantage.creationShare * (MS.homeAdvantage.targetXg / baseTeamXg);
-  _creationMultiplier = m;
+  const signedAdvantage = side === 0 ? MS.homeAdvantage.targetXg : -MS.homeAdvantage.targetXg;
+  const m = Math.max(0.05, 1 + MS.homeAdvantage.creationShare * (signedAdvantage / baseTeamXg));
+  _creationMultiplier[side] = m;
   return m;
 }
 
@@ -740,10 +756,19 @@ function selectIntentionalAction(eng: Engine): string {
     const baseLogP = Math.log(Math.max(1e-9, p0));
     const zTeam = actionQualityFor(sideOf(eng, att), eng.zone, action) - defensiveResistanceFor(opp(eng, att), eng.zone, action);
     const zTactics = tacticalSignalForAction(eng, action);
-    const cu = contextUtility(eng, action);
+    const cu = contextUtility(eng, action) + asymmetricActionUtility(eng, action);
     return utility(eng, baseLogP, zTeam, zTactics, cu);
   });
   return choice(eng.rng, labels, utilities);
+}
+
+/** Centered action-mix correction outside the neutral CONTROL/CONTROL matchup. */
+function asymmetricActionUtility(eng: Engine, action: string): number {
+  const side = sideOf(eng, eng.possessionSide);
+  const opposingStyle = opp(eng, eng.possessionSide).tactics.style;
+  if (side.tactics.style === "CONTROL" && opposingStyle === "CONTROL") return 0;
+  const scale = MS.tacticalActionMix.nonNeutralCorrectionScale;
+  return scale * (MS.tacticalActionMix.asymmetricActionUtility[action] ?? 0);
 }
 
 /** Style/direction/familiarity tactical signal for an action intent (§14/§19). */
@@ -761,7 +786,10 @@ function tacticalSignalForAction(eng: Engine, action: string): number {
     const logits = legal.map((a) => logit(outcomeBaseline(eng, a).turnover + 1e-9));
     const standardized = robustStandardize(logits);
     const idx = legal.indexOf(action);
-    if (idx >= 0) components.push(-standardized[idx]);
+    if (idx >= 0) {
+      const styleSignal = -standardized[idx];
+      components.push(styleSignal);
+    }
   } else if (style === "COUNTER") {
     if (eng.phase === "TRANSITION") {
       const expected = Math.max(expectedActionSeconds(action), MS.timing.instantActionSeconds);
@@ -770,7 +798,10 @@ function tacticalSignalForAction(eng: Engine, action: string): number {
     }
     // else styleRaw = 0
   }
-  return combineTactics(eng, components);
+  const signal = combineTactics(eng, components);
+  // Same-style matches, including the neutral baseline, remain on the
+  // established path; action-mix corrections are applied separately above.
+  return signal;
 }
 
 function expectedActionSeconds(action: string): number {
@@ -810,7 +841,8 @@ function resolveOutcome(eng: Engine, action: string): Outcome {
   const att = eng.possessionSide;
   const def = opp(eng, att);
   const zExec = clamp(
-    (actionQualityFor(sideOf(eng, att), eng.zone, action) - defensiveResistanceFor(def, eng.zone, action)) / Math.SQRT2,
+    (actionQualityFor(sideOf(eng, att), eng.zone, action) - defensiveResistanceFor(def, eng.zone, action)) / Math.SQRT2 +
+      MS.actionQuality.localDensityCoefficient * (localDensity(sideOf(eng, att), eng.zone) - localDensity(def, eng.zone)),
     -MS.normalization.contestZClamp,
     MS.normalization.contestZClamp
   );
@@ -926,7 +958,9 @@ function beginPossession(eng: Engine, restart: string | null, keepLane = false):
   // calling beginPossession).
   const ownerStats = eng.stats[eng.possessionSide === 0 ? "home" : "away"];
   ownerStats.possessions++;
+  eng.possessionStarts++;
   const start = samplePossessionStart(eng, restart);
+  eng.restartCounts[start.startType] = (eng.restartCounts[start.startType] ?? 0) + 1;
   eng.possessionStartType = start.startType;
   eng.zone = start.startZone;
   eng.lane = zoneToLane(start.startZone);
@@ -1030,21 +1064,31 @@ function situationLabel(eng: Engine): string {
 }
 
 function shotQualityLogitShift(eng: Engine): number {
-  if (eng.possessionSide === 0 && !eng.st.homeNeutral) {
+  if (!eng.st.homeNeutral) {
     return homeShotQualityLogitShift(eng);
   }
   return 0;
 }
 
-let _homeShift: number | null = null;
+/** Defensive coverage for a shot includes the target zone and the
+ * corresponding back-line zone that supports it. */
+function shotDefenseDensity(side: Side, zone: MatchZone): number {
+  const backLineZone = zone === "ATT_WIDE" ? "DEF_WIDE" : "DEF_CENTRAL";
+  return (localDensity(side, zone) + localDensity(side, backLineZone)) / 2;
+}
+
+let _homeShift: [number | null, number | null] = [null, null];
 function homeShotQualityLogitShift(eng: Engine): number {
-  if (_homeShift !== null) return _homeShift;
+  const side = eng.possessionSide;
+  if (_homeShift[side] !== null) return _homeShift[side] as number;
   const baseTeamXg = MS.validation.reference["TEAM_MATCH.xG"]?.mean ?? 1.28;
   const baseTeamShots = MS.validation.reference["TEAM_MATCH.shots"]?.mean ?? 12.5;
   const p0 = baseTeamXg / baseTeamShots;
-  const p1 = p0 + (MS.homeAdvantage.shotQualityShare * MS.homeAdvantage.targetXg) / baseTeamShots;
-  _homeShift = logit(p1) - logit(p0);
-  return _homeShift;
+  const signedAdvantage = side === 0 ? MS.homeAdvantage.targetXg : -MS.homeAdvantage.targetXg;
+  const p1 = clamp(p0 + (MS.homeAdvantage.shotQualityShare * signedAdvantage) / baseTeamShots, 0.002, 0.98);
+  const shift = logit(p1) - logit(p0);
+  _homeShift[side] = shift;
+  return shift;
 }
 
 interface ShotResult {
@@ -1083,7 +1127,13 @@ function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
   const gk = def.on.find((ps) => ps.tacPos === 1);
   const zGk = gk ? gk.zGk : 0;
   const shotSkillSignal = clamp((zFinish - zGk) / Math.SQRT2, -MS.normalization.contestZClamp, MS.normalization.contestZClamp);
-  const finalXg = logistic(logit(baselineXg) + MS.shotModel.finisherVsGoalkeeperLogitCoefficient * shotSkillSignal + shotQualityLogitShift(eng));
+  const densitySignal = localDensity(side, eng.zone) - shotDefenseDensity(def, eng.zone);
+  const finalXg = logistic(
+    logit(baselineXg) +
+      MS.shotModel.finisherVsGoalkeeperLogitCoefficient * shotSkillSignal +
+      shotQualityLogitShift(eng) +
+      MS.shotModel.localDensityCoefficient * densitySignal,
+  );
   const finalXgC = clamp(finalXg, 0.002, 0.98);
 
   const goal = nextDouble(eng.rng) < finalXgC;
@@ -1175,7 +1225,8 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
   const shift = cardLogitShift(eng, fouler, def);
   const redU = logit(pRed) + shift;
   const redP = logistic(redU);
-  const yellowU = logit(pYellow) + shift;
+  const alreadyBooked = (eng.playerYellows[fouler.id] ?? 0) >= 1;
+  const yellowU = logit(pYellow) + shift - (alreadyBooked ? MS.cards.secondYellowLogitPenalty : 0);
   const yellowP = logistic(yellowU);
 
   const isRed = nextDouble(eng.rng) < redP;
@@ -1484,12 +1535,15 @@ function stepPossession(eng: Engine): void {
   else if (action === "CARRY") stats.carries++;
   else if (action === "DRIBBLE") stats.dribbles++;
 
-  const dt = controlledDuration(eng.rng, action, eng.phase, eng.zone);
+  const actionPhase = eng.phase;
+  const dt = controlledDuration(eng.rng, action, actionPhase, eng.zone);
   eng.clockSeconds += dt;
   eng.possessionAgeSeconds += dt;
   eng.controlledSeconds[attSide] += dt;
   eng.controlledOnlySeconds += dt;
   eng.actions++;
+  eng.actionCounts[action] = (eng.actionCounts[action] ?? 0) + 1;
+  eng.phaseResidenceSeconds[actionPhase] += dt;
   if (LONG_RANK[eng.zone] >= 2) eng.attThirdSeconds[attSide] += dt;
 
   // Fatigue uses actual match-clock progress.
@@ -1831,6 +1885,16 @@ function buildEngine(
     deadBallSeconds: 0,
     controlledOnlySeconds: 0,
     actions: 0,
+    actionCounts: {},
+    phaseResidenceSeconds: {
+      SET_PIECE: 0,
+      TRANSITION: 0,
+      BUILD_UP: 0,
+      PROGRESSION: 0,
+      FINAL_THIRD: 0,
+    },
+    restartCounts: {},
+    possessionStarts: 0,
   };
 
   // Initial possession
@@ -1878,11 +1942,12 @@ export function simulatePossessionMatch(
   players: Player[],
   st: LiveMatchState,
   centers: AttributeCenters,
-  targetSeconds?: number
+  targetSeconds?: number,
+  diagnosticsOut?: MatchSimulationDiagnostics
 ): void {
   const eng = buildEngine(rng, home, away, players, st, centers);
   runMatch(eng, targetSeconds);
-  writeBack(eng, st);
+  writeBack(eng, st, diagnosticsOut);
 }
 
 /** Advance a live match by `matchMinutes` (converted to match-clock seconds). */
@@ -1902,7 +1967,7 @@ export function advancePossessionMatch(
   writeBack(eng, st);
 }
 
-function writeBack(eng: Engine, st: LiveMatchState): void {
+function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimulationDiagnostics): void {
   st.matchClockSeconds = eng.clockSeconds;
   st.period = eng.period;
   st.phase = eng.phase;
@@ -1938,6 +2003,14 @@ function writeBack(eng: Engine, st: LiveMatchState): void {
   st.ended = eng.ended;
   st.extraTimePlayed = eng.extraTimePlayed;
   st.shootout = eng.shootout ?? st.shootout;
+  if (diagnosticsOut) {
+    diagnosticsOut.actionCounts = { ...eng.actionCounts };
+    diagnosticsOut.phaseResidenceSeconds = { ...eng.phaseResidenceSeconds };
+    diagnosticsOut.restartCounts = { ...eng.restartCounts };
+    diagnosticsOut.possessionStarts = eng.possessionStarts;
+    diagnosticsOut.deadBallSeconds = eng.deadBallSeconds;
+    diagnosticsOut.controlledBallSeconds = [...eng.controlledSeconds] as [number, number];
+  }
   st.playerYellows = eng.playerYellows;
   st.playerMinutes = eng.playerMinutes;
   st.playerEnergy ??= {};

@@ -5,6 +5,8 @@ import { makeClub } from "./helpers";
 import { generatePlayer } from "../src/game/player";
 import type { Club, Player, Position, RngState } from "../src/game/types";
 
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 let clubIdCounter = 1;
 function makeClub2(overrides: Partial<Club> = {}): Club {
   return makeClub({ id: clubIdCounter++, ...overrides });
@@ -38,7 +40,7 @@ function cloneSquad(squad: Player[]): Player[] {
   return squad.map(clonePlayer);
 }
 
-function simulateMany(seedBase: number, count: number, home: Club, away: Club, squads: [Player[], Player[]]) {
+async function simulateMany(seedBase: number, count: number, home: Club, away: Club, squads: [Player[], Player[]]) {
   const stats = {
     goals: 0,
     shots: 0,
@@ -75,6 +77,7 @@ function simulateMany(seedBase: number, count: number, home: Club, away: Club, s
     if (match.homeScore > match.awayScore) stats.homeWins++;
     else if (match.homeScore < match.awayScore) stats.awayWins++;
     else stats.draws++;
+    if (i % 10 === 9) await yieldToEventLoop();
   }
   return stats;
 }
@@ -102,13 +105,36 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     expect(a.events).toEqual(b.events);
   });
 
-  it("produces reference-adjacent volume stats (goals, shots, actions, possession)", () => {
+  it("exposes calibration diagnostics without changing match aggregates", () => {
+    const rng = createRng(44);
+    const home = makeClub2();
+    const away = makeClub2();
+    const squads: [Player[], Player[]] = [makeSquad(rng, home, 30), makeSquad(rng, away, 30, 30)];
+    const players = [...cloneSquad(squads[0]), ...cloneSquad(squads[1])];
+    const { match } = simulateMatch(createRng(4405), home, away, players, { competitionId: 1, fixtureId: 44, year: 1, homeNeutral: true, collectDiagnostics: true });
+    const diagnostics = match.simulationDiagnostics;
+    expect(diagnostics).toBeDefined();
+    const d = diagnostics!;
+    const phaseSeconds = Object.values(d.phaseResidenceSeconds).reduce((sum, value) => sum + value, 0);
+    const actionCount = Object.values(d.actionCounts).reduce((sum, value) => sum + value, 0);
+    const restartCount = Object.values(d.restartCounts).reduce((sum, value) => sum + value, 0);
+    expect(actionCount).toBeGreaterThan(0);
+    expect(restartCount).toBe(d.possessionStarts);
+    expect(phaseSeconds).toBeCloseTo(d.controlledBallSeconds[0] + d.controlledBallSeconds[1], 8);
+    expect(d.controlledBallSeconds).toEqual([
+      match.stats.home.controlledBallSeconds,
+      match.stats.away.controlledBallSeconds,
+    ]);
+    expect(d.deadBallSeconds).toBeGreaterThan(0);
+  });
+
+  it("produces reference-adjacent volume stats (goals, shots, actions, possession)", async () => {
     const seed = 7;
     const rng = createRng(seed);
     const home = makeClub2();
     const away = makeClub2();
     const squads: [Player[], Player[]] = [makeSquad(rng, home, 30), makeSquad(rng, away, 30, 30)];
-    const s = simulateMany(7, 60, home, away, squads);
+    const s = await simulateMany(7, 60, home, away, squads);
     const per = (x: number) => x / 60;
     // Neutral equal teams: goals between ~1.5 and ~4.5; shots 15-60; actions 1000-3500.
     expect(per(s.goals)).toBeGreaterThan(1.5);
@@ -124,7 +150,7 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     expect(s.draws).toBeLessThan(s.homeWins + s.awayWins);
   });
 
-  it("stronger squads outperform weaker squads in expectation (team quality signal)", () => {
+  it("stronger squads outperform weaker squads in expectation (team quality signal)", async () => {
     // Generate a weak squad and a strong squad deterministically, then verify
     // the strong side wins more aggregate points/goals over many neutral matches.
     const rng = createRng(99);
@@ -141,12 +167,12 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
       boosted.overall = Math.min(99, boosted.overall + 25);
       return boosted;
     });
-    const s = simulateMany(5, 60, weakClub, strongClub, [weakSquad, strongSquad]);
+    const s = await simulateMany(5, 60, weakClub, strongClub, [weakSquad, strongSquad]);
     // Away (strong) should win more often.
     expect(s.awayWins).toBeGreaterThan(s.homeWins);
   });
 
-  it("home advantage produces more home goals", () => {
+  it("home advantage produces more home goals", async () => {
     const seed = 21;
     const rng = createRng(seed);
     const home = makeClub2();
@@ -164,13 +190,14 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
       const mn = simulateMatch(createRng(seed * 1000 + 5000 + i), home, away, playersN, { competitionId: 1, fixtureId: i + 5000, year: 1, homeNeutral: true });
       advHomeXg += ma.match.stats.home.xG;
       neutralHomeXg += mn.match.stats.home.xG;
+      if (i % 10 === 9) await yieldToEventLoop();
     }
     // Home advantage is calibrated as an xG shift; use the continuous metric
     // rather than a noisy discrete goal-difference comparison.
     expect(advHomeXg).toBeGreaterThan(neutralHomeXg);
   });
 
-  it("CONTROL style retains possession longer than COUNTER style (tactical signature)", () => {
+  it("CONTROL style retains possession longer than COUNTER style (tactical signature)", async () => {
     const seed = 33;
     const rng = createRng(seed);
     const controlClub = makeClub2({ tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
@@ -178,7 +205,7 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     const controlSquad = makeSquad(rng, controlClub, 30);
     const counterSquad = makeSquad(rng, counterClub, 30, 30);
 
-    const run = (home: Club, away: Club, hSquad: Player[], aSquad: Player[]) => {
+    const run = async (home: Club, away: Club, hSquad: Player[], aSquad: Player[]) => {
       let controlShare = 0;
       let totalControlled = 0;
       for (let i = 0; i < 40; i++) {
@@ -188,15 +215,16 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
         const total = match.stats.home.controlledBallSeconds + match.stats.away.controlledBallSeconds;
         totalControlled += total;
         controlShare += match.stats.home.controlledBallSeconds / Math.max(1, total);
+        if (i % 10 === 9) await yieldToEventLoop();
       }
       return controlShare / 40;
     };
     // Control (home) vs counter (away): control team should hold more of the ball.
-    const controlShare = run(controlClub, counterClub, controlSquad, counterSquad);
+    const controlShare = await run(controlClub, counterClub, controlSquad, counterSquad);
     expect(controlShare).toBeGreaterThan(0.5);
   });
 
-  it("high pressing produces more opponent turnovers and cards than no pressing", () => {
+  it("high pressing produces more opponent turnovers and cards than no pressing", async () => {
     const seed = 55;
     const rng = createRng(seed);
     const calmClub = makeClub2({ tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
@@ -206,7 +234,7 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     const pressSquad = calmSquad.map((player) => ({ ...clonePlayer(player), clubId: pressClub.id }));
     const opponentSquad = makeSquad(rng, opponentClub, 30, 30);
 
-    const run = (home: Club, away: Club, hSquad: Player[], aSquad: Player[]) => {
+    const run = async (home: Club, away: Club, hSquad: Player[], aSquad: Player[]) => {
       let turnovers = 0;
       let cards = 0;
       let homeCards = 0;
@@ -218,11 +246,12 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
         const homeMatchCards = match.stats.home.yellows + match.stats.home.reds;
         homeCards += homeMatchCards;
         cards += homeMatchCards + match.stats.away.yellows + match.stats.away.reds;
+        if (i % 10 === 9) await yieldToEventLoop();
       }
       return { turnovers: turnovers / 80, cards: cards / 80, homeCards: homeCards / 80 };
     };
-    const calm = run(calmClub, opponentClub, calmSquad, opponentSquad);
-    const press = run(pressClub, opponentClub, pressSquad, opponentSquad);
+    const calm = await run(calmClub, opponentClub, calmSquad, opponentSquad);
+    const press = await run(pressClub, opponentClub, pressSquad, opponentSquad);
     // Hold the opponent, roster and venue constant: pressing should increase
     // the pressing team's foul/card exposure rather than comparing two
     // mirrored fixtures where the effect cancels out.

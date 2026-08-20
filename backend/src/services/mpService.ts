@@ -2,11 +2,9 @@ import type { PrismaClient } from "@prisma/client";
 import type { World } from "../game/types";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave } from "./saveService";
 import { seasonRefFor, seasonKey, joinLockRound } from "../game/clock";
-import { MP_CONFIG } from "../config";
-import { initSeason, rebuildTierDivisions, computeNextTierAssignments, resetDivisionStandings, divisionsInSeason, tierOf, humanCount, fillerCount, createDivision, ensureDivisionFull, generateDivisionFixtures, syncMemberships, syncClubSeasons, recordDivision, recordInitialDivision } from "../game/multiplayer";
-import { rolloverSeason } from "../game/season";
-import { advanceLiveMatches, playFixtureInstant } from "../game/world";
-import { releaseAllReservations, settleDueTransferAuctions } from "../game/market";
+import { MP_CONFIG, scaleReferenceSeasonFlow } from "../config";
+import { initSeason } from "../game/multiplayer";
+import { releaseAllReservations } from "../game/market";
 
 export async function configuredInactivityThresholds(prisma: PrismaClient): Promise<{ 1: number; 2: number; default: number }> {
   const rows = await prisma.setting.findMany({ where: { key: { in: ["INACTIVITY_TIER_1", "INACTIVITY_TIER_2", "INACTIVITY_DEFAULT"] } } });
@@ -72,7 +70,7 @@ function seasonOrder(year: number, month: number): number {
 }
 
 /** Remove ephemeral filler clubs when a season's divisions are rebuilt. */
-function removeFillerClubs(world: World): void {
+export function removeFillerClubs(world: World): void {
   const removed = new Set(world.clubs.filter((club) => club.ownerUserId === null && club.isHuman === false).map((club) => club.id));
   if (removed.size === 0) return;
 
@@ -133,225 +131,41 @@ export async function ensureSeasonRow(prisma: PrismaClient, ref: { year: number;
 }
 
 /**
- * Ensure the in-memory world is initialized for the current real month: the
- * correct MpSeason row is referenced and a Division 1 exists with fixtures.
+ * Ensure the global world has an initialized season. Civil year/month values
+ * are display metadata only; the durable game clock owns later boundaries.
  */
 export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonHandle> {
-  const now = Date.now();
-  const ref = seasonRefFor(new Date(now));
-  const season = await ensureSeasonRow(prisma, ref);
   await ensureGlobalSave(prisma);
   const loaded = await loadGlobalWorld(prisma);
   if (!loaded) throw new Error("Global world unavailable");
   const world = loaded.world;
-  const worldOrder = seasonOrder(world.mp.seasonYear, world.mp.seasonMonth);
-  const realOrder = seasonOrder(ref.year, ref.month);
-
-  // Resumable rollover (plan §58): if a previous rollover crashed mid-way, the
-  // phase marker is still set. Resume it rather than leaving a half-rebuilt
-  // pyramid in place.
-  if (world.mp.rolloverPhase !== null) {
-    await rollover(prisma);
-    return ensureSeasonRow(prisma, ref);
-  }
-
-  if (worldOrder > realOrder) {
-    // An admin rollover can intentionally move the test world into the next
-    // calendar month before the host clock reaches it. Do not roll it back or
-    // reset its standings just because a status/join request arrives.
-    return ensureSeasonRow(prisma, { year: world.mp.seasonYear, month: world.mp.seasonMonth });
-  }
-  const isCurrentCalendarSeason = world.mp.seasonYear === ref.year && world.mp.seasonMonth === ref.month;
-  if (!isCurrentCalendarSeason) {
-    // Do not silently call initSeason for an existing world from a previous
-    // month: that would leave the old clubs without promotion/relegation and
-    // discard the opportunity to place queued clubs. Catch the world up
-    // through the normal rollover pipeline instead.
-    if (world.mp.seasonId !== 0) {
-      await rollover(prisma);
-      return ensureSeasonRow(prisma, ref);
-    } else {
-      initSeason(world, ref, season.seasonId);
-      await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+  if ((world.mp.calendarMigrationVersion ?? 0) < 1) {
+    for (const player of world.players) player.salary = scaleReferenceSeasonFlow(player.salary);
+    for (const listing of world.freeAgentListings) listing.demandedSalary = scaleReferenceSeasonFlow(listing.demandedSalary);
+    for (const allocation of world.seasonAllocations) allocation.amount = scaleReferenceSeasonFlow(allocation.amount);
+    const budget = await prisma.setting.findUnique({ where: { key: "FIRST_DIVISION_SEASON_BUDGET" } });
+    if (budget) {
+      const amount = Number(budget.value);
+      if (Number.isFinite(amount)) await prisma.setting.update({ where: { key: budget.key }, data: { value: String(scaleReferenceSeasonFlow(amount)) } });
     }
-  } else if (world.mp.seasonId !== season.seasonId) {
-    // The normalized season row may have been recreated while the in-memory
-    // world still has the same calendar month. Reattach it without rebuilding
-    // the active competition.
-    world.mp.seasonId = season.seasonId;
+    world.mp.calendarMigrationVersion = 1;
     await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
   }
-  return season;
+  if (world.mp.rolloverPhase !== null) return rollover(prisma, { calendarBoundary: true });
+  if (world.mp.seasonId === 0) {
+    const ref = seasonRefFor(new Date());
+    const season = await ensureSeasonRow(prisma, ref);
+    initSeason(world, ref, season.seasonId);
+    await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+    return season;
+  }
+  return ensureSeasonRow(prisma, { year: world.mp.seasonYear, month: world.mp.seasonMonth });
 }
 
-/**
- * Season rollover: finalize the old season, compute tier movement, rebuild
- * divisions for the new month, activate provisional clubs, issue budgets.
- */
-export async function rollover(prisma: PrismaClient): Promise<SeasonHandle> {
-  const now = Date.now();
-  const ref = seasonRefFor(new Date(now));
-  const loaded = await loadGlobalWorld(prisma);
-  if (!loaded) throw new Error("Global world unavailable");
-  const world = loaded.world;
-  const realOrder = seasonOrder(ref.year, ref.month);
-  const worldOrder = seasonOrder(world.mp.seasonYear, world.mp.seasonMonth);
-  // If the persisted world is behind the host calendar (server downtime),
-  // catch it up into the current month. Otherwise this is an explicit/admin
-  // rollover and the target is the month after the current world month.
-  const nextRef = worldOrder < realOrder
-    ? ref
-    : seasonRefFor(new Date(ref.endsAt));
-  const newSeason = await ensureSeasonRow(prisma, nextRef);
-
-  // Idempotency for forced/admin rollover and retries: if the world already
-  // points at the requested next month, do not rebuild/reset that season.
-  if (seasonOrder(world.mp.seasonYear, world.mp.seasonMonth) >= seasonOrder(nextRef.year, nextRef.month)) {
-    return ensureSeasonRow(prisma, { year: world.mp.seasonYear, month: world.mp.seasonMonth });
-  }
-
-  // Finish work that may have been missed while the server was offline before
-  // calculating movement. Timestamp auctions must not be lost at rollover,
-  // and incomplete fixtures still need to contribute to final standings.
-  settleDueTransferAuctions(world, now);
-  advanceLiveMatches(world, now);
-  const oldSeasonDivisions = divisionsInSeason(world, world.mp.seasonId).filter((division) => division.status !== "ARCHIVED");
-  for (const division of oldSeasonDivisions) {
-    for (const fixture of world.fixtures.filter((candidate) => candidate.competitionId === division.id && !candidate.played)) {
-      playFixtureInstant(world, fixture);
-    }
-  }
-
-  let revision = loaded.save.revision;
-  const persist = async () => {
-    await persistWorld(prisma, loaded.save.id, loaded.save.id, world, revision);
-    revision++;
-  };
-
-  // 1. Compute next-tier assignments for all active humans (must run while
-  //    the old divisions are still non-archived).
-  const oldSeasonId = world.mp.seasonId;
-  world.mp.rolloverPhase = "ROLL_OVER_STARTED";
-  await persist();
-  const { assignments, abandonedClubIds } = computeNextTierAssignments(world, oldSeasonId);
-  world.mp.rolloverPhase = "MOVEMENTS_CALCULATED";
-  await persist();
-
-  // 2a. Abandoned clubs become DORMANT at rollover (plan §45): removed from the
-  //     pyramid but never deleted. Roster, money, facilities and history are
-  //     preserved; the club can return (plan §46).
-  for (const clubId of abandonedClubIds) {
-    const club = world.clubs.find((c) => c.id === clubId);
-    if (!club) continue;
-    club.competitionState = "DORMANT";
-    club.abandonmentEligibleAt = null;
-    club.lastMeaningfulActivityAt = null;
-    world.news.push({ dayIndex: world.dayIndex, text: `${club.name} was moved to dormant status and will re-enter at the lowest tier if you return`, kind: "mp", clubId: club.id });
-  }
-
-  // 2. Finalize old season standings / prizes (light version).
-  const oldDivisions = divisionsInSeason(world, oldSeasonId);
-  for (const d of oldDivisions) {
-    if (d.status !== "ARCHIVED") d.status = "ARCHIVED";
-  }
-  removeFillerClubs(world);
-
-  // 3. Move humans to their new tiers, activate provisional clubs at lowest tier.
-  const activeIds = [...assignments.keys()];
-  const provisional = world.clubs.filter((c) => c.competitionState === "PROVISIONAL" && c.ownerUserId !== null);
-  const provisionalIds = new Set(provisional.map((club) => club.id));
-  const lowestTier = activeIds.length > 0 ? Math.max(...assignments.values()) : 1;
-  const byTier = new Map<number, { clubId: number; timezone: string | null }[]>();
-  for (const [clubId, tier] of assignments) {
-    if (!byTier.has(tier)) byTier.set(tier, []);
-    const club = world.clubs.find((c) => c.id === clubId);
-    byTier.get(tier)!.push({ clubId, timezone: club?.timezone ?? null });
-  }
-  // Provisional clubs enter at the lowest active tier + 1 (bottom of pyramid).
-  const humansAtLowestTier = byTier.get(lowestTier)?.length ?? 0;
-  // A provisional club joins the bottom edge without being promoted above
-  // active clubs. If the current bottom tier is full of humans, create the
-  // next tier; otherwise it can occupy the remaining bottom-division slots.
-  const provisionalTier = humansAtLowestTier > 0 && humansAtLowestTier % 8 === 0 ? lowestTier + 1 : lowestTier;
-  if (provisional.length > 0) {
-    if (!byTier.has(provisionalTier)) byTier.set(provisionalTier, []);
-    for (const club of provisional) {
-      club.competitionState = "ACTIVE";
-      byTier.get(provisionalTier)!.push({ clubId: club.id, timezone: club.timezone });
-      world.mpQueue = world.mpQueue.filter((q) => q.clubId !== club.id);
-    }
-  }
-
-  // 4. Rebuild divisions per tier (fresh season context).
-  for (const [tier, humans] of byTier.entries()) {
-    rebuildTierDivisions(world, newSeason.seasonId, tier, humans, nextRef);
-  }
-  world.mp.rolloverPhase = "DIVISIONS_CREATED";
-
-  // A world with no human clubs still needs the launch state: one Division 1
-  // containing filler AI. `rebuildTierDivisions([], ...)` intentionally makes
-  // no groups, so create that bootstrap division explicitly.
-  if (byTier.size === 0) {
-    const div = createDivision(world, { tier: 1, groupIndex: 0, seasonId: newSeason.seasonId, ref: nextRef });
-    ensureDivisionFull(world, div);
-    world.fixtures.push(...generateDivisionFixtures(world, div, nextRef));
-  }
-
-  // 5. Reset world mp state to the new season.
-  world.mp.seasonId = newSeason.seasonId;
-  world.mp.seasonYear = newSeason.year;
-  world.mp.seasonMonth = newSeason.month;
-  world.mp.seasonStatus = "ACTIVE";
-  world.mp.completedRounds = 0;
-  world.mp.joinState = "OPEN";
-  world.mp.lastProcessedGameDay = 0;
-  // A fresh season starts with the real clock (or admin re-arms manual mode).
-  world.mp.manualRound = null;
-
-  // 6. The club has now actually entered its new division: record the
-  //    highest-ever division reached (player-generation §21). Promotion is not
-  //    enough — the club must be in the higher division before receiving
-  //    permanent historical credit. Runs before the new academy intake below.
-  for (const [clubId, tier] of assignments) {
-    recordDivision(world, clubId, tier);
-  }
-  for (const club of world.clubs.filter((c) => c.competitionState === "ACTIVE")) {
-    const division = divisionsInSeason(world, newSeason.seasonId).find((d) => d.standings[club.id] !== undefined);
-    if (division) {
-      if (provisionalIds.has(club.id)) recordInitialDivision(world, club.id, tierOf(division));
-      else recordDivision(world, club.id, tierOf(division));
-    }
-  }
-
-  // Season rollover housekeeping on players (aging, contracts) — reuses the
-  // existing single-player rollover minus structure rebuild.
-  rolloverSeason(world.rng, world);
-  world.fixtures = world.fixtures.filter((f) => divisionsInSeason(world, newSeason.seasonId).some((d) => d.id === f.competitionId));
-  world.matches = [];
-  world.liveMatches = [];
-
-  // Issue the new season's full allocation exactly once. Provisional clubs
-  // already received PROVISIONAL_NEXT_SEASON for this season, so do not pay
-  // them a second time as ACTIVE_FULL when they enter the pyramid.
-  for (const [tier, humans] of byTier.entries()) {
-    for (const entry of humans) {
-      const alreadyReserved = world.seasonAllocations.some(
-        (a) => a.clubId === entry.clubId && a.seasonId === newSeason.seasonId && a.type === "PROVISIONAL_NEXT_SEASON"
-      );
-      if (!alreadyReserved) await issueAllocation(prisma, world, entry.clubId, newSeason.seasonId, tier, { type: "ACTIVE_FULL" });
-    }
-  }
-
-  // Refresh the normalized per-division memberships and per-club-season records
-  // for the freshly rebuilt pyramid (plan §55).
-  syncMemberships(world, newSeason.seasonId);
-  syncClubSeasons(world, newSeason.seasonId);
-
-  // Rollover complete: clear the resumable-phase marker.
-  world.mp.rolloverPhase = null;
-
-  await persist();
-  return newSeason;
+/** Public compatibility entry point backed by the durable rollover coordinator. */
+export async function rollover(prisma: PrismaClient, options: { calendarBoundary?: boolean; leaseHeld?: boolean } = {}): Promise<SeasonHandle> {
+  const { runRolloverCoordinatorInLock } = await import("./scheduler");
+  return runRolloverCoordinatorInLock(prisma, { ...options, ignoreDueTime: true, now: new Date() });
 }
 
 /** Issue the seasonal budget to a club (idempotent per type). */

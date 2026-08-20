@@ -3,7 +3,7 @@ import { z } from "zod";
 import { loadGlobalWorld, persistWorld, StaleWorldError } from "../services/saveService";
 import { competitionTable, playerView } from "../services/snapshot";
 import { liveStateView } from "../services/liveView";
-import { withGlobalLock } from "../services/lock";
+import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { multiplayerDayLabel } from "../game/calendar";
 import { releasePlayer } from "../game/transfers";
 import { applyMaxBid, auctionOpeningRange, cancelTransferAuction, createTransferAuction, recentTradeBaseValue, transferCooldownError, transferAuctionView } from "../game/market";
@@ -22,6 +22,7 @@ import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { World } from "../game/types";
 import { TICKET_PRICES } from "../game/constants";
+import { materializeSeasonEvents } from "../services/scheduler";
 
 const auctionCreateSchema = z.object({ playerId: z.number().int(), openingPrice: z.number().int().positive().optional() });
 const maxBidSchema = z.object({ maxBid: z.number().int().positive() });
@@ -67,7 +68,7 @@ async function withWorld(
   activity: string,
   fn: (world: World, clubId: number) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>
 ) {
-  return withGlobalLock(async () => {
+  return withGlobalLock(() => withGlobalLease(app.prisma, async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
       const loaded = await loadGlobalWorld(app.prisma);
       if (!loaded) return { error: { code: 404, body: { error: "World not found" } } };
@@ -78,13 +79,14 @@ async function withWorld(
       recordActivity(loaded.world, userId, club.id, activity);
       try {
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+        await materializeSeasonEvents(app.prisma, loaded.save.id, loaded.world);
         return { value: res.value };
       } catch (error) {
         if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
       }
     }
     throw new Error("World mutation could not be committed");
-  });
+  }));
 }
 
 export async function gameRoutes(app: FastifyInstance) {
@@ -331,7 +333,6 @@ export async function gameRoutes(app: FastifyInstance) {
         sellerDivision: divisionForClub(world, club.id),
         totalDivisions: Math.max(1, lowestActiveTier(world, world.mp.seasonId)),
         openingPrice: parsed.data.openingPrice,
-        seasonRolloverAt: nextMonthStart(world),
       });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: { ok: true, listingId: result.listing.id, openingPrice: result.listing.openingPrice } };
@@ -366,7 +367,6 @@ export async function gameRoutes(app: FastifyInstance) {
         proposedMaximum: parsed.data.maxBid,
         buyerDivision: divisionForClub(world, club.id),
         immediateAvailableCash: getImmediateAvailableCash(world, club),
-        seasonRolloverAt: nextMonthStart(world),
       });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: result };
@@ -403,7 +403,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = listing ? world.players.find((candidate) => candidate.id === listing.playerId) : undefined;
       if (!listing || !player) return { error: { code: 404, body: { error: "Free-agent listing not found" } } };
-      const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, immediateAvailableCash: getImmediateAvailableCash(world, club), seasonRolloverAt: nextMonthStart(world) });
+      const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, immediateAvailableCash: getImmediateAvailableCash(world, club) });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: result };
     });
@@ -635,12 +635,6 @@ export async function gameRoutes(app: FastifyInstance) {
     });
     return replyFrom(res, reply);
   });
-}
-
-function nextMonthStart(world: World): number {
-  const year = world.mp.seasonYear;
-  const month = world.mp.seasonMonth;
-  return month === 12 ? Date.UTC(year + 1, 0, 1) : Date.UTC(year, month, 1);
 }
 
 /** Real timestamp of the next payroll cycle (UTC midnight of that game-day). */

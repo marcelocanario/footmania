@@ -10,11 +10,11 @@ import type {
 import { createLiveMatchState, simulateMatch, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, matchRepsForDivisions } from "./match";
 import { updateStandings, isLeagueFinished } from "./league";
 import { calcGate } from "./club";
-import { MP_CONFIG } from "../config";
+import { MP_CONFIG, gameConfig } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
-import { completedRounds, seasonRefFor, seasonStatusFor } from "./clock";
 import { auditMultiplayerEvent, syncClubSeasons, divisionForClub } from "./multiplayer";
 import { missingDailyDates, processDailyDate, utcDateKey } from "./daily";
+import { seasonRefFor } from "./clock";
 
 export function nextId(world: World): number {
   return world.nextId++;
@@ -266,11 +266,16 @@ export function processDueFixtures(world: World, now: number): Match[] {
 
 /** Update world.mp.completedRounds from the real clock. */
 export function syncCompletedRounds(world: World, now: number): void {
-  const ref = seasonRefFor(new Date(now));
-  // Manual advancement is forward-only. Clearing manual mode must not rewind
-  // standings or reopen joining after those rounds were already simulated.
-  world.mp.completedRounds = Math.max(world.mp.completedRounds, completedRounds(ref, now, world.mp.matchKickoffHour));
-  world.mp.seasonStatus = seasonStatusFor(ref, now, world.mp.matchKickoffHour);
+  void now;
+  const divisions = world.competitions.filter((competition) => competition.kind === "division" && competition.status !== "ARCHIVED");
+  let completed = 0;
+  for (let round = 0; round < gameConfig.roundsPerSeason; round++) {
+    const fixtures = world.fixtures.filter((fixture) => fixture.round === round && divisions.some((division) => division.id === fixture.competitionId));
+    if (fixtures.length === 0 || fixtures.some((fixture) => !fixture.played)) break;
+    completed = round + 1;
+  }
+  world.mp.completedRounds = Math.max(world.mp.completedRounds, completed);
+  world.mp.seasonStatus = world.mp.phase === "INTERSEASON" ? "INTERSEASON" : "ACTIVE";
   const lockRound = world.mp.joinLockRound;
   if (world.mp.completedRounds >= lockRound && world.mp.joinState !== "LOCKED") {
     world.mp.joinState = "LOCKED";

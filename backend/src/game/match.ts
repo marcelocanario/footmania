@@ -368,7 +368,7 @@ export function simulateMatch(
   home: Club,
   away: Club,
   allPlayers: Player[],
-  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; reps?: MatchReps }
+  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; reps?: MatchReps; collectDiagnostics?: boolean }
 ) {
   const st = createLiveMatchState(rng, home, away, allPlayers, {
     matchId: opts.fixtureId,
@@ -380,9 +380,18 @@ export function simulateMatch(
     year: opts.year,
   });
   const centers = centersFor(allPlayers);
-  simulatePossessionMatch(rng, home, away, allPlayers, st, centers);
+  const simulationDiagnostics = opts.collectDiagnostics ? {
+    actionCounts: {},
+    phaseResidenceSeconds: {},
+    restartCounts: {},
+    possessionStarts: 0,
+    deadBallSeconds: 0,
+    controlledBallSeconds: [0, 0] as [number, number],
+  } : undefined;
+  simulatePossessionMatch(rng, home, away, allPlayers, st, centers, undefined, simulationDiagnostics);
   applyLiveMatchEnergy(st, allPlayers);
   const match = buildMatchFromState(st, home, away, allPlayers, opts.reps);
+  if (simulationDiagnostics) match.simulationDiagnostics = simulationDiagnostics;
   return {
     match,
     homeGoals: st.scores[0],

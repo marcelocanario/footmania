@@ -18,6 +18,7 @@ import { processDailyDate } from "../src/game/daily";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
+import { gameConfig } from "../src/config";
 import { makeClub, makeWorld } from "./helpers";
 
 function makeClubFn(id: number, overrides: Partial<Club> = {}): Club {
@@ -68,7 +69,7 @@ describe("financial cushion (§2/§62)", () => {
     world.players.find((p) => p.id === loanedOut.id)!.loanId = 101;
 
     const salaries = remainingSalaryCommitments(world, club);
-    expect(salaries).toBe(3_000_000); // only the loaned-in wage counts
+    expect(salaries).toBe(Math.round(3_000_000 * 30 / gameConfig.seasonDays)); // only the loaned-in wage counts through the loan end
   });
 
   it("includes active academy/youth salaries in the commitment horizon", () => {

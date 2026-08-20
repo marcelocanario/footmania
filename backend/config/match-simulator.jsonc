@@ -3073,7 +3073,7 @@
             "probability": 0.09721512028602669
           }
         ],
-        "foulProbabilityCalibrationMultiplier": 0.85
+        "foulProbabilityCalibrationMultiplier": 1.1
       },
       "phaseWindows": {
         "setPieceMaxAgeSeconds": 8,
@@ -3081,7 +3081,7 @@
         "shotSetPieceMaxAgeSeconds": 15
       },
       "timing": {
-        "tempoScale": 1,
+        "tempoScale": 0.928,
         "regulationSeconds": 5400,
         "firstHalfEndSeconds": 2700,
         "deadBallSecondsPerRestart": 25.84916263374729,
@@ -4027,6 +4027,7 @@
           }
         },
         "finisherVsGoalkeeperLogitCoefficient": 0.35,
+        "localDensityCoefficient": 1,
         "shooterRoleWeights": {
           "ST": 1,
           "LW": 0.8,
@@ -4122,12 +4123,14 @@
         "shooterFinishingFloor": 0.1
       },
       "homeAdvantage": {
-        "targetXg": 2.3,
-        "creationShare": 0.7,
-        "shotQualityShare": 0.3
+        // Home-minus-away xG advantage; creation and shot quality are
+        // shifted between teams so total xG stays near the neutral baseline.
+        "targetXg": 0.35,
+        "creationShare": 0.4,
+        "shotQualityShare": 0.6
       },
       "normalization": {
-        "madToSigma": 1.4826,
+        "madToSigma": 1.8,
         "minRobustSigma": 1,
         "rawZClamp": 3,
         "contestZClamp": 2.5,
@@ -4139,6 +4142,7 @@
         "curveExponent": 1.35
       },
       "actionQuality": {
+        "localDensityCoefficient": 3,
         "attributeWeights": {
           "PASS": {
             "technical": 1
@@ -4249,6 +4253,17 @@
         "executionFloor": 0.6,
         "executionCeiling": 1
       },
+      "tacticalActionMix": {
+        "nonNeutralCorrectionScale": 0,
+        "asymmetricActionUtility": {
+          "PASS": -0.35,
+          "CROSS": -0.15,
+          "CARRY": 0.25,
+          "DRIBBLE": 0.1,
+          "SHOT": -0.35,
+          "CLEARANCE": 0
+        }
+      },
       "pressing": {
         "intensityDivisor": 100
       },
@@ -4318,15 +4333,16 @@
         "lowOrganisationLogitCoefficient": 0.15
       },
       "cards": {
-        "yellowTargetPerMatch": 1.0,
-        "redTargetPerMatch": 0.0025,
+        "yellowTargetPerMatch": 3.95,
+        "redTargetPerMatch": 0.003,
+        "secondYellowLogitPenalty": 2.5,
         "disciplineRiskLogitCoefficient": 0.6,
         "fatigueLogitCoefficient": 0.25,
         "pressIntensityLogitCoefficient": 0.2,
         "highThreatLogitCoefficient": 0.2
       },
       "injuries": {
-        "targetPerMatch": 0.075,
+        "targetPerMatch": 0.088,
         "ageRiskStartAge": 28,
         "ageLogRiskPerYear": 0.025,
         "fatigueLogRiskCoefficient": 1.25,

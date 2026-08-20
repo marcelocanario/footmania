@@ -12,6 +12,8 @@ import type { RngState } from "../src/game/rng";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../src/matchSimulatorConfig";
 import { EVENT_CODES } from "../src/game/constants";
 
+const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 let clubIdCounter = 1;
 function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
   return {
@@ -90,7 +92,7 @@ function leagueCtx(home: Club, away: Club): RatingContext {
 }
 
 describe("match engine", () => {
-  it("produces a plausible goal distribution (2.5-4.5 goals per match)", () => {
+  it("produces a plausible goal distribution (2.5-4.5 goals per match)", async () => {
     const seeds = [7, 11, 42];
     let total = 0;
     const n = seeds.length * 80;
@@ -105,6 +107,7 @@ describe("match engine", () => {
         const players = [...cloneSquad(homeSquad), ...cloneSquad(awaySquad)];
         const { match } = simulateMatch(matchRng, home, away, players, { competitionId: 1, fixtureId: i, year: 1, reps: { homeRep: 4, awayRep: 4 } });
         total += match.homeScore + match.awayScore;
+        if (i % 10 === 9) await yieldToEventLoop();
       }
     }
     const avg = total / n;
@@ -112,7 +115,7 @@ describe("match engine", () => {
     expect(avg).toBeLessThan(4.5);
   });
 
-  it("home advantage produces more home goals", () => {
+  it("home advantage produces more home goals", async () => {
     const rng = createRng(21);
     const home = makeClub(70);
     const away = makeClub(71);
@@ -129,6 +132,7 @@ describe("match engine", () => {
       const mn = simulateMatch(createRng(21 * 10_000 + 10_000 + i), home, away, playersN, { competitionId: 1, fixtureId: i + 10_000, year: 1, reps: { homeRep: 4, awayRep: 4 }, homeNeutral: true });
       advHomeXg += ma.match.stats.home.xG;
       neutralHomeXg += mn.match.stats.home.xG;
+      if (i % 10 === 9) await yieldToEventLoop();
     }
     // Home advantage is specified as an xG shift; expected goals are the
     // appropriate aggregate here because discrete goal difference is noisy.

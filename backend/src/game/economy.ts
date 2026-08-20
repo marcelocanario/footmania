@@ -1,4 +1,6 @@
-import { gameConfig } from "../config";
+import { gameConfig, scaleReferenceSeasonFlow, seasonFlowScale } from "../config";
+
+export { scaleReferenceSeasonFlow, seasonFlowScale } from "../config";
 
 export interface EconomyConfig {
   playerValue: {
@@ -45,12 +47,12 @@ export const economyConfig = (): EconomyConfig => ({
     contractMaxMultiplier: gameConfig.playerValueContractMaxMultiplier,
   },
   salary: {
-    base: gameConfig.salaryBase,
+    base: scaleReferenceSeasonFlow(gameConfig.salaryBase),
     overallReference: gameConfig.salaryOverallReference,
     overallExponent: gameConfig.salaryOverallExponent,
     multiplier: gameConfig.salaryMultiplier,
     ageCurve: gameConfig.salaryAgeCurve,
-    floor: gameConfig.salaryFloor,
+    floor: scaleReferenceSeasonFlow(gameConfig.salaryFloor),
     academyMultiplier: gameConfig.academySalaryMultiplier,
   },
   contracts: {

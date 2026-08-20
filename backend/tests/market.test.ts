@@ -24,7 +24,7 @@ import {
   validateMaxBid,
 } from "../src/game/market";
 import { activeBidCommitments, getFinancialCushion, getImmediateAvailableCash, remainingSalaryCommitments } from "../src/game/finance";
-import { MARKET_CONFIG } from "../src/config";
+import { gameConfig, MARKET_CONFIG } from "../src/config";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, TransferAuction, World } from "../src/game/types";
@@ -159,10 +159,10 @@ describe("auction listing rules (§9/§64.1)", () => {
     const player = generatePlayer(rng, club, { id: 1, isYouth: false });
     player.value = 5_000_000;
     const world = makeWorldWithClubs([club]);
-    // Round 20 > fade window (6): day 1 + (20-1)*2 = 39, but days are 1..30.
-    // Use completedRounds fallback by setting dayIndex off-cadence? Instead
-    // pick a day past the fade window within the month: round 15 = day 29.
+    // The final inter-season days have no round number, so use the completed
+    // round counter to represent a current owner past the fade window.
     world.dayIndex = 29;
+    world.mp.completedRounds = 7;
     recordTransaction(world, {
       playerId: player.id,
       listingId: 500,
@@ -177,7 +177,7 @@ describe("auction listing rules (§9/§64.1)", () => {
     });
 
     const base = recentTradeBaseValue(world, player);
-    // roundForDay(29) = (29-1)/2 + 1 = 15 ≥ 6 → full player.value.
+    // Six completed rounds since acquisition reaches the full player.value.
     expect(base).toBe(5_000_000);
   });
 
@@ -590,13 +590,13 @@ describe("soft close (§18)", () => {
     expect(capped).toBe(listing.deadline);
   });
 
-  it("caps the deadline at season rollover for club-to-club auctions", () => {
+  it("allows a soft-close extension to cross the season boundary", () => {
     const listing = baseListing();
-    const capped = extendDeadline({
+    const extended = extendDeadline({
       listing, previousLeader: null, previousPrice: 8_500_000, newLeader: 1, newPrice: 9_000_000,
       now: 9_000, seasonRolloverAt: 9_000 + 60_000,
     });
-    expect(capped).toBe(9_000 + 60_000);
+    expect(extended).toBe(listing.deadline + MARKET_CONFIG.transferAuction.extensionMinutes * 60_000);
   });
 });
 
@@ -752,7 +752,7 @@ describe("settlement (§22)", () => {
     // Cash: winner pays clearing price. The seller is first charged the
     // player's accrued payroll through dayIndex (5 days of a 500K wage),
     // then receives the clearing price.
-    const accruedPayroll = Math.round((player.salary * world.dayIndex) / 30);
+    const accruedPayroll = Math.round((player.salary * world.dayIndex) / gameConfig.seasonDays);
     expect(buyerB.cash).toBe(buyerBCash - result.finalPrice!);
     expect(seller.cash).toBe(sellerCash - accruedPayroll + result.finalPrice!);
     // Loser pays nothing.

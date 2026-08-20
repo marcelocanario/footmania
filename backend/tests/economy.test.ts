@@ -255,9 +255,6 @@ describe("season timing", () => {
       const last = club.ledger.expense[club.ledger.expense.length - 1];
       simulated += last.amount;
     }
-    world.dayIndex = gameConfig.seasonDays;
-    settlePayroll(world.rng, world);
-    simulated += club.ledger.expense[club.ledger.expense.length - 1].amount;
     expect(simulated).toBe(salaryPerSeason);
   });
 

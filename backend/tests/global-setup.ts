@@ -7,9 +7,10 @@ import { readNamePoolsArtifact, seedNamePoolsFromArtifact, loadNamePoolsFromDb }
  * Test database bootstrap.
  *
  * Each test file that talks to Prisma points at its own persistent SQLite file
- * (test.db / test-live.db / test-persist.db / test-worker.db), created once via
+ * (test.db / test-live.db / test-persist.db / test-worker.db /
+ * test-scheduler.db), created once via
  * `prisma db push` and kept in sync with the schema (see AGENTS.md). This setup
- * clears every row in all four databases before the suite runs so tests that
+ * clears every row in all five databases before the suite runs so tests that
  * register users / create worlds start from a clean state.
  *
  * Rows are deleted in dependency order (children before parents) using the
@@ -23,7 +24,7 @@ import { readNamePoolsArtifact, seedNamePoolsFromArtifact, loadNamePoolsFromDb }
 export default async function setup(): Promise<void> {
   const cwd = join(dirname(fileURLToPath(import.meta.url)), "..");
   const artifact = readNamePoolsArtifact();
-  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db"]) {
+  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db", "test-scheduler.db"]) {
     const url = `file:${join(cwd, "prisma", name).replaceAll("\\", "/")}`;
     const prisma = new PrismaClient({ datasourceUrl: url, log: [] });
     try {

@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
-import { MP_CONFIG, gameConfig } from "../config";
+import { MP_CONFIG, gameConfig, scaleReferenceSeasonFlow, seasonFlowScale } from "../config";
 import { calculateBaseSalary, calculatePlayerValue } from "./economy";
 import { remainingSeasons } from "./economy";
 
@@ -79,7 +79,8 @@ export function calculateInitialFirstDivisionSeasonBudget(): number {
   const squadSize = MP_CONFIG.expectedSeniorSquadSize;
 
   // Expected per-season wage bill at Division 1 quality.
-  const expectedAveragePlayerSalary = calculateBaseSalary(overall, 26); // peak-age salary
+  const scale = seasonFlowScale();
+  const expectedAveragePlayerSalary = calculateBaseSalary(overall, 26) / scale; // 30-day reference salary
   const expectedSeasonWages = expectedAveragePlayerSalary * squadSize;
 
   // Expected first-team transfer spend: 2 meaningful acquisitions of a strong
@@ -99,14 +100,14 @@ export function calculateInitialFirstDivisionSeasonBudget(): number {
   //  - an elite (~86) a major expenditure, not a routine buy.
   const avgStarter = calculatePlayerValue(68, 25, 3);
   const elite = calculatePlayerValue(86, 26, 3);
-  const eliteCost = elite + calculateBaseSalary(86, 26);
+  const eliteCost = elite + calculateBaseSalary(86, 26) / scale;
   // A club should be able to afford roughly 1 elite player per season as a
   // major decision, not several. Cap the budget so 2+ elite purchases aren't
   // routine.
   const maxSensible = Math.round(eliteCost * 1.9);
   const minSensible = Math.round(avgStarter * 4);
 
-  return Math.round(Math.max(minSensible, Math.min(rawTier1Budget, maxSensible)));
+  return scaleReferenceSeasonFlow(Math.max(minSensible, Math.min(rawTier1Budget, maxSensible)));
 }
 
 /** Ensure FIRST_DIVISION_SEASON_BUDGET is initialized exactly once. */

@@ -1,7 +1,8 @@
 import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRow, World } from "./types";
-import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStandings, updateStandings } from "./league";
+import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStandings, updateStandings, validateDoubleRoundRobinFixtures } from "./league";
 import { simulateMatch } from "./match";
 import { kickoffForRound, seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
+import { roundDayIndex } from "../services/seasonCalendar";
 import { gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
@@ -278,6 +279,15 @@ export function initSeason(world: World, ref: { year: number; month: number }, s
   world.mp.joinLockRound = joinLockRound();
   world.mp.joinState = "OPEN";
   world.mp.joinThresholdPercent = MP_CONFIG.joinThresholdPercent;
+  world.mp.seasonNumber = world.mp.seasonNumber ?? Math.max(1, world.year);
+  world.mp.seasonDayIndex = 0;
+  world.mp.absoluteGameDay = world.mp.absoluteGameDay ?? 0;
+  world.mp.startAbsoluteGameDay = world.mp.absoluteGameDay;
+  if (world.mp.seasonStartAt === null || world.mp.seasonStartAt === undefined) {
+    const now = new Date();
+    world.mp.seasonStartAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  }
+  world.mp.phase = "ACTIVE";
 
   // Ensure a Division 1 exists. All pre-existing clubs stay; on first run the
   // world is empty and we create 8 filler AI clubs.
@@ -336,12 +346,14 @@ export function setDivisionState(world: World, divisionId: number, state: "CREAT
 /** Generate the 14-round schedule for a division and assign kickoff timestamps. */
 export function generateDivisionFixtures(world: World, comp: Competition, ref: { year: number; month: number }): Fixture[] {
   const clubIds = Object.keys(comp.standings).map(Number);
-  const fixtures = createLeagueFixtures(world.rng, comp.id, clubIds, gameConfig.league.startDay, gameConfig.league.matchIntervalDays);
+  const fixtures = createLeagueFixtures(world.rng, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
   for (const f of fixtures) {
     f.id = world.nextId++;
     const round = f.round + 1;
-    f.kickoffAt = kickoffForRound(ref, round);
+    f.kickoffAt = kickoffForRound({ ...ref, seasonStartAt: world.mp.seasonStartAt ?? Date.now() }, round);
+    f.scheduledSeasonDayIndex = roundDayIndex(f.round);
   }
+  validateDoubleRoundRobinFixtures(fixtures, clubIds, gameConfig.league.turns);
   comp.config.clubs = clubIds;
   return fixtures;
 }
@@ -405,13 +417,15 @@ export function simulateThroughRound(world: World, targetRound: number, now: num
   // would otherwise race with the instant simulation below.
   world.liveMatches = [];
   for (const club of world.clubs) club.liveMatchAt = null;
+  // Mark manual timing before simulating so the shared division handler does
+  // not reject future real-time kickoffs during an explicit admin advance.
+  world.mp.manualRound = target;
   const divisions = world.competitions.filter((c) => c.kind === "division" && c.status !== "ARCHIVED");
   for (const div of divisions) {
     simulateDivisionThroughRound(world, div, target, now);
   }
   world.mp.completedRounds = target;
   if (target >= world.mp.joinLockRound) world.mp.joinState = "LOCKED";
-  world.mp.manualRound = target;
   return target;
 }
 
@@ -922,7 +936,8 @@ export function rebuildTierDivisions(
   seasonId: number,
   tier: number,
   humans: { clubId: number; timezone: string | null }[],
-  ref: { year: number; month: number }
+  ref: { year: number; month: number },
+  options: { generateFixtures?: boolean } = {},
 ): Competition[] {
   // Remove existing divisions at this tier.
   const old = divisionsInTier(world, seasonId, tier);
@@ -943,8 +958,10 @@ export function rebuildTierDivisions(
     }
     // AI filler only in the final incomplete group.
     if (g === groups.length - 1) ensureDivisionFull(world, div);
-    const fixtures = generateDivisionFixtures(world, div, ref);
-    world.fixtures.push(...fixtures);
+    if (options.generateFixtures !== false) {
+      const fixtures = generateDivisionFixtures(world, div, ref);
+      world.fixtures.push(...fixtures);
+    }
     div.status = "ACTIVE";
     created.push(div);
   }

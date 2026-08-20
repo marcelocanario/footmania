@@ -88,6 +88,7 @@ const shotModelSchema = z.object({
     GLOBAL: z.object({ GLOBAL: prob }),
   }),
   finisherVsGoalkeeperLogitCoefficient: z.number(),
+  localDensityCoefficient: nonNegativeNumber,
   shooterRoleWeights: z.record(z.string(), z.number().min(0)),
   shotsOnTarget: z.object({
     baseRate: prob,
@@ -142,6 +143,7 @@ const readinessSchema = z.object({
 });
 
 const actionQualitySchema = z.object({
+  localDensityCoefficient: nonNegativeNumber,
   attributeWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
   defensiveResistanceWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
 });
@@ -154,6 +156,13 @@ const tacticalFamiliaritySchema = z.object({
   switchTransferCoefficient: nonNegativeNumber,
   executionFloor: z.number().min(0).max(1),
   executionCeiling: z.number().min(0).max(1),
+});
+
+const tacticalActionMixSchema = z.object({
+  /** Scales explicit action-mix corrections outside the neutral CONTROL/CONTROL matchup. */
+  nonNeutralCorrectionScale: z.number().min(0).max(1),
+  /** Direct logit shifts; the configured default scale is zero to preserve the baseline. */
+  asymmetricActionUtility: z.record(z.string(), z.number()),
 });
 
 const pressingSchema = z.object({ intensityDivisor: positiveNumber });
@@ -226,6 +235,7 @@ const foulsSchema = z.object({
 const cardsSchema = z.object({
   yellowTargetPerMatch: positiveNumber,
   redTargetPerMatch: positiveNumber,
+  secondYellowLogitPenalty: z.number().min(0),
   disciplineRiskLogitCoefficient: z.number(),
   fatigueLogitCoefficient: z.number(),
   pressIntensityLogitCoefficient: z.number(),
@@ -316,6 +326,7 @@ const matchSimulatorSchema = z
     actionQuality: actionQualitySchema,
     formationSupport: formationSupportSchema,
     tacticalFamiliarity: tacticalFamiliaritySchema,
+    tacticalActionMix: tacticalActionMixSchema,
     pressing: pressingSchema,
     defensiveOrganisation: defensiveOrganisationSchema,
     counterattack: counterattackSchema,

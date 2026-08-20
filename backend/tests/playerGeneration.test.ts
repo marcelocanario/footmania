@@ -26,6 +26,7 @@ import {
   type GeneratePlayerContext,
 } from "../src/game/playerGeneration";
 import { overallFromSkills } from "../src/game/rating";
+import { gameConfig } from "../src/config";
 import { makeClub } from "./helpers";
 import type { Position } from "../src/game/types";
 
@@ -295,7 +296,7 @@ describe("youth generation (spec §71)", () => {
     expect(player.isYouth).toBe(true);
     expect(player.age).toBeGreaterThanOrEqual(16);
     expect(player.age).toBeLessThanOrEqual(19);
-    expect(player.contractDays).toBe(4 * 30);
+    expect(player.contractDays).toBe(4 * gameConfig.seasonDays);
     expect(player.tier).toBeGreaterThanOrEqual(1);
     expect(player.tier).toBeLessThanOrEqual(5);
     expect(player.generatedClubHighestDivision).toBe(1);

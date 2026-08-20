@@ -1,7 +1,5 @@
 import type { JobContext, JobResult } from "./runner";
 import { DAILY_TICK, missingDailyDates, processDailyDate, isValidDateKey, parseDateKey } from "../../game/daily";
-import { rollover } from "../mpService";
-import { seasonRefFor } from "../../game/clock";
 import { persistWorld } from "../saveService";
 
 /**
@@ -12,10 +10,9 @@ import { persistWorld } from "../saveService";
  * multi-day recovery resumes from the last persisted date because
  * world.mp.lastDailyTickDate is persisted atomically with the world.
  *
- * Month-boundary coordination (plan §4):
- *  - dates in the world's current calendar month replay daily events;
- *  - when a month boundary is crossed the season is rolled over first
- *    (atomic + idempotent), then the new season's daily dates are processed.
+ * Season boundaries are owned by the durable scheduler. This compatibility
+ * job only replays legacy daily markers and never chooses a season from the
+ * host calendar.
  */
 export async function dailyProcessor(ctx: JobContext): Promise<JobResult> {
   const { world } = ctx;
@@ -31,20 +28,6 @@ export async function dailyProcessor(ctx: JobContext): Promise<JobResult> {
       const d = legacy % 100;
       world.mp.lastDailyTickDate = `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
     }
-  }
-
-  // Coordinates: the season currently active in the world vs. the calendar.
-  const ref = seasonRefFor(now);
-  const worldOrder = world.mp.seasonYear * 12 + (world.mp.seasonMonth - 1);
-  const realOrder = ref.year * 12 + (ref.month - 1);
-
-  // A future admin-controlled season must not be advanced by the real clock.
-  if (worldOrder > realOrder) return { changed: false };
-
-  // If the world is behind the calendar, roll over to the current month first.
-  if (world.mp.seasonId !== 0 && worldOrder < realOrder) {
-    await rollover(ctx.prisma);
-    return { changed: true, persisted: true };
   }
 
   // Use the persisted marker as the lower bound, then use the ledger to skip
@@ -64,12 +47,6 @@ export async function dailyProcessor(ctx: JobContext): Promise<JobResult> {
   for (const date of dates) {
     if (!isValidDateKey(date)) continue;
     const day = parseDateKey(date);
-    const dateRef = seasonRefFor(day);
-    // Only dates inside the current season's month are processed here; a
-    // rollover happens first when a boundary is crossed.
-    if (dateRef.year !== world.mp.seasonYear || dateRef.month !== world.mp.seasonMonth) {
-      continue;
-    }
     if (executedDates.has(date)) {
       if (!world.mp.lastDailyTickDate || date > world.mp.lastDailyTickDate) {
         world.mp.lastDailyTickDate = date;

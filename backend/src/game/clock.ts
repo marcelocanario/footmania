@@ -1,13 +1,13 @@
 import { gameConfig, MP_CONFIG } from "../config";
+import { roundForSeasonDayIndex, roundDayIndex, scheduledMatchAt, phaseForSeasonDayIndex } from "../services/seasonCalendar";
 
 /**
  * Server-authoritative global clock (plans/1. multiplayer.md §3).
  *
  * Time model:
- * - A season is one calendar month (e.g. 2026-08).
- * - A season starts on the first day of the month.
- * - Rounds play on days 1, 3, 5, ..., 27 (14 rounds, one every other day).
- * - The remaining days of the month are the interseason period.
+ * Civil year/month values are retained only for display and legacy persistence.
+ * Competition timing uses the season start instant plus the derived game-day
+ * index, so February and month lengths have no football meaning.
  * - Kickoffs are at a fixed UTC hour (GLOBAL_FIXED mode).
  */
 export interface SeasonRef {
@@ -42,35 +42,28 @@ export function utcDayOfMonth(date: Date): number {
 
 /** True when `dayOfMonth` is a league round day under the round interval. */
 export function isMatchDay(dayOfMonth: number): boolean {
-  return (dayOfMonth - gameConfig.league.startDay) % gameConfig.league.matchIntervalDays === 0;
+  return roundForSeasonDayIndex(dayOfMonth, gameConfig) !== null;
 }
 
 /** The round (1-based) played on `dayOfMonth`. Returns null when not a match day. */
 export function roundForDay(dayOfMonth: number): number | null {
-  if (!isMatchDay(dayOfMonth)) return null;
-  return Math.floor((dayOfMonth - gameConfig.league.startDay) / gameConfig.league.matchIntervalDays) + 1;
+  const round = roundForSeasonDayIndex(dayOfMonth, gameConfig);
+  return round === null ? null : round + 1;
 }
 
 /** The last match day of the season (day-of-month) under the configured calendar. */
 export function lastMatchDayOfMonth(year: number, month: number): number {
-  const startDay = gameConfig.league.startDay;
-  const matchInterval = gameConfig.league.matchIntervalDays;
-  const rounds = gameConfig.league.turns * (gameConfig.league.teams - 1);
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  // Walk days of the month that fall on the round cadence and pick the last one
-  // that is <= daysInMonth and yields round <= rounds.
-  let last = startDay;
-  for (let d = startDay; d <= daysInMonth; d += matchInterval) {
-    const r = roundForDay(d);
-    if (r !== null && r <= rounds) last = d;
-  }
-  return last;
+  void year;
+  void month;
+  return gameConfig.lastLeagueMatchDayIndex + 1;
 }
 
 /** Kickoff timestamp (epoch ms) for round `round` (1-based) of a season. */
-export function kickoffForRound(ref: { year: number; month: number }, round: number, hourUtc: number = MP_CONFIG.matchKickoffHourUtc): number {
-  const dayOfMonth = gameConfig.league.startDay + (round - 1) * gameConfig.league.matchIntervalDays;
-  return Date.UTC(ref.year, ref.month - 1, dayOfMonth, hourUtc, 0, 0);
+export function kickoffForRound(ref: { year: number; month: number; seasonStartAt?: number }, round: number, hourUtc: number = configuredKickoffHour()): number {
+  const start = "startsAt" in ref ? (ref as SeasonRef).startsAt : ("seasonStartAt" in ref ? Number((ref as { seasonStartAt: number }).seasonStartAt) : Date.UTC(ref.year, ref.month - 1, 1));
+  const dayIndex = roundDayIndex(round - 1, gameConfig);
+  if (hourUtc === configuredKickoffHour()) return scheduledMatchAt(start, dayIndex, gameConfig);
+  return start + dayIndex * 24 * 60 * 60 * 1000 + hourUtc * 60 * 60 * 1000;
 }
 
 /**
@@ -80,14 +73,16 @@ export function kickoffForRound(ref: { year: number; month: number }, round: num
  * stable after it has been persisted on the fixture.
  */
 export function kickoffForRoundInTimezone(
-  ref: { year: number; month: number },
+  ref: { year: number; month: number; seasonStartAt?: number },
   round: number,
   timeZone: string | null | undefined,
-  localHour: number = MP_CONFIG.matchKickoffHourUtc,
+  localHour: number = configuredKickoffHour(),
 ): number {
   if (!timeZone) return kickoffForRound(ref, round, localHour);
-  const dayOfMonth = gameConfig.league.startDay + (round - 1) * gameConfig.league.matchIntervalDays;
-  const localWallClock = Date.UTC(ref.year, ref.month - 1, dayOfMonth, localHour, 0, 0);
+  const dayIndex = roundDayIndex(round - 1, gameConfig);
+  const seasonStart = ref.seasonStartAt ?? Date.UTC(ref.year, ref.month - 1, 1);
+  const seasonDate = new Date(seasonStart + dayIndex * 24 * 60 * 60 * 1000);
+  const localWallClock = Date.UTC(seasonDate.getUTCFullYear(), seasonDate.getUTCMonth(), seasonDate.getUTCDate(), localHour, 0, 0);
   try {
     // One correction is sufficient for normal DST transitions.  Re-read the
     // offset at the candidate instant because the offset on the local wall
@@ -124,8 +119,8 @@ export function seasonKickoffs(ref: SeasonRef): number[] {
 }
 
 /** The round currently in progress (0 when none), based on `now`. */
-export function currentRound(ref: SeasonRef, now: number, kickoffHourUtc: number = MP_CONFIG.matchKickoffHourUtc): number {
-  const rounds = gameConfig.league.turns * (gameConfig.league.teams - 1);
+export function currentRound(ref: SeasonRef, now: number, kickoffHourUtc: number = configuredKickoffHour()): number {
+  const rounds = gameConfig.roundsPerSeason;
   for (let r = 1; r <= rounds; r++) {
     const k = kickoffForRound(ref, r, kickoffHourUtc);
     // A round is completed after its scheduled match window, not at the
@@ -138,7 +133,7 @@ export function currentRound(ref: SeasonRef, now: number, kickoffHourUtc: number
 }
 
 /** Round whose kickoff has already passed (completed count) — alias of currentRound. */
-export function completedRounds(ref: SeasonRef, now: number, kickoffHourUtc: number = MP_CONFIG.matchKickoffHourUtc): number {
+export function completedRounds(ref: SeasonRef, now: number, kickoffHourUtc: number = configuredKickoffHour()): number {
   return currentRound(ref, now, kickoffHourUtc);
 }
 
@@ -148,12 +143,11 @@ export function joinLockRound(): number {
 }
 
 /** Season status string for a given instant. */
-export function seasonStatusFor(ref: SeasonRef, now: number, kickoffHourUtc: number = MP_CONFIG.matchKickoffHourUtc): "PREPARATION" | "ACTIVE" | "INTERSEASON" | "ROLLOVER" | "COMPLETE" {
-  const lastMatch = lastMatchDayOfMonth(ref.year, ref.month);
-  const lastKickoff = Date.UTC(ref.year, ref.month - 1, lastMatch, kickoffHourUtc, 0, 0) + MP_CONFIG.matchDurationMinutes * 60 * 1000;
+export function seasonStatusFor(ref: SeasonRef, now: number, kickoffHourUtc: number = configuredKickoffHour()): "PREPARATION" | "ACTIVE" | "INTERSEASON" | "ROLLOVER" | "COMPLETE" {
   if (now < ref.startsAt) return "PREPARATION";
-  if (now <= lastKickoff) return "ACTIVE";
-  return "INTERSEASON";
+  const dayIndex = Math.floor((now - ref.startsAt) / (24 * 60 * 60 * 1000));
+  if (dayIndex >= gameConfig.seasonDays) return "COMPLETE";
+  return phaseForSeasonDayIndex(dayIndex, gameConfig);
 }
 
 export function isSeasonOver(ref: SeasonRef, now: number): boolean {
@@ -163,4 +157,8 @@ export function isSeasonOver(ref: SeasonRef, now: number): boolean {
 /** UTC day key (yyyymmdd) used to make daily ticks idempotent. */
 export function utcDayKey(date: Date): number {
   return date.getUTCFullYear() * 10000 + (date.getUTCMonth() + 1) * 100 + date.getUTCDate();
+}
+
+function configuredKickoffHour(): number {
+  return Number(gameConfig.scheduler.leagueMatchStartUtc.slice(0, 2));
 }

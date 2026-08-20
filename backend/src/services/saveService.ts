@@ -17,6 +17,7 @@ import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
+import { gameConfig, LEAGUE_LAST_MATCH_DAY } from "../config";
 import { ensureNamePools } from "./namePoolService";
 
 type Tx = Prisma.TransactionClient;
@@ -144,12 +145,24 @@ export function deserializeWorld(json: string): World {
      inactivityThresholds: { 1: 42, 2: 35, default: 28 },
      matchTimeMode: "DIVISION_LOCAL_KICKOFF",
      matchKickoffHour: 20,
-     lastProcessedGameDay: 0,
+      lastProcessedGameDay: 0,
      lastDailyTickDay: 0,
      lastDailyTickDate: null,
      manualRound: null,
-     rolloverPhase: null,
-   };
+      rolloverPhase: null,
+      absoluteGameDay: 0,
+      seasonNumber: 1,
+      seasonDayIndex: 0,
+      phase: "ACTIVE",
+       lastAdvancedAt: null,
+       clockVersion: 0,
+        startAbsoluteGameDay: 0,
+       seasonStartAt: null,
+       rolloverContext: null,
+        calendarMigrationVersion: 0,
+       loanEndAbsoluteGameDays: {},
+       stadiumCompletionAbsoluteGameDays: {},
+    };
    world.marketBids ??= [];
    world.transferAuctions ??= [];
    world.freeAgentListings ??= [];
@@ -165,7 +178,27 @@ export function deserializeWorld(json: string): World {
    world.mpActivities ??= [];
    world.mpAudits ??= [];
    world.seasonHistory ??= [];
-   world.generationEvents ??= [];
+    world.generationEvents ??= [];
+
+   // Calendar migration: old saves keep their month metadata, but all new
+   // timing derives from this monotonic game clock.
+   world.mp.absoluteGameDay ??= Math.max(0, world.dayIndex);
+   world.mp.seasonNumber ??= Math.max(1, world.year);
+   world.mp.seasonDayIndex ??= Math.max(0, Math.min(gameConfig.seasonDays - 1, world.dayIndex));
+   world.mp.phase ??= world.mp.seasonDayIndex <= LEAGUE_LAST_MATCH_DAY ? "ACTIVE" : "INTERSEASON";
+   world.mp.lastAdvancedAt ??= null;
+    world.mp.clockVersion ??= 0;
+     world.mp.startAbsoluteGameDay ??= world.mp.absoluteGameDay - world.mp.seasonDayIndex;
+     world.mp.seasonStartAt ??= world.mp.lastAdvancedAt ?? null;
+      world.mp.rolloverContext ??= null;
+      world.mp.loanEndAbsoluteGameDays ??= {};
+      world.mp.stadiumCompletionAbsoluteGameDays ??= {};
+      for (const loan of world.loans) {
+        world.mp.loanEndAbsoluteGameDays[String(loan.id)] ??= (world.mp.absoluteGameDay ?? world.dayIndex) + Math.max(0, loan.endDay - loan.startDay);
+      }
+      for (const upgrade of world.stadiumUpgrades) {
+        world.mp.stadiumCompletionAbsoluteGameDays[String(upgrade.clubId)] ??= (world.mp.absoluteGameDay ?? world.dayIndex) + Math.max(0, upgrade.completesDay - upgrade.startedDay);
+      }
 
   for (const club of world.clubs) {
     club.ledger ??= { income: [], expense: [] };
@@ -428,10 +461,10 @@ export async function persistWorld(
       await tx.standingsRow.createMany({ data: rows });
     }
     if (world.fixtures.length > 0) {
-      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null })) });
+      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, scheduledSeasonDayIndex: f.scheduledSeasonDayIndex ?? null })) });
     }
     if (world.matches.length > 0) {
-      await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, attendance: m.attendance, gateRevenue: m.gateRevenue, extraTime: m.extraTime ?? false })) });
+      await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, attendance: m.attendance, gateRevenue: m.gateRevenue, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null })) });
       await tx.matchStat.createMany({ data: world.matches.map((m) => statRow(m, saveId)) });
       const evRows: { saveId: number; matchId: number; minute: number; half: number; type: number; subtype: number; clubId: number; playerId: number | null; player2Id: number | null; goalType: number; ordinal: number }[] = [];
       for (const m of world.matches) {
@@ -500,8 +533,9 @@ export async function persistWorld(
            winningClubId: a.winningClubId,
            finalPrice: a.finalPrice,
            cancelledAt: a.cancelledAt !== null ? BigInt(a.cancelledAt) : null,
-           softClosed: a.softClosed,
-           softCloseExtensions: a.softCloseExtensions,
+            softClosed: a.softClosed,
+            softCloseExtensions: a.softCloseExtensions,
+            deadlineVersion: a.deadlineVersion ?? 0,
          })),
        });
      }
@@ -1065,7 +1099,7 @@ async function rebuildWorld(
   }
 
   const fixtures = fixtureRows.map((f) => {
-    const f2 = f as unknown as { kickoffAt: bigint | null };
+     const f2 = f as unknown as { kickoffAt: bigint | null; scheduledSeasonDayIndex: number | null };
     return {
       id: f.id,
       competitionId: f.competitionId,
@@ -1077,6 +1111,7 @@ async function rebuildWorld(
       leg: f.leg ?? undefined,
       tie: f.tie ?? undefined,
       kickoffAt: f2.kickoffAt !== null && f2.kickoffAt !== undefined ? Number(f2.kickoffAt) : undefined,
+      scheduledSeasonDayIndex: f2.scheduledSeasonDayIndex ?? undefined,
     };
   });
 
@@ -1110,6 +1145,7 @@ async function rebuildWorld(
         : emptyMatchStats(),
       extraTime: r.extraTime,
       minuteEvents: [],
+      scheduledAt: (r as unknown as { scheduledAt: bigint | null }).scheduledAt !== null && (r as unknown as { scheduledAt: bigint | null }).scheduledAt !== undefined ? Number((r as unknown as { scheduledAt: bigint | null }).scheduledAt) : undefined,
     };
   });
 
@@ -1147,7 +1183,8 @@ async function rebuildWorld(
      finalPrice: a.finalPrice,
      cancelledAt: a.cancelledAt !== null ? Number(a.cancelledAt) : null,
      softClosed: a.softClosed,
-     softCloseExtensions: a.softCloseExtensions,
+      softCloseExtensions: a.softCloseExtensions,
+      deadlineVersion: (a as unknown as { deadlineVersion: number }).deadlineVersion ?? 0,
    }));
 
    const freeAgentListings = freeAgentListingRows.map((l) => ({
