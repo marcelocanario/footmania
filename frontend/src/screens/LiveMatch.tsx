@@ -307,6 +307,13 @@ export function LiveMatch() {
     );
   };
 
+  const possession = (() => {
+    const total = stats.home.controlledBallSeconds + stats.away.controlledBallSeconds;
+    if (total <= 0) return [50, 50] as [number, number];
+    const home = Math.round((stats.home.controlledBallSeconds / total) * 100);
+    return [home, 100 - home] as [number, number];
+  })();
+
   const phaseLabel = PHASE_LABEL[state.phase] ?? state.phase;
 
   if (state.phase === "pregame") {
@@ -385,9 +392,9 @@ export function LiveMatch() {
         </div>
 
         <div className="stat-bars">
-          {barRow("Possession", stats.possession[0], stats.possession[1])}
-          {barRow("Shots", stats.shots[0], stats.shots[1])}
-          {barRow("On target", stats.onGoal[0], stats.onGoal[1])}
+          {barRow("Possession", possession[0], possession[1])}
+          {barRow("Shots", stats.home.shots, stats.away.shots)}
+          {barRow("On target", stats.home.shotsOnTarget, stats.away.shotsOnTarget)}
         </div>
       </div>
 
@@ -472,12 +479,12 @@ export function LiveMatch() {
 
       <div className="card">
         <h2 className="card-title">Match stats</h2>
-        {barRow("Fouls", stats.fouls[0], stats.fouls[1])}
-        {barRow("Tackles", stats.tackles[0], stats.tackles[1])}
-        {barRow("Wrong passes", stats.wrongPasses[0], stats.wrongPasses[1])}
+        {barRow("Fouls", stats.home.fouls, stats.away.fouls)}
+        {barRow("Corners", stats.home.corners, stats.away.corners)}
+        {barRow("xG", Number(stats.home.xG.toFixed(2)), Number(stats.away.xG.toFixed(2)))}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <span className="chip">🟨 {stats.yellows[0]} : {stats.yellows[1]}</span>
-          <span className="chip">🟥 {stats.reds[0]} : {stats.reds[1]}</span>
+          <span className="chip">🟨 {stats.home.yellows} : {stats.away.yellows}</span>
+          <span className="chip">🟥 {stats.home.reds} : {stats.away.reds}</span>
           <span className="chip">Subs {state.usedSubs[0]} : {state.usedSubs[1]}</span>
         </div>
       </div>

@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "calibrate:match": "tsx scripts/match-calibration.ts",
     "db:generate": "prisma generate",
     "db:upgrade": "prisma db push",
     "db:push": "prisma db push",

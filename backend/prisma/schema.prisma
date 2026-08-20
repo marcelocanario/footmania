@@ -317,30 +317,13 @@ model Match {
 }
 
 model MatchStat {
-  id              Int    @id @default(autoincrement())
-  saveId          Int
-  save            Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  matchId         Int
-  homePossession  Int
-  awayPossession  Int
-  homeShots       Int
-  awayShots       Int
-  homeOnGoal      Int
-  awayOnGoal      Int
-  homeOffTarget   Int
-  awayOffTarget   Int
-  homeFouls       Int
-  awayFouls       Int
-  homeCorners     Int
-  awayCorners     Int
-  homeYellows     Int
-  awayYellows     Int
-  homeReds        Int
-  awayReds        Int
-  homeTackles     Int
-  awayTackles     Int
-  homeWrongPasses Int
-  awayWrongPasses Int
+  id       Int    @id @default(autoincrement())
+  saveId   Int
+  save     Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  matchId  Int
+  // Full per-team match stats (plans/6. §44) serialized as JSON: the shape
+  // includes nested team objects and is not relational.
+  statsJson String
 
   @@unique([saveId, matchId])
 }

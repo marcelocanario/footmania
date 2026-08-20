@@ -153,7 +153,7 @@ async function handleMessage(
         advanceLiveMatches(world, Date.now());
         const res = {
           events: st.events.slice(beforeEvents),
-          atHalfTime: st.half === 1 && st.minute === 0 && !st.ended,
+          atHalfTime: isHalftime(st),
         };
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "tick", events: res.events, atHalfTime: res.atHalfTime, state: liveStateView(world, st, meta.userId) });

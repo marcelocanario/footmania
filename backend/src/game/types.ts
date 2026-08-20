@@ -243,17 +243,75 @@ export interface MatchEvent {
   goalType: number;
 }
 
+/** Per-team aggregate statistics produced by the possession-state engine
+ *  (plans/6. match-simulator-overhaul.md §44). Percentages (possession share,
+ *  field tilt) are never persisted; selectors derive them from
+ *  `controlledBallSeconds`. */
+export interface TeamMatchStats {
+  controlledBallSeconds: number;
+  attackingThirdControlledSeconds: number;
+
+  possessions: number;
+  passes: number;
+  crosses: number;
+  carries: number;
+  dribbles: number;
+
+  turnovers: number;
+  highRecoveries: number;
+  counterattacks: number;
+  counterattackShots: number;
+  boxEntries: number;
+
+  shots: number;
+  shotsOnTarget: number;
+  xG: number;
+
+  corners: number;
+  fouls: number;
+  yellows: number;
+  reds: number;
+  offsides: number;
+  penalties: number;
+  injuries: number;
+}
+
 export interface MatchStats {
-  possession: [number, number];
-  shots: [number, number];
-  onGoal: [number, number];
-  offTarget: [number, number];
-  fouls: [number, number];
-  corners: [number, number];
-  yellows: [number, number];
-  reds: [number, number];
-  tackles: [number, number];
-  wrongPasses: [number, number];
+  home: TeamMatchStats;
+  away: TeamMatchStats;
+}
+
+export interface LiveCardState {
+  playerId: number;
+  /** YELLOW | RED | YELLOW_RED */
+  kind: "YELLOW" | "RED" | "YELLOW_RED";
+  minute: number;
+}
+
+export interface LiveInjuryState {
+  playerId: number;
+  days: number;
+  minute: number;
+}
+
+export interface LiveSubstitutionState {
+  minute: number;
+  outId: number;
+  inId: number;
+}
+
+/** A club's live per-match tactics (plans/6. §2). Formation/style/pressing are
+ *  adapted from Club.tactics into the possession-state model. */
+export interface LiveTactics {
+  formation: number;
+  /** CONTROL | PRESS | COUNTER (mapped from Club.tactics.style). */
+  style: "CONTROL" | "PRESS" | "COUNTER";
+  /** Effective pressing intensity 0..1 (Club.tactics.pressing scaled). */
+  pressing: number;
+  /** Preferred lane: CENTRE | WIDE (from Club.tactics.direction). */
+  direction: "CENTRE" | "WIDE";
+  /** Familiarity 0..100 with the current tactical setup. */
+  familiarity: number;
 }
 
 export interface Match {
@@ -313,12 +371,68 @@ export interface LiveMatchState {
   subSlots: SubSlots;
   suspensionClears: number[];
   playerMinutes: Record<number, number>;
+  /** Fractional in-match energy is persisted separately from Player.energy
+   *  (the database field is an integer) so streamed ticks and reloads do not
+   *  reset fatigue or introduce rounding drift. */
+  playerEnergy: Record<number, number>;
   shootout?: { scores: [number, number]; winner: number };
   ended: boolean;
   // Real clock (epoch ms) of the last time this match was advanced. Used to
   // pace live matches at the configured real-world duration regardless of
   // worker tick rate and across server downtime.
   lastAdvancedAt: number;
+
+  // -------------------------------------------------------------------------
+  // Possession-state engine runtime (plans/6. match-simulator-overhaul.md §2).
+  // All fields below are engine-owned runtime state and are persisted with the
+  // live match so a restart resumes deterministically.
+  // -------------------------------------------------------------------------
+  /** Current match-clock seconds (controlled-ball + dead-ball time). */
+  matchClockSeconds: number;
+  period: 1 | 2;
+  /** Seeded RNG stream owned by the engine. */
+  rngState: RngState;
+  /** Seconds of controlled ball per team (drives possession share). */
+  controlledBallSeconds: [number, number];
+  /** Seconds controlled in the attacking third per team. */
+  attackingThirdControlledSeconds: [number, number];
+  /** Current possession phase, zone and lane. */
+  phase: string;
+  zone: string;
+  lane: "LEFT" | "CENTRE" | "RIGHT";
+  possessionStartType: string;
+  /** Seconds of the current possession already played (SET_PIECE/TRANSITION windows). */
+  possessionAgeSeconds: number;
+  /** Team quality / tactics signals derived once at kickoff. */
+  homeTactics: LiveTactics;
+  awayTactics: LiveTactics;
+  /** Defensive organisation 0..1 per team (recovered continuously). */
+  homeDefensiveOrganisation: number;
+  awayDefensiveOrganisation: number;
+  homeBaselineOrganisation: number;
+  awayBaselineOrganisation: number;
+  homeOrganisationRecoveryTime: number;
+  awayOrganisationRecoveryTime: number;
+  /** Live card/injury/substitution bookkeeping. */
+  cards: LiveCardState[];
+  injuries: LiveInjuryState[];
+  substitutions: LiveSubstitutionState[];
+  /** Team-match stat accumulators (mirrors Match.stats; kept here so live ticks
+   *  accumulate incrementally and the final build is exact). */
+  teamStats: { home: TeamMatchStats; away: TeamMatchStats };
+  /** Bookkeeping: is this possession a live counterattack. */
+  isCounter: boolean;
+  /** Bookkeeping: high-recovery was recorded for the current possession. */
+  possessionHighRecovery: boolean;
+  /** Bookkeeping: opponent control window for sustained-pressure commentary. */
+  opponentControlSeconds: [number, number];
+  /** Bookkeeping: consecutive advanced/box states within the pressure window. */
+  pressureWindowAdvancedStates: [number, number];
+  pressureWindowStartSeconds: [number, number];
+  /** Dead-ball restarts accumulated (used for restart sampling/corners). */
+  pendingRestart: string | null;
+  /** First action pinned by a possession start (resumed deterministically). */
+  possessionFirstAction: string | null;
 }
 
 export interface NewsItem {

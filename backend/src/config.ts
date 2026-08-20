@@ -73,6 +73,27 @@ const gameConfigSchema = z
       academyPromotionAge: z.number().int().min(1),
       academyContractSeasons: z.number().int().min(1),
     }),
+    // Primary balance tunables of the match simulator (plans/6. §0/§6). The
+    // full matchSimulator model lives in config/match-simulator.jsonc; only the
+    // normalized 40/35/25 latent-decision weights are promoted into the game
+    // config so competitive balance is tuned in one place. Optional with a
+    // default so older/custom config objects (tests) without the block parse.
+    matchSimulator: z
+      .object({
+        influence: z
+          .object({
+            team: nonNegativeNumber,
+            tactics: nonNegativeNumber,
+            luck: nonNegativeNumber,
+          })
+          .superRefine((influence, ctx) => {
+            const sum = influence.team + influence.tactics + influence.luck;
+            if (sum <= 0) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: `matchSimulator.influence must have a positive sum (got ${sum})`, path: ["influence"] });
+            }
+          }),
+      })
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
@@ -378,6 +399,9 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     academyMaxAge: 19,
     academyPromotionAge: 21,
     academyContractSeasons: 4,
+  },
+  matchSimulator: {
+    influence: { team: 0.4, tactics: 0.35, luck: 0.25 },
   },
 };
 

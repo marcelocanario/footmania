@@ -209,5 +209,18 @@
     "academyPromotionAge": 21,
     // Contract length (seasons) for newly generated youth.
     "academyContractSeasons": 4
+  },
+
+  // --- Match simulator influence (plans/6. match-simulator-overhaul.md §6) ---
+  // Primary balance tunables: the normalized 40/35/25 latent decision weights.
+  // The full matchSimulator model lives in config/match-simulator.jsonc; only
+  // these weights are promoted here so designers tune competitive balance in
+  // one place (plan section 0).
+  "matchSimulator": {
+    "influence": {
+      "team": 0.4,
+      "tactics": 0.35,
+      "luck": 0.25
+    }
   }
 }

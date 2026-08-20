@@ -2,20 +2,49 @@ import type {
   Club,
   Competition,
   Fixture,
+  LiveMatchState,
   Match,
   Player,
   World,
 } from "./types";
-import { createLiveMatchState, simulateMatch, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, matchRepsForDivisions } from "./match";
+import { createLiveMatchState, simulateMatch, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, matchRepsForDivisions } from "./match";
 import { updateStandings, isLeagueFinished } from "./league";
 import { calcGate } from "./club";
 import { MP_CONFIG } from "../config";
+import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { completedRounds, seasonRefFor, seasonStatusFor } from "./clock";
 import { auditMultiplayerEvent, syncClubSeasons, divisionForClub } from "./multiplayer";
 import { missingDailyDates, processDailyDate, utcDateKey } from "./daily";
 
 export function nextId(world: World): number {
   return world.nextId++;
+}
+
+function emptyTeamStats() {
+  return {
+    controlledBallSeconds: 0,
+    attackingThirdControlledSeconds: 0,
+    possessions: 0,
+    passes: 0,
+    crosses: 0,
+    carries: 0,
+    dribbles: 0,
+    turnovers: 0,
+    highRecoveries: 0,
+    counterattacks: 0,
+    counterattackShots: 0,
+    boxEntries: 0,
+    shots: 0,
+    shotsOnTarget: 0,
+    xG: 0,
+    corners: 0,
+    fouls: 0,
+    yellows: 0,
+    reds: 0,
+    offsides: 0,
+    penalties: 0,
+    injuries: 0,
+  };
 }
 
 export function findClub(world: World, id: number): Club | undefined {
@@ -54,7 +83,7 @@ export function startLiveMatch(world: World, fixture: Fixture): Match | null {
     attendance: 0,
     gateRevenue: 0,
     events: [],
-    stats: { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0], tackles: [0, 0], wrongPasses: [0, 0] },
+    stats: { home: emptyTeamStats(), away: emptyTeamStats() },
     minuteEvents: [],
   };
   world.matches.push(match);
@@ -105,9 +134,11 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
     const wholeMinutes = Math.floor(elapsedMs / realMsPerMatchMinute);
     if (wholeMinutes <= 0) continue;
 
-    const played = st.minute + (st.half === 1 ? st.firstHalfLen : 0);
-    const remaining = (st.firstHalfLen + st.secondHalfLen) - played;
-    const minutes = Math.min(wholeMinutes, Math.max(1, remaining));
+    const clockSeconds = typeof st.matchClockSeconds === "number"
+      ? st.matchClockSeconds
+      : ((st.half === 1 ? st.firstHalfLen : 0) + st.minute) * 60;
+    const remainingMinutes = Math.max(0, (MS.timing.regulationSeconds - clockSeconds) / 60);
+    const minutes = Math.min(wholeMinutes, Math.max(1, Math.ceil(remainingMinutes)));
     tickLiveMatch(world.rng, home, away, world.players, st, minutes, { ignoreHalfTime: true, reps: matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id)) });
     // The match is now fully simulated up to the real time that `minutes`
     // match-minutes represent. Any sub-minute fraction of the elapsed window
@@ -123,7 +154,7 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
 }
 
 /** Finalize a finished live match: apply gate, standings, player effects. */
-export function finalizeLiveMatch(world: World, st: { matchId: number; fixtureId: number; homeClubId: number; awayClubId: number; suspensionClears?: number[] }): Match | null {
+export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | null {
   const rng = world.rng;
   const home = findClub(world, st.homeClubId);
   const away = findClub(world, st.awayClubId);
@@ -143,6 +174,10 @@ export function finalizeLiveMatch(world: World, st: { matchId: number; fixtureId
   if (existing) Object.assign(existing, match, { id: st.matchId });
   else world.matches.push(match);
   if (fixture) fixture.played = true;
+  // Live fatigue is kept fractional in the persisted match state because the
+  // Player table stores integer energy. Commit it once, at full-time, so a
+  // save/reload or a worker tick cannot reset in-match fatigue.
+  applyLiveMatchEnergy(st, world.players);
   applyMatchToPlayers(match, world);
   for (const id of st.suspensionClears ?? []) {
     const p = world.players.find((x) => x.id === id);
@@ -176,7 +211,7 @@ export function playFixtureInstant(world: World, fixture: Fixture): Match | null
     attendance: 0,
     gateRevenue: 0,
     events: [],
-    stats: { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0], tackles: [0, 0], wrongPasses: [0, 0] },
+    stats: { home: emptyTeamStats(), away: emptyTeamStats() },
     minuteEvents: [],
   };
   const sim = simulateMatch(world.rng, home, away, world.players, {

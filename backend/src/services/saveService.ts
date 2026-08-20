@@ -15,6 +15,7 @@ import { generateWorld } from "../game/worldgen";
 import { createRng } from "../game/rng";
 import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
+import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
 import { ensureNamePools } from "./namePoolService";
 
@@ -193,24 +194,57 @@ export function deserializeWorld(json: string): World {
   for (const match of world.matches) {
     match.events ??= [];
     match.minuteEvents ??= [];
-    match.stats.tackles ??= [0, 0];
-    match.stats.wrongPasses ??= [0, 0];
+    match.stats = normalizeMatchStats(match.stats);
     match.extraTime ??= false;
   }
   if (world.liveMatches) {
-    for (const st of world.liveMatches) {
-      st.compKind ??= "division";      st.year ??= world.year;
-      st.subbedIn ??= [[], []];
-      st.possessionCounts ??= [0, 0];
-      st.playerYellows ??= {};
-      st.subSlots ??= { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] };
-      st.suspensionClears ??= [];
-      st.lastAdvancedAt ??= Date.now();
-      st.stats.tackles ??= [0, 0];
-      st.stats.wrongPasses ??= [0, 0];
-    }
+    for (const st of world.liveMatches) hydrateLiveMatchState(st, world);
   }
   return world;
+}
+
+/** Coerce a persisted/legacy stats object into the new nested MatchStats shape. */
+function normalizeMatchStats(stats: unknown): MatchStats {
+  if (!stats || typeof stats !== "object") return emptyMatchStats();
+  const s = stats as MatchStats & {
+    possession?: [number, number];
+    shots?: [number, number];
+    onGoal?: [number, number];
+    offTarget?: [number, number];
+    fouls?: [number, number];
+    corners?: [number, number];
+    yellows?: [number, number];
+    reds?: [number, number];
+    tackles?: [number, number];
+    wrongPasses?: [number, number];
+  };
+  // New nested shape already present.
+  if (s.home && s.away && typeof s.home.shots === "number" && typeof s.away.shots === "number") {
+    return { home: { ...emptyTeamStats(), ...s.home }, away: { ...emptyTeamStats(), ...s.away } };
+  }
+  // Legacy flat per-side arrays.
+  const h = s.shots?.[0] ?? 0;
+  const a = s.shots?.[1] ?? 0;
+  return {
+    home: {
+      ...emptyTeamStats(),
+      shots: h,
+      shotsOnTarget: s.onGoal?.[0] ?? 0,
+      fouls: s.fouls?.[0] ?? 0,
+      corners: s.corners?.[0] ?? 0,
+      yellows: s.yellows?.[0] ?? 0,
+      reds: s.reds?.[0] ?? 0,
+    },
+    away: {
+      ...emptyTeamStats(),
+      shots: a,
+      shotsOnTarget: s.onGoal?.[1] ?? 0,
+      fouls: s.fouls?.[1] ?? 0,
+      corners: s.corners?.[1] ?? 0,
+      yellows: s.yellows?.[1] ?? 0,
+      reds: s.reds?.[1] ?? 0,
+    },
+  };
 }
 
 export async function createSaveRecord(
@@ -750,31 +784,69 @@ function competitionRow(c: Competition, saveId: number) {
   };
 }
 
+function emptyTeamStats(): MatchStats["home"] {
+  return {
+    controlledBallSeconds: 0,
+    attackingThirdControlledSeconds: 0,
+    possessions: 0,
+    passes: 0,
+    crosses: 0,
+    carries: 0,
+    dribbles: 0,
+    turnovers: 0,
+    highRecoveries: 0,
+    counterattacks: 0,
+    counterattackShots: 0,
+    boxEntries: 0,
+    shots: 0,
+    shotsOnTarget: 0,
+    xG: 0,
+    corners: 0,
+    fouls: 0,
+    yellows: 0,
+    reds: 0,
+    offsides: 0,
+    penalties: 0,
+    injuries: 0,
+  };
+}
+
+function emptyMatchStats(): MatchStats {
+  return { home: emptyTeamStats(), away: emptyTeamStats() };
+}
+
+/** Convert a pre-overhaul MatchStat row (per-team int columns) into the new
+ *  per-team object shape, so old saves without statsJson still load. */
+function legacyStatRowToMatchStats(s: Record<string, unknown>): MatchStats {
+  const num = (k: string) => (typeof s[k] === "number" ? s[k] as number : 0);
+  return {
+    home: {
+      ...emptyTeamStats(),
+      shots: num("homeShots"),
+      shotsOnTarget: num("homeOnGoal"),
+      fouls: num("homeFouls"),
+      corners: num("homeCorners"),
+      yellows: num("homeYellows"),
+      reds: num("homeReds"),
+    },
+    away: {
+      ...emptyTeamStats(),
+      shots: num("awayShots"),
+      shotsOnTarget: num("awayOnGoal"),
+      fouls: num("awayFouls"),
+      corners: num("awayCorners"),
+      yellows: num("awayYellows"),
+      reds: num("awayReds"),
+    },
+  };
+}
+
 function statRow(m: Match, saveId: number) {
   const s: MatchStats = m.stats;
   return {
     saveId,
     matchId: m.id,
-    homePossession: s.possession[0],
-    awayPossession: s.possession[1],
-    homeShots: s.shots[0],
-    awayShots: s.shots[1],
-    homeOnGoal: s.onGoal[0],
-    awayOnGoal: s.onGoal[1],
-    homeOffTarget: s.offTarget[0],
-    awayOffTarget: s.offTarget[1],
-    homeFouls: s.fouls[0],
-    awayFouls: s.fouls[1],
-    homeCorners: s.corners[0],
-    awayCorners: s.corners[1],
-    homeYellows: s.yellows[0],
-    awayYellows: s.yellows[1],
-    homeReds: s.reds[0],
-    awayReds: s.reds[1],
-    homeTackles: s.tackles[0],
-    awayTackles: s.tackles[1],
-    homeWrongPasses: s.wrongPasses[0],
-    awayWrongPasses: s.wrongPasses[1],
+    statsJson: JSON.stringify(s),
   };
 }
 
@@ -1031,19 +1103,11 @@ async function rebuildWorld(
       gateRevenue: r.gateRevenue,
       events: eventsByMatch.get(r.id) ?? [],
       stats: s
-        ? {
-            possession: [s.homePossession, s.awayPossession],
-            shots: [s.homeShots, s.awayShots],
-            onGoal: [s.homeOnGoal, s.awayOnGoal],
-            offTarget: [s.homeOffTarget, s.awayOffTarget],
-            fouls: [s.homeFouls, s.awayFouls],
-            corners: [s.homeCorners, s.awayCorners],
-            yellows: [s.homeYellows, s.awayYellows],
-            reds: [s.homeReds, s.awayReds],
-            tackles: [s.homeTackles, s.awayTackles],
-            wrongPasses: [s.homeWrongPasses, s.awayWrongPasses],
-          }
-        : { possession: [50, 50], shots: [0, 0], onGoal: [0, 0], offTarget: [0, 0], fouls: [0, 0], corners: [0, 0], yellows: [0, 0], reds: [0, 0], tackles: [0, 0], wrongPasses: [0, 0] },
+        ? jsonOr<MatchStats>(
+            (s as unknown as { statsJson?: string | null }).statsJson,
+            legacyStatRowToMatchStats(s)
+          )
+        : emptyMatchStats(),
       extraTime: r.extraTime,
       minuteEvents: [],
     };
@@ -1214,23 +1278,15 @@ async function rebuildWorld(
       seasonHistory: [],
       generationEvents: [],
       financialInterventions: [],
-    };
-   world.rng.state = Number(saveRow.rngState);
+  };
+  world.rng.state = Number(saveRow.rngState);
    world.nextId =
      Math.max(
        1,
        ...[...clubs.map((c) => c.id), ...players.map((p) => p.id), ...competitions.map((c) => c.id), ...fixtures.map((f) => f.id), ...matches.map((m) => m.id), ...auctions.map((a) => a.id), ...freeAgentListings.map((l) => l.id), ...world.loans.map((l) => l.id)]
      ) + 1;
-  world.liveMatches = (liveRow ?? []).map((r) => jsonOr<LiveMatchState | null>(r.stateJson, null)).filter((x): x is LiveMatchState => !!x);
-  for (const st of world.liveMatches) {
-    st.subbedIn ??= [[], []];
-    st.possessionCounts ??= [0, 0];
-    st.playerYellows ??= {};
-    st.suspensionClears ??= [];
-    st.lastAdvancedAt ??= Date.now();
-    st.stats.tackles ??= [0, 0];
-    st.stats.wrongPasses ??= [0, 0];
-  }
+   world.liveMatches = (liveRow ?? []).map((r) => jsonOr<LiveMatchState | null>(r.stateJson, null)).filter((x): x is LiveMatchState => !!x);
+   for (const st of world.liveMatches) hydrateLiveMatchState(st, world);
   world.mpQueue = (mpQueueRows ?? []).map((q) => ({ clubId: q.clubId, source: q.source as "NEW_CLUB" | "RETURNING_CLUB", queuedAt: q.queuedAt.getTime(), preferredSeasonId: q.preferredSeasonId }));
   world.seasonAllocations = (mpAllocationRows ?? []).map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type as "ACTIVE_FULL" | "ACTIVE_PRORATED" | "PROVISIONAL_NEXT_SEASON", amount: a.amount, issuedAt: a.issuedAt.getTime() }));
   world.mpMemberships = (mpMembershipRows ?? []).map((m) => ({ divisionId: m.divisionId, clubId: m.clubId, slotNumber: m.slotNumber, isFillerAI: m.isFillerAI, replacedClubId: m.replacedClubId, joinedAt: m.joinedAt.getTime() }));
@@ -1262,4 +1318,69 @@ async function rebuildWorld(
    ];
    if (persistedIds.length > 0) world.nextId = Math.max(world.nextId, Math.max(...persistedIds) + 1);
    return world;
+}
+
+/** Hydrate one live match in one place for both JSON and relational saves. */
+function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
+  st.compKind ??= "division";
+  st.year ??= world.year;
+  st.subbedIn ??= [[], []];
+  st.possessionCounts ??= [0, 0];
+  st.playerYellows ??= {};
+  st.subSlots ??= { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] };
+  st.suspensionClears ??= [];
+  st.lastAdvancedAt ??= Date.now();
+  st.firstHalfLen ??= MS.timing.firstHalfEndSeconds / 60;
+  st.secondHalfLen ??= (MS.timing.regulationSeconds - MS.timing.firstHalfEndSeconds) / 60;
+
+  st.stats = normalizeMatchStats(st.stats);
+  st.teamStats = normalizeMatchStats(st.teamStats ?? st.stats);
+
+  // Pre-overhaul live states only had half/minute. Convert that progress before
+  // applying defaults; assigning zero here would replay the match from kickoff
+  // after a server restart.
+  if (typeof st.matchClockSeconds !== "number") {
+    const firstHalf = st.firstHalfLen;
+    const legacyHalf = st.half === 1 ? 1 : 0;
+    const legacyMinute = Math.max(0, typeof st.minute === "number" ? st.minute : 0);
+    st.matchClockSeconds = ((legacyHalf === 1 ? firstHalf : 0) + legacyMinute) * 60;
+    st.period = legacyHalf === 1 ? 2 : 1;
+  } else {
+    st.period ??= 1;
+  }
+  st.rngState ??= { seed: world.seed, state: world.rng?.state ?? 0 };
+  st.controlledBallSeconds ??= [0, 0];
+  st.attackingThirdControlledSeconds ??= [0, 0];
+  st.phase ??= "BUILD_UP";
+  st.zone ??= "DEF_CENTRAL";
+  st.lane ??= "CENTRE";
+  st.possessionStartType ??= "OPEN_PLAY";
+  st.possessionAgeSeconds ??= 0;
+  st.homeTactics ??= { formation: 4, style: "CONTROL", pressing: 0, direction: "CENTRE", familiarity: 50 };
+  st.awayTactics ??= { formation: 4, style: "CONTROL", pressing: 0, direction: "CENTRE", familiarity: 50 };
+  st.homeDefensiveOrganisation ??= 0;
+  st.awayDefensiveOrganisation ??= 0;
+  st.homeBaselineOrganisation ??= 0;
+  st.awayBaselineOrganisation ??= 0;
+  st.homeOrganisationRecoveryTime ??= 1;
+  st.awayOrganisationRecoveryTime ??= 1;
+  st.cards ??= [];
+  st.injuries ??= [];
+  st.substitutions ??= [];
+  st.isCounter ??= false;
+  st.possessionHighRecovery ??= false;
+  st.opponentControlSeconds ??= [0, 0];
+  st.pressureWindowAdvancedStates ??= [0, 0];
+  st.pressureWindowStartSeconds ??= [0, 0];
+  st.pendingRestart ??= null;
+  st.possessionFirstAction ??= null;
+  st.withBall ??= 0;
+  st.playerEnergy ??= {};
+  const playerIds = new Set([...st.homeXI, ...st.awayXI, ...st.homeSubs, ...st.awaySubs, ...st.homeOn, ...st.awayOn]);
+  for (const id of playerIds) {
+    if (typeof st.playerEnergy[id] !== "number") {
+      const player = world.players.find((candidate) => candidate.id === id);
+      if (player) st.playerEnergy[id] = player.energy;
+    }
+  }
 }

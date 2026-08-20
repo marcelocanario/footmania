@@ -131,6 +131,11 @@ export function truncatedNormal(rng: RngState, mean: number, stdDev: number, min
 
 // Marsaglia–Tsang gamma sampler (valid for shape >= 1).
 function gammaSample(rng: RngState, shape: number): number {
+  if (shape < 1) {
+    // Boost trick: Gamma(k) = Gamma(1+k) * U^(1/k) for 0 < k < 1.
+    const u = Math.max(Number.EPSILON, nextDouble(rng));
+    return gammaSample(rng, shape + 1) * Math.pow(u, 1 / shape);
+  }
   const d = shape - 1 / 3;
   const c = 1 / Math.sqrt(9 * d);
   for (;;) {
@@ -146,6 +151,12 @@ function gammaSample(rng: RngState, shape: number): number {
       return d * v;
     }
   }
+}
+
+// Marsaglia–Tsang gamma sampler (valid for shape >= 1). Export the primitive so
+// the match engine can sample Gamma(shape, scale) durations (plan §20).
+export function gamma(rng: RngState, shape: number): number {
+  return gammaSample(rng, shape);
 }
 
 // Beta via the gamma-ratio method (alpha, beta >= 1).

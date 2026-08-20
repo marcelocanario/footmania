@@ -77,11 +77,18 @@ describe("global multiplayer world persistence", () => {
     const st2 = reloaded!.world.liveMatches.find((s) => s.matchId === 990001);
     expect(st2).not.toBeNull();
     expect(st2!.playerMinutes).toEqual(st.playerMinutes);
+    expect(st2!.matchClockSeconds).toBe(st.matchClockSeconds);
+    expect(st2!.rngState).toEqual(st.rngState);
+    expect(st2!.playerEnergy).toEqual(st.playerEnergy);
+    expect(st2!.stats.home.controlledBallSeconds + st2!.stats.away.controlledBallSeconds).toBeGreaterThan(0);
 
     // Finalize via the multiplayer path: minutes land on players.
     const { finalizeLiveMatch } = await import("../src/game/world");
     const home2 = reloaded!.world.clubs.find((c) => c.id === home.id)!;
     const away2 = reloaded!.world.clubs.find((c) => c.id === away.id)!;
+    const clockBeforeResume = st2!.matchClockSeconds;
+    tickLiveMatch(reloaded!.world.rng, home2, away2, reloaded!.world.players, st2!, 5, { ignoreHalfTime: true });
+    expect(st2!.matchClockSeconds).toBeGreaterThan(clockBeforeResume);
     tickLiveMatch(reloaded!.world.rng, home2, away2, reloaded!.world.players, st2!, 200, { ignoreHalfTime: true });
     finalizeLiveMatch(reloaded!.world, st2!);
     const onPitchId = st2!.homeOn[0];

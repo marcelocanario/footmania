@@ -321,6 +321,36 @@ export interface LiveEvent {
   player2: string;
 }
 
+export interface TeamMatchStats {
+  controlledBallSeconds: number;
+  attackingThirdControlledSeconds: number;
+  possessions: number;
+  passes: number;
+  crosses: number;
+  carries: number;
+  dribbles: number;
+  turnovers: number;
+  highRecoveries: number;
+  counterattacks: number;
+  counterattackShots: number;
+  boxEntries: number;
+  shots: number;
+  shotsOnTarget: number;
+  xG: number;
+  corners: number;
+  fouls: number;
+  yellows: number;
+  reds: number;
+  offsides: number;
+  penalties: number;
+  injuries: number;
+}
+
+export interface MatchStats {
+  home: TeamMatchStats;
+  away: TeamMatchStats;
+}
+
 export interface LiveState {
   matchId: number;
   fixtureId: number;
@@ -341,7 +371,7 @@ export interface LiveState {
   extraTime: boolean;
   ended: boolean;
   shootout: { scores: [number, number]; winner: string } | null;
-  stats: { possession: [number, number]; shots: [number, number]; onGoal: [number, number]; offTarget: [number, number]; fouls: [number, number]; corners: [number, number]; yellows: [number, number]; reds: [number, number]; tackles: [number, number]; wrongPasses: [number, number] };
+  stats: MatchStats;
   events: LiveEvent[];
   homeOn: LivePlayer[];
   awayOn: LivePlayer[];
@@ -384,7 +414,7 @@ export interface MatchEvents {
     away: string;
     homeScore: number;
     awayScore: number;
-    stats: { possession: [number, number]; shots: [number, number]; onGoal: [number, number]; offTarget: [number, number]; fouls: [number, number]; yellows: [number, number]; reds: [number, number]; tackles: [number, number]; wrongPasses: [number, number] };
+    stats: MatchStats;
     attendance: number;
     gateRevenue: number;
   };
