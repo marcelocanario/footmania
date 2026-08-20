@@ -19,6 +19,7 @@ import {
 import { DEVELOPMENT, DAYS_PER_YEAR } from "../src/game/constants";
 import { overallFromSkills as ratingOverall } from "../src/game/rating";
 import type { Player } from "../src/game/types";
+import { calibrationDescribe } from "./calibration";
 
 function makePlayer(overrides: Partial<Player> = {}): Player {
   const club = {
@@ -146,7 +147,7 @@ describe("player development curves", () => {
   });
 });
 
-describe("development profile generation", () => {
+calibrationDescribe("development profile generation", () => {
   it("generates profiles within bounds with plausible means", () => {
     const rng = createRng(12345);
     let dSum = 0;
@@ -293,7 +294,7 @@ describe("applyDevelopment", () => {
   });
 });
 
-describe("long-term career simulation", () => {
+calibrationDescribe("long-term career simulation", () => {
   it("produces plausible career trajectories across activity profiles", () => {
     const n = 1000;
     const activities = [

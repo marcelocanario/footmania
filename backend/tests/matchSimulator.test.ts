@@ -4,6 +4,7 @@ import { simulateMatch, createLiveMatchState, tickLiveMatch } from "../src/game/
 import { makeClub } from "./helpers";
 import { generatePlayer } from "../src/game/player";
 import type { Club, Player, Position, RngState } from "../src/game/types";
+import { calibrationDescribe } from "./calibration";
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -128,6 +129,7 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     expect(d.deadBallSeconds).toBeGreaterThan(0);
   });
 
+  calibrationDescribe("match aggregate calibration", () => {
   it("produces reference-adjacent volume stats (goals, shots, actions, possession)", async () => {
     const seed = 7;
     const rng = createRng(seed);
@@ -256,6 +258,8 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     // the pressing team's foul/card exposure rather than comparing two
     // mirrored fixtures where the effect cancels out.
     expect(press.homeCards).toBeGreaterThan(calm.homeCards);
+  });
+
   });
 
   it("red cards reduce the dismissed team's defensive organisation", async () => {

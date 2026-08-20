@@ -40,9 +40,44 @@ Must complete with zero TypeScript errors.
 cd backend && npm test
 ```
 
-The full Vitest suite must pass. Do not weaken, delete, or scope-skip existing
-assertions to make a change pass; update tests only when the plan intentionally
-changes the behavior the test asserted, and add coverage for the new behavior.
+The fast default unit suite must pass for every backend change. Run the
+additional suites only when they are applicable to the change, as described
+below. Do not weaken, delete, or scope-skip existing assertions to make a
+change pass; update tests only when the plan intentionally changes the
+behavior the test asserted, and add coverage for the new behavior.
+
+### 2a. Test suite policy
+
+`cd backend && npm test` is the fast default unit suite and should be run for
+every backend change. Database, server, WebSocket, worker, scheduler,
+persistence, and other integration tests are intentionally separate. The name
+`integration` is conventional; it does not mean agents should run it for every
+change.
+
+Run `cd backend && npm run test:integration` only when the change affects the
+database schema, Prisma services, persistence/save boundaries, workers,
+schedulers, HTTP routes, server startup, WebSockets, or cross-cutting behavior
+that requires the real application boundary. Run it before release or when
+performing explicit full validation. High-volume statistical, Monte Carlo,
+calibration, load, and long-running simulation tests must not run in the
+default suite.
+
+When a test needs population-level sampling to validate a distribution,
+correlation, balance target, or long-term trajectory, mark its group as a
+calibration test using `calibrationDescribe` from
+`backend/tests/calibration.ts`. Keep deterministic examples and boundary cases
+in the default suite whenever they provide useful regression coverage.
+
+Calibration tests must preserve their assertions and sample sizes. Run
+`cd backend && npm run test:calibration` only on demand when changing related
+RNG, player-generation, development, match, economy, or balance logic, and
+before release or full validation. Use `cd backend && npm run test:all` only for
+release validation, broad cross-cutting changes, or when explicitly requested;
+it runs the unit, integration, and calibration suites together. Do not add
+future exhaustive, database-backed, server-backed, or long-running tests
+directly to the default test path merely because they are new; place them in
+the matching on-demand suite and document why if the classification is not
+obvious.
 
 ### 3. Frontend build
 

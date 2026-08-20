@@ -10,6 +10,18 @@ import { createRng } from "../src/game/rng";
 
 const prisma = new PrismaClient();
 const artifact = readNamePoolsArtifact();
+const fixture = {
+  countries: {
+    BRA: {
+      names: artifact.countries.BRA.names.slice(0, 3),
+      surnames: artifact.countries.BRA.surnames.slice(0, 3),
+    },
+    JAP: {
+      names: artifact.countries.JAP.names.slice(0, 3),
+      surnames: artifact.countries.JAP.surnames.slice(0, 3),
+    },
+  },
+};
 
 describe("name pool artifact", () => {
   it("contains 221 countries each with names and surnames", () => {
@@ -30,14 +42,14 @@ describe("name pool artifact", () => {
 describe("name pool seeding", () => {
   it("seeds and re-seeds idempotently with exact row counts and ordering", async () => {
     await prisma.namePoolEntry.deleteMany();
-    const first = await seedNamePoolsFromArtifact(prisma, artifact);
-    expect(first.countries).toBe(221);
-    expect(first.rows).toBeGreaterThan(50000);
+    const first = await seedNamePoolsFromArtifact(prisma, fixture);
+    expect(first.countries).toBe(2);
+    expect(first.rows).toBe(12);
 
     const rows1 = await prisma.namePoolEntry.findMany({ orderBy: [{ countryCode: "asc" }, { kind: "asc" }, { position: "asc" }] });
     expect(rows1.length).toBe(first.rows);
 
-    const second = await seedNamePoolsFromArtifact(prisma, artifact);
+    const second = await seedNamePoolsFromArtifact(prisma, fixture);
     expect(second.rows).toBe(first.rows);
 
     const rows2 = await prisma.namePoolEntry.findMany({ orderBy: [{ countryCode: "asc" }, { kind: "asc" }, { position: "asc" }] });
@@ -49,7 +61,7 @@ describe("name pool seeding", () => {
 
   it("round-trips from the database into the runtime catalog with ordering intact", async () => {
     await prisma.namePoolEntry.deleteMany();
-    await seedNamePoolsFromArtifact(prisma, artifact);
+    await seedNamePoolsFromArtifact(prisma, fixture);
     await loadNamePoolsFromDb(prisma);
 
     expect(hasNamePool("BRA")).toBe(true);
@@ -57,7 +69,7 @@ describe("name pool seeding", () => {
 
     // The first three BRA names must come back in the artifact's exact order
     // (duplicate "Adrianinho" at positions 0 and 1 included).
-    const bra = artifact.countries.BRA;
+    const bra = fixture.countries.BRA;
     const rng = createRng(42);
     const seen = new Set<string>();
     for (let i = 0; i < 1000; i++) {
@@ -65,7 +77,7 @@ describe("name pool seeding", () => {
       expect(name.length).toBeGreaterThan(0);
       seen.add(name);
     }
-    expect(seen.size).toBeGreaterThan(10);
+    expect(seen.size).toBeGreaterThan(1);
     const expectedFirst = new Set(bra.names.slice(0, 3));
     for (const n of Array.from(expectedFirst)) {
       expect(bra.names.includes(n), n).toBe(true);
@@ -74,13 +86,13 @@ describe("name pool seeding", () => {
 
   it("ensureNamePools seeds an empty table and leaves a populated one alone", async () => {
     await prisma.namePoolEntry.deleteMany();
-    await ensureNamePools(prisma);
+    await ensureNamePools(prisma, fixture);
     const seeded = await prisma.namePoolEntry.count();
-    expect(seeded).toBeGreaterThan(50000);
+    expect(seeded).toBe(12);
     expect(hasNamePool("ING")).toBe(true);
 
     const before = await prisma.namePoolEntry.count();
-    await ensureNamePools(prisma);
+    await ensureNamePools(prisma, fixture);
     const after = await prisma.namePoolEntry.count();
     expect(after).toBe(before);
   });

@@ -24,6 +24,17 @@ import { readNamePoolsArtifact, seedNamePoolsFromArtifact, loadNamePoolsFromDb }
 export default async function setup(): Promise<void> {
   const cwd = join(dirname(fileURLToPath(import.meta.url)), "..");
   const artifact = readNamePoolsArtifact();
+  // Integration tests need real country pools, not the full production-sized
+  // artifact. Keep a few ordered entries per country so generation and fallback
+  // behavior remain representative without inserting tens of thousands of rows.
+  const testArtifact = {
+    countries: Object.fromEntries(
+      Object.entries(artifact.countries).map(([code, pools]) => [code, {
+        names: pools.names.slice(0, 3),
+        surnames: pools.surnames.slice(0, 3),
+      }]),
+    ),
+  };
   for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db", "test-scheduler.db"]) {
     const url = `file:${join(cwd, "prisma", name).replaceAll("\\", "/")}`;
     const prisma = new PrismaClient({ datasourceUrl: url, log: [] });
@@ -66,10 +77,10 @@ export default async function setup(): Promise<void> {
       await prisma.dailyExecution.deleteMany();
       await prisma.save.deleteMany();
       await prisma.user.deleteMany();
-      // Name-pool reference data is not save-scoped: wipe and reseed so tests
-      // always run against the exact artifact regardless of prior runs.
+      // Name-pool reference data is not save-scoped: wipe and reseed the compact
+      // integration fixture so tests are isolated without a 50k-row import.
       await prisma.namePoolEntry.deleteMany();
-      await seedNamePoolsFromArtifact(prisma, artifact);
+      await seedNamePoolsFromArtifact(prisma, testArtifact);
     } finally {
       await prisma.$disconnect();
     }

@@ -88,10 +88,10 @@ export async function loadNamePoolsFromDb(prisma: PrismaClient | Tx): Promise<nu
  * Ensure the in-memory name catalog is populated. Seed the database from the
  * committed artifact on first run (idempotent), then load into memory.
  */
-export async function ensureNamePools(prisma: PrismaClient): Promise<void> {
+export async function ensureNamePools(prisma: PrismaClient, artifact: NamePoolsArtifact = readNamePoolsArtifact()): Promise<void> {
   const existing = await prisma.namePoolEntry.count();
   if (existing === 0) {
-    await seedNamePoolsFromArtifact(prisma);
+    await seedNamePoolsFromArtifact(prisma, artifact);
   }
   await loadNamePoolsFromDb(prisma);
 }

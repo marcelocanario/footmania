@@ -29,6 +29,7 @@ import { overallFromSkills } from "../src/game/rating";
 import { gameConfig } from "../src/config";
 import { makeClub } from "./helpers";
 import type { Position } from "../src/game/types";
+import { calibrationDescribe } from "./calibration";
 
 function seniorCtx(overrides: Partial<Parameters<typeof generateSeniorPlayer>[0]> = {}) {
   return {
@@ -196,7 +197,7 @@ describe("remaining natural growth & initial potential (spec §34-§36)", () => 
   });
 });
 
-describe("tier classification (spec §37)", () => {
+calibrationDescribe("tier classification (spec §37)", () => {
   it("maps percentile thresholds to tiers 1..5", () => {
     expect(tierFromZ(-3.0)).toBe(1);
     expect(tierFromZ(-1.5)).toBe(1);
@@ -245,7 +246,7 @@ describe("skill generation toward a target (spec §39)", () => {
   });
 });
 
-describe("senior generation (spec §70)", () => {
+calibrationDescribe("senior generation (spec §70)", () => {
   it("generates a valid player with independent development traits", () => {
     const player = generateSeniorPlayer(seniorCtx());
     expect(player.age).toBeGreaterThanOrEqual(18);
@@ -290,7 +291,7 @@ describe("senior generation (spec §70)", () => {
   });
 });
 
-describe("youth generation (spec §71)", () => {
+calibrationDescribe("youth generation (spec §71)", () => {
   it("generates a valid youth player", () => {
     const player = generateYouthPlayer(youthCtx());
     expect(player.isYouth).toBe(true);
@@ -361,7 +362,7 @@ describe("senior roster template (spec §17)", () => {
   });
 });
 
-describe("distribution acceptance (spec §53-§55)", () => {
+calibrationDescribe("distribution acceptance (spec §53-§55)", () => {
   it("base Z is a true truncated normal (mean 0, std ~0.989, symmetric, bounded)", () => {
     const rng = createRng(4242);
     const n = 200000;
@@ -431,7 +432,7 @@ describe("distribution acceptance (spec §53-§55)", () => {
   });
 });
 
-describe("independence acceptance (spec §58)", () => {
+calibrationDescribe("independence acceptance (spec §58)", () => {
   it("starting quality Z is uncorrelated with development traits", () => {
     const n = 200000;
     const zs: number[] = [];
@@ -473,7 +474,7 @@ function sumOf(fn: typeof generateYouthPlayer, base: GeneratePlayerContext, n: n
   return sum;
 }
 
-describe("global bounds (spec §40)", () => {
+calibrationDescribe("global bounds (spec §40)", () => {
   it("never generates players outside the global OVR bounds", () => {
     const rng = createRng(99);
     const club = makeClub({ highestDivision: 1 });

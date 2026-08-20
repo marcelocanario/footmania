@@ -21,6 +21,7 @@ import { rolloverSeason } from "../src/game/season";
 import { overallFromSkills } from "../src/game/rating";
 import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
+import { calibrationDescribe } from "./calibration";
 
 function seniorCtx(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlayerContext {
   return {
@@ -59,7 +60,7 @@ function youthCtx(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlaye
   } as GeneratePlayerContext;
 }
 
-describe("accelerated career simulation (spec §60-§61)", () => {
+calibrationDescribe("accelerated career simulation (spec §60-§61)", () => {
   // Simulate a player's whole career using the REAL development functions,
   // advancing seasonally (no real-time waiting, no fixtures).
   function simulateCareer(ctx: GeneratePlayerContext, activity: number, years: number): {

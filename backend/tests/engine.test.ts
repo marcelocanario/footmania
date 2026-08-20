@@ -11,6 +11,7 @@ import type { RatingContext } from "../src/game/match";
 import type { RngState } from "../src/game/rng";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../src/matchSimulatorConfig";
 import { EVENT_CODES } from "../src/game/constants";
+import { calibrationDescribe } from "./calibration";
 
 const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -92,6 +93,7 @@ function leagueCtx(home: Club, away: Club): RatingContext {
 }
 
 describe("match engine", () => {
+  calibrationDescribe("match aggregate calibration", () => {
   it("produces a plausible goal distribution (2.5-4.5 goals per match)", async () => {
     const seeds = [7, 11, 42];
     let total = 0;
@@ -230,6 +232,7 @@ describe("match engine", () => {
     const weakGkConv = againstWeakGkGoals / Math.max(1, againstWeakGkShots);
     const strongGkConv = againstStrongGkGoals / Math.max(1, againstStrongGkShots);
     expect(weakGkConv).toBeGreaterThan(strongGkConv);
+  });
   });
 
   it("sending a defender off lowers the conceding team's sector strength", () => {

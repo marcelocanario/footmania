@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { beta, createRng, normal, nextDouble, truncatedNormal } from "../src/game/rng";
+import { calibrationDescribe } from "./calibration";
 
-describe("rng distribution helpers", () => {
+calibrationDescribe("rng distribution helpers", () => {
   it("normal respects bounds statistically and is deterministic per seed", () => {
     const rng1 = createRng(123);
     const rng2 = createRng(123);
@@ -77,6 +78,9 @@ describe("rng distribution helpers", () => {
     expect(sum / n).toBeCloseTo(0.5, 0.03);
   });
 
+});
+
+describe("rng edge cases", () => {
   it("never consumes the stream for stdDev 0 or degenerate truncation", () => {
     const rng = createRng(1);
     const before = rng.state;
