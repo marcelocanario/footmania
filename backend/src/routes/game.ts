@@ -6,11 +6,11 @@ import { liveStateView } from "../services/liveView";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { multiplayerDayLabel } from "../game/calendar";
 import { releasePlayer } from "../game/transfers";
-import { applyMaxBid, auctionOpeningRange, cancelTransferAuction, createTransferAuction, recentTradeBaseValue, transferCooldownError, transferAuctionView } from "../game/market";
+import { applyMaxBid, auctionOpeningRange, cancelTransferAuction, createTransferAuction, playerHasActiveListing, recentTradeBaseValue, transferCooldownError, transferAuctionView } from "../game/market";
 import { applyFreeAgentBid, freeAgentListingView } from "../game/freeAgents";
 import { cancelLoanListing, claimLoan, claimableInSeconds, offerPlayerForLoan } from "../game/loans";
 import { getCommitmentTotals, getImmediateAvailableCash, financialState, remainingSeasonFraction } from "../game/finance";
-import { calculateReleaseClause, remainingSeasons } from "../game/economy";
+import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from "../game/economy";
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
 import { roundLabelFor, findCompetition } from "../game/world";
@@ -25,12 +25,11 @@ import { TICKET_PRICES } from "../game/constants";
 import { materializeSeasonEvents } from "../services/scheduler";
 
 const auctionCreateSchema = z.object({ playerId: z.number().int(), openingPrice: z.number().int().positive().optional() });
-const maxBidSchema = z.object({ maxBid: z.number().int().positive() });
+const maxBidSchema = z.object({ maxBid: z.number().int().positive(), contractSeasons: z.number().int().min(1).max(gameConfig.maxContractSeasons) });
 const loanCreateSchema = z.object({ playerId: z.number().int() });
 
 const contractSchema = z.object({
   length: z.number().int().min(1).max(gameConfig.maxContractSeasons),
-  salary: z.number().int().min(0),
 });
 
 const tacticsSchema = z.object({
@@ -367,6 +366,7 @@ export async function gameRoutes(app: FastifyInstance) {
         proposedMaximum: parsed.data.maxBid,
         buyerDivision: divisionForClub(world, club.id),
         immediateAvailableCash: getImmediateAvailableCash(world, club),
+        contractSeasons: parsed.data.contractSeasons,
       });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: result };
@@ -403,7 +403,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = listing ? world.players.find((candidate) => candidate.id === listing.playerId) : undefined;
       if (!listing || !player) return { error: { code: 404, body: { error: "Free-agent listing not found" } } };
-      const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, immediateAvailableCash: getImmediateAvailableCash(world, club) });
+      const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, immediateAvailableCash: getImmediateAvailableCash(world, club), contractSeasons: parsed.data.contractSeasons });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: result };
     });
@@ -418,19 +418,18 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((c) => c.id === clubId)!;
       const player = world.players.find((p) => p.id === playerId);
       if (!player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in squad" } } };
+      if (player.isYouth) return { error: { code: 400, body: { error: "Youth players cannot renew a contract" } } };
       if (player.loanId !== null) return { error: { code: 400, body: { error: "A player on loan cannot renew his contract" } } };
+      if (playerHasActiveListing(world, player)) return { error: { code: 400, body: { error: "A player with an active market listing cannot renew his contract" } } };
       const seasons = parsed.data.length;
       if (seasons < 1 || seasons > gameConfig.maxContractSeasons) {
         return { error: { code: 400, body: { error: `Contract length must be between 1 and ${gameConfig.maxContractSeasons} seasons` } } };
       }
-      const demand = contractDemand(player, seasons);
-      if (parsed.data.salary < demand) {
-        return { error: { code: 400, body: { error: "Salary offer rejected", demand } } };
-      }
+      const demand = contractDemand(player, seasons, remainingSeasonFraction(world));
       settlePlayerPayroll(world, player);
       resetPayrollPeriod(player, world.dayIndex);
-      player.salary = parsed.data.salary;
-      player.contractDays = seasons * gameConfig.seasonDays;
+      player.salary = demand;
+      player.contractDays = contractDaysForTerm(seasons);
       player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
       player.morale = Math.min(100, player.morale + 5);
       world.news.push({ dayIndex: world.dayIndex, text: `${player.name} signed a new contract`, kind: "contract" });
@@ -445,8 +444,9 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     if (!player) return reply.code(404).send({ error: "Player not found" });
     const maxSeasons = gameConfig.maxContractSeasons;
+    const fraction = remainingSeasonFraction(loaded.world);
     const demandsBySeason = Object.fromEntries(
-      Array.from({ length: maxSeasons }, (_, i) => [i + 1, contractDemand(player, i + 1)])
+      Array.from({ length: maxSeasons }, (_, i) => [i + 1, contractDemand(player, i + 1, fraction)])
     );
     return {
       demand: demandsBySeason[1] ?? player.salary,

@@ -7,7 +7,7 @@ import { payrollDayIndices } from "./seasonCalendar";
 import { MP_CONFIG } from "../config";
 import { startLiveMatch, advanceLiveMatches } from "../game/world";
 import { settleTransferAuction } from "../game/market";
-import { settleFreeAgentListing } from "../game/freeAgents";
+import { processDueFreeAgentListing } from "../game/freeAgents";
 import { processGameDayEnd, processGameDayPayroll, processGameDayStart, processGameDayWeekly } from "../game/daily";
 import { runAiMarketTick } from "../game/aiMarket";
 import { endLoan, processContractExpiry, processContractWarning, stadiumCycle } from "../game/season";
@@ -574,8 +574,35 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         const listing = world.freeAgentListings.find((candidate) => candidate.id === Number(payload.listingId ?? entityId));
         if (!listing || listing.status !== "ACTIVE") return;
         const settleAt = context.ignoreDueTime ? Math.max(now.getTime(), listing.deadline) : now.getTime();
-        const result = settleFreeAgentListing(world, listing, settleAt);
-        if (!result.ok) throw new Error(result.error);
+        const result = processDueFreeAgentListing(world, listing, settleAt);
+        if (result.kind === "FAILED") throw new Error(result.error);
+        if (result.kind === "RELISTED") {
+          const relisted = world.freeAgentListings.find((candidate) => candidate.id === result.newListingId);
+          if (relisted) {
+            await scheduleEvent(prisma, {
+              saveId,
+              type: ScheduledEventType.AUCTION_END,
+              timeBasis: "REAL_TIME",
+              dueAt: new Date(relisted.deadline),
+              phase: "INTRADAY",
+              entityType: "FREE_AGENT",
+              entityId: String(relisted.id),
+              payload: { listingId: relisted.id, marketType: "FREE_AGENT" },
+              idempotencyKey: `AUCTION_END:FREE_AGENT:${relisted.id}:${relisted.deadline}`,
+            });
+          }
+        } else if (result.kind === "DELETED") {
+          await prisma.scheduledEvent.updateMany({
+            where: {
+              saveId,
+              type: ScheduledEventType.AUCTION_END,
+              entityType: "FREE_AGENT",
+              entityId: { in: result.listingIds.map(String) },
+              status: { in: ["PENDING", "FAILED"] },
+            },
+            data: { status: "CANCELLED", version: { increment: 1 } },
+          });
+        }
         return;
       }
       const listing = world.transferAuctions.find((candidate) => candidate.id === Number(payload.auctionId ?? entityId));

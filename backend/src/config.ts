@@ -41,6 +41,7 @@ const gameConfigSchema = z
     weeklyIntervalDays: z.number().int().min(1),
     transferIntervalDays: z.number().int().min(1),
     auctionDurationDays: z.number().int().min(1),
+    freeAgentRetentionDays: z.number().int().min(1).default(30),
     loanDurationSeasons: z.number().int().min(1),
     stadiumUpgradeDays: z.number().int().min(1),
     contractWarningSeasons: z.number().int().min(1),
@@ -168,10 +169,11 @@ const gameConfigSchema = z
         curveK: 2.0,
       },
       bidIncrementRate: 0.01,
+      transferLockupDays: 15,
       softCloseMinutes: 5,
       extensionMinutes: 5,
       maxSoftCloseExtensionMinutes: 30,
-      allowAcrossSeasonRollover: false,
+      allowAcrossSeasonRollover: true,
     },
 
     freeAgents: {
@@ -375,6 +377,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   weeklyIntervalDays: 7,
   transferIntervalDays: 1,
   auctionDurationDays: 7,
+  freeAgentRetentionDays: 30,
   loanDurationSeasons: 1,
   stadiumUpgradeDays: 15,
   contractWarningSeasons: 2,

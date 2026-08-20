@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Dialog } from "primereact/dialog";
+import { Dropdown } from "primereact/dropdown";
 import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Gavel, HandCoins, Users } from "lucide-react";
 import { api, type AuctionView, type FinanceSnapshot, type FreeAgentView, type LoanView, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
+import { useSettings } from "../store/settings";
 import { strings } from "../strings";
 import { PlayerName, POSITION_CLASS, POSITION_LETTER } from "../components/PlayerName";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
@@ -23,6 +25,7 @@ function AuctionCountdown({ deadline }: { deadline: number }) {
 
 export function Transfers() {
   const { snapshot, refresh } = useGame();
+  const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
   const [auctions, setAuctions] = useState<AuctionView[]>([]);
   const [freeAgents, setFreeAgents] = useState<FreeAgentView[]>([]);
   const [loans, setLoans] = useState<LoanView[]>([]);
@@ -32,13 +35,19 @@ export function Transfers() {
   const [sellPrice, setSellPrice] = useState(0);
   const [freeAgentTarget, setFreeAgentTarget] = useState<FreeAgentView | null>(null);
   const [freeAgentBidAmount, setFreeAgentBidAmount] = useState(0);
+  const [freeAgentContractSeasons, setFreeAgentContractSeasons] = useState(1);
   const [loanTarget, setLoanTarget] = useState<LoanView | null>(null);
   const [auctionBidTarget, setAuctionBidTarget] = useState<AuctionView | null>(null);
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
+  const [auctionContractSeasons, setAuctionContractSeasons] = useState(1);
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const toast = useRef<Toast>(null);
+  const contractTermOptions = (demands: Record<number, number> | undefined, fallback: number) => Array.from({ length: maxContractSeasons }, (_, index) => index + 1).map((value) => ({
+    label: `${value} additional season${value === 1 ? "" : "s"} - ${money(demands?.[value] ?? fallback)}/season`,
+    value,
+  }));
   const seasonsOf = (days: number) => {
     const per = snapshot?.save.seasonDays;
     if (!per) return `${days}d`;
@@ -67,6 +76,11 @@ export function Transfers() {
     const id = window.setInterval(() => void loadAuctions(), 30_000);
     return () => window.clearInterval(id);
   }, [loadAuctions]);
+
+  useEffect(() => {
+    if (freeAgentContractSeasons > maxContractSeasons) setFreeAgentContractSeasons(maxContractSeasons);
+    if (auctionContractSeasons > maxContractSeasons) setAuctionContractSeasons(maxContractSeasons);
+  }, [auctionContractSeasons, freeAgentContractSeasons, maxContractSeasons]);
 
   const sell = async () => {
     if (!sellPlayer) return;
@@ -102,7 +116,7 @@ export function Transfers() {
   const submitFreeAgentBid = async () => {
     if (!freeAgentTarget) return;
     try {
-      const res = await api.bidFreeAgent(freeAgentTarget.id, freeAgentBidAmount);
+      const res = await api.bidFreeAgent(freeAgentTarget.id, freeAgentBidAmount, freeAgentContractSeasons);
       toast.current?.show({
         severity: "success",
         summary: res.leading ? "You are now leading the signing race" : "Signing bid placed",
@@ -118,7 +132,7 @@ export function Transfers() {
   const submitAuctionBid = async () => {
     if (!auctionBidTarget) return;
     try {
-      const res = await api.bidAuction(auctionBidTarget.id, auctionBidAmount);
+      const res = await api.bidAuction(auctionBidTarget.id, auctionBidAmount, auctionContractSeasons);
       toast.current?.show({
         severity: "success",
         summary: res.leading ? "You are now leading" : "Bid placed",
@@ -259,7 +273,7 @@ export function Transfers() {
                         <div style={{ color: "var(--text-3)", fontSize: "0.84rem", marginTop: 4 }}>Your max: {money(a.myMaxBid)}</div>
                       )}
                     </div>
-                    <button className="btn" onClick={() => { setAuctionBidTarget(a); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
+                    <button className="btn" onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
                       {a.myMaxBid !== null ? "Increase Max" : strings.transfers.bid}
                     </button>
                   </div>
@@ -287,7 +301,7 @@ export function Transfers() {
                       OVR <b style={{ color: "var(--text-2)" }}>{fa.overall}</b> · {fa.age} yrs · Salary {money(fa.salary)}/season · Value {money(fa.value)} · Signing {money(fa.currentPrice)} · Bidders {fa.bidderCount}
                     </div>
                   </div>
-                  <button className="btn" onClick={() => { setFreeAgentTarget(fa); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
+                    <button className="btn" onClick={() => { setFreeAgentTarget(fa); setFreeAgentContractSeasons(fa.myContractSeasons ?? 1); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
                     {strings.transfers.sign}
                   </button>
                 </div>
@@ -405,8 +419,8 @@ export function Transfers() {
             </div>
             <PlayerSkillsRadar skills={freeAgentTarget.skills} />
             <div style={{ color: "var(--text-2)", marginTop: 8 }}>
-              <div>Demanded salary: <b>{money(freeAgentTarget.salary)}/season</b></div>
-              <div>Contract: <b>{seasonsOf(freeAgentTarget.contractDays)}</b></div>
+              <div>Exact salary demand: <b>{money(freeAgentTarget.contractDemandsBySeason?.[freeAgentContractSeasons] ?? freeAgentTarget.salary)}/season</b></div>
+              <div>Contract: <b>Current season + {freeAgentContractSeasons} full season{freeAgentContractSeasons === 1 ? "" : "s"}</b></div>
               <div style={{ marginTop: 4 }}>
                 Current signing fee: <b style={{ color: "var(--gold-2)" }}>{money(freeAgentTarget.currentPrice)}</b> · Bidders: {freeAgentTarget.bidderCount} · Ends in <AuctionCountdown deadline={freeAgentTarget.deadline} />
               </div>
@@ -419,14 +433,24 @@ export function Transfers() {
           </>
         )}
         <div className="form-group" style={{ marginTop: 12 }}>
+          <label htmlFor="fa-contract-term">Contract term</label>
+          <Dropdown
+            inputId="fa-contract-term"
+            value={freeAgentContractSeasons}
+            options={contractTermOptions(freeAgentTarget?.contractDemandsBySeason, freeAgentTarget?.salary ?? 0)}
+            onChange={(e) => setFreeAgentContractSeasons(e.value as number)}
+            style={{ width: "100%" }}
+          />
+        </div>
+        <div className="form-group" style={{ marginTop: 12 }}>
           <label htmlFor="fa-bid">
             {strings.transfers.yourBid} (minimum {money(freeAgentTarget ? Math.max(freeAgentTarget.openingPrice, freeAgentTarget.myMaxBid ?? 0, freeAgentTarget.currentPrice + freeAgentTarget.bidIncrement) : 0)})
           </label>
           <InputNumber id="fa-bid" value={freeAgentBidAmount} onValueChange={(e) => setFreeAgentBidAmount(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
         </div>
-        {cushionWarning(cushionProjection(freeAgentBidAmount, freeAgentTarget?.salary ?? 0, freeAgentTarget?.myMaxBid ?? null, freeAgentTarget?.amILeading ?? false))}
+        {cushionWarning(cushionProjection(freeAgentBidAmount, freeAgentTarget?.contractDemandsBySeason?.[freeAgentContractSeasons] ?? freeAgentTarget?.salary ?? 0, freeAgentTarget?.myMaxBid ?? null, freeAgentTarget?.amILeading ?? false))}
         <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 8 }}>
-          The signing fee is paid to the system. Your maximum is private and cannot be lowered once submitted.
+          The signing fee is paid to the system. Salary is charged through normal payroll, not immediately. Your maximum is private and cannot be lowered once submitted.
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={() => setFreeAgentTarget(null)}>{strings.common.cancel}</button>
@@ -446,7 +470,8 @@ export function Transfers() {
             </div>
             <PlayerSkillsRadar skills={auctionBidTarget.skills} />
             <div style={{ color: "var(--text-2)", marginTop: 8 }}>
-              <div>Salary: <b>{money(auctionBidTarget.salary)}/season</b></div>
+              <div>Exact salary demand: <b>{money(auctionBidTarget.contractDemandsBySeason?.[auctionContractSeasons] ?? auctionBidTarget.salary)}/season</b></div>
+              <div>Contract: <b>Current season + {auctionContractSeasons} full season{auctionContractSeasons === 1 ? "" : "s"}</b></div>
               <div style={{ marginTop: 4 }}>
                 Current price: <b style={{ color: "var(--gold-2)" }}>{money(auctionBidTarget.currentPrice)}</b> · Bidders: {auctionBidTarget.bidderCount} · Ends in <AuctionCountdown deadline={auctionBidTarget.deadline} />
               </div>
@@ -459,14 +484,24 @@ export function Transfers() {
           </>
         )}
         <div className="form-group" style={{ marginTop: 12 }}>
+          <label htmlFor="auc-contract-term">Contract term</label>
+          <Dropdown
+            inputId="auc-contract-term"
+            value={auctionContractSeasons}
+            options={contractTermOptions(auctionBidTarget?.contractDemandsBySeason, auctionBidTarget?.salary ?? 0)}
+            onChange={(e) => setAuctionContractSeasons(e.value as number)}
+            style={{ width: "100%" }}
+          />
+        </div>
+        <div className="form-group" style={{ marginTop: 12 }}>
           <label htmlFor="auc-bid">
             {strings.transfers.yourBid} (minimum {money(auctionBidTarget ? Math.max(auctionBidTarget.openingPrice, auctionBidTarget.myMaxBid ?? 0, auctionBidTarget.currentPrice + auctionBidTarget.bidIncrement) : 0)})
           </label>
           <InputNumber id="auc-bid" value={auctionBidAmount} onValueChange={(e) => setAuctionBidAmount(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
         </div>
-        {cushionWarning(cushionProjection(auctionBidAmount, auctionBidTarget?.salary ?? 0, auctionBidTarget?.myMaxBid ?? null, auctionBidTarget?.amILeading ?? false))}
+        {cushionWarning(cushionProjection(auctionBidAmount, auctionBidTarget?.contractDemandsBySeason?.[auctionContractSeasons] ?? auctionBidTarget?.salary ?? 0, auctionBidTarget?.myMaxBid ?? null, auctionBidTarget?.amILeading ?? false))}
         <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 8 }}>
-          Your maximum is private and cannot be lowered once submitted. The market clears at the second-highest max plus increment.
+          Salary is charged through normal payroll, not immediately. Your maximum is private and cannot be lowered once submitted. The market clears at the second-highest max plus increment.
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={() => setAuctionBidTarget(null)}>{strings.common.cancel}</button>

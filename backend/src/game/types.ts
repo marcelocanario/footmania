@@ -470,6 +470,10 @@ export interface MarketBid {
   capMultiplierAtSubmission?: number;
   maximumAllowedByRuleAtSubmission?: number;
   buyerDivisionAtSubmission?: number;
+  /** Contract terms accepted with the first bid; immutable on later raises. */
+  contractSeasons?: number;
+  contractSalary?: number;
+  contractDemandAtSubmission?: number;
   createdAt: number;
   updatedAt: number;
   // Immutable tie-priority instant (earliest wins at equal maximums, §13).
@@ -494,6 +498,10 @@ export interface TransferAuction {
   // Total division count (pyramid depth) at listing time, so later pyramid
   // changes cannot retroactively alter the normalized gap of a live listing.
   totalDivisionsAtListing: number;
+  /** Salary baseline used for bidder-specific contract demands. */
+  salaryBaselineAtListing?: number;
+  playerOverallAtListing?: number;
+  playerAgeAtListing?: number;
   currentPrice: number;
   leadingClubId: number | null;
   createdAt: number;
@@ -519,8 +527,11 @@ export interface FreeAgentListing {
   playerValueAtListing: number;
   openingPrice: number;
   bidIncrement: number;
-  demandedSalary: number;
-  demandedContractDays: number;
+  /** Salary baseline used for bidder-specific contract demands. */
+  salaryBaselineAtListing?: number;
+  /** Legacy listing-wide terms retained only while old rows are readable. */
+  demandedSalary?: number;
+  demandedContractDays?: number;
   currentPrice: number;
   leadingClubId: number | null;
   relistStage: number;
@@ -539,6 +550,8 @@ export interface FreeAgentListing {
    * signs the player (§36).
    */
   blockedClubId: number | null;
+  /** Original unclaimed timestamp preserved through every relist. */
+  unclaimedSince?: number;
   /** True once the deadline was extended by a soft-close competitive bid. */
   softClosed: boolean;
   /** Number of soft-close extensions applied so far (bounds §17/§18). */
@@ -572,7 +585,9 @@ export interface PlayerMarketTransaction {
   price: number;
   seasonId: number;
   seasonKey: string;
-  matchday: number;
+  seasonDayIndex: number;
+  contractSeasons?: number | null;
+  contractSalary?: number | null;
   timestamp: number;
 }
 
@@ -590,6 +605,8 @@ export interface AIEvaluation {
   decision: string;
   /** Maximum the AI committed, when it chose to bid. */
   maxBid: number | null;
+  contractSeasons?: number | null;
+  contractSalary?: number | null;
 }
 
 export interface Loan {
@@ -712,6 +729,8 @@ export interface MpState {
   rolloverContext?: RolloverContext | null;
   /** One-time economic conversion marker for the 30 -> 35 day migration. */
   calendarMigrationVersion?: number;
+  /** One-time cleanup marker for the bidder-specific contract market rollout. */
+  contractMarketMigrationVersion?: number;
   /** Absolute end day for loans, keyed by loan ID. */
   loanEndAbsoluteGameDays?: Record<string, number>;
   /** Absolute completion day for stadium upgrades, keyed by club ID. */

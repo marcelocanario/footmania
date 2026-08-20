@@ -7,12 +7,14 @@ import {
   calculateReleaseClause,
   calculateRenewalDemand,
   calculateRenewalRaise,
+  contractDaysForTerm,
+  remainingSeasonFractionForDay,
   curveMultiplier,
   remainingSeasons,
 } from "../src/game/economy";
 import { generatePlayer, refreshPlayerDerived } from "../src/game/player";
 import { createRng } from "../src/game/rng";
-import { contractCycle, promoteYouthPlayer, rolloverSeason } from "../src/game/season";
+import { contractCycle, processContractExpiry, promoteYouthPlayer, rolloverSeason } from "../src/game/season";
 import { settlePayroll } from "../src/game/season";
 import { applyMaxBid, createTransferAuction, settleTransferAuction } from "../src/game/market";
 import { gameConfig } from "../src/config";
@@ -150,6 +152,32 @@ describe("contract limits", () => {
 });
 
 describe("contract renewal demand", () => {
+  it("includes the remaining current-season fraction in the fixed-salary demand", () => {
+    const baseline = 100_000;
+    const seasons = 2;
+    const fraction = 0.25;
+    const raise = calculateRenewalRaise(baseline, 80, 25, seasons);
+    const future = baseline * (1 + raise) + baseline * Math.pow(1 + raise, 2);
+    const expected = Math.round((baseline * fraction + future) / (fraction + seasons));
+    expect(calculateContractDemand(baseline, 80, 25, seasons, fraction)).toBe(expected);
+    expect(calculateContractDemand(baseline, 80, 25, seasons, 0)).toBeGreaterThan(calculateContractDemand(baseline, 80, 25, seasons, fraction));
+  });
+
+  it("uses the multiplayer season clock for the remaining fraction", () => {
+    expect(remainingSeasonFractionForDay(0)).toBe(1);
+    expect(remainingSeasonFractionForDay(gameConfig.seasonDays)).toBe(0);
+    expect(remainingSeasonFractionForDay(gameConfig.seasonDays + 10)).toBe(0);
+  });
+
+  it("leaves four complete seasons after a four-season term crosses rollover", () => {
+    const club = makeClub();
+    const player = generatePlayer(createRng(31), club, { id: 31, isYouth: false });
+    player.contractDays = contractDaysForTerm(4);
+    const world = makeWorld([club], [player]);
+    rolloverSeason(world.rng, world);
+    expect(player.contractDays).toBe(gameConfig.seasonDays * 4);
+  });
+
   it("converts a 10% raise over 5 seasons to the equivalent fixed salary", () => {
     const demand = calculateRenewalDemand(100_000, 0.1, 5);
     expect(demand).toBe(Math.round(134_312.2));
@@ -201,6 +229,18 @@ describe("contract renewal demand", () => {
 });
 
 describe("salary persistence", () => {
+  it("creates a bidder-specific free-agent listing when a senior contract expires", () => {
+    const club = makeClub();
+    const player = generatePlayer(createRng(32), club, { id: 32, isYouth: false });
+    player.contractDays = 0;
+    const world = makeWorld([club], [player]);
+    processContractExpiry(world, player.id);
+    expect(player.clubId).toBeNull();
+    expect(world.freeAgentListings).toHaveLength(1);
+    expect(world.freeAgentListings[0].salaryBaselineAtListing).toBeGreaterThan(0);
+    expect(world.freeAgentListings[0].unclaimedSince).toBeDefined();
+  });
+
   it("pays academy players a configurable fraction of senior salary", () => {
     const club = makeClub();
     const youth = generatePlayer(createRng(12), club, { isYouth: true, id: 1 });
@@ -281,6 +321,7 @@ describe("season timing", () => {
     listed.listing.deadline = settleAt - 1;
     const settled = settleTransferAuction(world, listed.listing, settleAt);
     expect(settled.ok).toBe(true);
+    const buyerSalary = p.salary;
     // Seller receives the final price (opening 2M for a single bid) minus the
     // seller's prorated wages through day 10.
     const fee = listed.listing.openingPrice;
@@ -289,7 +330,7 @@ describe("season timing", () => {
     settlePayroll(world.rng, world);
     expect(seller.cash).toBe(sellerAfterCycle + fee - Math.round(100_000 * 3 / gameConfig.seasonDays));
     expect(buyer.ledger.expense.filter((e) => e.code === 4).reduce((sum, e) => sum + e.amount, 0)).toBe(
-      Math.round(100_000 * (14 - 10) / gameConfig.seasonDays)
+      Math.round(buyerSalary * (14 - 10) / gameConfig.seasonDays)
     );
   });
 });
@@ -311,7 +352,7 @@ describe("AI contract renewals", () => {
     if (p.clubId !== null) {
       if (p.salary !== 100_000) {
         const max = gameConfig.maxContractSeasons;
-        const canonical = Array.from({ length: max }, (_, i) => calculateContractDemand(100_000, p.overall, p.age, i + 1));
+        const canonical = Array.from({ length: max }, (_, i) => calculateContractDemand(100_000, p.overall, p.age, i + 1, remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex)));
         expect(canonical).toContain(p.salary);
         expect(p.salary).toBeLessThanOrEqual(100_000 * 1.3);
       }

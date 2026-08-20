@@ -5,6 +5,7 @@ import { seasonRefFor, seasonKey, joinLockRound } from "../game/clock";
 import { MP_CONFIG, scaleReferenceSeasonFlow } from "../config";
 import { initSeason } from "../game/multiplayer";
 import { releaseAllReservations } from "../game/market";
+import { migrateActiveContractMarket } from "./contractMarketMigration";
 
 export async function configuredInactivityThresholds(prisma: PrismaClient): Promise<{ 1: number; 2: number; default: number }> {
   const rows = await prisma.setting.findMany({ where: { key: { in: ["INACTIVITY_TIER_1", "INACTIVITY_TIER_2", "INACTIVITY_DEFAULT"] } } });
@@ -76,6 +77,7 @@ export function removeFillerClubs(world: World): void {
 
   const removedPlayerIds = new Set(world.players.filter((player) => player.clubId !== null && removed.has(player.clubId)).map((player) => player.id));
   const loanIds = new Set(world.loans.filter((loan) => removed.has(loan.fromClubId) || (loan.toClubId !== null && removed.has(loan.toClubId))).map((loan) => loan.id));
+  const removedListingIds = new Set<number>();
   for (const player of world.players) {
     if (player.clubId !== null && removed.has(player.clubId)) {
       player.clubId = null;
@@ -93,6 +95,7 @@ export function removeFillerClubs(world: World): void {
   world.loans = world.loans.filter((loan) => !loanIds.has(loan.id));
   for (const listing of world.transferAuctions) {
     if (listing.status !== "ACTIVE" || (!removedPlayerIds.has(listing.playerId) && !removed.has(listing.sellerClubId))) continue;
+    removedListingIds.add(listing.id);
     releaseAllReservations(world, listing.id, "TRANSFER");
     listing.status = "CANCELLED";
     listing.cancelledAt = Date.now();
@@ -101,10 +104,13 @@ export function removeFillerClubs(world: World): void {
   }
   for (const listing of world.freeAgentListings) {
     if (listing.status !== "ACTIVE" || !removedPlayerIds.has(listing.playerId)) continue;
+    removedListingIds.add(listing.id);
     releaseAllReservations(world, listing.id, "FREE_AGENT");
     listing.status = "CANCELLED";
     listing.completedAt = Date.now();
   }
+  world.marketBids = world.marketBids.filter((bid) => !removedListingIds.has(bid.listingId));
+  world.aiEvaluations = world.aiEvaluations.filter((evaluation) => !removedListingIds.has(evaluation.listingId));
   world.clubs = world.clubs.filter((club) => !removed.has(club.id));
   for (const id of removed) delete world.ticketPrices[id];
   world.stadiumUpgrades = world.stadiumUpgrades.filter((upgrade) => !removed.has(upgrade.clubId));
@@ -136,12 +142,15 @@ export async function ensureSeasonRow(prisma: PrismaClient, ref: { year: number;
  */
 export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonHandle> {
   await ensureGlobalSave(prisma);
-  const loaded = await loadGlobalWorld(prisma);
+  let loaded = await loadGlobalWorld(prisma);
   if (!loaded) throw new Error("Global world unavailable");
-  const world = loaded.world;
+  let world = loaded.world;
   if ((world.mp.calendarMigrationVersion ?? 0) < 1) {
     for (const player of world.players) player.salary = scaleReferenceSeasonFlow(player.salary);
-    for (const listing of world.freeAgentListings) listing.demandedSalary = scaleReferenceSeasonFlow(listing.demandedSalary);
+    for (const listing of world.freeAgentListings) {
+      if (listing.demandedSalary !== undefined) listing.demandedSalary = scaleReferenceSeasonFlow(listing.demandedSalary);
+      if (listing.salaryBaselineAtListing !== undefined) listing.salaryBaselineAtListing = scaleReferenceSeasonFlow(listing.salaryBaselineAtListing);
+    }
     for (const allocation of world.seasonAllocations) allocation.amount = scaleReferenceSeasonFlow(allocation.amount);
     const budget = await prisma.setting.findUnique({ where: { key: "FIRST_DIVISION_SEASON_BUDGET" } });
     if (budget) {
@@ -150,6 +159,21 @@ export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonH
     }
     world.mp.calendarMigrationVersion = 1;
     await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+    loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("Global world unavailable after calendar migration");
+    world = loaded.world;
+  }
+  if (migrateActiveContractMarket(world, Date.now())) {
+    await prisma.scheduledEvent.updateMany({
+      where: { saveId: loaded.save.id, type: "AUCTION_END", status: { in: ["PENDING", "FAILED"] } },
+      data: { status: "CANCELLED", version: { increment: 1 } },
+    });
+    await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+    const { materializeSeasonEvents } = await import("./scheduler");
+    await materializeSeasonEvents(prisma, loaded.save.id, world);
+    loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("Global world unavailable after contract market migration");
+    world = loaded.world;
   }
   if (world.mp.rolloverPhase !== null) return rollover(prisma, { calendarBoundary: true });
   if (world.mp.seasonId === 0) {

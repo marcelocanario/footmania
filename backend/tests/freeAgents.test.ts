@@ -3,13 +3,15 @@ import {
   applyFreeAgentBid,
   createFreeAgentListing,
   generateFreeAgentTerms,
+  freeAgentListingView,
   marketSalaryForPlayer,
   relistDueFreeAgents,
+  processDueFreeAgentListing,
   settleDueFreeAgentListings,
   settleFreeAgentListing,
   contractSeasonsForAge,
 } from "../src/game/freeAgents";
-import { MARKET_CONFIG } from "../src/config";
+import { gameConfig, MARKET_CONFIG } from "../src/config";
 import { getImmediateAvailableCash } from "../src/game/finance";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
@@ -41,8 +43,9 @@ describe("free-agent listing creation (§42)", () => {
     // Opening = 10% of value (relistMultipliers[0]).
     expect(l.openingPrice).toBeGreaterThan(0);
     expect(l.openingPrice).toBeLessThanOrEqual(Math.round(10_000_000 * MARKET_CONFIG.freeAgents.relistMultipliers[0]) + 25_000);
-    expect(l.demandedSalary).toBeGreaterThan(0);
-    expect(l.demandedContractDays).toBeGreaterThan(0);
+    expect(l.salaryBaselineAtListing).toBeGreaterThan(0);
+    expect(l.demandedSalary).toBeUndefined();
+    expect(l.demandedContractDays).toBeUndefined();
   });
 
   it("rejects youth players and non-free agents", () => {
@@ -104,6 +107,17 @@ describe("free-agent contract terms (§46)", () => {
     const a = generateFreeAgentTerms(world, fa, 0);
     const b = generateFreeAgentTerms(world, fa, 0);
     expect(a).toEqual(b);
+  });
+
+  it("exposes demand options from the frozen market salary baseline", () => {
+    const fa = freePlayer(createRng(4), 4, { value: 10_000_000, salary: 800_000 });
+    const world = makeWorld([makeClubFn(1)], [fa]);
+    const created = createFreeAgentListing(world, fa, { now: 1_700_000_000_000 });
+    if (!created.ok) throw new Error(created.error);
+    const view = freeAgentListingView(world, created.listing, null);
+    expect(view.salaryBaseline).toBe(created.listing.salaryBaselineAtListing);
+    expect(view.contractDemandsBySeason[1]).toBeGreaterThan(0);
+    expect(view.contractDemandsBySeason[5]).toBeGreaterThanOrEqual(view.contractDemandsBySeason[1]);
   });
 });
 
@@ -168,10 +182,29 @@ describe("free-agent proxy bidding (§43)", () => {
     expect(increased.ok).toBe(true);
     expect(world.marketReservations.find((r) => r.clubId === club.id)?.amount).toBe(25_000_000);
   });
+
+  it("stores bidder-specific terms and rejects changing them on a later raise", () => {
+    const { world, listing, fa } = setupWorld();
+    const club = makeClubFn(1);
+    world.clubs.push(club);
+    const first = applyFreeAgentBid(world, { listing, club, player: fa, proposedMaximum: 2_000_000, immediateAvailableCash: 50_000_000, contractSeasons: 3, now: 1_700_000_000_000 });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.contractSeasons).toBe(3);
+    expect(first.contractSalary).toBeGreaterThan(0);
+    const acceptedSalary = first.contractSalary;
+    world.mp.seasonDayIndex = 10;
+    const increased = applyFreeAgentBid(world, { listing, club, player: fa, proposedMaximum: 2_050_000, immediateAvailableCash: 50_000_000, contractSeasons: 3, now: 1_700_000_000_001 });
+    expect(increased.ok).toBe(true);
+    if (increased.ok) expect(increased.contractSalary).toBe(acceptedSalary);
+    const changed = applyFreeAgentBid(world, { listing, club, player: fa, proposedMaximum: 2_100_000, immediateAvailableCash: 50_000_000, contractSeasons: 4, now: 1_700_000_000_001 });
+    expect(changed.ok).toBe(false);
+    expect(changed.ok === false && changed.error).toMatch(/cannot be changed/);
+  });
 });
 
 describe("free-agent settlement (§44/§46)", () => {
-  it("pays the system and signs the predefined contract", () => {
+  it("pays the system and signs the winning bidder's contract", () => {
     const rng = createRng(1);
     const fa = freePlayer(rng, 1, { value: 10_000_000, salary: 800_000, age: 27 });
     const winner = makeClubFn(1, { cash: 50_000_000 });
@@ -180,7 +213,7 @@ describe("free-agent settlement (§44/§46)", () => {
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
     const bidAt = 1_700_000_000_000 + 10_000;
-    const r = applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, immediateAvailableCash: 50_000_000, now: bidAt });
+    const r = applyFreeAgentBid(world, { listing, club: winner, player: fa, proposedMaximum: 1_500_000, immediateAvailableCash: 50_000_000, contractSeasons: 3, now: bidAt });
     expect(r.ok).toBe(true);
     const settleAt = 1_700_000_000_000 + 100_000;
     listing.deadline = settleAt - 1;
@@ -192,12 +225,15 @@ describe("free-agent settlement (§44/§46)", () => {
     expect(winner.cash).toBe(50_000_000 - listing.finalPrice!);
     // Money leaves the economy: no other club received it.
     expect(fa.clubId).toBe(winner.id);
-    expect(fa.salary).toBe(listing.demandedSalary);
-    expect(fa.contractDays).toBe(listing.demandedContractDays);
+    expect(fa.salary).toBe(world.marketBids[0].contractSalary);
+    expect(fa.contractDays).toBe(gameConfig.seasonDays * 4);
+    expect(winner.ledger.expense.filter((entry) => entry.code === 4)).toHaveLength(0);
     expect(listing.status).toBe("COMPLETED");
     // Transaction recorded.
     expect(world.playerMarketHistory.length).toBe(1);
     expect(world.playerMarketHistory[0].type).toBe("FREE_AGENT_SIGNING");
+    expect(world.playerMarketHistory[0].contractSeasons).toBe(3);
+    expect(world.playerMarketHistory[0].contractSalary).toBe(fa.salary);
   });
 
   it("honors a binding signing bid after payroll makes the winner cash-negative", () => {
@@ -228,9 +264,10 @@ describe("free-agent settlement (§44/§46)", () => {
     const now = 1_700_000_000_000 + 100_000;
     listing.deadline = now - 1;
 
-    const settled = settleDueFreeAgentListings(world, now);
-    expect(settled).toBe(1);
+    const processed = settleDueFreeAgentListings(world, now);
+    expect(processed).toBe(0);
     expect(listing.status).toBe("CANCELLED");
+    expect(world.freeAgentListings.filter((candidate) => candidate.status === "ACTIVE")).toHaveLength(1);
   });
 });
 
@@ -252,6 +289,8 @@ describe("free-agent relisting (§54)", () => {
     // Lower opening on the next stage.
     expect(active[0].openingPrice).toBeLessThanOrEqual(listing.openingPrice);
     expect(active[0].relistStage).toBe(1);
+    expect(active[0].unclaimedSince).toBe(listing.unclaimedSince);
+    expect(active[0].salaryBaselineAtListing).toBe(listing.salaryBaselineAtListing);
   });
 
   it("carries the former-club block across no-bid relists", () => {
@@ -283,5 +322,19 @@ describe("free-agent relisting (§54)", () => {
 
     const relisted = relistDueFreeAgents(world, now);
     expect(relisted).toBe(0);
+  });
+
+  it("deletes an unclaimed free agent at the exact retention boundary", () => {
+    const fa = freePlayer(createRng(9), 9, { value: 10_000_000 });
+    const world = makeWorld([makeClubFn(1)], [fa]);
+    const created = createFreeAgentListing(world, fa, { now: 1_700_000_000_000 });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+    const retentionAt = (listing.unclaimedSince ?? listing.createdAt) + gameConfig.freeAgentRetentionDays * 24 * 60 * 60 * 1000;
+    listing.deadline = retentionAt - 1;
+    const result = processDueFreeAgentListing(world, listing, retentionAt);
+    expect(result.kind).toBe("DELETED");
+    expect(world.players.some((player) => player.id === fa.id)).toBe(false);
+    expect(world.freeAgentListings.some((candidate) => candidate.playerId === fa.id)).toBe(false);
   });
 });

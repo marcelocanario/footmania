@@ -153,19 +153,70 @@ export function calculateRenewalRaise(currentSalary: number, overall: number, ag
  * one constant figure. See spec §18.
  */
 export function calculateRenewalDemand(currentSalary: number, raise: number, requestedSeasons: number): number {
+  return calculateRenewalDemandWithCurrentSeason(currentSalary, raise, requestedSeasons, 0);
+}
+
+/**
+ * Equivalent fixed per-season salary including the remaining current season.
+ * The current-season fraction is intentionally explicit because callers that
+ * are calculating historical/full-season values may not have a live clock.
+ */
+export function calculateRenewalDemandWithCurrentSeason(
+  currentSalary: number,
+  raise: number,
+  requestedSeasons: number,
+  currentSeasonFraction: number,
+): number {
   if (requestedSeasons <= 0) return Math.round(currentSalary);
-  if (raise <= 0) return Math.round(currentSalary);
+  const fraction = clamp(currentSeasonFraction, 0, 1);
+  if (raise <= 0) {
+    return Math.round(currentSalary);
+  }
   const r = clamp(raise, 0, 1);
   const n = requestedSeasons;
   const sum = Math.pow(1 + r, n + 1) - (1 + r);
-  const requested = currentSalary * (sum / (n * r));
+  const total = currentSalary * fraction + currentSalary * (sum / r);
+  const requested = total / Math.max(1e-9, fraction + n);
   return Math.round(requested);
 }
 
 /** Canonical demand used by both human renewals and AI clubs. */
-export function calculateContractDemand(currentSalary: number, overall: number, age: number, requestedSeasons: number): number {
+export function calculateContractDemand(
+  currentSalary: number,
+  overall: number,
+  age: number,
+  requestedSeasons: number,
+  currentSeasonFraction = 0,
+): number {
   const raise = calculateRenewalRaise(currentSalary, overall, age, requestedSeasons);
-  return calculateRenewalDemand(currentSalary, raise, requestedSeasons);
+  return calculateRenewalDemandWithCurrentSeason(currentSalary, raise, requestedSeasons, currentSeasonFraction);
+}
+
+/** Contract duration includes the current season plus the selected term. */
+export function contractDaysForTerm(requestedSeasons: number): number {
+  return (Math.max(1, Math.trunc(requestedSeasons)) + 1) * gameConfig.seasonDays;
+}
+
+/** Fraction of the current season remaining for a newly negotiated contract. */
+export function remainingSeasonFractionForDay(seasonDayIndex: number): number {
+  const day = Math.max(0, Math.min(gameConfig.seasonDays, Math.trunc(seasonDayIndex)));
+  return Math.max(0, (gameConfig.seasonDays - day) / gameConfig.seasonDays);
+}
+
+/** All server-authoritative salary demands for the selectable contract terms. */
+export function contractDemandOptions(
+  salaryBaseline: number,
+  overall: number,
+  age: number,
+  seasonDayIndex: number,
+): Record<number, number> {
+  const fraction = remainingSeasonFractionForDay(seasonDayIndex);
+  return Object.fromEntries(
+    Array.from({ length: gameConfig.maxContractSeasons }, (_, index) => {
+      const seasons = index + 1;
+      return [seasons, calculateContractDemand(salaryBaseline, overall, age, seasons, fraction)];
+    }),
+  );
 }
 
 /**

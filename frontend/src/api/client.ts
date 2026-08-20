@@ -353,7 +353,10 @@ export interface AuctionView {
   completedAt: number | null;
   winningClubId: number | null;
   finalPrice: number | null;
+  contractDemandsBySeason: Record<number, number>;
   myMaxBid: number | null;
+  myContractSeasons: number | null;
+  myContractSalary: number | null;
   amILeading: boolean;
 }
 
@@ -366,6 +369,8 @@ export interface FreeAgentView {
   age: number;
   salary: number;
   contractDays: number;
+  salaryBaseline: number;
+  contractDemandsBySeason: Record<number, number>;
   skills: SkillSet;
   value: number;
   openingPrice: number;
@@ -376,6 +381,8 @@ export interface FreeAgentView {
   relistStage: number;
   status: string;
   myMaxBid: number | null;
+  myContractSeasons: number | null;
+  myContractSalary: number | null;
   amILeading: boolean;
 }
 
@@ -582,10 +589,10 @@ export const api = {
     request<{ ok: boolean; listingId?: number; openingPrice?: number }>("/api/transfers/auctions", { method: "POST", body: JSON.stringify({ playerId, openingPrice }) }),
   listAuctions: () => request<{ auctions: AuctionView[] }>("/api/transfers/auctions"),
   listFreeAgents: () => request<{ signings: FreeAgentView[] }>("/api/transfers/free-agents"),
-  bidFreeAgent: (listingId: number, maxBid: number) =>
-    request<{ ok: boolean; currentPrice: number; leading: boolean }>(`/api/transfers/free-agents/${listingId}/bid`, { method: "POST", body: JSON.stringify({ maxBid }) }),
-  bidAuction: (listingId: number, maxBid: number) =>
-    request<{ ok: boolean; currentPrice: number; leading: boolean }>(`/api/transfers/auctions/${listingId}/bid`, { method: "POST", body: JSON.stringify({ maxBid }) }),
+  bidFreeAgent: (listingId: number, maxBid: number, contractSeasons: number) =>
+    request<{ ok: boolean; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number }>(`/api/transfers/free-agents/${listingId}/bid`, { method: "POST", body: JSON.stringify({ maxBid, contractSeasons }) }),
+  bidAuction: (listingId: number, maxBid: number, contractSeasons: number) =>
+    request<{ ok: boolean; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number }>(`/api/transfers/auctions/${listingId}/bid`, { method: "POST", body: JSON.stringify({ maxBid, contractSeasons }) }),
   cancelAuction: (listingId: number) =>
     request<{ ok: boolean }>(`/api/transfers/auctions/${listingId}/cancel`, { method: "POST" }),
   auctionPreview: (playerId: number) =>
@@ -600,8 +607,8 @@ export const api = {
       `/api/transfers/auctions/preview?playerId=${playerId}`
     ),
 
-  renewContract: (playerId: number, length: number, salary: number) =>
-    request<{ ok: boolean }>(`/api/players/${playerId}/contract`, { method: "POST", body: JSON.stringify({ length, salary }) }),
+  renewContract: (playerId: number, length: number) =>
+    request<{ ok: boolean; demand: number }>(`/api/players/${playerId}/contract`, { method: "POST", body: JSON.stringify({ length }) }),
   setTrainingFocus: (focus: "assistant" | "primary" | "secondary") =>
     request<{ ok: boolean; trainingFocus: "assistant" | "primary" | "secondary" }>("/api/club/training", { method: "POST", body: JSON.stringify({ focus }) }),
   setTactics: (tactics: { style: number; pressing: number; direction: number }) =>

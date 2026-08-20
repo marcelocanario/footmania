@@ -42,6 +42,8 @@ Multiplayer
 UI:
 	[DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
 	pro users can nickname players. nicknames are seen by everyone else as well
+	implement creation of club jersey. copy from: https://league-builder.app/kit-lab (you can copy the assets needed as well); then, in the live match UI, use the appropriate jerseys instead of the circles
+	modify the tactics screen. I want something that looks like this: https://league-builder.app/lineup-creator
 
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)

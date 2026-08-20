@@ -58,7 +58,8 @@ export function remainingSalaryCommitmentForPlayer(player: Player, throughDay = 
 
 /** Remaining season fraction used for a new acquisition at the current day. */
 export function remainingSeasonFraction(world: World): number {
-  return Math.max(0, (gameConfig.seasonDays - world.dayIndex) / gameConfig.seasonDays);
+  const seasonDayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
+  return Math.max(0, (gameConfig.seasonDays - seasonDayIndex) / gameConfig.seasonDays);
 }
 
 /**
@@ -109,17 +110,19 @@ export function contingentSalaryFromLeadingBids(world: World, club: Club): numbe
       .filter((r) => r.clubId === club.id && r.releasedAt === null)
       .map((r) => r.listingId)
   );
-  const salaryStartDay = club.competitionState === "PROVISIONAL" ? 0 : world.dayIndex;
+  const salaryStartDay = club.competitionState === "PROVISIONAL" ? 0 : (world.mp.seasonDayIndex ?? world.dayIndex);
   let total = 0;
   for (const listing of world.transferAuctions) {
     if (listing.status !== "ACTIVE" || listing.leadingClubId !== club.id || !activeIds.has(listing.id)) continue;
     const player = world.players.find((p) => p.id === listing.playerId);
     if (!player) continue;
-    total += salaryCommitmentForPeriod(player.salary, salaryStartDay, gameConfig.seasonDays);
+    const bid = world.marketBids.find((candidate) => candidate.marketType === "TRANSFER" && candidate.listingId === listing.id && candidate.clubId === club.id);
+    total += salaryCommitmentForPeriod(bid?.contractSalary ?? player.salary, salaryStartDay, gameConfig.seasonDays);
   }
   for (const listing of world.freeAgentListings) {
     if (listing.status !== "ACTIVE" || listing.leadingClubId !== club.id || !activeIds.has(listing.id)) continue;
-    total += salaryCommitmentForPeriod(listing.demandedSalary, salaryStartDay, gameConfig.seasonDays);
+    const bid = world.marketBids.find((candidate) => candidate.marketType === "FREE_AGENT" && candidate.listingId === listing.id && candidate.clubId === club.id);
+    total += salaryCommitmentForPeriod(bid?.contractSalary ?? listing.salaryBaselineAtListing ?? listing.demandedSalary ?? 0, salaryStartDay, gameConfig.seasonDays);
   }
   return Math.round(total);
 }
@@ -189,7 +192,7 @@ function acquisitionSalaryCommitment(salary: number, world: World, club: Club): 
   // Provisional clubs are warned against the funded upcoming season, whose
   // salary horizon starts at season day zero even though the current season's
   // wage clock is frozen.
-  const startDay = club.competitionState === "PROVISIONAL" ? 0 : world.dayIndex;
+  const startDay = club.competitionState === "PROVISIONAL" ? 0 : (world.mp.seasonDayIndex ?? world.dayIndex);
   return salaryCommitmentForPeriod(salary, startDay, gameConfig.seasonDays);
 }
 
@@ -663,7 +666,9 @@ export function runFinancialIntervention(
         price: candidate.price,
         seasonId,
         seasonKey: `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`,
-        matchday: world.dayIndex,
+        seasonDayIndex: world.mp.seasonDayIndex ?? world.dayIndex,
+        contractSeasons: null,
+        contractSalary: null,
         timestamp: now,
       });
 

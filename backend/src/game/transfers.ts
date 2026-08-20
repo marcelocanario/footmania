@@ -3,6 +3,7 @@ import { positionCount } from "./club";
 import { DAYS_PER_YEAR } from "./constants";
 import { resetPayrollPeriod, settlePlayerPayroll } from "./payroll";
 import { playerHasActiveListing } from "./market";
+import { prepareFreeAgentListing } from "./freeAgents";
 import { getImmediateAvailableCash } from "./finance";
 
 const MIN_SQUAD = [3, 4, 4, 5, 4];
@@ -25,6 +26,11 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
     return { ok: false, error: "The club cannot afford to release this player", cost };
   }
 
+  const prepared = player.isYouth
+    ? null
+    : prepareFreeAgentListing(world, player, { allowOwnedPlayer: true });
+  if (prepared && !prepared.ok) return { ok: false, error: prepared.error, cost };
+
   settlePlayerPayroll(world, player);
   club.cash -= cost;
   if (cost > 0) {
@@ -36,6 +42,7 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
   player.tacPos = -1;
   player.starter = false;
   player.onSale = false;
+  if (prepared?.ok) world.freeAgentListings.push(prepared.listing);
   world.news.push({
     dayIndex: world.dayIndex,
     text: `${player.name} was released by ${club.name} as a free agent`,

@@ -13,6 +13,7 @@ import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from ".
 import {
   calculateBaseSalary,
   calculateContractDemand,
+  contractDaysForTerm,
   calculatePlayerValue,
   calculateReleaseClause,
   remainingSeasons,
@@ -20,7 +21,9 @@ import {
 import { divisionForClub, lowestActiveTier } from "./multiplayer";
 import { generateSeasonalAcademyIntake, academyIntakeDone, markAcademyIntakeDone } from "./clubGenerator";
 import { generateSeniorPlayer } from "./playerGeneration";
-import { evaluateAIDecision, getImmediateAvailableCash, remainingSalaryCommitmentForPlayer, salaryCommitmentForPeriod } from "./finance";
+import { evaluateAIDecision, getImmediateAvailableCash, remainingSalaryCommitmentForPlayer, remainingSeasonFraction, salaryCommitmentForPeriod } from "./finance";
+import { prepareFreeAgentListing } from "./freeAgents";
+import { playerHasActiveListing } from "./market";
 
 /** Add game-days without wrapping at a civil-month or season boundary. */
 export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
@@ -249,6 +252,7 @@ export function contractCycle(rng: World["rng"], world: World) {
     if (player.clubId === null) continue;
     const club = world.clubs.find((c) => c.id === player.clubId);
     if (!club || club.competitionState !== "ACTIVE") continue;
+    if (player.isYouth || player.loanId !== null || playerHasActiveListing(world, player)) continue;
     if (player.contractDays <= 0) {
       processContractExpiry(world, player.id);
       continue;
@@ -258,7 +262,7 @@ export function contractCycle(rng: World["rng"], world: World) {
     if (player.contractDays <= warningThreshold) {
       const maxSeasons = gameConfig.maxContractSeasons;
       const offerSeasons = 1 + nextInt(rng, maxSeasons);
-      const demand = calculateContractDemand(player.salary, player.overall, player.age, offerSeasons);
+       const demand = calculateContractDemand(player.salary, player.overall, player.age, offerSeasons, remainingSeasonFraction(world));
       // AI renewal uses the same demand model as the human player; the club
       // only decides whether it can afford it and for how long. The AI's hard
       // financial safety rule (financial-control §13) is enforced with the
@@ -278,7 +282,8 @@ export function contractCycle(rng: World["rng"], world: World) {
         settlePlayerPayroll(world, player);
         resetPayrollPeriod(player, world.dayIndex);
         player.salary = demand;
-        player.contractDays = DAYS_PER_YEAR * offerSeasons;
+         player.contractDays = contractDaysForTerm(offerSeasons);
+         player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
         player.morale = Math.min(100, player.morale + 5);
       } else if (chance(rng, 30)) {
         world.news.push({
@@ -297,8 +302,8 @@ export function contractCycle(rng: World["rng"], world: World) {
  * Per-season salary the player requests for a renewal of `seasons` seasons,
  * based on his current salary, overall, and age. Shared by human and AI clubs.
  */
-export function contractDemand(player: Player, seasons: number): number {
-  return calculateContractDemand(player.salary, player.overall, player.age, seasons);
+export function contractDemand(player: Player, seasons: number, currentSeasonFraction = 0): number {
+  return calculateContractDemand(player.salary, player.overall, player.age, seasons, currentSeasonFraction);
 }
 
 /** Emit the ordinary player-facing warning for a contract nearing expiry. */
@@ -322,11 +327,16 @@ export function processContractExpiry(world: World, playerId: number): void {
     const loan = world.loans.find((candidate) => candidate.id === player.loanId);
     if (loan) endLoan(world, loan);
   }
+  const prepared = player.isYouth
+    ? null
+    : prepareFreeAgentListing(world, player, { allowOwnedPlayer: true });
+  if (prepared && !prepared.ok) throw new Error(`Could not create free-agent listing after contract expiry: ${prepared.error}`);
   player.clubId = null;
   player.contractDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
   player.tacPos = -1;
   player.starter = false;
   player.onSale = false;
+  if (prepared && prepared.ok) world.freeAgentListings.push(prepared.listing);
   const text = `${player.name} left ${club.name} as a free agent after his contract expired`;
   if (!world.news.some((item) => item.kind === "contract" && item.clubId === club.id && item.text === text)) {
     world.news.push({ dayIndex: world.dayIndex, text, kind: "contract", clubId: club.id });
@@ -595,7 +605,8 @@ export function commitSeasonRollover(world: World): void {
     player.yellows = 0;
     player.reds = 0;
     player.energy = 100;
-    player.onSale = false;
+    player.onSale = world.transferAuctions.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id)
+      || world.freeAgentListings.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id);
     player.morale = Math.max(30, Math.min(100, player.morale));
   }
 }

@@ -14,8 +14,9 @@
     "test:watch": "vitest",
     "calibrate:match": "tsx scripts/match-calibration.ts",
     "db:generate": "prisma generate",
-    "db:upgrade": "prisma db push",
+    "db:upgrade": "prisma db push && tsx scripts/migrate-contract-market.ts",
     "db:push": "prisma db push",
+    "db:migrate-contract-market": "tsx scripts/migrate-contract-market.ts",
     "db:reset": "prisma db push --force-reset",
     "db:seed-name-pools": "tsx scripts/import-name-pools.mts",
     "db:seed": "tsx prisma/seed.ts"

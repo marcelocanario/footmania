@@ -8,7 +8,7 @@ import type {
   TransferAuction,
   World,
 } from "./types";
-import { clamp } from "./economy";
+import { calculateContractDemand, contractDaysForTerm, contractDemandOptions, clamp, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
 import { roundForDay } from "./clock";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 
@@ -271,8 +271,8 @@ export function recentTradeBaseValue(world: World, player: Player): number {
   const fade = MARKET_CONFIG.recentTrade.fadeOverGames;
   if (fade <= 0) return player.value;
 
-  const acquisitionRound = roundForDay(last.matchday) ?? 1;
-  const currentRound = roundForDay(world.dayIndex) ?? Math.max(1, currentRoundFallback(world));
+  const acquisitionRound = roundForDay(last.seasonDayIndex) ?? 1;
+  const currentRound = roundForDay(world.mp.seasonDayIndex ?? world.dayIndex) ?? Math.max(1, currentRoundFallback(world));
   const gamesSinceTrade = Math.max(0, currentRound - acquisitionRound);
 
   if (gamesSinceTrade >= fade) return player.value;
@@ -418,7 +418,7 @@ export function createTransferAuction(
     return { ok: false, error: "This player already has an active market listing" };
   }
   // §53: same-season club-to-club anti-circular cooldown (FA signings exempt).
-  const cooldown = transferCooldownError(world, player);
+  const cooldown = transferCooldownError(world, player, now);
   if (cooldown) return { ok: false, error: cooldown };
 
   // §64.1: the seller chooses within [0.60, 1.00] × base; default to base.
@@ -426,10 +426,6 @@ export function createTransferAuction(
   if (!resolved.ok) return resolved;
   const openingPrice = resolved.openingPrice;
   const deadline = now + gameConfig.auctionDurationDays * 24 * 60 * 60 * 1000;
-  // §17: club-to-club auction may not cross season rollover.
-  if (opts.seasonRolloverAt !== undefined && deadline > opts.seasonRolloverAt) {
-    return { ok: false, error: "The auction would cross the season rollover boundary" };
-  }
 
   const listing: TransferAuction = {
     id: world.nextId++,
@@ -440,6 +436,9 @@ export function createTransferAuction(
     bidIncrement: bidIncrementForValue(player.value),
     sellerDivisionAtListing: opts.sellerDivision,
     totalDivisionsAtListing: opts.totalDivisions,
+    salaryBaselineAtListing: player.salary,
+    playerOverallAtListing: player.overall,
+    playerAgeAtListing: player.age,
     currentPrice: openingPrice,
     leadingClubId: null,
     createdAt: now,
@@ -553,6 +552,10 @@ export function settleTransferAuction(
   // an active loan/FA commitment cannot be auctioned through to a new owner.
   if (player.clubId !== seller.id) return { ok: false, error: "Seller no longer owns the player" };
 
+  const winningBid = world.marketBids.find((bid) => bid.marketType === "TRANSFER" && bid.listingId === listing.id && bid.clubId === winner.id);
+  const contractSeasons = winningBid?.contractSeasons ?? 1;
+  const contractSalary = winningBid?.contractSalary ?? player.salary;
+
   const finalPrice = calculateCurrentPrice({ openingPrice: listing.openingPrice, bidIncrement: listing.bidIncrement, bids });
 
   // The bid is a binding commitment. Payroll or another already-authorized
@@ -568,8 +571,9 @@ export function settleTransferAuction(
     return { ok: false, error: "Winning bid reservation is missing or insufficient" };
   }
 
-  // §27: the buyer inherits the current contract; no salary recalculation.
-  // Settle the seller's accrued payroll through today before ownership moves.
+  // Settle the seller's accrued payroll through today before ownership moves;
+  // the buyer receives the winning bidder's new contract rather than inheriting
+  // the seller's salary or remaining duration.
   settlePlayerPayroll(world, player);
   seller.cash += finalPrice;
   seller.ledger.income.push({ code: 3, amount: finalPrice, day: world.dayIndex, label: `Transfer fee: ${player.name}` });
@@ -580,6 +584,9 @@ export function settleTransferAuction(
   player.tacPos = -1;
   player.starter = false;
   player.onSale = false;
+  player.salary = contractSalary;
+  player.contractDays = contractDaysForTerm(contractSeasons);
+  player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   // The player's payroll clock continues at the buyer (same contract/salary).
   resetPayrollPeriod(player, world.dayIndex);
 
@@ -593,7 +600,9 @@ export function settleTransferAuction(
     price: finalPrice,
     seasonId: world.mp.seasonId,
     seasonKey: `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`,
-    matchday: world.dayIndex,
+    seasonDayIndex: world.mp.seasonDayIndex ?? world.dayIndex,
+    contractSeasons,
+    contractSalary,
     timestamp: now,
   });
 
@@ -653,31 +662,38 @@ export function settleDueTransferAuctions(world: World, now: number): number {
  * season. Free-agent signings are EXEMPT (they use the recent-price anchor
  * instead, §53/§54). Returns an error when the player is still cooling down.
  */
-export function transferCooldownError(world: World, player: Player): string | null {
+export function transferCooldownError(world: World, player: Player, now = Date.now()): string | null {
   const last = lastPermanentAcquisition(world, player.id);
   if (!last) return null;
   if (last.type !== "TRANSFER") return null; // FA signings are exempt
-  if (last.seasonId !== world.mp.seasonId) return null; // previous season only
-  // Same-season club-to-club acquisition: still cooling down.
-  return "A player acquired from another club this season cannot be listed again until next season";
+  if (last.seasonId === world.mp.seasonId) {
+    return "A player acquired from another club this season cannot be listed again until next season";
+  }
+  const elapsed = now - last.timestamp;
+  const lockupMs = MARKET_CONFIG.transferAuction.transferLockupDays * 24 * 60 * 60 * 1000;
+  if (elapsed < lockupMs) {
+    const remainingDays = Math.ceil((lockupMs - Math.max(0, elapsed)) / (24 * 60 * 60 * 1000));
+    return `This player is under a ${MARKET_CONFIG.transferAuction.transferLockupDays}-day transfer lockup (${remainingDays} day${remainingDays === 1 ? "" : "s"} remaining)`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
-// Rollover reconciliation (§17, §102.9)
+// Removed-player reconciliation (§10, §16)
 // ---------------------------------------------------------------------------
 
 /**
- * A club-to-club auction may not cross season rollover (§17). At rollover any
- * still-ACTIVE transfer listing is cancelled: reservations released, the
- * player's on-sale flag cleared, and an audit/news record preserved. No money
- * or ownership moves (§17.1-4). Returns the number of listings cancelled.
+ * Ordinary season rollover leaves transfer auctions untouched. This helper is
+ * retained for cleanup callers that remove a seller/player (for example,
+ * ephemeral filler-club cleanup), where an active listing can no longer settle.
  */
 export function reconcileListingsAtRollover(world: World, now: number): number {
   let cancelled = 0;
   for (const listing of world.transferAuctions) {
     if (listing.status !== "ACTIVE") continue;
     const player = world.players.find((p) => p.id === listing.playerId);
-    // If the player/seller no longer exists (filler removal), release cleanly.
+    const seller = world.clubs.find((club) => club.id === listing.sellerClubId);
+    if (player && seller) continue;
     releaseAllReservations(world, listing.id, "TRANSFER");
     listing.status = "CANCELLED";
     listing.cancelledAt = now;
@@ -711,10 +727,11 @@ export function applyMaxBid(
     proposedMaximum: number;
     buyerDivision: number;
     immediateAvailableCash: number;
+    contractSeasons?: number;
     now?: number;
     seasonRolloverAt?: number;
   }
-): { ok: true; currentPrice: number; leading: boolean } | { ok: false; error: string } {
+): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number } | { ok: false; error: string } {
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
   const existing = marketBidFor(world, listing.id, club.id);
@@ -746,6 +763,25 @@ export function applyMaxBid(
   if (!validated.ok) return validated;
 
   const maxBid = validated.maximum;
+  const requestedContractSeasons = opts.contractSeasons;
+  const contractSeasons = existing?.contractSeasons ?? requestedContractSeasons ?? 1;
+  if (contractSeasons < 1 || contractSeasons > gameConfig.maxContractSeasons || !Number.isInteger(contractSeasons)) {
+    return { ok: false, error: `Contract term must be between 1 and ${gameConfig.maxContractSeasons} seasons` };
+  }
+  if (existing?.contractSeasons !== undefined && requestedContractSeasons !== undefined && existing.contractSeasons !== requestedContractSeasons) {
+    return { ok: false, error: "Contract term cannot be changed after the first bid" };
+  }
+  const baseline = listing.salaryBaselineAtListing ?? player.salary;
+  const overall = listing.playerOverallAtListing ?? player.overall;
+  const age = listing.playerAgeAtListing ?? player.age;
+  const calculatedContractSalary = calculateContractDemand(
+    baseline,
+    overall,
+    age,
+    contractSeasons,
+    remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
+  );
+  const contractSalary = existing?.contractSalary ?? calculatedContractSalary;
   const capMultiplier = clubTransferCapMultiplier(opts.buyerDivision, listing.sellerDivisionAtListing, listing.totalDivisionsAtListing);
   if (existing) {
     // §69: increasing the maximum revalidates the bidder-specific cap and
@@ -755,6 +791,9 @@ export function applyMaxBid(
     existing.capMultiplierAtSubmission = capMultiplier;
     existing.maximumAllowedByRuleAtSubmission = listing.playerValueAtListing * capMultiplier;
     existing.buyerDivisionAtSubmission = opts.buyerDivision;
+    existing.contractSalary ??= contractSalary;
+    existing.contractDemandAtSubmission ??= existing.contractSalary;
+    existing.contractSeasons ??= contractSeasons;
   } else {
     world.marketBids.push({
       id: world.nextId++,
@@ -765,6 +804,9 @@ export function applyMaxBid(
       capMultiplierAtSubmission: capMultiplier,
       maximumAllowedByRuleAtSubmission: listing.playerValueAtListing * capMultiplier,
       buyerDivisionAtSubmission: opts.buyerDivision,
+      contractSeasons,
+      contractSalary,
+      contractDemandAtSubmission: contractSalary,
       createdAt: now,
       updatedAt: now,
       initialPriorityAt: now,
@@ -808,7 +850,7 @@ export function applyMaxBid(
     }
   }
 
-  return { ok: true, currentPrice: listing.currentPrice, leading: listing.leadingClubId === club.id };
+  return { ok: true, currentPrice: listing.currentPrice, leading: listing.leadingClubId === club.id, contractSeasons, contractSalary };
 }
 
 /** Public projection for one listing (never competing maximums, §15/§16). */
@@ -819,6 +861,14 @@ export function transferAuctionView(
 ) {
   const p = world.players.find((x) => x.id === listing.playerId);
   const myBid = myClubId !== null ? marketBidFor(world, listing.id, myClubId) : undefined;
+  const contractDemandsBySeason = p
+    ? contractDemandOptions(
+        listing.salaryBaselineAtListing ?? p.salary,
+        listing.playerOverallAtListing ?? p.overall,
+        listing.playerAgeAtListing ?? p.age,
+        world.mp.seasonDayIndex ?? world.dayIndex,
+      )
+    : {};
   return {
     id: listing.id,
     playerId: listing.playerId,
@@ -841,8 +891,11 @@ export function transferAuctionView(
     completedAt: listing.completedAt,
     winningClubId: listing.winningClubId,
     finalPrice: listing.finalPrice,
+    contractDemandsBySeason,
     // §15: only the requesting club's own maximum and leading state.
     myMaxBid: myBid?.maxBid ?? null,
+    myContractSeasons: myBid?.contractSeasons ?? null,
+    myContractSalary: myBid?.contractSalary ?? null,
     amILeading: listing.leadingClubId === myClubId,
   };
 }

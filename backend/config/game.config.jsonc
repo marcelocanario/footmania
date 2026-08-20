@@ -42,6 +42,8 @@
   "transferIntervalDays": 1,
   // Real 24-hour periods an auction stays open before it resolves.
   "auctionDurationDays": 7,
+  // Real-time days an unclaimed free agent remains available across relists.
+  "freeAgentRetentionDays": 30,
   // Length of a loan in seasons (converted to game-days via the derived season length).
   // (e.g. 1 = a loan lasts one full season.)
   "loanDurationSeasons": 1,

@@ -80,7 +80,7 @@ export const strings = {
     position: "Pos",
     player: "Player",
     renew: "Renew Contract",
-    contractMonths: "Length (seasons)",
+    contractAdditionalSeasons: "Additional seasons after current",
     newSalary: "New Salary",
     contractDone: "Contract renewed",
     trainingFocus: "Training focus",

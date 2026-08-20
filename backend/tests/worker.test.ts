@@ -17,6 +17,7 @@ import { runDailyTick } from "../src/game/world";
 import { createTransferAuction, applyMaxBid } from "../src/game/market";
 import { applyFreeAgentBid, createFreeAgentListing } from "../src/game/freeAgents";
 import { aiMarketProcessor } from "../src/services/jobs/aiMarketProcessor";
+import { gameConfig } from "../src/config";
 import type { World } from "../src/game/types";
 
 const prisma = new PrismaClient();
@@ -437,7 +438,7 @@ describe("free-agent market (Phase 7)", () => {
 
     // A club bids.
     const bidAt = 1_700_000_000_000 + 10_000;
-    const bid = applyFreeAgentBid(world, { listing, club: buyer, player, proposedMaximum: 2_000_000, immediateAvailableCash: 200_000_000, now: bidAt });
+    const bid = applyFreeAgentBid(world, { listing, club: buyer, player, proposedMaximum: 2_000_000, immediateAvailableCash: 200_000_000, contractSeasons: 3, now: bidAt });
     expect(bid.ok).toBe(true);
     listing.deadline = Date.now() - 1;
     await persistWorld(prisma, saveId, saveId, world);
@@ -453,7 +454,9 @@ describe("free-agent market (Phase 7)", () => {
     expect(settled.winningClubId).toBe(buyer.id);
     const signedPlayer = reloaded!.world.players.find((p) => p.id === player.id)!;
     expect(signedPlayer.clubId).toBe(buyer.id);
-    expect(signedPlayer.salary).toBe(settled.demandedSalary);
+    const acceptedBid = reloaded!.world.marketBids.find((candidate) => candidate.listingId === listing.id && candidate.clubId === buyer.id);
+    expect(signedPlayer.salary).toBe(acceptedBid?.contractSalary);
+    expect(signedPlayer.contractDays).toBe(gameConfig.seasonDays * 4);
     // Money left the economy (no club credited) and history recorded.
     expect(reloaded!.world.playerMarketHistory.some((t) => t.type === "FREE_AGENT_SIGNING")).toBe(true);
   });

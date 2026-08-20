@@ -12,7 +12,7 @@ import {
   upgradeGain,
 } from "../src/game/aiMarket";
 import { clubTransferCapMultiplier, createTransferAuction } from "../src/game/market";
-import { MARKET_CONFIG } from "../src/config";
+import { gameConfig, MARKET_CONFIG } from "../src/config";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, TransferAuction, World } from "../src/game/types";
@@ -214,7 +214,7 @@ describe("AI selling decision (§39/§40)", () => {
       price: 1_000_000,
       seasonId: world.mp.seasonId,
       seasonKey: "2026-01",
-      matchday: 1,
+      seasonDayIndex: 1,
       timestamp: 1_700_000_000_000,
     });
 
@@ -414,8 +414,14 @@ describe("evaluateAndBidOnce (§33/§34)", () => {
     const evalRow = world.aiEvaluations.find((e) => e.listingId === listing.id && e.clubId === buyer.id);
     expect(evalRow).toBeDefined();
     expect(evalRow!.decision).toBe("BID");
+    expect(evalRow!.contractSeasons).toBeGreaterThanOrEqual(1);
+    expect(evalRow!.contractSeasons).toBeLessThanOrEqual(gameConfig.maxContractSeasons);
+    expect(evalRow!.contractSalary).toBeGreaterThan(0);
     // The bid landed in the market.
-    expect(world.marketBids.some((b) => b.listingId === listing.id && b.clubId === buyer.id)).toBe(true);
+    const bid = world.marketBids.find((b) => b.listingId === listing.id && b.clubId === buyer.id);
+    expect(bid).toBeDefined();
+    expect(bid!.contractSeasons).toBe(evalRow!.contractSeasons);
+    expect(bid!.contractSalary).toBe(evalRow!.contractSalary);
   });
 
   it("does not re-evaluate the same listing (no second bid) — §34", () => {

@@ -3,7 +3,6 @@ import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Dialog } from "primereact/dialog";
 import { Dropdown } from "primereact/dropdown";
-import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Dumbbell, ShieldCheck, Users, Clapperboard } from "lucide-react";
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
@@ -51,7 +50,6 @@ export function Squad() {
   const [selected, setSelected] = useState<PlayerView | null>(null);
   const [showRenew, setShowRenew] = useState(false);
   const [renewSeasons, setRenewSeasons] = useState(1);
-  const [renewSalary, setRenewSalary] = useState(0);
   const [renewDemand, setRenewDemand] = useState(0);
   const [renewDemandsBySeason, setRenewDemandsBySeason] = useState<Record<number, number>>({});
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
@@ -80,13 +78,11 @@ export function Squad() {
   const openRenew = (p: PlayerView) => {
     setSelected(p);
     setRenewSeasons(1);
-    setRenewSalary(p.salary);
     setRenewDemand(p.salary);
     setRenewDemandsBySeason({});
     if (snapshot) void api.contractDemand(p.id).then((res) => {
       setRenewDemandsBySeason(res.demandsBySeason ?? {});
       setRenewDemand(res.demandsBySeason?.[1] ?? res.salary);
-      setRenewSalary(res.demandsBySeason?.[1] ?? res.salary);
     });
     setShowRenew(true);
   };
@@ -94,7 +90,7 @@ export function Squad() {
   const renew = async () => {
     if (!selected) return;
     try {
-      await api.renewContract(selected.id, renewSeasons, renewSalary);
+      await api.renewContract(selected.id, renewSeasons);
       toast.current?.show({ severity: "success", summary: strings.squad.contractDone });
       setShowRenew(false);
       refresh();
@@ -105,8 +101,8 @@ export function Squad() {
 
   const renewalCushion = finance && selected
     ? finance.financialCushion
-      - selected.salary * finance.remainingSeasonFraction
-      + renewSalary * finance.remainingSeasonFraction
+       - selected.salary * finance.remainingSeasonFraction
+       + renewDemand * finance.remainingSeasonFraction
     : null;
 
   const saveTrainingFocus = async (focus: TrainingFocus) => {
@@ -369,7 +365,7 @@ export function Squad() {
               </div>
 
               <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && !selectedPlayer.onLoanOut && <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>{strings.squad.renew}</button>}
+                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && !selectedPlayer.onLoanOut && !selectedPlayer.onSale && <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>{strings.squad.renew}</button>}
                 {selectedPlayer.isYouth && !selectedPlayer.onLoanOut && (
                   <button className="btn" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "promote")}>{strings.squad.promoteYouth}</button>
                 )}
@@ -415,24 +411,23 @@ export function Squad() {
               Current salary {money(selectedPlayer.salary)}/season · Demand {money(renewDemand)}/season · Contract {seasonsOf(selectedPlayer.contractDays)} left
             </div>
             <div className="form-group">
-              <label htmlFor="renew-seasons">{strings.squad.contractMonths}</label>
+              <label htmlFor="renew-seasons">{strings.squad.contractAdditionalSeasons}</label>
               <Dropdown
                 id="renew-seasons"
                 value={renewSeasons}
-                options={Array.from({ length: maxContractSeasons }, (_, i) => i + 1).map((s) => ({ label: s === 1 ? "1 season" : `${s} seasons`, value: s }))}
+                 options={Array.from({ length: maxContractSeasons }, (_, i) => i + 1).map((s) => ({ label: `${s === 1 ? "1 season" : `${s} seasons`} - ${money(renewDemandsBySeason[s] ?? renewDemand)}/season`, value: s }))}
                 onChange={(e) => {
                   const v = e.value as number;
                   setRenewSeasons(v);
                   const demand = renewDemandsBySeason?.[v] ?? renewDemand;
-                  setRenewSalary(demand);
                   setRenewDemand(demand);
                 }}
                 style={{ width: "100%" }}
               />
             </div>
             <div className="form-group">
-              <label htmlFor="renew-salary">{strings.squad.newSalary}</label>
-              <InputNumber id="renew-salary" value={renewSalary} onValueChange={(e) => setRenewSalary(e.value ?? 0)} mode="currency" currency="USD" locale="en-US" style={{ width: "100%" }} inputStyle={{ width: "100%" }} />
+              <label>{strings.squad.newSalary}</label>
+              <div className="card" style={{ padding: 10 }}>{money(renewDemand)}/season</div>
             </div>
             {renewalCushion !== null && renewalCushion < 0 && (
               <div className="card" style={{ marginBottom: 10, padding: 10, fontSize: "0.88rem", color: "var(--gold-2)", borderColor: "var(--gold-2)" }}>

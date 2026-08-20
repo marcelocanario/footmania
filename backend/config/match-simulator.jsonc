@@ -4254,7 +4254,7 @@
         "executionCeiling": 1
       },
       "tacticalActionMix": {
-        "nonNeutralCorrectionScale": 0,
+        "nonNeutralCorrectionScale": 0.75,
         "asymmetricActionUtility": {
           "PASS": -0.35,
           "CROSS": -0.15,

@@ -19,6 +19,7 @@ Deterministic seeded Monte Carlo over the production possession engine. The fina
 | `cards.yellowTargetPerMatch` | 1.1 | **3.95** | Raise yellow frequency after adding second-yellow leniency. | yellows 4.66 |
 | `cards.redTargetPerMatch` | 0.003 | **0.003** | Anchor total straight-plus-second-yellow reds in the target band. | reds 0.081 |
 | `injuries.targetPerMatch` | 0.088 | **0.088** | Restore the target injury event rate. | injuries 0.67 |
+| `tacticalActionMix.nonNeutralCorrectionScale` | 0 | **0.75** | Reduce tactical pass/shot mix inflation while preserving the neutral CONTROL/CONTROL baseline. | PRESS/COUNTER action mix is reported in the diagnostic section |
 
 ## Neutral Benchmark (20,000 sims)
 
@@ -70,12 +71,12 @@ Goal histogram (total goals per match, % of 20,000): 0→7.4%, 1→19.6%, 2→25
 
 | Scenario | Selected tactic | Side | Possession | Shots | Fouls | Yellows | Selected-side win% |
 |---|---|---|---:|---:|---:|---:|---:|
-| tactics-CONTROL-vs-PRESS | CONTROL | home | 53.6% | 30.8 | 27.2 | 5.14 | 43.3% |
-| tactics-PRESS-vs-CONTROL | CONTROL | away | 46.7% | 30.8 | 27.2 | 5.15 | 43.0% |
-| tactics-CONTROL-vs-COUNTER | CONTROL | home | 56.9% | 30.7 | 23.4 | 4.18 | 37.3% |
-| tactics-COUNTER-vs-CONTROL | CONTROL | away | 43.4% | 30.7 | 23.4 | 4.18 | 37.7% |
-| tactics-PRESS-vs-COUNTER | PRESS | home | 53.1% | 35.4 | 22.7 | 4.45 | 33.9% |
-| tactics-COUNTER-vs-PRESS | PRESS | away | 47.2% | 35.3 | 22.7 | 4.45 | 33.5% |
+| tactics-CONTROL-vs-PRESS | CONTROL | home | 54.8% | 26.5 | 31.3 | 5.72 | 42.3% |
+| tactics-PRESS-vs-CONTROL | CONTROL | away | 45.7% | 26.6 | 31.2 | 5.70 | 41.8% |
+| tactics-CONTROL-vs-COUNTER | CONTROL | home | 58.0% | 26.5 | 26.8 | 4.69 | 36.4% |
+| tactics-COUNTER-vs-CONTROL | CONTROL | away | 42.2% | 26.6 | 26.8 | 4.71 | 37.2% |
+| tactics-PRESS-vs-COUNTER | PRESS | home | 53.0% | 31.2 | 26.6 | 5.11 | 33.2% |
+| tactics-COUNTER-vs-PRESS | PRESS | away | 47.3% | 31.2 | 26.5 | 5.10 | 33.0% |
 
 ## Tactical Volume Diagnostic
 
@@ -83,17 +84,17 @@ Diagnostics are from the same engine path with per-match action and phase reside
 
 | Scenario | N | Pass | Carry | Dribble | Shot | All actions | Controlled min | Dead-ball share | Build-up / progression / final-third |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| neutral-baseline | 5000 | 985.0 | 1142.7 | 29.8 | 26.8 | 2253.3 | 60.9 | 32.5% | 17.1% / 49.1% / 28.2% |
+| neutral-baseline | 20000 | 984.7 | 1142.5 | 29.8 | 26.7 | 2252.6 | 60.9 | 32.5% | 17.1% / 49.1% / 28.2% |
 | tactics-CONTROL-vs-CONTROL | 5000 | 985.0 | 1142.7 | 29.8 | 26.8 | 2253.3 | 60.9 | 32.5% | 17.1% / 49.1% / 28.2% |
-| tactics-CONTROL-vs-PRESS | 5000 | 1166.9 | 923.9 | 37.9 | 30.8 | 2231.6 | 59.6 | 33.9% | 17.2% / 48.8% / 27.8% |
-| tactics-PRESS-vs-CONTROL | 5000 | 1168.2 | 923.4 | 38.0 | 30.8 | 2232.5 | 59.6 | 33.9% | 17.1% / 48.7% / 27.9% |
-| tactics-CONTROL-vs-COUNTER | 5000 | 1160.5 | 965.8 | 38.8 | 30.7 | 2268.4 | 60.6 | 32.7% | 17.2% / 49.3% / 27.7% |
-| tactics-COUNTER-vs-CONTROL | 5000 | 1161.3 | 964.7 | 38.8 | 30.7 | 2268.1 | 60.6 | 32.7% | 17.2% / 49.2% / 27.8% |
-| tactics-PRESS-vs-COUNTER | 5000 | 1377.1 | 728.5 | 48.4 | 35.4 | 2266.4 | 59.8 | 33.7% | 17.2% / 49.0% / 27.3% |
-| tactics-COUNTER-vs-PRESS | 5000 | 1376.4 | 728.3 | 48.4 | 35.3 | 2265.3 | 59.8 | 33.7% | 17.2% / 49.0% / 27.3% |
-| tactics-PRESS-vs-PRESS | 5000 | 1357.0 | 717.4 | 46.4 | 35.1 | 2233.4 | 58.9 | 34.6% | 17.2% / 48.7% / 27.3% |
-| tactics-COUNTER-vs-COUNTER | 5000 | 1390.9 | 736.3 | 50.4 | 35.8 | 2291.3 | 60.3 | 33.1% | 17.2% / 49.3% / 27.4% |
-- The diagnostic separates composition from timing: neutral and tactical cases stay near 2253 total actions and 61 controlled minutes, while COUNTER/COUNTER shifts the mix to 1391 passes and 36 shots. The remaining issue is tactical action selection, not a global clock-duration multiplier.
+| tactics-CONTROL-vs-PRESS | 5000 | 936.1 | 1128.8 | 42.5 | 26.5 | 2206.1 | 59.2 | 34.3% | 16.9% / 48.4% / 28.7% |
+| tactics-PRESS-vs-CONTROL | 5000 | 937.9 | 1127.4 | 42.7 | 26.6 | 2206.7 | 59.2 | 34.3% | 16.9% / 48.4% / 28.7% |
+| tactics-CONTROL-vs-COUNTER | 5000 | 930.4 | 1178.6 | 43.6 | 26.5 | 2252.2 | 60.5 | 32.9% | 16.7% / 49.0% / 28.7% |
+| tactics-COUNTER-vs-CONTROL | 5000 | 931.0 | 1177.6 | 43.6 | 26.6 | 2251.8 | 60.5 | 32.9% | 16.8% / 49.0% / 28.7% |
+| tactics-PRESS-vs-COUNTER | 5000 | 1145.4 | 934.1 | 56.2 | 31.2 | 2244.2 | 59.5 | 34.0% | 16.9% / 48.9% / 28.0% |
+| tactics-COUNTER-vs-PRESS | 5000 | 1145.4 | 934.2 | 56.1 | 31.2 | 2244.2 | 59.5 | 34.0% | 16.9% / 48.9% / 28.0% |
+| tactics-PRESS-vs-PRESS | 5000 | 1125.8 | 914.9 | 53.5 | 30.8 | 2202.1 | 58.5 | 35.2% | 16.9% / 48.5% / 27.9% |
+| tactics-COUNTER-vs-COUNTER | 5000 | 1159.0 | 946.1 | 58.6 | 31.4 | 2273.2 | 60.2 | 33.2% | 16.9% / 49.2% / 28.0% |
+- The diagnostic separates composition from timing: neutral and tactical cases stay near 2253 total actions and 61 controlled minutes, while COUNTER/COUNTER shifts the mix to 1159 passes and 31 shots. The remaining issue is tactical action selection, not a global clock-duration multiplier.
 
 ## Fatigue and Player Availability
 
@@ -131,14 +132,14 @@ The configured team/tactics/luck influence remains **0.40 / 0.35 / 0.25**; no ch
 | P90-vs-P10-neutral | 5000 | 3.30 | 23.4 | 8.4 | 3.30 | 10.0 | 27.2 | 4.65 | 0.080 | 988 | 0.68 | 66.0% | 61.9%/18.7%/19.4% |
 | identical-home-away | 5000 | 2.69 | 27.9 | 10.0 | 2.70 | 10.1 | 26.1 | 4.61 | 0.079 | 983 | 0.67 | 50.3% | 43.4%/25.0%/31.6% |
 | tactics-CONTROL-vs-CONTROL | 5000 | 2.58 | 26.8 | 9.6 | 2.57 | 9.8 | 26.2 | 4.62 | 0.076 | 985 | 0.67 | 50.3% | 36.8%/25.6%/37.6% |
-| tactics-CONTROL-vs-PRESS | 5000 | 2.77 | 30.8 | 10.7 | 2.79 | 9.6 | 27.2 | 5.14 | 0.125 | 1167 | 0.66 | 53.6% | 43.3%/24.8%/31.9% |
-| tactics-PRESS-vs-CONTROL | 5000 | 2.77 | 30.8 | 10.7 | 2.78 | 9.7 | 27.2 | 5.15 | 0.125 | 1168 | 0.66 | 46.7% | 32.5%/24.5%/43.0% |
-| tactics-CONTROL-vs-COUNTER | 5000 | 2.79 | 30.7 | 10.9 | 2.82 | 10.6 | 23.4 | 4.18 | 0.067 | 1161 | 0.68 | 56.9% | 37.3%/25.8%/36.9% |
-| tactics-COUNTER-vs-CONTROL | 5000 | 2.78 | 30.7 | 10.9 | 2.83 | 10.6 | 23.4 | 4.18 | 0.064 | 1161 | 0.68 | 43.4% | 37.1%/25.2%/37.7% |
-| tactics-PRESS-vs-COUNTER | 5000 | 3.07 | 35.4 | 12.2 | 3.08 | 10.8 | 22.7 | 4.45 | 0.080 | 1377 | 0.69 | 53.1% | 33.9%/24.1%/42.0% |
-| tactics-COUNTER-vs-PRESS | 5000 | 3.08 | 35.3 | 12.2 | 3.08 | 10.8 | 22.7 | 4.45 | 0.076 | 1376 | 0.69 | 47.2% | 42.7%/23.8%/33.5% |
-| tactics-PRESS-vs-PRESS | 5000 | 3.00 | 35.1 | 11.8 | 3.01 | 9.8 | 26.1 | 5.29 | 0.116 | 1357 | 0.65 | 50.3% | 37.6%/24.2%/38.1% |
-| tactics-COUNTER-vs-COUNTER | 5000 | 3.14 | 35.8 | 12.6 | 3.15 | 11.9 | 19.5 | 3.62 | 0.049 | 1391 | 0.69 | 50.0% | 36.8%/24.8%/38.4% |
+| tactics-CONTROL-vs-PRESS | 5000 | 2.54 | 26.5 | 9.3 | 2.56 | 8.9 | 31.3 | 5.72 | 0.156 | 936 | 0.65 | 54.8% | 42.3%/26.6%/31.1% |
+| tactics-PRESS-vs-CONTROL | 5000 | 2.54 | 26.6 | 9.3 | 2.56 | 9.0 | 31.2 | 5.70 | 0.155 | 938 | 0.64 | 45.7% | 31.8%/26.4%/41.8% |
+| tactics-CONTROL-vs-COUNTER | 5000 | 2.63 | 26.5 | 9.6 | 2.62 | 9.9 | 26.8 | 4.69 | 0.092 | 930 | 0.69 | 58.0% | 36.4%/26.6%/37.0% |
+| tactics-COUNTER-vs-CONTROL | 5000 | 2.63 | 26.6 | 9.6 | 2.62 | 9.9 | 26.8 | 4.71 | 0.094 | 931 | 0.67 | 42.2% | 35.9%/26.9%/37.2% |
+| tactics-PRESS-vs-COUNTER | 5000 | 2.86 | 31.2 | 10.9 | 2.83 | 10.0 | 26.6 | 5.11 | 0.107 | 1145 | 0.70 | 53.0% | 33.2%/24.8%/42.0% |
+| tactics-COUNTER-vs-PRESS | 5000 | 2.84 | 31.2 | 10.9 | 2.83 | 10.1 | 26.5 | 5.10 | 0.104 | 1145 | 0.71 | 47.3% | 41.2%/25.8%/33.0% |
+| tactics-PRESS-vs-PRESS | 5000 | 2.77 | 30.8 | 10.5 | 2.76 | 9.1 | 30.4 | 6.03 | 0.145 | 1126 | 0.67 | 50.1% | 38.1%/25.0%/36.9% |
+| tactics-COUNTER-vs-COUNTER | 5000 | 2.89 | 31.4 | 11.1 | 2.89 | 11.2 | 23.0 | 4.17 | 0.072 | 1159 | 0.69 | 50.0% | 37.9%/25.3%/36.8% |
 | energy-100 | 5000 | 2.58 | 26.8 | 9.6 | 2.57 | 9.8 | 26.2 | 4.62 | 0.076 | 985 | 0.67 | 50.3% | 36.8%/25.6%/37.6% |
 | energy-75 | 5000 | 2.58 | 26.7 | 9.6 | 2.56 | 9.8 | 26.3 | 4.63 | 0.075 | 985 | 0.67 | 50.3% | 36.7%/26.0%/37.3% |
 | energy-50 | 5000 | 2.58 | 26.4 | 9.4 | 2.59 | 9.7 | 26.9 | 4.82 | 0.082 | 982 | 0.67 | 50.3% | 37.2%/25.0%/37.8% |

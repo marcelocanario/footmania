@@ -125,7 +125,7 @@ describe("auction listing rules (§9/§64.1)", () => {
     const world = makeWorldWithClubs([club]);
     // Round 1 is played on day 1; round 3 is played on day 5 (interval 2).
     world.dayIndex = 5;
-    // The player was signed cheaply from free agency in round 1 (matchday 1).
+    // The player was signed cheaply from free agency on season day 1.
     recordTransaction(world, {
       playerId: player.id,
       listingId: 500,
@@ -135,7 +135,7 @@ describe("auction listing rules (§9/§64.1)", () => {
       price: 500_000,
       seasonId: world.mp.seasonId,
       seasonKey: "2026-01",
-      matchday: 1,
+      seasonDayIndex: 1,
       timestamp: 1_700_000_000_000,
     });
 
@@ -172,7 +172,7 @@ describe("auction listing rules (§9/§64.1)", () => {
       price: 500_000,
       seasonId: world.mp.seasonId,
       seasonKey: "2026-01",
-      matchday: 1,
+      seasonDayIndex: 1,
       timestamp: 1_700_000_000_000,
     });
 
@@ -202,7 +202,7 @@ describe("auction listing rules (§9/§64.1)", () => {
     expect(second.ok === false && second.error).toMatch(/active market listing/i);
   });
 
-  it("rejects a listing that would cross the season rollover boundary", () => {
+  it("allows a listing to cross the season rollover boundary", () => {
     const rng = createRng(1);
     const club = makeClub(1);
     const player = generatePlayer(rng, club, { id: 1, isYouth: false });
@@ -210,7 +210,7 @@ describe("auction listing rules (§9/§64.1)", () => {
     const now = 1_700_000_000_000;
     const rolloverAt = now + 60 * 60 * 1000; // 1h away, but auction needs 24h
     const result = createTransferAuction(world, { player, sellerClub: club, sellerDivision: 1, totalDivisions: 3, now, seasonRolloverAt: rolloverAt });
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
   });
 });
 
@@ -670,8 +670,8 @@ describe("due listing expiry (§77)", () => {
   });
 });
 
-describe("rollover reconciliation (§17/§102.9)", () => {
-  it("cancels all active transfer listings at rollover, releasing reservations", () => {
+describe("rollover reconciliation (§10/§16)", () => {
+  it("leaves active transfer listings and reservations intact at rollover", () => {
     const rng = createRng(21);
     const seller = makeClub(10);
     const buyer = makeClub(1);
@@ -685,14 +685,31 @@ describe("rollover reconciliation (§17/§102.9)", () => {
     expect(world.marketReservations.filter((r) => r.releasedAt === null)).toHaveLength(1);
 
     const cancelled = reconcileListingsAtRollover(world, 5000);
-    expect(cancelled).toBe(1);
-    expect(listing.status).toBe("CANCELLED");
-    expect(player.onSale).toBe(false);
-    expect(world.marketReservations.every((r) => r.releasedAt !== null)).toBe(true);
+    expect(cancelled).toBe(0);
+    expect(listing.status).toBe("ACTIVE");
+    expect(player.onSale).toBe(true);
+    expect(world.marketReservations.every((r) => r.releasedAt === null)).toBe(true);
     // No money or ownership moves (§17.4).
     expect(player.clubId).toBe(seller.id);
     expect(seller.cash + buyer.cash).toBe(20_000_000);
     expect(world.playerMarketHistory).toHaveLength(0);
+  });
+
+  it("cancels an active listing when its seller is removed", () => {
+    const rng = createRng(22);
+    const seller = makeClub(10);
+    const buyer = makeClub(1);
+    const player = generatePlayer(rng, seller, { id: 1, isYouth: false });
+    const world = makeWorld([seller, buyer], [player]);
+    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
+    if (!created.ok) throw new Error(created.error);
+    applyMaxBid(world, { listing: created.listing, club: buyer, player, proposedMaximum: 10_500_000, buyerDivision: 1, immediateAvailableCash: 50_000_000 });
+    world.clubs = world.clubs.filter((club) => club.id !== seller.id);
+
+    expect(reconcileListingsAtRollover(world, 5000)).toBe(1);
+    expect(created.listing.status).toBe("CANCELLED");
+    expect(player.onSale).toBe(false);
+    expect(world.marketReservations.every((r) => r.releasedAt !== null)).toBe(true);
   });
 });
 
@@ -701,11 +718,11 @@ describe("market history (§72)", () => {
     const world = makeWorldWithClubs([]);
     recordTransaction(world, {
       playerId: 1, listingId: 5, type: "TRANSFER", fromClubId: 1, toClubId: 2, price: 8_000_000,
-      seasonId: 1, seasonKey: "2026-01", matchday: 3, timestamp: 100,
+      seasonId: 1, seasonKey: "2026-01", seasonDayIndex: 3, timestamp: 100,
     });
     recordTransaction(world, {
       playerId: 1, listingId: null, type: "LOAN", fromClubId: 2, toClubId: 3, price: 0,
-      seasonId: 1, seasonKey: "2026-01", matchday: 10, timestamp: 200,
+      seasonId: 1, seasonKey: "2026-01", seasonDayIndex: 10, timestamp: 200,
     });
     const permanent = world.playerMarketHistory.filter((t) => t.type !== "LOAN");
     expect(permanent).toHaveLength(1);
@@ -727,18 +744,18 @@ describe("settlement (§22)", () => {
     const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
-    applyMaxBid(world, { listing, club: buyerA, player, proposedMaximum: 10_000_000, buyerDivision: 1, immediateAvailableCash: 20_000_000, now: 100 });
-    applyMaxBid(world, { listing, club: buyerB, player, proposedMaximum: 12_000_000, buyerDivision: 1, immediateAvailableCash: 25_000_000, now: 200 });
+    applyMaxBid(world, { listing, club: buyerA, player, proposedMaximum: 10_000_000, buyerDivision: 1, immediateAvailableCash: 20_000_000, now: 100, contractSeasons: 1 });
+    applyMaxBid(world, { listing, club: buyerB, player, proposedMaximum: 12_000_000, buyerDivision: 1, immediateAvailableCash: 25_000_000, now: 200, contractSeasons: 4 });
     return { world, seller, buyerA, buyerB, player, listing };
   }
 
-  it("settles atomically: winner pays clearing price, seller credited, contract preserved", () => {
+  it("settles atomically with the winning bidder's contract terms", () => {
     const { world, seller, buyerA, buyerB, player, listing } = setupWorldWithBids();
     const sellerCash = seller.cash;
     const buyerACash = buyerA.cash;
     const buyerBCash = buyerB.cash;
-    const salaryBefore = player.salary;
-    const contractDaysBefore = player.contractDays;
+    const winningBid = world.marketBids.find((bid) => bid.clubId === buyerB.id && bid.listingId === listing.id);
+    const sellerSalary = player.salary;
     const now = listing.deadline + 1;
 
     const result = settleTransferAuction(world, listing, now);
@@ -752,16 +769,16 @@ describe("settlement (§22)", () => {
     // Cash: winner pays clearing price. The seller is first charged the
     // player's accrued payroll through dayIndex (5 days of a 500K wage),
     // then receives the clearing price.
-    const accruedPayroll = Math.round((player.salary * world.dayIndex) / gameConfig.seasonDays);
+    const accruedPayroll = Math.round((sellerSalary * world.dayIndex) / gameConfig.seasonDays);
     expect(buyerB.cash).toBe(buyerBCash - result.finalPrice!);
     expect(seller.cash).toBe(sellerCash - accruedPayroll + result.finalPrice!);
     // Loser pays nothing.
     expect(buyerA.cash).toBe(buyerACash);
 
-    // Ownership + contract preserved (§27).
+    // Ownership + the winner's accepted contract terms are applied.
     expect(player.clubId).toBe(buyerB.id);
-    expect(player.salary).toBe(salaryBefore);
-    expect(player.contractDays).toBe(contractDaysBefore);
+    expect(player.salary).toBe(winningBid?.contractSalary);
+    expect(player.contractDays).toBe(gameConfig.seasonDays * 5);
     expect(player.onSale).toBe(false);
 
     // Ledger: one income (seller), one expense (winner).
@@ -783,6 +800,8 @@ describe("settlement (§22)", () => {
     expect(world.playerMarketHistory[0].type).toBe("TRANSFER");
     expect(world.playerMarketHistory[0].toClubId).toBe(buyerB.id);
     expect(world.playerMarketHistory[0].price).toBe(result.finalPrice);
+    expect(world.playerMarketHistory[0].contractSeasons).toBe(4);
+    expect(world.playerMarketHistory[0].contractSalary).toBe(winningBid?.contractSalary);
 
     // News published.
     expect(world.news.some((n) => n.kind === "auction" && n.text.includes(player.name))).toBe(true);
@@ -797,6 +816,17 @@ describe("settlement (§22)", () => {
     expect(second.ok).toBe(false);
     // Money moved exactly once.
     expect(world.playerMarketHistory).toHaveLength(1);
+  });
+
+  it("does not charge the buyer salary at settlement and rejects term changes", () => {
+    const { world, buyerA, buyerB, player, listing } = setupWorldWithBids();
+    const bid = world.marketBids.find((candidate) => candidate.clubId === buyerA.id && candidate.listingId === listing.id);
+    expect(bid?.contractSeasons).toBe(1);
+    const changed = applyMaxBid(world, { listing, club: buyerA, player, proposedMaximum: bid!.maxBid + listing.bidIncrement, buyerDivision: 1, immediateAvailableCash: 50_000_000, contractSeasons: 2 });
+    expect(changed.ok).toBe(false);
+    const salaryExpensesBefore = buyerB.ledger.expense.filter((entry) => entry.code === 4).length;
+    expect(settleTransferAuction(world, listing, listing.deadline + 1).ok).toBe(true);
+    expect(buyerB.ledger.expense.filter((entry) => entry.code === 4)).toHaveLength(salaryExpensesBefore);
   });
 
   it("honors a binding auction after payroll makes the winner cash-negative", () => {
@@ -827,6 +857,27 @@ describe("settlement (§22)", () => {
     expect(player.onSale).toBe(false);
   });
 
+  it("settles a real-time auction in the season where it closes", () => {
+    const rng = createRng(19);
+    const seller = makeClub(10);
+    const buyer = makeClub(1);
+    const player = generatePlayer(rng, seller, { id: 1, isYouth: false });
+    const world = makeWorld([seller, buyer], [player]);
+    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3, now: 1_000 });
+    if (!created.ok) throw new Error(created.error);
+    const listing = created.listing;
+    expect(applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: listing.openingPrice, buyerDivision: 1, immediateAvailableCash: 50_000_000, contractSeasons: 2, now: 1_001 }).ok).toBe(true);
+    world.mp.seasonId = 2;
+    world.mp.seasonYear = 2026;
+    world.mp.seasonMonth = 2;
+    world.mp.seasonDayIndex = 3;
+    const settled = settleTransferAuction(world, listing, listing.deadline + 1);
+    expect(settled.ok).toBe(true);
+    expect(world.playerMarketHistory[0].seasonId).toBe(2);
+    expect(world.playerMarketHistory[0].seasonDayIndex).toBe(3);
+    expect(player.contractDays).toBe(gameConfig.seasonDays * 3);
+  });
+
   it("settles due listings via settleDueTransferAuctions and skips non-due ones", () => {
     const { world, listing } = setupWorldWithBids();
     // Not yet due: nothing settles.
@@ -848,7 +899,7 @@ describe("transfer cooldown (§53)", () => {
     world.mp.seasonId = 3;
     recordTransaction(world, {
       playerId: 1, listingId: 99, type: "TRANSFER", fromClubId: 10, toClubId: 1, price: 5_000_000,
-      seasonId: 3, seasonKey: "2026-03", matchday: 2, timestamp: 1,
+      seasonId: 3, seasonKey: "2026-03", seasonDayIndex: 2, timestamp: 1,
     });
     expect(transferCooldownError(world, player)).toMatch(/cannot be listed again/);
   });
@@ -862,7 +913,7 @@ describe("transfer cooldown (§53)", () => {
     world.mp.seasonId = 3;
     recordTransaction(world, {
       playerId: 1, listingId: 99, type: "FREE_AGENT_SIGNING", fromClubId: null, toClubId: 1, price: 2_000_000,
-      seasonId: 3, seasonKey: "2026-03", matchday: 2, timestamp: 1,
+      seasonId: 3, seasonKey: "2026-03", seasonDayIndex: 2, timestamp: 1,
     });
     expect(transferCooldownError(world, player)).toBeNull();
   });
@@ -876,9 +927,25 @@ describe("transfer cooldown (§53)", () => {
     world.mp.seasonId = 4;
     recordTransaction(world, {
       playerId: 1, listingId: 99, type: "TRANSFER", fromClubId: 10, toClubId: 1, price: 5_000_000,
-      seasonId: 3, seasonKey: "2026-03", matchday: 2, timestamp: 1,
+      seasonId: 3, seasonKey: "2026-03", seasonDayIndex: 2, timestamp: 1,
     });
     expect(transferCooldownError(world, player)).toBeNull();
+  });
+
+  it("enforces the real-time lockup across a season boundary", () => {
+    const rng = createRng(17);
+    const seller = makeClub(10);
+    const buyer = makeClub(1);
+    const player = generatePlayer(rng, seller, { id: 1, isYouth: false });
+    const world = makeWorld([seller, buyer], [player]);
+    world.mp.seasonId = 4;
+    const now = 2_000_000_000_000;
+    recordTransaction(world, {
+      playerId: player.id, listingId: 99, type: "TRANSFER", fromClubId: seller.id, toClubId: buyer.id, price: 5_000_000,
+      seasonId: 3, seasonKey: "2026-03", seasonDayIndex: 28, timestamp: now - 14 * 24 * 60 * 60 * 1000,
+    });
+    expect(transferCooldownError(world, player, now)).toMatch(/15-day transfer lockup/);
+    expect(transferCooldownError(world, player, now + 24 * 60 * 60 * 1000)).toBeNull();
   });
 
   it("blocks createTransferAuction for a cooling-down player", () => {
@@ -889,7 +956,7 @@ describe("transfer cooldown (§53)", () => {
     world.mp.seasonId = 3;
     recordTransaction(world, {
       playerId: 1, listingId: 99, type: "TRANSFER", fromClubId: 10, toClubId: 1, price: 5_000_000,
-      seasonId: 3, seasonKey: "2026-03", matchday: 2, timestamp: 1,
+      seasonId: 3, seasonKey: "2026-03", seasonDayIndex: 2, timestamp: 1,
     });
     const result = createTransferAuction(world, { player, sellerClub: club, sellerDivision: 1, totalDivisions: 3 });
     expect(result.ok).toBe(false);

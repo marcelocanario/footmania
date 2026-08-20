@@ -220,6 +220,7 @@ describe("global multiplayer world persistence", () => {
       proposedMaximum: Math.round(player.value * 1.1),
       buyerDivision: 1,
       immediateAvailableCash: 50_000_000,
+      contractSeasons: 4,
       now,
     });
     expect(bid.ok).toBe(true);
@@ -229,11 +230,11 @@ describe("global multiplayer world persistence", () => {
     recordTransaction(world, {
       playerId: player.id, listingId: listing.id, type: "TRANSFER",
       fromClubId: seller.id, toClubId: buyer.id, price: listing.currentPrice,
-      seasonId, seasonKey: "2026-01", matchday: world.dayIndex, timestamp: now,
+      seasonId, seasonKey: "2026-01", seasonDayIndex: world.dayIndex, contractSeasons: 4, contractSalary: world.marketBids[0].contractSalary, timestamp: now,
     });
     world.aiEvaluations.push({
       marketType: "TRANSFER", listingId: listing.id, clubId: buyer.id,
-      evaluatedAt: now, decision: "BID", maxBid: Math.round(player.value * 1.1),
+      evaluatedAt: now, decision: "BID", maxBid: Math.round(player.value * 1.1), contractSeasons: 4, contractSalary: world.marketBids[0].contractSalary,
     });
 
     await persistWorld(prisma, saveId, saveId, world);
@@ -247,12 +248,18 @@ describe("global multiplayer world persistence", () => {
     expect(rw.marketBids).toHaveLength(1);
     expect(rw.marketBids[0].clubId).toBe(buyer.id);
     expect(rw.marketBids[0].maxBid).toBe(world.marketBids[0].maxBid);
+    expect(rw.marketBids[0].contractSeasons).toBe(4);
+    expect(rw.marketBids[0].contractSalary).toBe(world.marketBids[0].contractSalary);
     expect(rw.marketReservations).toHaveLength(1);
     expect(rw.marketReservations[0].amount).toBe(world.marketBids[0].maxBid);
     expect(rw.playerMarketHistory).toHaveLength(1);
     expect(rw.playerMarketHistory[0].type).toBe("TRANSFER");
+    expect(rw.playerMarketHistory[0].contractSeasons).toBe(4);
+    expect(rw.playerMarketHistory[0].contractSalary).toBe(world.marketBids[0].contractSalary);
     expect(rw.aiEvaluations).toHaveLength(1);
     expect(rw.aiEvaluations[0].decision).toBe("BID");
+    expect(rw.aiEvaluations[0].contractSeasons).toBe(4);
+    expect(rw.aiEvaluations[0].contractSalary).toBe(world.marketBids[0].contractSalary);
 
     // A reload after settlement-like release: released reservations survive.
     releaseAllReservations(rw, listing.id, "TRANSFER");
@@ -300,5 +307,32 @@ describe("global multiplayer world persistence", () => {
     expect(rw.nextId).toBeGreaterThan(990001);
     expect(rw.players.find((player) => player.id === replacement.id)?.financialInterventionGeneratedSeasonId).toBe(seasonId);
     expect(rw.freeAgentListings.find((listing) => listing.playerId === freeAgent.id)?.blockedClubId).toBe(club.id);
+    expect(rw.freeAgentListings.find((listing) => listing.playerId === freeAgent.id)?.unclaimedSince).toBeDefined();
+  });
+
+  it("reads a legacy matchday into seasonDayIndex without losing its value", async () => {
+    const { saveId } = await freshGlobalWorld(903);
+    const { seasonId, world } = await withSeason(saveId);
+    const player = world.players[0];
+    await prisma.playerMarketTransaction.create({
+      data: {
+        saveId,
+        playerId: player.id,
+        listingId: null,
+        type: "LOAN",
+        fromClubId: null,
+        toClubId: null,
+        price: 0,
+        seasonId,
+        seasonKey: "2026-01",
+        seasonDayIndex: null,
+        matchday: 9,
+        contractSeasons: null,
+        contractSalary: null,
+        timestamp: BigInt(123),
+      },
+    });
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded?.world.playerMarketHistory[0].seasonDayIndex).toBe(9);
   });
 });

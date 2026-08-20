@@ -6,6 +6,7 @@ import { aiAffordableCommitment, getFinancialCushion } from "./finance";
 import { positionCount } from "./club";
 import { createRng, nextDouble } from "./rng";
 import { divisionForClub, lowestActiveTier } from "./multiplayer";
+import { calculateContractDemand, remainingSeasonFractionForDay } from "./economy";
 
 /**
  * AI Selling (transfer-market-overhaul Phase 5, §35-§40).
@@ -399,6 +400,11 @@ export function deterministicValuationNoise(clubId: number, playerId: number, li
   return lo + (hi - lo) * nextDouble(rng);
 }
 
+/** Stable contract choice for an AI bid; retries never choose a new term. */
+function deterministicContractTerm(clubId: number, playerId: number, listingId: number): number {
+  return 1 + Math.abs(clubId * 31 + playerId * 17 + listingId) % gameConfig.maxContractSeasons;
+}
+
 /**
  * AI maximum bid (§30). Base valuation:
  *   calculatedMax = player.value × needMultiplier × upgradeMultiplier × noise
@@ -487,7 +493,7 @@ export function evaluateAndBidOnce(
   );
   if (already) return { ok: false, error: "Already evaluated" };
 
-  const record = (decision: string, maxBid: number | null) => {
+  const record = (decision: string, maxBid: number | null, contractSeasons?: number, contractSalary?: number) => {
     world.aiEvaluations.push({
       marketType: "TRANSFER",
       listingId: listing.id,
@@ -495,6 +501,8 @@ export function evaluateAndBidOnce(
       evaluatedAt: now,
       decision,
       maxBid,
+      contractSeasons: contractSeasons ?? null,
+      contractSalary: contractSalary ?? null,
     });
   };
 
@@ -513,7 +521,15 @@ export function evaluateAndBidOnce(
   // The AI's financial safety rule (financial-control §13): it may only bid up
   // to what keeps its financial cushion >= 0. The affordability ceiling is
   // derived from the shared commitment calculator, never a separate formula.
-  const affordable = aiAffordableCommitment(world, club, player.salary);
+  const contractSeasons = deterministicContractTerm(club.id, player.id, listing.id);
+  const contractSalary = calculateContractDemand(
+    listing.salaryBaselineAtListing ?? player.salary,
+    listing.playerOverallAtListing ?? player.overall,
+    listing.playerAgeAtListing ?? player.age,
+    contractSeasons,
+    remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
+  );
+  const affordable = aiAffordableCommitment(world, club, contractSalary);
   const maxBid = aiMaximumBid({
     club,
     player,
@@ -538,6 +554,7 @@ export function evaluateAndBidOnce(
     buyerDivision: opts.buyerDivision,
     immediateAvailableCash: affordable,
     now,
+    contractSeasons,
     seasonRolloverAt: opts.seasonRolloverAt,
   });
   if (!result.ok) {
@@ -546,7 +563,7 @@ export function evaluateAndBidOnce(
     return { ok: false, error: result.error, recorded: false };
   }
 
-  record("BID", maxBid);
+  record("BID", maxBid, contractSeasons, contractSalary);
   return { ok: true, bid: maxBid };
 }
 
@@ -637,7 +654,7 @@ export function evaluateFreeAgentAndBid(
   );
   if (already) return { ok: false, error: "Already evaluated" };
 
-  const record = (decision: string, maxBid: number | null) => {
+  const record = (decision: string, maxBid: number | null, contractSeasons?: number, contractSalary?: number) => {
     world.aiEvaluations.push({
       marketType: "FREE_AGENT",
       listingId: listing.id,
@@ -645,6 +662,8 @@ export function evaluateFreeAgentAndBid(
       evaluatedAt: now,
       decision,
       maxBid,
+      contractSeasons: contractSeasons ?? null,
+      contractSalary: contractSalary ?? null,
     });
   };
 
@@ -660,9 +679,17 @@ export function evaluateFreeAgentAndBid(
     return { ok: false, error: "No upgrade", recorded: true };
   }
 
+  const contractSeasons = deterministicContractTerm(club.id, player.id, listing.id);
+  const contractSalary = calculateContractDemand(
+    listing.salaryBaselineAtListing ?? listing.demandedSalary ?? player.salary,
+    player.overall,
+    player.age,
+    contractSeasons,
+    remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
+  );
   // Free-agent valuation: value x need x upgrade x noise, NO player-value cap
   // (§43). The AI's affordability ceiling still enforces the §13 cushion rule.
-  const affordable = aiAffordableCommitment(world, club, listing.demandedSalary);
+  const affordable = aiAffordableCommitment(world, club, contractSalary);
   const needMult = rangeMap(need, MARKET_CONFIG.aiBuying.needMultiplierRange);
   const upgradeMult = rangeMap(upgrade, MARKET_CONFIG.aiBuying.upgradeMultiplierRange);
   const noise = deterministicValuationNoise(club.id, player.id, listing.id);
@@ -681,12 +708,13 @@ export function evaluateFreeAgentAndBid(
     proposedMaximum: maxBid,
     immediateAvailableCash: affordable,
     now,
+    contractSeasons,
   });
   if (!result.ok) {
     return { ok: false, error: result.error, recorded: false };
   }
 
-  record("BID", maxBid);
+  record("BID", maxBid, contractSeasons, contractSalary);
   return { ok: true, bid: maxBid };
 }
 
