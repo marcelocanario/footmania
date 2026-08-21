@@ -1,19 +1,16 @@
 import type { Club, Player, World } from "./types";
-import { chance, nextInt, pick } from "./rng";
+import { chance, nextInt } from "./rng";
 import {
   aging,
   potentialGrowth,
   shouldRetire,
 } from "./player";
 import { DAYS_PER_YEAR } from "./constants";
-import { sortedStandings } from "./league";
-import { squadNeeds } from "./transfers";
 import { gameConfig, scaleReferenceSeasonFlow } from "../config";
 import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from "./payroll";
 import {
   calculateBaseSalary,
   calculateContractDemand,
-  contractDaysForTerm,
   calculatePlayerValue,
   calculateReleaseClause,
   remainingSeasons,
@@ -21,9 +18,9 @@ import {
 import { divisionForClub, lowestActiveTier } from "./multiplayer";
 import { generateSeasonalAcademyIntake, academyIntakeDone, markAcademyIntakeDone } from "./clubGenerator";
 import { generateSeniorPlayer } from "./playerGeneration";
-import { evaluateAIDecision, getImmediateAvailableCash, remainingSalaryCommitmentForPlayer, remainingSeasonFraction, salaryCommitmentForPeriod } from "./finance";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { playerHasActiveListing } from "./market";
+import { isEphemeralAI } from "./club";
 
 /** Add game-days without wrapping at a civil-month or season boundary. */
 export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
@@ -40,7 +37,8 @@ export function loanFitsContract(startDay: number, endDay: number, contractDays:
   return endDay > startDay && endDay - startDay <= contractDays;
 }
 
-export const SENIOR_SQUAD_LIMIT = 35;
+export { SENIOR_SQUAD_LIMIT } from "./constants";
+import { SENIOR_SQUAD_LIMIT } from "./constants";
 
 export function fairSalaryForPlayer(player: Player): number {
   return calculateBaseSalary(player.overall, player.age);
@@ -90,24 +88,6 @@ export function clubLastMatch(world: World, clubId: number) {
   return null;
 }
 
-function lastMatchXI(world: World, clubId: number): Set<number> {
-  const last = clubLastMatch(world, clubId);
-  if (!last) return new Set();
-  const ids = new Set<number>();
-  const subbedOff = new Set<number>();
-  for (const ev of last.events) {
-    if (ev.clubId !== clubId) continue;
-    if (ev.type === 6) {
-      if (ev.playerId !== null) subbedOff.add(ev.playerId);
-      if (ev.player2Id !== null) ids.add(ev.player2Id);
-    } else if (ev.playerId !== null) {
-      ids.add(ev.playerId);
-    }
-  }
-  for (const id of subbedOff) ids.delete(id);
-  return ids;
-}
-
 export function weeklyUpdate(rng: World["rng"], world: World) {
   for (const club of world.clubs) {
     const last = clubLastMatch(world, club.id);
@@ -148,13 +128,12 @@ export function updateCareerRecords(world: World) {
     if (!topSeason || p.seasonGoals > topSeason.seasonGoals) topSeason = p;
   }
   upsertRecord(world, "most_goals_in_season", topSeason?.seasonGoals ?? 0, topSeason?.name ?? "—");
+  // Division titles are tracked per club in `trophies`, keyed by division name
+  // (invariant #19). The all-time leader holds the record.
   let topClub: Club | null = null;
   let topCount = 0;
   for (const club of world.clubs) {
-    let titles = 0;
-    for (const comp of world.competitions) {
-      if (comp.kind === "league") titles += club.trophies[comp.name] ?? 0;
-    }
+    const titles = Object.values(club.trophies).reduce((sum, count) => sum + count, 0);
     if (titles > topCount) {
       topCount = titles;
       topClub = club;
@@ -176,8 +155,11 @@ function upsertRecord(world: World, category: string, value: number, holderName:
 }
 
 export function computeSeasonAwards(world: World) {
-  const season = world.year;
-  for (const comp of world.competitions) {
+  const season = world.mp.seasonYear;
+  // Only the divisions of the season being archived are eligible; archived
+  // competitions from earlier seasons must never produce duplicate awards.
+  const comps = world.competitions.filter((c) => c.kind === "division" && c.seasonId === world.mp.seasonId && c.status !== "ARCHIVED");
+  for (const comp of comps) {
     const clubIds = new Set(comp.config.clubs);
     const players = world.players.filter((p) => p.clubId !== null && clubIds.has(p.clubId));
     const scorers = [...players].sort((a, b) => b.seasonGoals - a.seasonGoals || b.seasonAssists - a.seasonAssists);
@@ -247,53 +229,21 @@ export function computeSeasonAwards(world: World) {
   }
 }
 
+/**
+ * Weekly contract cycle. Human clubs only (invariant #28): ephemeral AI
+ * squads never renew, expire or release players during their single season.
+ * A human-club player whose contract clock reached zero leaves as a free
+ * agent through the standard expiry transition.
+ */
 export function contractCycle(rng: World["rng"], world: World) {
+  void rng;
   for (const player of [...world.players]) {
     if (player.clubId === null) continue;
     const club = world.clubs.find((c) => c.id === player.clubId);
-    if (!club || club.competitionState !== "ACTIVE") continue;
+    if (!club || club.competitionState !== "ACTIVE" || isEphemeralAI(club)) continue;
     if (player.isYouth || player.loanId !== null || playerHasActiveListing(world, player)) continue;
     if (player.contractDays <= 0) {
       processContractExpiry(world, player.id);
-      continue;
-    }
-    if (club.isHuman) continue;
-    const warningThreshold = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
-    if (player.contractDays <= warningThreshold) {
-      const maxSeasons = gameConfig.maxContractSeasons;
-      const offerSeasons = 1 + nextInt(rng, maxSeasons);
-       const demand = calculateContractDemand(player.salary, player.overall, player.age, offerSeasons, remainingSeasonFraction(world));
-      // AI renewal uses the same demand model as the human player; the club
-      // only decides whether it can afford it and for how long. The AI's hard
-      // financial safety rule (financial-control §13) is enforced with the
-      // shared commitment calculator: the new salary must not push the
-      // financial cushion below 0.
-      const currentSalaryCommitment = remainingSalaryCommitmentForPlayer(player);
-      const accruedSalaryToSettle = remainingSalaryCommitmentForPlayer(player, world.dayIndex);
-      const renewedSalaryCommitment = salaryCommitmentForPeriod(demand, world.dayIndex, gameConfig.seasonDays);
-      const affordable = evaluateAIDecision(world, club, {
-        immediateCost: accruedSalaryToSettle,
-        newBidCommitments: 0,
-        additionalSalary: 0,
-        additionalSalaryCommitment: renewedSalaryCommitment,
-        replacedSalaryCommitment: currentSalaryCommitment,
-      });
-      if (affordable && demand > player.salary) {
-        settlePlayerPayroll(world, player);
-        resetPayrollPeriod(player, world.dayIndex);
-        player.salary = demand;
-         player.contractDays = contractDaysForTerm(offerSeasons);
-         player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
-        player.morale = Math.min(100, player.morale + 5);
-      } else if (chance(rng, 30)) {
-        world.news.push({
-          dayIndex: world.dayIndex,
-          text: `${player.name} (${club.name}) rejected a renewal offer and may leave at the end of his contract`,
-          kind: "contract",
-          clubId: club.id,
-        });
-        player.morale = Math.max(0, player.morale - 5);
-      }
     }
   }
 }
@@ -367,127 +317,6 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
   }
 }
 
-export function loanCycle(rng: World["rng"], world: World) {
-  for (const club of world.clubs) {
-    if (club.isHuman || club.competitionState !== "ACTIVE" || !chance(rng, 15)) continue;
-    const roster = world.players.filter(
-      (p) =>
-        p.clubId === club.id && !p.isYouth && !p.onSale && p.loanId === null && p.injuryDays === 0 && p.overall < 70
-    );
-    if (roster.length === 0) continue;
-    const inXI = lastMatchXI(world, club.id);
-    const candidates = roster.filter((p) => !inXI.has(p.id));
-    if (candidates.length === 0) continue;
-    const endDay = seasonEndDay(world.dayIndex, DAYS_PER_YEAR * gameConfig.loanDurationSeasons);
-    const contractEligible = candidates.filter((p) => loanFitsContract(world.dayIndex, endDay, p.contractDays));
-    if (contractEligible.length === 0) continue;
-    const p = pick(rng, contractEligible);
-    world.loans.push({
-      id: world.nextId++,
-      playerId: p.id,
-      fromClubId: club.id,
-      toClubId: null,
-      startDay: world.dayIndex,
-      endDay,
-      recalled: false,
-      listedAt: Date.now(),
-      claimableAt: Date.now(),
-    });
-    world.mp.loanEndAbsoluteGameDays ??= {};
-    world.mp.loanEndAbsoluteGameDays[String(world.loans.at(-1)!.id)] = (world.mp.absoluteGameDay ?? world.dayIndex) + (endDay - world.dayIndex);
-    world.news.push({
-      dayIndex: world.dayIndex,
-      text: `${club.name} listed ${p.name} on the loan list`,
-      kind: "loan",
-      clubId: club.id,
-    });
-  }
-  for (const loan of [...world.loans]) {
-    if (loan.recalled) continue;
-    const absoluteEnd = world.mp.loanEndAbsoluteGameDays?.[String(loan.id)] ?? loan.endDay;
-    if (absoluteEnd <= (world.mp.absoluteGameDay ?? world.dayIndex)) {
-      endLoan(world, loan);
-    } else if (loan.toClubId !== null && chance(rng, 5)) {
-      endLoan(world, loan);
-    }
-  }
-  for (const club of world.clubs) {
-    if (club.isHuman || !chance(rng, 12)) continue;
-    const needs = squadNeeds(club, world.players);
-    const candidates = world.loans.filter((l) => {
-      const absoluteEnd = world.mp.loanEndAbsoluteGameDays?.[String(l.id)] ?? l.endDay;
-      if (l.toClubId !== null || l.recalled || absoluteEnd <= (world.mp.absoluteGameDay ?? world.dayIndex)) return false;
-      const p = world.players.find((x) => x.id === l.playerId);
-      if (!p || p.clubId === club.id || needs[p.position] <= 0) return false;
-      return evaluateAIDecision(world, club, {
-        immediateCost: 0,
-        newBidCommitments: 0,
-        additionalSalary: 0,
-        additionalSalaryCommitment: salaryCommitmentForPeriod(p.salary, world.dayIndex, Math.min(gameConfig.seasonDays, l.endDay)),
-      });
-    });
-    if (candidates.length === 0) continue;
-    const loan = pick(rng, candidates);
-    const p = world.players.find((x) => x.id === loan.playerId)!;
-    settlePlayerPayroll(world, p);
-    loan.toClubId = club.id;
-    p.loanId = loan.id;
-    p.clubId = club.id;
-    world.news.push({
-      dayIndex: world.dayIndex,
-      text: `${club.name} took ${p.name} on loan`,
-      kind: "loan",
-      clubId: club.id,
-    });
-  }
-}
-
-export function stadiumCycle(world: World) {
-  const currentAbsolute = world.mp.absoluteGameDay ?? world.dayIndex;
-  const due = world.stadiumUpgrades.filter((u) => {
-    const absoluteDue = world.mp.stadiumCompletionAbsoluteGameDays?.[String(u.clubId)];
-    return !u.completed && (absoluteDue !== undefined ? absoluteDue <= currentAbsolute : u.completesDay <= world.dayIndex);
-  });
-  for (const u of due) {
-    const club = world.clubs.find((c) => c.id === u.clubId);
-    if (club) {
-      club.stadiumCapacity = u.newCapacity;
-      world.news.push({
-        dayIndex: world.dayIndex,
-        text: `${club.name} inaugurated its expanded stadium: ${u.newCapacity} seats`,
-        kind: "stadium",
-        clubId: club.id,
-      });
-    }
-    u.completed = true;
-  }
-}
-
-export function startStadiumUpgrade(world: World, club: Club): { error?: string; upgrade?: World["stadiumUpgrades"][number] } {
-  if (world.stadiumUpgrades.some((u) => u.clubId === club.id && u.startedDay >= world.dayIndex - (DAYS_PER_YEAR - 1))) {
-    return { error: "Only one stadium upgrade is allowed per season" };
-  }
-  if (world.stadiumUpgrades.some((u) => u.clubId === club.id && !u.completed)) {
-    return { error: "A stadium upgrade is already under construction" };
-  }
-  const newCapacity = club.stadiumCapacity + 5000;
-  const cost = Math.round((newCapacity / 5000) ** 2 * 1_000_000);
-  // §9/§64: a new immediate expense (stadium upgrade) requires actual
-  // unreserved cash. Binding bid reservations are not available for spending,
-  // even though the cushion may be negative for humans.
-  if (getImmediateAvailableCash(world, club) < cost) {
-    return { error: "Not enough unreserved cash for this upgrade" };
-  }
-  club.cash -= cost;
-  club.ledger.expense.push({ code: 12, amount: cost, day: world.dayIndex, label: "Stadium expansion" });
-  const upgrade = { clubId: club.id, startedDay: world.dayIndex, completesDay: seasonEndDay(world.dayIndex, gameConfig.stadiumUpgradeDays), newCapacity, cost, completed: false };
-  world.stadiumUpgrades.push(upgrade);
-  world.mp.stadiumCompletionAbsoluteGameDays ??= {};
-  world.mp.stadiumCompletionAbsoluteGameDays[String(club.id)] = (world.mp.absoluteGameDay ?? world.dayIndex) + gameConfig.stadiumUpgradeDays;
-  world.news.push({ dayIndex: world.dayIndex, text: `${club.name} began a stadium expansion to ${newCapacity} seats`, kind: "stadium", clubId: club.id });
-  return { upgrade };
-}
-
 /** Apply season-end aging, salary settlement, retirements, and contract expiry. */
 export function processSeasonEndContracts(rng: World["rng"], world: World): void {
   // The configured season can end between payroll intervals. Settle the
@@ -530,6 +359,9 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
 /** Run youth promotion, seasonal academy intake, and roster replacement. */
 export function processSeasonalAcademyIntake(rng: World["rng"], world: World): void {
   for (const club of world.clubs) {
+    // Ephemeral AI squads are static (invariant #28): no promotions, no
+    // academy intake and no replacement generation for filler clubs.
+    if (isEphemeralAI(club)) continue;
     let squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
     let juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
     const juniorsToPromote = juniors.filter((p) => p.age >= 21);
@@ -609,11 +441,4 @@ export function commitSeasonRollover(world: World): void {
       || world.freeAgentListings.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id);
     player.morale = Math.max(30, Math.min(100, player.morale));
   }
-}
-
-/** Preserve the legacy all-in-one API for callers outside the scheduler. */
-export function rolloverSeason(rng: World["rng"], world: World): void {
-  processSeasonEndContracts(rng, world);
-  processSeasonalAcademyIntake(rng, world);
-  commitSeasonRollover(world);
 }

@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, Wallet, Building2, TrendingDown } from "lucide-react";
-import { Toast } from "primereact/toast";
 import { api, type FinanceDetails, type FinanceSnapshot, type LedgerEntry } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
-import { money, num } from "../format";
+import { money } from "../format";
 
 const STATUS_LABEL: Record<FinanceSnapshot["status"], string> = {
   SAFE: "SAFE",
@@ -13,58 +12,23 @@ const STATUS_LABEL: Record<FinanceSnapshot["status"], string> = {
 };
 
 export function Finances() {
-  const { snapshot, refresh } = useGame();
+  const { snapshot } = useGame();
   const [income, setIncome] = useState<LedgerEntry[]>([]);
   const [expense, setExpense] = useState<LedgerEntry[]>([]);
-  const [busy, setBusy] = useState(false);
   const [details, setDetails] = useState<FinanceDetails | null>(null);
-  const [prices, setPrices] = useState<number[]>([]);
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
-  const toast = useRef<Toast>(null);
 
   useEffect(() => {
-    if (false) return;
     void (async () => {
       const res = await api.finances();
       setIncome(res.income);
       setExpense(res.expense);
       setFinance(res.finance);
-      const financeDetails = await api.financeDetails();
-      setDetails(financeDetails);
-      setPrices([...financeDetails.ticketPrices]);
+      setDetails(await api.financeDetails());
     })();
   }, [snapshot?.club?.cash]);
 
   const club = snapshot?.club;
-
-  const savePrices = async () => {
-    if (prices.length !== 4) return;
-    setBusy(true);
-    try {
-      await api.setTicketPrices(prices as [number, number, number, number]);
-      toast.current?.show({ severity: "success", summary: "Ticket prices updated" });
-      await refresh();
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const upgrade = async () => {
-    if (false) return;
-    setBusy(true);
-    try {
-      await api.startStadiumUpgrade();
-      toast.current?.show({ severity: "success", summary: "Stadium expansion started" });
-      await refresh();
-      setDetails(await api.financeDetails());
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const ledgerRow = (e: LedgerEntry, positive: boolean) => (
     <div key={`${e.day}-${e.label}-${e.amount}`} className="news-item">
@@ -78,7 +42,6 @@ export function Finances() {
 
   return (
     <div>
-      <Toast ref={toast} />
       <div className="page-head">
         <div>
           <div className="kicker">{strings.finances.title}</div>
@@ -94,7 +57,7 @@ export function Finances() {
           <div style={{ fontFamily: "var(--font-display)", fontSize: "2.3rem", fontWeight: 800, marginTop: 6, color: (club?.cash ?? 0) >= 0 ? "var(--grass-2)" : "var(--red-2)" }}>
             {money(club?.cash ?? 0)}
           </div>
-          <div className="hint">{num(club?.stadiumCapacity ?? 0)} seats · {club?.stadiumName}</div>
+          <div className="hint">{club?.stadiumName}</div>
         </div>
 
         <div className="card" style={{ flex: 1 }}>
@@ -102,19 +65,6 @@ export function Finances() {
             <Building2 size={12} /> Stadium
           </div>
           <div style={{ fontFamily: "var(--font-display)", fontSize: "1.4rem", fontWeight: 800, marginTop: 6 }}>{club?.stadiumName}</div>
-          <div className="hint">{num(club?.stadiumCapacity ?? 0)} capacity</div>
-          {details?.stadiumUpgrade ? (
-            <div className="hint" style={{ marginTop: 10 }}>Expansion completes on day {details.stadiumUpgrade.completesDay}</div>
-          ) : (
-            <>
-              {finance && details && finance.financialCushion >= 0 && finance.financialCushion - details.nextStadiumUpgradeCost < 0 && (
-                <div className="hint" style={{ marginTop: 10, color: "var(--gold-2)" }}>
-                  This upgrade would reduce your financial cushion to {money(finance.financialCushion - details.nextStadiumUpgradeCost)}.
-                </div>
-              )}
-              <button className="btn sm" style={{ marginTop: 12 }} disabled={busy} onClick={upgrade}>Expand by 5,000 seats</button>
-            </>
-          )}
         </div>
       </div>
 
@@ -171,23 +121,14 @@ export function Finances() {
 
       <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
         <div className="card">
-          <h2 className="card-title">Ticket prices</h2>
-          <div className="hint" style={{ marginBottom: 12 }}>Prices affect attendance through demand elasticity.</div>
-          <div className="grid cols-2">
-            {prices.map((price, i) => {
-              const bounds = details?.ticketBounds[i];
-              return <div className="form-group" key={i}>
-                <label htmlFor={`ticket-${i}`}>Sector {i + 1}</label>
-                <input id={`ticket-${i}`} type="number" min={bounds?.min} max={bounds?.max} value={price} onChange={(e) => setPrices((current) => current.map((v, j) => j === i ? Number(e.target.value) : v))} />
-                {bounds && <span className="hint">{bounds.min} - {bounds.max}</span>}
-              </div>;
-            })}
-          </div>
-          <button className="btn sm" disabled={busy || prices.length !== 4} onClick={savePrices}>{strings.common.save}</button>
-        </div>
-        <div className="card">
           <h2 className="card-title">Club operations</h2>
           <div className="hint" style={{ marginTop: 12 }}>Coach: {club?.coachName}</div>
+          {details && details.records.length > 0 && (
+            <div className="hint" style={{ marginTop: 12 }}>{details.records.length} club records on file</div>
+          )}
+        </div>
+        <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-3)" }}>
+          <span className="hint">More club facilities are planned for a future season.</span>
         </div>
       </div>
 

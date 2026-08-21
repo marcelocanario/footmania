@@ -3,7 +3,7 @@ import { beta, createRng, nextInt, truncatedNormal } from "./rng";
 import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
 import { overallFromSkills, SKILL_KEYS, trainingWeights } from "./rating";
 import { calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
-import { generateSeniorPlayer, generateYouthPlayer } from "./playerGeneration";
+import { generateSeniorPlayer, generateYouthPlayer, tierFromZ } from "./playerGeneration";
 
 export { overallFromSkills } from "./rating";
 
@@ -167,11 +167,14 @@ export function potentialGrowth(rng: RngState, player: Player) {
   else if (player.age === 18) rate = 15 / 40;
   else if (player.age === 19) rate = 14 / 40;
   else if (player.age === 20) rate = 5 / 40;
-  // Tier ordering (player-generation §37): 1 = lowest, 5 = highest. Better
-  // birth quality raises the potential-growth rate for under-21 players.
-  if (player.tier <= 2) rate += 0.03;
-  else if (player.tier === 3) rate += 0.04;
-  else if (player.tier === 4) rate += 0.07;
+  // Hidden growth tier (player-generation §37): derived on the fly from the
+  // persisted birth-quality Z so no star/quality flag is ever stored on the
+  // player or exposed through an API view. Z=0 (mid tier) covers legacy rows
+  // generated before rawZ was recorded.
+  const tier = tierFromZ(player.rawZ ?? 0);
+  if (tier <= 2) rate += 0.03;
+  else if (tier === 3) rate += 0.04;
+  else if (tier === 4) rate += 0.07;
   else rate += 0.11;
   player.potentialAcc += rate;
   if (player.potentialAcc > 1 && player.potential < 100) {

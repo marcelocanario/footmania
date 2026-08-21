@@ -1,5 +1,6 @@
-import type { Club, Competition, Fixture, RngState, StandingsRow } from "./types";
+import type { Club, Competition, Fixture, RngState, StandingsRow, World } from "./types";
 import { shuffle } from "./rng";
+import { MP_CONFIG } from "../config";
 
 export function circleSchedule(rng: RngState, clubIds: number[]): [number, number][][] {
   const teams = shuffle(rng, clubIds);
@@ -170,4 +171,45 @@ export function isLeagueFinished(competition: Competition, fixtures: Fixture[]):
   const compFixtures = fixtures.filter((f) => f.competitionId === competition.id);
   const maxPlayed = Math.max(0, ...compFixtures.map((f) => (f.played ? f.round : -1)));
   return maxPlayed + 1 >= maxRounds;
+}
+
+// ---------------------------------------------------------------------------
+// New-club sell lock (anti-funnel / anti-farm)
+// ---------------------------------------------------------------------------
+
+/**
+ * League matches actually played by a club in the current season, counted from
+ * played fixtures — deliberately NOT from StandingsRow.played /
+ * MpClubSeason.played, which a mid-season joiner inherits from the replaced AI
+ * club. Historical fixtures keep the retired AI's id, so fixture counting
+ * correctly yields 0 for the joining club.
+ */
+export function matchesPlayedByClub(world: World, clubId: number): number {
+  const activeDivisionIds = new Set(
+    world.competitions
+      .filter((c) => c.kind === "division" && c.status !== "ARCHIVED" && c.seasonId === world.mp.seasonId)
+      .map((c) => c.id)
+  );
+  let played = 0;
+  for (const f of world.fixtures) {
+    if (!f.played || !activeDivisionIds.has(f.competitionId)) continue;
+    if (f.homeClubId === clubId || f.awayClubId === clubId) played++;
+  }
+  return played;
+}
+
+/**
+ * Outbound-market lock for fresh HUMAN clubs: a club may buy players and
+ * release players immediately, but may not list players for transfer auction
+ * or loan until it has played the configured number of its OWN league matches.
+ * Filler AI clubs are exempt — they are ephemeral market supply, not
+ * funnel participants. Returns an error string while locked, else null.
+ */
+export function newClubSellLockError(world: World, clubId: number): string | null {
+  const club = world.clubs.find((c) => c.id === clubId);
+  if (!club || club.ownerUserId === null) return null;
+  const required = MP_CONFIG.newClubSellLockMatches;
+  const played = matchesPlayedByClub(world, clubId);
+  if (played >= required) return null;
+  return `New clubs can sell or loan out players after ${required} played matches (${required - played} more to go)`;
 }

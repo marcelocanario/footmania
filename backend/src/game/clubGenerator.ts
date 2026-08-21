@@ -2,6 +2,7 @@ import type { Club, Player, Position, World } from "./types";
 import { shuffle } from "./rng";
 import { generateSeniorPlayer, generateYouthPlayer, seniorRosterTemplate, playerRng, type GenerationType } from "./playerGeneration";
 import { gameConfig } from "../config";
+import { SENIOR_SQUAD_LIMIT } from "./constants";
 
 /**
  * Squad-level generation orchestration (plans/4. player-generation.md §70-§73).
@@ -83,12 +84,13 @@ export function academyPositionTemplate(world: World, clubId: number, generation
 }
 
 /**
- * Generate the fixed 28-senior squad (spec §70). Position slots follow the
- * canonical 10/32/32/26 template; captain = best GK, penalty taker = best FW.
+ * Generate a senior squad (spec §70). Position slots follow the canonical
+ * 10/32/32/26 template; captain = best GK, penalty taker = best FW. Human
+ * clubs use the configured initial size; filler AI passes the senior limit.
  */
-export function generateInitialSeniorSquad(ctx: GenerationContext): Player[] {
+export function generateInitialSeniorSquad(ctx: GenerationContext, size: number = gameConfig.playerGenerationRules.initialSeniorSquadSize): Player[] {
   const { world, club } = ctx;
-  const template = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize);
+  const template = seniorRosterTemplate(size);
   const created: Player[] = [];
   for (let slot = 0; slot < template.length; slot++) {
     const player = generateSeniorPlayer({
@@ -219,6 +221,23 @@ export function generateNewClubRoster(ctx: GenerationContext): { seniors: Player
   const youth = generateInitialAcademy(ctx);
   if (!ctx.world.generationEvents.includes(creationKey)) ctx.world.generationEvents.push(creationKey);
   return { seniors, youth };
+}
+
+/**
+ * Generate the static filler-AI roster (invariant #28): exactly
+ * SENIOR_SQUAD_LIMIT senior players and no academy. Ephemeral AI teams keep
+ * this roster for their single season; nothing is ever promoted, released or
+ * added. Guarded by the same club-creation idempotency key as human rosters.
+ */
+export function generateFillerRoster(ctx: GenerationContext): Player[] {
+  const creationKey = `club-creation:${ctx.club.id}`;
+  const hasPlayers = ctx.world.players.some((p) => p.clubId === ctx.club.id);
+  if (hasPlayers || ctx.world.generationEvents.includes(creationKey)) {
+    return ctx.world.players.filter((p) => p.clubId === ctx.club.id && !p.isYouth);
+  }
+  const seniors = generateInitialSeniorSquad(ctx, SENIOR_SQUAD_LIMIT);
+  if (!ctx.world.generationEvents.includes(creationKey)) ctx.world.generationEvents.push(creationKey);
+  return seniors;
 }
 
 export type { GenerationType };

@@ -17,11 +17,12 @@ import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
  *                    - contingent leading-bid salaries
  *
  * No future income is ever forecast. Humans may deliberately push their
- * cushion negative (warned, not blocked); AI clubs must always keep
- * FinancialCushionAfterDecision >= 0. When a club stays cash-negative across
- * a payroll cycle, a financial intervention resolves outgoing auctions and
- * system-liquidates players to restore solvency, generating same-position
- * replacement players from the normal new-club generation distribution.
+ * cushion negative (warned, not blocked). Ephemeral filler-AI clubs are
+ * financially inert (invariant #28): they hold no cash and never appear here.
+ * When a human club stays cash-negative across a payroll cycle, a financial
+ * intervention resolves outgoing auctions and system-liquidates players to
+ * restore solvency, generating same-position replacement players from the
+ * normal new-club generation distribution.
  */
 
 export interface CommitmentTotals {
@@ -122,7 +123,7 @@ export function contingentSalaryFromLeadingBids(world: World, club: Club): numbe
   for (const listing of world.freeAgentListings) {
     if (listing.status !== "ACTIVE" || listing.leadingClubId !== club.id || !activeIds.has(listing.id)) continue;
     const bid = world.marketBids.find((candidate) => candidate.marketType === "FREE_AGENT" && candidate.listingId === listing.id && candidate.clubId === club.id);
-    total += salaryCommitmentForPeriod(bid?.contractSalary ?? listing.salaryBaselineAtListing ?? listing.demandedSalary ?? 0, salaryStartDay, gameConfig.seasonDays);
+    total += salaryCommitmentForPeriod(bid?.contractSalary ?? listing.salaryBaselineAtListing ?? 0, salaryStartDay, gameConfig.seasonDays);
   }
   return Math.round(total);
 }
@@ -171,76 +172,21 @@ export function financialState(world: World, club: Club): FinancialState {
 }
 
 // ---------------------------------------------------------------------------
-// AI guardrail (§13-§16)
-// ---------------------------------------------------------------------------
-
-export interface AiFinancialDecision {
-  /** An immediate cash outflow the decision creates (0 for bids/wage-only). */
-  immediateCost: number;
-  /** New active bid commitment the decision creates (private maximum). */
-  newBidCommitments: number;
-  /** Per-season salary the decision adds to the club's payroll. */
-  additionalSalary: number;
-  /** Exact current-season salary commitment to add, when duration is bounded. */
-  additionalSalaryCommitment?: number;
-  /** Existing current-season salary commitment replaced by the decision. */
-  replacedSalaryCommitment?: number;
-}
-
-/** Remaining-season salary commitment for a fresh acquisition. */
-function acquisitionSalaryCommitment(salary: number, world: World, club: Club): number {
-  // Provisional clubs are warned against the funded upcoming season, whose
-  // salary horizon starts at season day zero even though the current season's
-  // wage clock is frozen.
-  const startDay = club.competitionState === "PROVISIONAL" ? 0 : (world.mp.seasonDayIndex ?? world.dayIndex);
-  return salaryCommitmentForPeriod(salary, startDay, gameConfig.seasonDays);
-}
-
-/**
- * The AI's hard safety rule (financial-control §13):
- *
- *   FinancialCushionAfterDecision >= 0
- *
- * Equivalent to
- *
- *   cashAfterDecision >= bidCommitmentsAfter + remainingSalariesAfter
- *     + existing contingent salaries
- */
-export function evaluateAIDecision(world: World, club: Club, decision: AiFinancialDecision): boolean {
-  if (club.competitionState !== "ACTIVE" && club.competitionState !== "PROVISIONAL") return false;
-  const totals = getCommitmentTotals(world, club);
-  const cashAfter = club.cash - decision.immediateCost;
-  const bidsAfter = totals.activeBidCommitments + decision.newBidCommitments;
-  const salaryAdded = decision.additionalSalaryCommitment ?? acquisitionSalaryCommitment(decision.additionalSalary, world, club);
-  const salariesAfter = Math.max(0, totals.remainingSalaryCommitments - (decision.replacedSalaryCommitment ?? 0)) + salaryAdded;
-  return cashAfter >= bidsAfter + salariesAfter + totals.contingentSalary;
-}
-
-/**
- * The maximum private maximum the AI may commit to a new acquisition while
- * staying financially safe. `additionalSalary` is the player's per-season
- * salary (or a free agent's demanded salary).
- */
-export function aiAffordableCommitment(world: World, club: Club, additionalSalary: number): number {
-  const totals = getCommitmentTotals(world, club);
-  const salaryDelta = acquisitionSalaryCommitment(additionalSalary, world, club);
-  return Math.max(0, totals.financialCushion - salaryDelta);
-}
-
-// ---------------------------------------------------------------------------
 // System liquidation price (§32)
 // ---------------------------------------------------------------------------
 
 /**
  * The price the system pays when liquidating a player during a financial
- * intervention: the normal auction opening price (defaults to the base value).
- * Reuses the transfer-market authority so auction floors and recent-market
- * anchors apply. Never hard-coded (§32).
+ * intervention: the MINIMUM price that would be acceptable in a normal auction
+ * (the opening-price floor, 60% of the base value). Reuses the transfer-market
+ * authority so auction floors and recent-market anchors apply. Paying below
+ * market keeps the intervention from being farmable as a full-value liquidity
+ * pump. Never hard-coded (§32).
  */
 export function systemLiquidationPrice(world: World, player: Player): number {
   const range = auctionOpeningRange(world, player);
-  const resolved = resolveOpeningPrice(world, player, range.max);
-  return resolved.ok ? resolved.openingPrice : range.max;
+  const resolved = resolveOpeningPrice(world, player, range.min);
+  return resolved.ok ? resolved.openingPrice : range.min;
 }
 
 // ---------------------------------------------------------------------------
@@ -519,11 +465,9 @@ export function runFinancialIntervention(
       continue;
     }
     // Valid bid → settle immediately at the current proxy clearing price
-    // (never the leader's private maximum) (§25/§26).
-    const deadline = listing.deadline;
-    listing.deadline = now;
-    const settled = settleTransferAuction(world, listing, now);
-    listing.deadline = deadline;
+    // (never the leader's private maximum) (§25/§26). Force-close bypasses
+    // the deadline check without mutating the listing.
+    const settled = settleTransferAuction(world, listing, now, { forceClose: true });
     if (settled.ok) {
       forcedAuctionRevenue += settled.finalPrice ?? 0;
       const entry: FinancialInterventionEntry = { playerId: listing.playerId, kind: "FORCED_AUCTION", price: settled.finalPrice, replacementPlayerId: null };

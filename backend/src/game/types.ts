@@ -29,7 +29,6 @@ export interface Player {
   skills: SkillSet;
   overall: number;
   potential: number;
-  tier: number;
   characteristic1: number;
   characteristic2: number;
   energy: number;
@@ -119,8 +118,6 @@ export interface Club {
   // (inactivity threshold exceeded mid-season). Actual removal only happens at
   // rollover (plan §42).
   abandonmentEligibleAt: number | null;
-  // 0 = none, 1/2 = warning issued, 3 = removal-eligible at rollover.
-  inactivityWarningStage?: number;
   // Multiplayer: epoch ms of the scheduled live-match kickoff (if any).
   liveMatchAt: number | null;
   // Preferred match-time half-hour slots (local wall clock, 0..47). Null =
@@ -135,7 +132,6 @@ export interface Club {
   highestDivision: number;
   cash: number;
   stadiumName: string;
-  stadiumCapacity: number;
   primaryColor: string;
   secondaryColor: string;
   coachName: string;
@@ -343,8 +339,6 @@ export interface Match {
   awayScore: number;
   penaltyWinnerId: number | null;
   penaltyScore?: [number, number];
-  attendance: number;
-  gateRevenue: number;
   events: MatchEvent[];
   stats: MatchStats;
   extraTime?: boolean;
@@ -523,10 +517,8 @@ export interface TransferAuction {
   winningClubId: number | null;
   finalPrice: number | null;
   cancelledAt: number | null;
-  /** True once the deadline was extended by a soft-close competitive bid. */
+  /** True once the deadline was reset by a soft-close competitive bid. */
   softClosed: boolean;
-  /** Number of soft-close extensions applied so far (bounds §17/§18). */
-  softCloseExtensions: number;
   /** Incremented whenever the persisted real-time deadline is replaced. */
   deadlineVersion?: number;
 }
@@ -540,9 +532,6 @@ export interface FreeAgentListing {
   bidIncrement: number;
   /** Salary baseline used for bidder-specific contract demands. */
   salaryBaselineAtListing?: number;
-  /** Legacy listing-wide terms retained only while old rows are readable. */
-  demandedSalary?: number;
-  demandedContractDays?: number;
   currentPrice: number;
   leadingClubId: number | null;
   relistStage: number;
@@ -563,10 +552,8 @@ export interface FreeAgentListing {
   blockedClubId: number | null;
   /** Original unclaimed timestamp preserved through every relist. */
   unclaimedSince?: number;
-  /** True once the deadline was extended by a soft-close competitive bid. */
+  /** True once the deadline was reset by a soft-close competitive bid. */
   softClosed: boolean;
-  /** Number of soft-close extensions applied so far (bounds §17/§18). */
-  softCloseExtensions: number;
 }
 
 /**
@@ -597,27 +584,15 @@ export interface PlayerMarketTransaction {
   seasonId: number;
   seasonKey: string;
   seasonDayIndex: number;
+  /**
+   * Global completed-rounds counter at transaction time. Feeds the resale
+   * anchor fade with a monotonic clock (review C4); legacy rows may predate
+   * the field and fall back to the day-based approximation.
+   */
+  completedRounds?: number;
   contractSeasons?: number | null;
   contractSalary?: number | null;
   timestamp: number;
-}
-
-/**
- * Durable AI market evaluation/decision state (transfer-market-overhaul
- * §102.5). One row per (marketType, listingId, clubId) so the AI evaluates
- * each listing at most once and a restart cannot trigger a re-evaluation.
- */
-export interface AIEvaluation {
-  marketType: MarketType;
-  listingId: number;
-  clubId: number;
-  evaluatedAt: number;
-  /** Action decided: NONE | BID | CLAIM (loans) | PASS. */
-  decision: string;
-  /** Maximum the AI committed, when it chose to bid. */
-  maxBid: number | null;
-  contractSeasons?: number | null;
-  contractSalary?: number | null;
 }
 
 export interface Loan {
@@ -628,6 +603,12 @@ export interface Loan {
   startDay: number;
   endDay: number;
   recalled: boolean;
+  /**
+   * Lender-chosen claim fee (§55), snapshotted in absolute currency at listing
+   * time as a fraction of the player's value within the configured band. Paid
+   * by the borrower to the lender at claim; legacy rows may predate the field.
+   */
+  feeAmount?: number;
   /** Real-time instant the player was listed for loan (§57). */
   listedAt: number;
   /** Real-time instant the listing becomes claimable (listedAt + exposure, §57). */
@@ -648,24 +629,6 @@ export interface CareerRecord {
   category: string;
   value: number;
   holderName: string;
-}
-
-export interface ManagerHistoryEntry {
-  clubId: number;
-  name: string;
-  appointedDay: number;
-  departedDay: number | null;
-  gamesInCharge: number;
-  reason: string | null;
-}
-
-export interface StadiumUpgrade {
-  clubId: number;
-  startedDay: number;
-  completesDay: number;
-  newCapacity: number;
-  cost: number;
-  completed: boolean;
 }
 
 export interface SeasonSummary {
@@ -747,8 +710,6 @@ export interface MpState {
   contractMarketMigrationVersion?: number;
   /** Absolute end day for loans, keyed by loan ID. */
   loanEndAbsoluteGameDays?: Record<string, number>;
-  /** Absolute completion day for stadium upgrades, keyed by club ID. */
-  stadiumCompletionAbsoluteGameDays?: Record<string, number>;
 }
 
 export interface MpQueueEntry {
@@ -907,20 +868,15 @@ export interface World {
   transferAuctions: TransferAuction[];
   freeAgentListings: FreeAgentListing[];
   marketReservations: MarketReservation[];
-  playerMarketHistory: PlayerMarketTransaction[];
-  aiEvaluations: AIEvaluation[];
-  seasonAwards: SeasonAward[];
-  records: CareerRecord[];
-  managerHistory: ManagerHistoryEntry[];
-  ticketPrices: Record<number, [number, number, number, number]>;
-  stadiumUpgrades: StadiumUpgrade[];
-  humanClubId: number | null;
-  seasonSummary: SeasonSummary | null;
-  rng: RngState;
-  contractWarnings: number[];
-  // Financial-intervention audit records (financial-control §53). Persisted for
-  // disputes and anti-exploit analysis.
-  financialInterventions: FinancialIntervention[];
+   playerMarketHistory: PlayerMarketTransaction[];
+   seasonAwards: SeasonAward[];
+   records: CareerRecord[];
+   humanClubId: number | null;
+   seasonSummary: SeasonSummary | null;
+   rng: RngState;
+   // Financial-intervention audit records (financial-control §53). Persisted for
+   // disputes and anti-exploit analysis.
+   financialInterventions: FinancialIntervention[];
   // Multiplayer state (see MpState).
   mp: MpState;
   // Multiplayer: clubs waiting for next season (post-lock joins, returning).

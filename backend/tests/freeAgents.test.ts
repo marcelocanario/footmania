@@ -13,6 +13,8 @@ import {
 } from "../src/game/freeAgents";
 import { gameConfig, MARKET_CONFIG } from "../src/config";
 import { getImmediateAvailableCash } from "../src/game/finance";
+import { calculateBaseSalary } from "../src/game/economy";
+import { roundToSensibleIncrement } from "../src/game/market";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
@@ -44,8 +46,8 @@ describe("free-agent listing creation (§42)", () => {
     expect(l.openingPrice).toBeGreaterThan(0);
     expect(l.openingPrice).toBeLessThanOrEqual(Math.round(10_000_000 * MARKET_CONFIG.freeAgents.relistMultipliers[0]) + 25_000);
     expect(l.salaryBaselineAtListing).toBeGreaterThan(0);
-    expect(l.demandedSalary).toBeUndefined();
-    expect(l.demandedContractDays).toBeUndefined();
+    expect((l as unknown as Record<string, unknown>).demandedSalary).toBeUndefined();
+    expect((l as unknown as Record<string, unknown>).demandedContractDays).toBeUndefined();
   });
 
   it("rejects youth players and non-free agents", () => {
@@ -71,20 +73,33 @@ describe("free-agent listing creation (§42)", () => {
 });
 
 describe("free-agent contract terms (§46)", () => {
-  it("generates a deterministic salary from the live contract market", () => {
+  it("derives the salary baseline from the same first-contract formula as generation (review B2)", () => {
     const rng = createRng(1);
     const club = makeClubFn(1);
-    const comparable = generatePlayer(rng, club, { id: 1, isYouth: false });
-    comparable.clubId = club.id;
-    comparable.value = 10_000_000;
-    comparable.salary = 800_000;
+    // A populated world with wildly different salaries must NOT move the
+    // baseline: it is pinned to the deterministic overall/age formula.
+    const richComparable = generatePlayer(rng, club, { id: 1, isYouth: false });
+    richComparable.clubId = club.id;
+    richComparable.value = 10_000_000;
+    richComparable.salary = 8_000_000;
+    const poorComparable = generatePlayer(rng, club, { id: 3, isYouth: false });
+    poorComparable.clubId = club.id;
+    poorComparable.value = 100_000;
+    poorComparable.salary = 5_000;
     const fa = freePlayer(rng, 2, { value: 10_000_000, age: 27 });
-    const world = makeWorld([club], [comparable, fa]);
+    const world = makeWorld([club], [richComparable, poorComparable, fa]);
 
-    const s1 = marketSalaryForPlayer(world, fa, 0);
-    const s2 = marketSalaryForPlayer(world, fa, 0);
+    const s1 = marketSalaryForPlayer(fa);
+    const s2 = marketSalaryForPlayer(fa);
     expect(s1).toBe(s2); // deterministic
+    // Same first-contract formula as generation, rounded to a sensible amount.
+    expect(s1).toBe(roundToSensibleIncrement(calculateBaseSalary(fa.overall, fa.age)));
     expect(s1).toBeGreaterThan(0);
+
+    // An empty world produces the identical baseline.
+    const lonely = freePlayer(rng, 5, { value: 10_000_000, age: 27 });
+    const emptyWorld = makeWorld([makeClubFn(2)], [lonely]);
+    expect(marketSalaryForPlayer(lonely)).toBe(s1);
   });
 
   it("contract duration depends on age and is clamped to 1..4 seasons", () => {

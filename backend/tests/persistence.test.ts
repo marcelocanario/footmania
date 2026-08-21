@@ -5,11 +5,12 @@ process.env.NODE_ENV = "test";
 
 import { PrismaClient } from "@prisma/client";
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
-import { generateWorld } from "../src/game/worldgen";
+import { generateWorld, createHumanClub } from "../src/game/worldgen";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave, StaleWorldError } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
 import { applyDevelopment } from "../src/game/player";
-import { initSeason, createDivision, ensureDivisionFull, generateDivisionFixtures, rebuildTierDivisions } from "../src/game/multiplayer";
+import { initSeason, createDivision, ensureDivisionFull, generateDivisionFixtures, rebuildTierDivisions, highestRankedReplaceableAI, placeNewClub } from "../src/game/multiplayer";
+import { applyMaxBid, createTransferAuction } from "../src/game/market";
 import { gameConfig } from "../src/config";
 
 const prisma = new PrismaClient();
@@ -216,21 +217,42 @@ describe("global multiplayer world persistence", () => {
     expect(rw.generationEvents).toContain("academy-intake:1:7");
   });
 
-  it("round-trips market listings, bids, reservations, history, and AI evaluations", async () => {
+  it("round-trips market listings, bids, reservations, history", async () => {
     const { saveId } = await freshGlobalWorld(901);
     const { seasonId, world } = await withSeason(saveId);
-    const seller = world.clubs[0];
+    // Human seller/bidder with User rows (Club.ownerUserId FK) and enough
+    // played fixtures to satisfy the new-club outbound sell lock.
+    await prisma.user.deleteMany({ where: { id: { in: [9000, 9001] } } });
+    await prisma.user.createMany({
+      data: [
+        { id: 9000, username: "persist-seller", passwordHash: "test" },
+        { id: 9001, username: "persist-buyer", passwordHash: "test" },
+      ],
+    });
+    const { createHumanClub } = await import("../src/game/worldgen");
+    const { MP_CONFIG } = await import("../src/config");
+    const division = world.competitions.find((candidate) => candidate.kind === "division" && candidate.seasonId === seasonId)!;
+    const makeTrader = (userId: number, name: string) => {
+      const club = createHumanClub(world, { userId, clubName: name, country: "BRA", timezone: null });
+      club.competitionState = "ACTIVE";
+      for (let round = 0; round < MP_CONFIG.newClubSellLockMatches; round++) {
+        world.fixtures.push({ id: world.nextId++, competitionId: division.id, round, homeClubId: club.id, awayClubId: -club.id, dayIndex: round, played: true });
+      }
+      return club;
+    };
+    const seller = makeTrader(9000, "Seller FC");
     const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
     const now = Date.now();
 
     // A public auction listing.
-    const { createTransferAuction, applyMaxBid, releaseAllReservations } = await import("../src/game/market");    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
+    const { createTransferAuction, applyMaxBid, releaseAllReservations } = await import("../src/game/market");
+    const buyer = makeTrader(9001, "Bidder FC");
+    const created = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 3 });
     expect(created.ok).toBe(true);
     if (!created.ok) throw new Error(created.error);
     const listing = created.listing;
 
     // A club bids (reservation + bid rows).
-    const buyer = world.clubs.find((c) => c.id !== seller.id)!;
     const bid = applyMaxBid(world, {
       listing,
       club: buyer,
@@ -243,16 +265,12 @@ describe("global multiplayer world persistence", () => {
     });
     expect(bid.ok).toBe(true);
 
-    // History + AI evaluation state.
+    // History row (with the completed-rounds stamp for the anchor fade).
     const { recordTransaction } = await import("../src/game/market");
     recordTransaction(world, {
       playerId: player.id, listingId: listing.id, type: "TRANSFER",
       fromClubId: seller.id, toClubId: buyer.id, price: listing.currentPrice,
       seasonId, seasonKey: "2026-01", seasonDayIndex: world.dayIndex, contractSeasons: 4, contractSalary: world.marketBids[0].contractSalary, timestamp: now,
-    });
-    world.aiEvaluations.push({
-      marketType: "TRANSFER", listingId: listing.id, clubId: buyer.id,
-      evaluatedAt: now, decision: "BID", maxBid: Math.round(player.value * 1.1), contractSeasons: 4, contractSalary: world.marketBids[0].contractSalary,
     });
 
     await persistWorld(prisma, saveId, saveId, world);
@@ -274,10 +292,7 @@ describe("global multiplayer world persistence", () => {
     expect(rw.playerMarketHistory[0].type).toBe("TRANSFER");
     expect(rw.playerMarketHistory[0].contractSeasons).toBe(4);
     expect(rw.playerMarketHistory[0].contractSalary).toBe(world.marketBids[0].contractSalary);
-    expect(rw.aiEvaluations).toHaveLength(1);
-    expect(rw.aiEvaluations[0].decision).toBe("BID");
-    expect(rw.aiEvaluations[0].contractSeasons).toBe(4);
-    expect(rw.aiEvaluations[0].contractSalary).toBe(world.marketBids[0].contractSalary);
+    expect(rw.playerMarketHistory[0].completedRounds).toBe(world.mp.completedRounds);
 
     // A reload after settlement-like release: released reservations survive.
     releaseAllReservations(rw, listing.id, "TRANSFER");
@@ -364,4 +379,85 @@ describe("global multiplayer world persistence", () => {
     const reloaded = await loadGlobalWorld(prisma);
     expect(reloaded?.world.mp.phase).toBe("POST_MATCH");
   });
+
+  it("round-trips a filler retirement with a force-settled listing without dangling market state", async () => {
+    const { saveId } = await freshGlobalWorld(905);
+    // Club.ownerUserId has an FK to User: create the owners first.
+    await prisma.user.deleteMany({ where: { id: { in: [9051, 9052] } } });
+    await prisma.user.createMany({
+      data: [
+        { id: 9051, username: "bidder-9051", passwordHash: "test" },
+        { id: 9052, username: "joiner-9052", passwordHash: "test" },
+      ],
+    });
+    const { seasonId, world } = await withSeason(saveId);
+    const div = world.competitions.find((c) => c.kind === "division" && c.seasonId === seasonId)!;
+    const aiId = highestRankedReplaceableAI(world, div)!;
+    const ai = world.clubs.find((c) => c.id === aiId)!;
+    const player = world.players.filter((p) => p.clubId === aiId && !p.isYouth).reduce((min, p) => (p.value < min.value ? p : min));
+    // Raw pre-B3 state: AI-owned listings are hard-blocked now, but legacy
+    // worlds can still carry them and rollover must force-settle/cancel them.
+    const now = Date.now();
+    const listing: import("../src/game/types").TransferAuction = {
+      id: world.nextId++,
+      playerId: player.id,
+      sellerClubId: ai.id,
+      playerValueAtListing: player.value,
+      openingPrice: Math.max(1, player.value),
+      bidIncrement: Math.max(1, Math.round(player.value * 0.01)),
+      sellerDivisionAtListing: 1,
+      totalDivisionsAtListing: 1,
+      salaryBaselineAtListing: player.salary,
+      playerOverallAtListing: player.overall,
+      playerAgeAtListing: player.age,
+      currentPrice: Math.max(1, player.value),
+      leadingClubId: null,
+      createdAt: now,
+      deadline: now + 3_600_000,
+      originalDeadline: now + 3_600_000,
+      status: "ACTIVE",
+      completedAt: null,
+      winningClubId: null,
+      finalPrice: null,
+      cancelledAt: null,
+      softClosed: false,
+      deadlineVersion: 0,
+    };
+    world.transferAuctions.push(listing);
+    void ai;
+    const bidder = createHumanClub(world, { userId: 9051, clubName: "Bidder FC", country: "BRA", timezone: "UTC" });
+    bidder.cash = Math.max(bidder.cash, listing.openingPrice + 1_000_000);
+    const bid = applyMaxBid(world, {
+      listing,
+      club: bidder,
+      player,
+      proposedMaximum: listing.openingPrice,
+      buyerDivision: 1,
+      immediateAvailableCash: bidder.cash,
+      now: Date.now(),
+    });
+    expect(bid.ok).toBe(true);
+
+    // A human takes the AI's slot; the leading bidder must keep the player.
+    const joiner = createHumanClub(world, { userId: 9052, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const result = placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 });
+    if (result.kind !== "active") throw new Error("expected active placement");
+    expect(result.replacedClubId).toBe(aiId);
+
+    await persistWorld(prisma, saveId, saveId, world);
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const rw = reloaded!.world;
+
+    expect(rw.clubs.some((c) => c.id === aiId)).toBe(false);
+    const settled = rw.transferAuctions.find((a) => a.id === listing.id)!;
+    expect(settled.status).toBe("COMPLETED");
+    expect(settled.winningClubId).toBe(bidder.id);
+    expect(rw.players.find((p) => p.id === player.id)?.clubId).toBe(bidder.id);
+    // No dangling commitments referencing the retired filler.
+    expect(rw.marketBids.some((b) => b.clubId === aiId)).toBe(false);
+    expect(rw.marketReservations.some((r) => r.clubId === aiId && r.releasedAt === null)).toBe(false);
+    expect(rw.marketReservations.filter((r) => r.listingId === listing.id).every((r) => r.releasedAt !== null)).toBe(true);
+  });
 });
+

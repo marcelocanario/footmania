@@ -41,13 +41,8 @@ const gameConfigSchema = z
     }),
     payrollIntervalDays: z.number().int().min(1),
     weeklyIntervalDays: z.number().int().min(1),
-    transferIntervalDays: z.number().int().min(1),
-    auctionDurationDays: z.number().int().min(1),
     freeAgentRetentionDays: z.number().int().min(1).default(30),
-    loanDurationSeasons: z.number().int().min(1),
-    stadiumUpgradeDays: z.number().int().min(1),
     contractWarningSeasons: z.number().int().min(1),
-    humanMatchDurationMinutes: z.number().int().min(1).max(60),
     playerValueBase: nonNegativeNumber,
     playerValueOverallReference: z.number().min(1),
     playerValueOverallExponent: nonNegativeNumber,
@@ -179,39 +174,23 @@ const gameConfigSchema = z
       },
       bidIncrementRate: 0.01,
       transferLockupDays: 15,
-      softCloseMinutes: 5,
-      extensionMinutes: 5,
-      maxSoftCloseExtensionMinutes: 30,
+      // Anti-sniping soft close (§18): any competitive bid (leader or price
+      // change) resets the remaining time to this window whenever less than
+      // the window remains. There is no extension cap or accumulator.
+      softCloseWindowMinutes: 30,
       allowAcrossSeasonRollover: true,
     },
 
     freeAgents: {
-      startMultiplier: 0.1,
       durationHours: 24,
       relistMultipliers: [0.1, 0.075, 0.05, 0.025],
       // Null => no player-value cap; only the immediate-cash rule applies.
       valueBasedMaximumMultiplier: null,
-      salaryKernelBandwidthLogValue: Math.log(2),
-      salaryEffectiveSampleTarget: 25,
-      salaryNoiseSigma: 0.05,
-      salaryNoiseZClamp: 1.5,
-      salaryPercentileFloor: 0.05,
-      salaryPercentileCeiling: 0.95,
       contractMinSeasons: 1,
       contractMaxSeasons: 4,
       contractAgeMidpointOffset: 1.0,
       contractAgeScaleSigmaMultiplier: 0.625,
       allowAcrossSeasonRollover: true,
-    },
-
-    // Division → ticket-tier mapping for pricing/attendance. The division
-    // number (1 = strongest) is mapped to a 1..maxTier bucket via a monotone
-    // sublinear curve: tier = clamp(1..maxTier, maxTier / division^curveK).
-    // Division 1 always lands on the strongest (highest) bucket; deeper
-    // divisions decay sublinearly so the pyramid tiers are not over-indexed.
-    ticketTier: {
-      maxTier: 5,
-      curveK: 0.5,
     },
 
     // Match-engine balance values. When the attacking side leads by 2+ goals
@@ -330,11 +309,24 @@ const gameConfigSchema = z
       maxValueRatio: 1.0,
     },
 
+    // Transfer sales tax (review B1): a fraction of every club-to-club final
+    // price that is burned at settlement (paid by neither club — it leaves the
+    // economy). The primary structural money sink now that stadium/ticket
+    // revenue is gone; it scales with market activity and hits the richest
+    // clubs hardest.
+    transferTax: {
+      rate: 0.05,
+    },
+
     loans: {
       exposureMinutes: 30,
-      borrowerWageShare: 1.0,
-      cancellation: "PRE_CLAIM_ONLY" as const,
-      allowAcrossSeasonRollover: false,
+      // Lender-chosen claim fee (§55): a fraction of the player's value within
+      // this band, snapshotted at listing time and paid by the borrower to the
+      // lender at claim.
+      feeMinValueRatio: 0.1,
+      feeMaxValueRatio: 0.3,
+      // Maximum players one club may hold on loan at once.
+      maxLoanedInPerClub: 5,
     },
   } as const;
 
@@ -375,6 +367,12 @@ export const MP_CONFIG = {
   // Multiplayer club/player generation baselines used to seed budgets.
   expectedSeniorSquadSize: 25,
   expectedMeaningfulSigningsPerSeason: 2,
+  // Starting cash for a brand-new human club. The season budget is the only
+  // initial funding; keep at 0 so new accounts cannot inject untracked cash.
+  newClubStartingCash: 0,
+  // Outbound-market lock: a new club may not list players for sale or loan
+  // until it has played this many of its own league matches (anti-funnel).
+  newClubSellLockMatches: 3,
 } as const;
 
 /** Human-club Elo settings. Elo is intentionally hidden from player-facing APIs. */
@@ -403,13 +401,8 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   economy: { referenceSeasonDays: 30 },
   payrollIntervalDays: 7,
   weeklyIntervalDays: 7,
-  transferIntervalDays: 1,
-  auctionDurationDays: 7,
   freeAgentRetentionDays: 30,
-  loanDurationSeasons: 1,
-  stadiumUpgradeDays: 15,
   contractWarningSeasons: 2,
-  humanMatchDurationMinutes: 10,
   playerValueBase: 500000,
   playerValueOverallReference: 50,
   playerValueOverallExponent: 3.5,

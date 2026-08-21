@@ -24,16 +24,6 @@ export function nextDouble(rng: RngState): number {
   return nextUint(rng) / 4294967296;
 }
 
-export function nextBoolean(rng: RngState): boolean {
-  return nextUint(rng) % 2 === 0;
-}
-
-/** Uniform integer in the inclusive range [min, max]. */
-export function uniformInt(rng: RngState, min: number, max: number): number {
-  if (max < min) [min, max] = [max, min];
-  return min + nextInt(rng, max - min + 1);
-}
-
 export function chance(rng: RngState, percent: number): boolean {
   return nextUint(rng) % 100 < percent;
 }
@@ -51,10 +41,6 @@ export function shuffle<T>(rng: RngState, arr: T[]): T[] {
     a[j] = t;
   }
   return a;
-}
-
-export function chanceDenom(rng: RngState, denominator: number): boolean {
-  return nextUint(rng) % denominator === 0;
 }
 
 // Box–Muller transform. nextDouble yields [0, 1); the zero guard keeps log() finite.

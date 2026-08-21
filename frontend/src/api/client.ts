@@ -31,7 +31,6 @@ export interface PlayerView {
   tacPos: number;
   tacPosName: string;
   overall: number;
-  tier: number;
   skills: SkillSet;
   energy: number;
   value: number;
@@ -67,7 +66,6 @@ export interface ClubView {
   highestDivision: number;
   cash: number;
   stadiumName: string;
-  stadiumCapacity: number;
   primaryColor: string;
   secondaryColor: string;
   coachName: string;
@@ -323,6 +321,7 @@ export interface LoanView {
   startDay: number;
   endDay: number;
   recalled: boolean;
+  feeAmount?: number;
   listedAt: number;
   claimableAt: number;
   player: PlayerView | null;
@@ -333,10 +332,6 @@ export interface LoanView {
 }
 
 export interface FinanceDetails {
-  ticketPrices: [number, number, number, number];
-  ticketBounds: { min: number; max: number }[];
-  stadiumUpgrade: { clubId: number; startedDay: number; completesDay: number; newCapacity: number; cost: number; completed: boolean } | null;
-  nextStadiumUpgradeCost: number;
   records: CareerRecord[];
   awards: SeasonAward[];
 }
@@ -533,14 +528,12 @@ export interface MatchEvents {
     homeScore: number;
     awayScore: number;
     stats: MatchStats;
-    attendance: number;
-    gateRevenue: number;
   };
   events: LiveEvent[];
 }
 
 export interface Settings {
-  humanMatchDurationMinutes: number;
+  matchDurationMinutes: number;
   maxContractSeasons?: number;
 }
 
@@ -597,12 +590,8 @@ export const api = {
 
   matchEvents: (matchId: number) => request<MatchEvents>(`/api/matches/${matchId}/events`),
   liveState: (matchId: number) => request<{ state: LiveState }>(`/api/matches/${matchId}/live`),
-  liveTick: (matchId: number, minutes: number, resume = false) =>
-    request<{ events: LiveEvent[]; state: LiveState }>(`/api/matches/${matchId}/tick`, { method: "POST", body: JSON.stringify({ minutes, resume }) }),
   liveSub: (matchId: number, outId: number, inId: number) =>
     request<{ event: LiveEvent | null; state: LiveState }>(`/api/matches/${matchId}/sub`, { method: "POST", body: JSON.stringify({ outId, inId }) }),
-  liveFinish: (matchId: number) =>
-    request<{ ok: boolean }>(`/api/matches/${matchId}/finish`, { method: "POST" }),
   liveWsUrl: (matchId: number) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws`,
   getLineup: (auto?: boolean, formation?: number) =>
@@ -647,13 +636,9 @@ export const api = {
   finances: () =>
     request<{ cash: number; income: LedgerEntry[]; expense: LedgerEntry[]; finance: FinanceSnapshot }>("/api/club/finances"),
   financeDetails: () => request<FinanceDetails>("/api/club/finance-details"),
-  setTicketPrices: (prices: [number, number, number, number]) =>
-    request<{ ok: boolean; prices: [number, number, number, number] }>("/api/club/tickets", { method: "POST", body: JSON.stringify({ prices }) }),
-  startStadiumUpgrade: () =>
-    request<{ ok: boolean; upgrade: FinanceDetails["stadiumUpgrade"] }>("/api/club/stadium-upgrade", { method: "POST" }),
   listLoans: () => request<{ loans: LoanView[] }>("/api/transfers/loans"),
-  offerLoan: (playerId: number) =>
-    request<{ ok: boolean }>("/api/transfers/loans", { method: "POST", body: JSON.stringify({ playerId }) }),
+  offerLoan: (playerId: number, feeRatio?: number) =>
+    request<{ ok: boolean }>("/api/transfers/loans", { method: "POST", body: JSON.stringify(feeRatio !== undefined ? { playerId, feeRatio } : { playerId }) }),
   claimLoan: (loanId: number) =>
     request<{ ok: boolean }>(`/api/transfers/loans/${loanId}/claim`, { method: "POST" }),
   cancelLoan: (loanId: number) =>
@@ -667,8 +652,6 @@ export const api = {
   records: () => request<{ records: CareerRecord[]; awards: SeasonAward[] }>("/api/records"),
 
   settings: () => request<Settings>("/api/settings"),
-  updateSettings: (humanMatchDurationMinutes: number) =>
-    request<Settings>("/api/settings", { method: "PUT", body: JSON.stringify({ humanMatchDurationMinutes }) }),
   updateTimezone: (timezone: string) =>
     request<{ ok: boolean; timezone: string }>("/api/account/timezone", { method: "PUT", body: JSON.stringify({ timezone }) }),
 

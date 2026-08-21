@@ -1,8 +1,10 @@
 import { MARKET_CONFIG, gameConfig } from "../config";
 import type {
   Club,
+  FreeAgentListing,
   MarketBid,
   MarketReservation,
+  MarketType,
   Player,
   PlayerMarketTransaction,
   TransferAuction,
@@ -10,6 +12,8 @@ import type {
 } from "./types";
 import { calculateContractDemand, contractDaysForTerm, contractDemandOptions, clamp, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
 import { roundForDay } from "./clock";
+import { seniorRosterFullError, isEphemeralAI } from "./club";
+import { newClubSellLockError } from "./league";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 
 /** Compact currency formatter for news text. */
@@ -76,9 +80,6 @@ export function clubTransferCapMultiplier(buyerDivision: number, sellerDivision:
  * subject only to the hard immediate-cash rule:
  *
  *   maximumAllowedBid = min(bidderSpecificPlayerValueCap, ImmediateAvailableCash)
- *
- * AI clubs additionally cap themselves at what keeps their financial cushion
- * >= 0 (see aiAffordableCommitment in finance.ts).
  */
 export function maximumAllowedBid(
   playerValue: number,
@@ -107,6 +108,10 @@ export function validateMaxBid(opts: {
 }): { ok: true; maximum: number } | { ok: false; error: string } {
   const { listing, club, player, proposedMaximum, buyerDivision, immediateAvailableCash } = opts;
 
+  // Invariant #28: ephemeral filler-AI clubs never participate in the market.
+  if (isEphemeralAI(club)) {
+    return { ok: false, error: "AI clubs cannot bid on transfer listings" };
+  }
   if (!Number.isFinite(proposedMaximum) || proposedMaximum <= 0) {
     return { ok: false, error: "Maximum bid must be positive" };
   }
@@ -125,8 +130,7 @@ export function validateMaxBid(opts: {
   }
   // §9/§10/§11: the hard immediate-cash rule. Humans may make their financial
   // cushion negative, but a new immediate obligation cannot exceed actual
-  // unreserved cash. AI clubs apply a stricter cushion rule at the strategy
-  // layer (finance.evaluateAIDecision) — not here.
+  // unreserved cash.
   if (proposedMaximum > immediateAvailableCash) {
     return { ok: false, error: "Maximum exceeds your immediately available cash" };
   }
@@ -180,10 +184,11 @@ export function determineLeader(bids: { clubId: number; maxBid: number; initialP
 }
 
 /**
- * Anti-sniping soft close (§18). A bid extends the deadline only when it
- * changes the leader or raises the current price. Extensions are capped by
- * MAX_SOFT_CLOSE_EXTENSION. Returns the new deadline (unchanged when no
- * extension applies).
+ * Anti-sniping soft close (§18). A competitive bid (leader or price change)
+ * resets the remaining time to the configured window whenever less than the
+ * window remains; otherwise the deadline is untouched. There is no extension
+ * cap: every competitive bid in the final window pushes the close a full
+ * window away, so scripted last-second bids cannot snipe.
  */
 export function extendDeadline(opts: {
   listing: TransferAuction;
@@ -197,18 +202,14 @@ export function extendDeadline(opts: {
   const { listing, previousLeader, previousPrice, newLeader, newPrice, now, seasonRolloverAt } = opts;
   const competitive = newLeader !== previousLeader || newPrice > previousPrice;
   if (!competitive) return listing.deadline;
-  const extensionMs = MARKET_CONFIG.transferAuction.extensionMinutes * 60_000;
-  // The total accumulated extension is capped at MAX_SOFT_CLOSE_EXTENSION (§17).
-  const extendedMinutes = listing.softCloseExtensions * MARKET_CONFIG.transferAuction.extensionMinutes;
-  if (extendedMinutes >= MARKET_CONFIG.transferAuction.maxSoftCloseExtensionMinutes) {
-    return listing.deadline;
-  }
-  let deadline = Math.max(now, listing.deadline) + extensionMs;
-  // Auctions and soft-close extensions use absolute real time and may cross a
-  // season boundary. The legacy argument is retained for callers compiled
-  // against the old signature but no longer truncates the deadline.
+  const windowMs = MARKET_CONFIG.transferAuction.softCloseWindowMinutes * 60_000;
+  if (listing.deadline - now >= windowMs) return listing.deadline;
+  // Reset the close a full window away. Auctions and soft-close resets use
+  // absolute real time and may cross a season boundary. The legacy argument is
+  // retained for callers compiled against the old signature but no longer
+  // truncates the deadline.
   void seasonRolloverAt;
-  return deadline;
+  return now + windowMs;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,13 +233,14 @@ export function activeReservations(world: World, clubId: number, excludeListingI
 /**
  * Append a durable market transaction. Only permanent acquisitions
  * (TRANSFER, FREE_AGENT_SIGNING) feed the resale anchor / transfer cooldown;
- * LOAN records are audit-only (§72).
+ * LOAN records are audit-only (§72). The row is stamped with the global
+ * completed-rounds counter so the anchor fade uses a monotonic clock (§C4).
  */
 export function recordTransaction(
   world: World,
   tx: Omit<PlayerMarketTransaction, "id">
 ): PlayerMarketTransaction {
-  const row: PlayerMarketTransaction = { ...tx, id: world.nextId++ };
+  const row: PlayerMarketTransaction = { ...tx, id: world.nextId++, completedRounds: world.mp.completedRounds };
   world.playerMarketHistory.push(row);
   return row;
 }
@@ -259,8 +261,15 @@ export function lastPermanentAcquisition(
  *
  * If the player has a recent permanent trade, the base blends the actual paid
  * price toward `player.value` linearly over `RECENT_TRADE_FADE_OVER_GAMES`
- * league rounds played by the current owner. With no trade, or after the fade
- * window, the base is `player.value`.
+ * league rounds completed by the whole world since the trade. With no trade,
+ * or after the fade window, the base is `player.value`.
+ *
+ * Both endpoints use the monotonic `completedRounds` counter (review C4):
+ * trades are stamped at record time, so off-match-day trades no longer snap to
+ * round 1 and mis-anchor the fade. Legacy rows without the stamp fall back to
+ * the day-based approximation; when even that cannot resolve a round (the day
+ * was not a match day), the row counts as fully faded so a stale price can
+ * never pin the base indefinitely.
  *
  * LOAN records never feed the base (§72). The base always uses the player's own
  * last permanent trade price — never a similar-player market average.
@@ -271,20 +280,14 @@ export function recentTradeBaseValue(world: World, player: Player): number {
   const fade = MARKET_CONFIG.recentTrade.fadeOverGames;
   if (fade <= 0) return player.value;
 
-  const acquisitionRound = roundForDay(last.seasonDayIndex) ?? 1;
-  const currentRound = roundForDay(world.mp.seasonDayIndex ?? world.dayIndex) ?? Math.max(1, currentRoundFallback(world));
+  const currentRound = world.mp.completedRounds;
+  const acquisitionRound = last.completedRounds ?? roundForDay(last.seasonDayIndex);
+  if (acquisitionRound === undefined || acquisitionRound === null) return player.value;
   const gamesSinceTrade = Math.max(0, currentRound - acquisitionRound);
 
   if (gamesSinceTrade >= fade) return player.value;
   const t = gamesSinceTrade / fade;
   return last.price + (player.value - last.price) * t;
-}
-
-/** Round counter fallback when the current day is not a match day. */
-function currentRoundFallback(world: World): number {
-  // Completed rounds from the multiplayer clock; matches day-of-month round
-  // cadence when the world is simulated.
-  return world.mp.completedRounds;
 }
 
 /** The seller's allowed opening-price range for a player (§64.1). */
@@ -374,6 +377,54 @@ export function releaseAllReservations(world: World, listingId: number, marketTy
   }
 }
 
+/**
+ * Recompute the cached proxy state (leader, current price, reservations) of an
+ * active listing from its surviving bids. Used after bids are removed outside
+ * the normal `applyMaxBid` path (destroyed-club cleanup) so the next-highest
+ * surviving bidder leads with a live reservation (§12/§13/§23).
+ */
+export function recomputeProxyState(world: World, listingId: number, marketType: MarketType): void {
+  const listing: TransferAuction | FreeAgentListing | undefined =
+    marketType === "TRANSFER"
+      ? world.transferAuctions.find((a) => a.id === listingId)
+      : world.freeAgentListings.find((l) => l.id === listingId);
+  if (!listing || listing.status !== "ACTIVE") return;
+  const bids = world.marketBids
+    .filter((b) => b.marketType === marketType && b.listingId === listingId)
+    .map((b) => ({ clubId: b.clubId, maxBid: b.maxBid, initialPriorityAt: b.initialPriorityAt }));
+  listing.currentPrice = calculateCurrentPrice({ openingPrice: listing.openingPrice, bidIncrement: listing.bidIncrement, bids });
+  listing.leadingClubId = determineLeader(bids);
+  for (const bid of world.marketBids.filter((b) => b.marketType === marketType && b.listingId === listingId)) {
+    if (bid.clubId === listing.leadingClubId) {
+      upsertReservation(world, { clubId: bid.clubId, listingId, marketType, amount: bid.maxBid });
+    } else {
+      releaseReservation(world, bid.clubId, listingId, marketType);
+    }
+  }
+}
+
+/**
+ * Void every market commitment of a club that is being destroyed (retiring
+ * filler / rollover filler removal): its bids are removed, its reservations
+ * released, and every affected active listing gets its proxy state recomputed.
+ * A destroyed club's commitments are void — they are never settled in its
+ * favor — but surviving bidders on the same listings keep their state intact.
+ */
+export function purgeClubBids(world: World, clubId: number): void {
+  const affected = new Set<string>();
+  for (const bid of world.marketBids) {
+    if (bid.clubId === clubId) affected.add(`${bid.marketType}:${bid.listingId}`);
+  }
+  world.marketBids = world.marketBids.filter((bid) => bid.clubId !== clubId);
+  for (const r of world.marketReservations) {
+    if (r.clubId === clubId && r.releasedAt === null) r.releasedAt = Date.now();
+  }
+  for (const key of affected) {
+    const separator = key.indexOf(":");
+    recomputeProxyState(world, Number(key.slice(separator + 1)), key.slice(0, separator) as MarketType);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Listing helpers (§68)
 // ---------------------------------------------------------------------------
@@ -412,8 +463,15 @@ export function createTransferAuction(
   const now = opts.now ?? Date.now();
   const { player, sellerClub } = opts;
 
+  // Invariant #28: ephemeral filler-AI clubs never list players for sale.
+  if (isEphemeralAI(sellerClub)) {
+    return { ok: false, error: "AI clubs cannot list players for transfer" };
+  }
   if (player.isYouth) return { ok: false, error: "Youth players cannot be listed for auction" };
   if (player.clubId !== sellerClub.id) return { ok: false, error: "Player not in squad" };
+  // New-club outbound lock: buying/releasing stay open, selling does not.
+  const sellLock = newClubSellLockError(world, sellerClub.id);
+  if (sellLock) return { ok: false, error: sellLock };
   if (playerHasActiveListing(world, player)) {
     return { ok: false, error: "This player already has an active market listing" };
   }
@@ -425,7 +483,10 @@ export function createTransferAuction(
   const resolved = resolveOpeningPrice(world, player, opts.openingPrice);
   if (!resolved.ok) return resolved;
   const openingPrice = resolved.openingPrice;
-  const deadline = now + gameConfig.auctionDurationDays * 24 * 60 * 60 * 1000;
+  // Real-time listing window from MARKET_CONFIG (review C3): the single source
+  // of truth for auction duration; the legacy gameConfig.auctionDurationDays
+  // was removed.
+  const deadline = now + MARKET_CONFIG.transferAuction.durationHours * 60 * 60 * 1000;
 
   const listing: TransferAuction = {
     id: world.nextId++,
@@ -450,7 +511,6 @@ export function createTransferAuction(
     finalPrice: null,
     cancelledAt: null,
     softClosed: false,
-    softCloseExtensions: 0,
     deadlineVersion: 0,
   };
   world.transferAuctions.push(listing);
@@ -518,14 +578,19 @@ export function expireDueListings(world: World, now: number): number {
  * clearing price (proxy) → deduct from buyer → credit seller → transfer player
  * (preserving contract/salary) → release all reservations → record history →
  * mark complete → news.
+ *
+ * `forceClose` bypasses the deadline check for callers that must resolve a
+ * listing immediately because its seller is being destroyed (financial
+ * intervention, filler-club retirement); the proxy rules are unchanged.
  */
 export function settleTransferAuction(
   world: World,
   listing: TransferAuction,
-  now: number
-): { ok: true; winnerClubId: number | null; finalPrice: number | null } | { ok: false; error: string } {
+  now: number,
+  opts: { forceClose?: boolean } = {}
+): { ok: true; winnerClubId: number | null; finalPrice: number | null } | { ok: false; error: string; terminal?: boolean } {
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
-  if (now < listing.deadline) return { ok: false, error: "Listing has not closed yet" };
+  if (!opts.forceClose && now < listing.deadline) return { ok: false, error: "Listing has not closed yet" };
 
   const bids = world.marketBids
     .filter((b) => b.listingId === listing.id)
@@ -568,15 +633,35 @@ export function settleTransferAuction(
     (candidate) => candidate.clubId === winner.id && candidate.listingId === listing.id && candidate.marketType === "TRANSFER" && candidate.releasedAt === null,
   );
   if (!reservation || reservation.amount < finalPrice) {
-    return { ok: false, error: "Winning bid reservation is missing or insufficient" };
+    return { ok: false, error: "Winning bid reservation is missing or insufficient", terminal: true };
   }
+  // Defensive single-roster-cap re-check at settlement: two auctions for the
+  // same buyer may both pass the bid-time check and settle in one worker pass.
+  // Terminal: retrying can never succeed, so callers cancel the listing.
+  const rosterFull = seniorRosterFullError(world, winner.id);
+  if (rosterFull) return { ok: false, error: rosterFull, terminal: true };
 
   // Settle the seller's accrued payroll through today before ownership moves;
   // the buyer receives the winning bidder's new contract rather than inheriting
   // the seller's salary or remaining duration.
   settlePlayerPayroll(world, player);
-  seller.cash += finalPrice;
-  seller.ledger.income.push({ code: 3, amount: finalPrice, day: world.dayIndex, label: `Transfer fee: ${player.name}` });
+  // Transfer sales tax (review B1): a configured fraction of the final price
+  // is burned — credited to no club — so every club-to-club transfer shrinks
+  // the money supply. The seller receives the net amount; the winner pays the
+  // gross price. Transaction history keeps the gross price (one cause, one
+  // effect: the tax never distorts values, anchors or caps).
+  const tax = Math.max(0, Math.round(finalPrice * MARKET_CONFIG.transferTax.rate));
+  const netToSeller = finalPrice - tax;
+  // Invariant #28: ephemeral AI clubs hold no cash. When a destroyed filler's
+  // listing is force-settled, its proceeds burn with the club instead of
+  // transiently crediting it.
+  if (!isEphemeralAI(seller)) {
+    seller.cash += netToSeller;
+    seller.ledger.income.push({ code: 3, amount: netToSeller, day: world.dayIndex, label: `Transfer fee: ${player.name}` });
+    if (tax > 0) {
+      seller.ledger.expense.push({ code: 17, amount: tax, day: world.dayIndex, label: `Transfer sales tax: ${player.name}` });
+    }
+  }
   winner.cash -= finalPrice;
   winner.ledger.expense.push({ code: 1, amount: finalPrice, day: world.dayIndex, label: `Transfer fee: ${player.name}` });
 
@@ -616,12 +701,30 @@ export function settleTransferAuction(
 
   world.news.push({
     dayIndex: world.dayIndex,
-    text: `${winner.name} won the auction for ${player.name} for ${formatMoney(finalPrice)}`,
+    text: `${winner.name} won the auction for ${player.name} for ${formatMoney(finalPrice)}${tax > 0 ? ` (includes ${formatMoney(tax)} sales tax)` : ""}`,
     kind: "auction",
     clubId: winner.id,
   });
 
   return { ok: true, winnerClubId: winner.id, finalPrice };
+}
+
+/**
+ * Fail-closed cancellation of a listing that can never settle (missing
+ * reservation, roster cap breach): release reservations, keep the player owned
+ * by the seller, and announce the cancellation (§22 no partial state).
+ */
+export function cancelUnsettleableAuction(world: World, listing: TransferAuction, now: number, reason: string): void {
+  const player = world.players.find((p) => p.id === listing.playerId);
+  releaseAllReservations(world, listing.id, "TRANSFER");
+  listing.status = "CANCELLED";
+  listing.cancelledAt = now;
+  if (player) player.onSale = false;
+  world.news.push({
+    dayIndex: world.dayIndex,
+    text: `The auction for ${player?.name ?? "a player"} was cancelled (${reason})`,
+    kind: "auction",
+  });
 }
 
 /** Settle every due transfer auction (§77 worker path). Returns count settled. */
@@ -638,16 +741,7 @@ export function settleDueTransferAuctions(world: World, now: number): number {
     // (the winner's max >= clearing price). Fail closed rather than letting a
     // broken listing retry forever: cancel it, release reservations, and keep
     // the player owned by the seller (§22 no partial state).
-    const player = world.players.find((p) => p.id === listing.playerId);
-    releaseAllReservations(world, listing.id, "TRANSFER");
-    listing.status = "CANCELLED";
-    listing.cancelledAt = now;
-    if (player) player.onSale = false;
-    world.news.push({
-      dayIndex: world.dayIndex,
-      text: `The auction for ${player?.name ?? "a player"} was cancelled because it could not be settled`,
-      kind: "auction",
-    });
+    cancelUnsettleableAuction(world, listing, now, result.error);
   }
   return settled;
 }
@@ -734,6 +828,8 @@ export function applyMaxBid(
 ): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number } | { ok: false; error: string } {
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
+  // Invariant #28: ephemeral filler-AI clubs never enter bid commitments.
+  if (isEphemeralAI(club)) return { ok: false, error: "AI clubs cannot bid on transfer listings" };
   const existing = marketBidFor(world, listing.id, club.id);
   const existingReservation = existing
     ? world.marketReservations.find(
@@ -747,6 +843,9 @@ export function applyMaxBid(
 
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
   if (now >= listing.deadline) return { ok: false, error: "Listing has closed" };
+  // Single senior-roster cap: a full squad cannot enter new binding commitments.
+  const rosterFull = seniorRosterFullError(world, club.id);
+  if (rosterFull) return { ok: false, error: rosterFull };
 
   const validated = validateMaxBid({
     listing,
@@ -835,7 +934,6 @@ export function applyMaxBid(
   if (newDeadline !== listing.deadline) {
     listing.deadline = newDeadline;
     listing.softClosed = true;
-    listing.softCloseExtensions += 1;
     listing.deadlineVersion = (listing.deadlineVersion ?? 0) + 1;
   }
 

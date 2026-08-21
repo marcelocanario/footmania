@@ -1,7 +1,7 @@
 import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRow, World } from "./types";
-import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStandings, updateStandings, validateDoubleRoundRobinFixtures } from "./league";
+import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, updateStandings, validateDoubleRoundRobinFixtures } from "./league";
 import { simulateMatch } from "./match";
-import { seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
+import { seasonKey, joinLockRound } from "./clock";
 import { roundDayIndex } from "../services/seasonCalendar";
 import { anchorMinutes, pickFixtureKickoff, pickSynchronizedKickoff, type PreferenceInput } from "./scheduling";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
@@ -9,10 +9,8 @@ import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
 import { overallFromSkills } from "./rating";
 import { applyMatchElo, eloRatings } from "./elo";
-import { tierBudget, proratedBudget, performanceModifier } from "./budget";
-import { releaseAllReservations } from "./market";
-import { generateNewClubRoster, totalDivisionsForGeneration } from "./clubGenerator";
-import type { PrismaClient } from "@prisma/client";
+import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "./market";
+import { generateFillerRoster, totalDivisionsForGeneration } from "./clubGenerator";
 
 export const CLUBS_PER_DIVISION = gameConfig.league.teams;
 export const ROUNDS_PER_SEASON = gameConfig.league.turns * (gameConfig.league.teams - 1);
@@ -196,7 +194,7 @@ export function firstReplaceableAIDivision(world: World, seasonId: number, tier:
   return null;
 }
 
-/** Create a filler AI club with a generated squad. */
+/** Create a filler AI club with its fixed generated squad (invariant #28). */
 export function createFillerAI(world: World, tier: number, seasonId?: number): Club {
   const rng = world.rng;
   const id = world.nextId++;
@@ -215,9 +213,10 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
     liveMatchAt: null,
     country,
     highestDivision: tier,
-    cash: STARTING_CASH(tier),
+    // Ephemeral AI clubs have no finances: cash stays 0 and nothing is ever
+    // charged or paid to them (invariant #28).
+    cash: 0,
     stadiumName: `${city} Stadium`,
-    stadiumCapacity: Math.max(10000, Math.min(60000, tier * 1100 + nextInt(rng, 15000))),
     primaryColor: "#334455",
     secondaryColor: "#112233",
     coachName: generateName(rng, country),
@@ -232,7 +231,7 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
     eloRatedMatches: 0,
   };
   world.clubs.push(club);
-  generateNewClubRoster({
+  generateFillerRoster({
     world,
     club,
     currentDivision: tier,
@@ -261,10 +260,6 @@ function randomTactics(rng: ReturnType<typeof createRng>) {
     pressing: nextInt(rng, 100) <= 70 ? 0 : 1,
     direction: nextInt(rng, 100) <= 70 ? 0 : 1,
   };
-}
-
-function STARTING_CASH(tier: number): number {
-  return Math.max(1_000_000, 3_500_000 * Math.pow(0.72, Math.max(0, tier - 1)));
 }
 
 export interface SeasonContext {
@@ -424,8 +419,6 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
       homeScore: sim.homeGoals,
       awayScore: sim.awayGoals,
       penaltyWinnerId: null,
-      attendance: 0,
-      gateRevenue: 0,
       events: sim.match.events,
       stats: sim.match.stats,
       extraTime: false,
@@ -498,37 +491,76 @@ export function replaceClubInDivision(world: World, comp: Competition, oldClubId
   }
 }
 
-/** Remove an ephemeral filler after a human takes its competition slot. */
-function retireFillerClub(world: World, clubId: number): void {
+/**
+ * Remove an ephemeral filler after a human takes its competition slot.
+ *
+ * Market reconciliation happens BEFORE the roster is destroyed (plan §102.9):
+ *  1. the filler's own bids/evaluations/reservations are voided, so a club
+ *     that is about to disappear can neither win nor influence any other
+ *     listing's proxy state;
+ *  2. its active transfer listings with surviving bids are force-settled —
+ *     the leading bidder wins the player immediately at the proxy clearing
+ *     price; listings without bids are cancelled and released;
+ *  3. only then is the remaining squad deleted, so a force-settled player
+ *     travels to its winner instead of being destroyed with the club.
+ */
+function retireFillerClub(world: World, clubId: number, now: number): void {
   const club = clubById(world, clubId);
   if (!club || club.ownerUserId !== null || club.isHuman) return;
-  const playerIds = new Set(world.players.filter((player) => player.clubId === clubId).map((player) => player.id));
+  const squadIds = new Set(world.players.filter((player) => player.clubId === clubId).map((player) => player.id));
   const loanIds = new Set(world.loans.filter((loan) => loan.fromClubId === clubId || loan.toClubId === clubId).map((loan) => loan.id));
+
+  // 1. Void the filler's own market commitments first.
+  purgeClubBids(world, clubId);
+
+  // 2. Resolve the filler's own listings while it still exists.
+  for (const listing of [...world.transferAuctions]) {
+    if (listing.status !== "ACTIVE" || (listing.sellerClubId !== clubId && !squadIds.has(listing.playerId))) continue;
+    const hasBids = world.marketBids.some((bid) => bid.marketType === "TRANSFER" && bid.listingId === listing.id);
+    if (hasBids) {
+      // Force-close: the seller is disappearing, so the leading surviving
+      // bidder wins now at the proxy clearing price (never its maximum).
+      const settled = settleTransferAuction(world, listing, now, { forceClose: true });
+      if (settled.ok) continue;
+    }
+    // No (valid) bids: fail closed like the worker path — cancel, release,
+    // clear the flag. The player is destroyed with the club below.
+    releaseAllReservations(world, listing.id, "TRANSFER");
+    listing.status = "CANCELLED";
+    listing.cancelledAt = now;
+    const player = world.players.find((candidate) => candidate.id === listing.playerId);
+    if (player) player.onSale = false;
+    if (hasBids) {
+      world.news.push({
+        dayIndex: world.dayIndex,
+        text: `The auction for ${player?.name ?? "a player"} was cancelled because it could not be settled`,
+        kind: "auction",
+      });
+    }
+  }
+  for (const listing of world.freeAgentListings) {
+    if (listing.status !== "ACTIVE" || !squadIds.has(listing.playerId)) continue;
+    // Defensive: a squad player cannot have a free-agent listing (such a
+    // player would be unowned). Cancel-and-release if state ever contradicts.
+    releaseAllReservations(world, listing.id, "FREE_AGENT");
+    listing.status = "CANCELLED";
+    listing.completedAt = now;
+  }
+
+  // 3. Detach players loaned out by/in to the filler.
   for (const player of world.players) {
-    if (player.loanId !== null && loanIds.has(player.loanId) && !playerIds.has(player.id)) {
+    if (player.loanId !== null && loanIds.has(player.loanId) && !squadIds.has(player.id)) {
       player.loanId = null;
       player.clubId = null;
       player.starter = false;
       player.tacPos = -1;
     }
   }
-  world.players = world.players.filter((player) => !playerIds.has(player.id));
+
+  // 4. Destroy the remaining roster and the club. Force-settled players now
+  //    belong to their winners and survive.
+  world.players = world.players.filter((player) => player.clubId !== clubId);
   world.loans = world.loans.filter((loan) => !loanIds.has(loan.id));
-  for (const listing of world.transferAuctions) {
-    if (listing.status !== "ACTIVE" || (listing.sellerClubId !== clubId && !playerIds.has(listing.playerId))) continue;
-    releaseAllReservations(world, listing.id, "TRANSFER");
-    listing.status = "CANCELLED";
-    listing.cancelledAt = Date.now();
-    const player = world.players.find((candidate) => candidate.id === listing.playerId);
-    if (player) player.onSale = false;
-  }
-  for (const listing of world.freeAgentListings) {
-    if (listing.status !== "ACTIVE" || !playerIds.has(listing.playerId)) continue;
-    releaseAllReservations(world, listing.id, "FREE_AGENT");
-    listing.status = "CANCELLED";
-    listing.completedAt = Date.now();
-  }
-  delete world.ticketPrices[clubId];
   world.clubs = world.clubs.filter((candidate) => candidate.id !== clubId);
 }
 
@@ -580,7 +612,7 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
   const position = positionInDivision(world, division, aiId);
   replaceClubInDivision(world, division, aiId, clubId);
   const club = clubById(world, clubId)!;
-  retireFillerClub(world, aiId);
+  retireFillerClub(world, aiId, now);
   club.competitionState = "ACTIVE";
   // The human club inherits only current-season competition state; it keeps
   // its own identity, roster, finances, facilities.
@@ -638,7 +670,7 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
   }
   const position = positionInDivision(world, division, aiId);
   replaceClubInDivision(world, division, aiId, clubId);
-  retireFillerClub(world, aiId);
+  retireFillerClub(world, aiId, now);
   club.competitionState = "ACTIVE";
   club.abandonmentEligibleAt = null;
   club.lastMeaningfulActivityAt = Date.now();
@@ -1220,114 +1252,11 @@ function improveSocialAssignment(groups: { clubId: number; timezone: string | nu
   }
 }
 
-/**
- * Partition humans into `required` groups of up to 8, maximizing human density
- * (always fill a division before starting another) and then minimizing
- * timezone spread (plan §6/§36). Implementation: sort by timezone coordinate,
- * cut into contiguous chunks of 8, then greedily swap boundary members between
- * neighboring groups whenever the swap strictly reduces total timezone spread.
- * Group count never increases; only the final group may be partial (AI fills it).
- */
-export function timezoneCluster(
-  humans: { clubId: number; timezone: string | null }[],
-  required: number
-): { clubId: number; timezone: string | null }[][] {
-  const groups: { clubId: number; timezone: string | null }[][] = [];
-  for (let i = 0; i < required; i++) groups.push([]);
-
-  const sorted = [...humans].sort((a, b) => timezoneCoordinate(a.timezone) - timezoneCoordinate(b.timezone));
-  // Fill groups of 8 in timezone order (human density first).
-  sorted.forEach((h, i) => {
-    const g = Math.min(required - 1, Math.floor(i / CLUBS_PER_DIVISION));
-    groups[g].push(h);
-  });
-
-  // Boundary-swap optimization: swapping the last member of group i with the
-  // first member of group i+1 reduces total spread only if it moves each club
-  // closer to its new group's midpoint.
-  let improved = true;
-  while (improved) {
-    improved = false;
-    for (let i = 0; i < groups.length - 1; i++) {
-      const left = groups[i];
-      const right = groups[i + 1];
-      if (left.length === 0 || right.length === 0) continue;
-      const leftMid = midpoint(left);
-      const rightMid = midpoint(right);
-      const leftEdge = coordOf(left[left.length - 1]);
-      const rightEdge = coordOf(right[0]);
-      // Distance each currently contributes to its group's spread.
-      const current = Math.abs(leftEdge - leftMid) + Math.abs(rightEdge - rightMid);
-      // If swapped.
-      const swapped = Math.abs(rightEdge - leftMid) + Math.abs(leftEdge - rightMid);
-      if (swapped < current - 1e-9) {
-        // Move the boundary members: left's last member goes to right's front,
-        // right's first member goes to left's back. This keeps both groups
-        // contiguous in timezone order and preserves group sizes when the two
-        // groups are equal-length; a size imbalance (density ordering) is only
-        // allowed toward the higher-populated group.
-        const leftMember = left.pop()!;
-        const rightMember = right.shift()!;
-        left.push(rightMember);
-        right.unshift(leftMember);
-        improved = true;
-      }
-    }
-  }
-  return groups;
-}
-
-function coordOf(h: { timezone: string | null }): number {
-  return timezoneCoordinate(h.timezone);
-}
-
-function midpoint(humans: { timezone: string | null }[]): number {
-  if (humans.length === 0) return 0;
-  return humans.reduce((sum, h) => sum + coordOf(h), 0) / humans.length;
-}
-
 /** Reset a division's standings for a new season. */
 export function resetDivisionStandings(world: World, comp: Competition) {
   for (const key of Object.keys(comp.standings)) {
     comp.standings[Number(key)] = emptyStandingsRow(Number(key));
   }
-}
-
-// ---------------------------------------------------------------------------
-// Seasonal budget issuance
-// ---------------------------------------------------------------------------
-
-export async function issueSeasonBudget(
-  prisma: PrismaClient,
-  world: World,
-  clubId: number,
-  seasonId: number,
-  tier: number,
-  opts: { type: "ACTIVE_FULL" | "ACTIVE_PRORATED" | "PROVISIONAL_NEXT_SEASON"; remainingRounds?: number; finishPosition?: number; divisionSize?: number }
-): Promise<number> {
-  const existing = world.seasonAllocations.find((a) => a.clubId === clubId && a.seasonId === seasonId && a.type === opts.type);
-  if (existing) return existing.amount;
-
-  let full = await tierBudget(prisma, tier);
-  if (opts.finishPosition !== undefined && opts.divisionSize !== undefined) {
-    full = Math.round(full * performanceModifier(opts.finishPosition, opts.divisionSize));
-  }
-  let amount = full;
-  if (opts.type === "ACTIVE_PRORATED") {
-    amount = proratedBudget(full, opts.remainingRounds ?? ROUNDS_PER_SEASON, ROUNDS_PER_SEASON);
-  }
-  const club = clubById(world, clubId);
-  if (club) {
-    club.cash += amount;
-    club.ledger.income.push({ code: 13, amount, day: world.dayIndex, label: `Season ${seasonKeyFromId(seasonId)} budget` });
-    world.news.push({ dayIndex: world.dayIndex, text: `${club.name} received the season budget`, kind: "finance", clubId });
-  }
-  world.seasonAllocations.push({ clubId, seasonId, type: opts.type, amount, issuedAt: Date.now() });
-  return amount;
-}
-
-function seasonKeyFromId(seasonId: number): string {
-  return `#${seasonId}`;
 }
 
 /**

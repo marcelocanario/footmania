@@ -1,8 +1,7 @@
 import type { Club, LiveMatchState, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
 import { nextInt } from "./rng";
-import { lineupForMatch, divisionTicketTier } from "./club";
+import { lineupForMatch } from "./club";
 import { DEVELOPMENT, EVENT_CODES } from "./constants";
-import { TACTICAL_RATING_WEIGHTS, tacticalSkillRating } from "./rating";
 import {
   advancePossessionMatch,
   computeAttributeCenters,
@@ -24,109 +23,6 @@ import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 // are unaffected. All behavioral logic is delegated to the config-driven
 // engine.
 // ---------------------------------------------------------------------------
-
-export interface RatingContext {
-  kind: "league" | "cup" | "state" | "division";
-  homeRep: number;
-  awayRep: number;
-  awayClubId: number;
-}
-
-export interface MatchReps {
-  homeRep?: number;
-  awayRep?: number;
-}
-
-export function matchRepsForDivisions(homeDivision: number, awayDivision: number): MatchReps {
-  return { homeRep: divisionTicketTier(homeDivision), awayRep: divisionTicketTier(awayDivision) };
-}
-
-// ---------------------------------------------------------------------------
-// Legacy strength helpers (retained for tactical validation utilities).
-// They are pure functions of the squad/context and do not drive the engine.
-// ---------------------------------------------------------------------------
-
-export function matchRating(p: Player, ctx: RatingContext): number {
-  if (p.injuryDays > 0) return 1;
-  const weights = TACTICAL_RATING_WEIGHTS[p.tacPos];
-  let n = 0;
-  if (weights) {
-    n = tacticalSkillRating(p.skills, p.tacPos);
-  }
-  if (p.tacPos <= 0) n = Math.round(n * 0.5);
-  if (n <= 0) n = 1;
-  const clubRep = p.clubId === ctx.awayClubId ? ctx.awayRep : ctx.homeRep;
-  if (ctx.kind === "state") {
-    if (p.country === "BRA") {
-      if (clubRep < 3) n = Math.round(n * 0.65);
-      else if (clubRep === 3) n = Math.round(n * 0.85);
-      else if (clubRep === 4) n = Math.round(n * 0.95);
-    }
-  } else if (ctx.kind === "league") {
-    if (clubRep < 3) n = Math.round(n * 0.85);
-    else if (clubRep === 3) n = Math.round(n * 0.95);
-  } else if (ctx.kind === "cup") {
-    if (clubRep < 3) n = Math.round(n * 0.75);
-    else if (clubRep === 3) n = Math.round(n * 0.85);
-  }
-  return n / 10;
-}
-
-function bestN(list: Player[], lo: number, hi: number, n: number, ctx: RatingContext): number {
-  let sum = 0;
-  let count = 0;
-  for (const p of list) {
-    if (count < n && p.tacPos >= lo && p.tacPos <= hi) {
-      sum += matchRating(p, ctx);
-      count++;
-    }
-  }
-  return sum;
-}
-
-export function midfieldStrength(list: Player[], club: Club, ctx: RatingContext): number {
-  const pressing = Math.min(2, Math.max(0, club.tactics.pressing));
-  const bonus = [0.0, 0.04, 0.08][pressing];
-  let sum = 0;
-  let count = 0;
-  for (const p of list) {
-    if (count < 5 && p.tacPos >= 10 && p.tacPos <= 17) {
-      sum += matchRating(p, ctx);
-      count++;
-    }
-  }
-  if (count < 3) return 0.01;
-  return (bonus + sum) / 5;
-}
-
-export function defenseStrength(list: Player[], ctx: RatingContext): number {
-  const sum = bestN(list, 2, 9, 5, ctx);
-  let count = 0;
-  for (const p of list) {
-    if (p.tacPos >= 2 && p.tacPos <= 9) count++;
-    if (count >= 5) break;
-  }
-  if (count < 3) return 0.01;
-  return sum / 5;
-}
-
-export function attackStrength(list: Player[], ctx: RatingContext): number {
-  const sum = bestN(list, 19, 25, 3, ctx);
-  let count = 0;
-  for (const p of list) {
-    if (p.tacPos >= 19 && p.tacPos <= 25) count++;
-    if (count >= 3) break;
-  }
-  if (count < 1) return 0;
-  return sum / 3;
-}
-
-export function gkRating(list: Player[], ctx: RatingContext): number {
-  for (const p of list) {
-    if (p.tacPos === 1) return matchRating(p, ctx);
-  }
-  return 0.1;
-}
 
 // ---------------------------------------------------------------------------
 // Setup helpers
@@ -336,9 +232,8 @@ export function tickLiveMatch(
   allPlayers: Player[],
   st: LiveMatchState,
   minutes: number,
-  opts?: { resume?: boolean; ignoreHalfTime?: boolean; reps?: MatchReps }
+  opts?: { resume?: boolean; ignoreHalfTime?: boolean }
 ): LiveTickResult {
-  void opts?.reps;
   const beforeEvents = st.events.length;
   const centers = centersFor(allPlayers);
   // Pause at half-time for human viewers unless resuming.
@@ -368,7 +263,7 @@ export function simulateMatch(
   home: Club,
   away: Club,
   allPlayers: Player[],
-  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; reps?: MatchReps; collectDiagnostics?: boolean }
+  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; collectDiagnostics?: boolean }
 ) {
   const st = createLiveMatchState(rng, home, away, allPlayers, {
     matchId: opts.fixtureId,
@@ -390,7 +285,7 @@ export function simulateMatch(
   } : undefined;
   simulatePossessionMatch(rng, home, away, allPlayers, st, centers, undefined, simulationDiagnostics);
   applyLiveMatchEnergy(st, allPlayers);
-  const match = buildMatchFromState(st, home, away, allPlayers, opts.reps);
+  const match = buildMatchFromState(st, home, away, allPlayers);
   if (simulationDiagnostics) match.simulationDiagnostics = simulationDiagnostics;
   return {
     match,
@@ -414,8 +309,7 @@ export function applyLiveMatchEnergy(st: LiveMatchState, allPlayers: Player[]): 
 // Match assembly from a live state
 // ---------------------------------------------------------------------------
 
-export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[], reps?: MatchReps): Match {
-  void reps;
+export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, allPlayers: Player[]): Match {
   const stats: MatchStats = st.teamStats
     ? { home: { ...st.teamStats.home }, away: { ...st.teamStats.away } }
     : st.stats;
@@ -429,8 +323,6 @@ export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, 
     awayScore: st.scores[1],
     penaltyWinnerId: st.shootout?.winner ?? null,
     penaltyScore: st.shootout?.scores,
-    attendance: 0,
-    gateRevenue: 0,
     events: st.events,
     stats,
     extraTime: st.extraTimePlayed,
@@ -456,11 +348,9 @@ export function performLiveSub(
   st: LiveMatchState,
   side: number,
   outId: number,
-  inId: number,
-  reps?: MatchReps
+  inId: number
 ): LiveSubResult {
   void rng;
-  void reps;
   if (st.ended) return { event: null, error: "Match already finished" };
   if (side !== 0 && side !== 1) return { event: null, error: "Invalid team side" };
   const byId = new Map(allPlayers.map((p) => [p.id, p]));

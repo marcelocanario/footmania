@@ -13,9 +13,10 @@ import {
   upsertReservation,
 } from "./market";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
-import { createRng, nextDouble, normal } from "./rng";
+import { seniorRosterFullError, isEphemeralAI } from "./club";
+import { createRng, nextDouble } from "./rng";
 import { DEVELOPMENT } from "./constants";
-import { calculateContractDemand, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
+import { calculateBaseSalary, calculateContractDemand, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
 
 /**
  * Free-agent market (transfer-market-overhaul Phase 7, §41-§54).
@@ -40,73 +41,25 @@ export function generateFreeAgentTerms(
   player: Player,
   version = 0
 ): { salary: number; contractDays: number } {
-  const salary = marketSalaryForPlayer(world, player, version);
+  void world;
+  void version;
+  const salary = marketSalaryForPlayer(player);
   const seasons = contractSeasonsForAge(player.age, version);
   return { salary, contractDays: contractDaysForTerm(seasons) };
 }
 
 /**
- * Weighted median in log-salary space of comparable contracted senior players
- * (§46.1). Uses a Gaussian kernel on ln(value) distance; widens the bandwidth
- * until the effective sample size reaches the configured target.
+ * Frozen salary baseline for a free agent (§46.1, review B2): the SAME
+ * deterministic first-contract formula used at generation
+ * (`calculateBaseSalary(overall, age)`), clamped by the global salary floor.
+ * It deliberately does NOT sample the current population's salaries: the
+ * previous population-kernel baseline created a positive feedback loop (new
+ * signings raised the medians that price the next signings), creeping wages
+ * upward season over season. The formula is pinned to visible data
+ * (overall + age) and cannot drift.
  */
-export function marketSalaryForPlayer(world: World, player: Player, version = 0): number {
-  const cfg = MARKET_CONFIG.freeAgents;
-  const Vp = Math.max(1, player.value);
-  const comparables = world.players.filter(
-    (p) => p.clubId !== null && !p.isYouth && p.value > 0 && p.salary > 0 && p.id !== player.id
-  );
-  if (comparables.length === 0) {
-    return Math.max(scaleReferenceSeasonFlow(gameConfig.salaryFloor), roundToSensibleIncrement(player.value * 0.08));
-  }
-
-  let h = cfg.salaryKernelBandwidthLogValue;
-  let salaries: number[] = [];
-  let weights: number[] = [];
-  let neff = 0;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    salaries = [];
-    weights = [];
-    for (const c of comparables) {
-      const di = Math.log(Math.max(1, c.value) / Vp);
-      const wi = Math.exp(-(di * di) / (2 * h * h));
-      salaries.push(Math.log(c.salary));
-      weights.push(wi);
-    }
-    const sumW = weights.reduce((a, b) => a + b, 0);
-    const sumW2 = weights.reduce((a, b) => a + b * b, 0);
-    neff = sumW > 0 ? (sumW * sumW) / Math.max(1e-9, sumW2) : 0;
-    if (neff >= cfg.salaryEffectiveSampleTarget) break;
-    h *= 1.5;
-  }
-
-  // Weighted median in log-salary space.
-  const pairs = salaries.map((s, i) => ({ s, w: weights[i] }));
-  pairs.sort((a, b) => a.s - b.s);
-  const totalW = pairs.reduce((a, b) => a + b.w, 0);
-  let acc = 0;
-  let medianLog = pairs[0]?.s ?? 0;
-  for (const p of pairs) {
-    acc += p.w;
-    if (acc >= totalW / 2) {
-      medianLog = p.s;
-      break;
-    }
-  }
-
-  // Deterministic negotiation noise: Z ~ N(0,1) seeded by playerId+version.
-  const rng = createRng(player.id * 31 + version * 7 + 1);
-  let z = normal(rng, 0, 1);
-  z = Math.max(-cfg.salaryNoiseZClamp, Math.min(cfg.salaryNoiseZClamp, z));
-  const noise = Math.exp(cfg.salaryNoiseSigma * z);
-  const marketSalary = Math.exp(medianLog) * noise;
-
-  // Clamp to the weighted 5th-95th salary band of the same population.
-  const sortedSalaries = comparables.map((c) => c.salary).sort((a, b) => a - b);
-  const pct = (q: number) => sortedSalaries[Math.min(sortedSalaries.length - 1, Math.floor(q * sortedSalaries.length))] ?? 0;
-  const floor = pct(cfg.salaryPercentileFloor);
-  const ceil = pct(cfg.salaryPercentileCeiling);
-  return Math.max(scaleReferenceSeasonFlow(gameConfig.salaryFloor), roundToSensibleIncrement(Math.max(floor, Math.min(ceil, marketSalary))));
+export function marketSalaryForPlayer(player: Player): number {
+  return Math.max(scaleReferenceSeasonFlow(gameConfig.salaryFloor), roundToSensibleIncrement(calculateBaseSalary(player.overall, player.age)));
 }
 
 /**
@@ -169,7 +122,7 @@ export function prepareFreeAgentListing(
   const multipliers = MARKET_CONFIG.freeAgents.relistMultipliers;
   const startMultiplier = stage >= multipliers.length ? multipliers[multipliers.length - 1] : multipliers[stage];
   const openingPrice = Math.max(1, roundToSensibleIncrement(player.value * startMultiplier));
-  const salaryBaselineAtListing = opts.salaryBaselineAtListing ?? marketSalaryForPlayer(world, player, stage);
+  const salaryBaselineAtListing = opts.salaryBaselineAtListing ?? marketSalaryForPlayer(player);
   const deadline = now + MARKET_CONFIG.freeAgents.durationHours * 60 * 60 * 1000;
 
   const listing: FreeAgentListing = {
@@ -192,7 +145,6 @@ export function prepareFreeAgentListing(
     blockedClubId: opts.blockedClubId ?? null,
     unclaimedSince: opts.unclaimedSince ?? now,
     softClosed: false,
-    softCloseExtensions: 0,
   };
   return { ok: true, listing };
 }
@@ -216,6 +168,8 @@ export function applyFreeAgentBid(
 ): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number } | { ok: false; error: string } {
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
+  // Invariant #28: ephemeral filler-AI clubs never sign free agents.
+  if (isEphemeralAI(club)) return { ok: false, error: "AI clubs cannot sign free agents" };
   const existing = marketBidFor(world, listing.id, club.id);
   const existingReservation = existing
     ? world.marketReservations.find(
@@ -229,6 +183,9 @@ export function applyFreeAgentBid(
 
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
   if (now >= listing.deadline) return { ok: false, error: "Listing has closed" };
+  // Single senior-roster cap: a full squad cannot enter new binding commitments.
+  const rosterFull = seniorRosterFullError(world, club.id);
+  if (rosterFull) return { ok: false, error: rosterFull };
   if (player.id !== listing.playerId || player.clubId !== null || player.isYouth) {
     return { ok: false, error: "Player is no longer available as a free agent" };
   }
@@ -265,7 +222,7 @@ export function applyFreeAgentBid(
     return { ok: false, error: "Contract term cannot be changed after the first bid" };
   }
   const calculatedContractSalary = calculateContractDemand(
-    listing.salaryBaselineAtListing ?? listing.demandedSalary ?? player.salary,
+    listing.salaryBaselineAtListing ?? player.salary,
     player.overall,
     player.age,
     contractSeasons,
@@ -318,7 +275,6 @@ export function applyFreeAgentBid(
   if (newDeadline !== listing.deadline) {
     listing.deadline = newDeadline;
     listing.softClosed = true;
-    listing.softCloseExtensions += 1;
   }
 
   for (const bid of world.marketBids.filter((b) => b.listingId === listing.id)) {
@@ -340,7 +296,7 @@ export function settleFreeAgentListing(
   world: World,
   listing: FreeAgentListing,
   now: number
-): { ok: true; winnerClubId: number | null; finalPrice: number | null } | { ok: false; error: string } {
+): { ok: true; winnerClubId: number | null; finalPrice: number | null } | { ok: false; error: string; terminal?: boolean } {
   if (listing.status !== "ACTIVE") return { ok: false, error: "Listing is not active" };
   if (now < listing.deadline) return { ok: false, error: "Listing has not closed yet" };
 
@@ -363,7 +319,7 @@ export function settleFreeAgentListing(
   if (!winner) return { ok: false, error: "Winning club not found" };
   const winningBid = world.marketBids.find((bid) => bid.marketType === "FREE_AGENT" && bid.listingId === listing.id && bid.clubId === winner.id);
   const contractSeasons = winningBid?.contractSeasons ?? 1;
-  const contractSalary = winningBid?.contractSalary ?? listing.salaryBaselineAtListing ?? listing.demandedSalary ?? player.salary;
+  const contractSalary = winningBid?.contractSalary ?? listing.salaryBaselineAtListing ?? player.salary;
   const finalPrice = calculateCurrentPrice({ openingPrice: listing.openingPrice, bidIncrement: listing.bidIncrement, bids });
   // A leading free-agent bid is a binding commitment. Payroll may have pushed
   // the winner cash-negative since the bid was placed; the settlement remains
@@ -372,8 +328,11 @@ export function settleFreeAgentListing(
     (candidate) => candidate.clubId === winner.id && candidate.listingId === listing.id && candidate.marketType === "FREE_AGENT" && candidate.releasedAt === null,
   );
   if (!reservation || reservation.amount < finalPrice) {
-    return { ok: false, error: "Winning bid reservation is missing or insufficient" };
+    return { ok: false, error: "Winning bid reservation is missing or insufficient", terminal: true };
   }
+  // Defensive single-roster-cap re-check at settlement (see settleTransferAuction).
+  const rosterFull = seniorRosterFullError(world, winner.id);
+  if (rosterFull) return { ok: false, error: rosterFull, terminal: true };
 
   // Winner pays the system: cash leaves the economy, no club is credited (§44).
   settlePlayerPayroll(world, player);
@@ -453,7 +412,7 @@ export function relistFreeAgent(world: World, listing: FreeAgentListing, now: nu
     relistStage: listing.relistStage + 1,
     previousListingId: listing.id,
     blockedClubId: listing.blockedClubId,
-    salaryBaselineAtListing: listing.salaryBaselineAtListing ?? listing.demandedSalary,
+    salaryBaselineAtListing: listing.salaryBaselineAtListing,
     unclaimedSince: listing.unclaimedSince ?? listing.createdAt,
   });
   return created.ok ? created.listing.id : null;
@@ -463,7 +422,7 @@ export type DueFreeAgentResult =
   | { kind: "SETTLED"; listingId: number; winnerClubId: number | null; finalPrice: number | null }
   | { kind: "RELISTED"; listingId: number; newListingId: number }
   | { kind: "DELETED"; playerId: number; listingIds: number[] }
-  | { kind: "FAILED"; listingId: number; error: string };
+  | { kind: "FAILED"; listingId: number; error: string; terminal?: boolean };
 
 /** Remove an unclaimed player and every live free-agent market reference. */
 export function deleteUnclaimedFreeAgent(world: World, playerId: number, now: number): number[] {
@@ -476,7 +435,6 @@ export function deleteUnclaimedFreeAgent(world: World, playerId: number, now: nu
   const listingIdSet = new Set(listingIds);
   world.marketBids = world.marketBids.filter((bid) => !(bid.marketType === "FREE_AGENT" && listingIdSet.has(bid.listingId)));
   world.marketReservations = world.marketReservations.filter((reservation) => !(reservation.marketType === "FREE_AGENT" && listingIdSet.has(reservation.listingId)));
-  world.aiEvaluations = world.aiEvaluations.filter((evaluation) => !(evaluation.marketType === "FREE_AGENT" && listingIdSet.has(evaluation.listingId)));
   world.freeAgentListings = world.freeAgentListings.filter((listing) => listing.playerId !== playerId);
   world.players = world.players.filter((player) => player.id !== playerId);
   return listingIds;
@@ -490,7 +448,7 @@ export function processDueFreeAgentListing(world: World, listing: FreeAgentListi
     const settled = settleFreeAgentListing(world, listing, now);
     return settled.ok
       ? { kind: "SETTLED", listingId: listing.id, winnerClubId: settled.winnerClubId, finalPrice: settled.finalPrice }
-      : { kind: "FAILED", listingId: listing.id, error: settled.error };
+      : { kind: "FAILED", listingId: listing.id, error: settled.error, terminal: settled.terminal };
   }
 
   const unclaimedSince = listing.unclaimedSince ?? listing.createdAt;
@@ -526,7 +484,7 @@ export function relistDueFreeAgents(world: World, now: number): number {
 export function freeAgentListingView(world: World, listing: FreeAgentListing, myClubId: number | null) {
   const p = world.players.find((x) => x.id === listing.playerId);
   const myBid = myClubId !== null ? marketBidFor(world, listing.id, myClubId) : undefined;
-  const salaryBaseline = listing.salaryBaselineAtListing ?? listing.demandedSalary ?? p?.salary ?? 0;
+  const salaryBaseline = listing.salaryBaselineAtListing ?? p?.salary ?? 0;
   return {
     id: listing.id,
     playerId: listing.playerId,

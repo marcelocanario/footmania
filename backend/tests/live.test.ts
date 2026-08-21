@@ -78,33 +78,31 @@ async function ageLiveMatch(app: FastifyInstance, matchId: number, minutes: numb
 }
 
 describe("live match over REST", () => {
-  it("does not let another club advance or finish someone else's match", async () => {
+  it("exposes no client-driven advance or finish endpoints", async () => {
     const app = buildServer();
     await app.ready();
     const first = await setupClub(app, "liveowner");
     const { matchId } = await makeLiveMatch(app, first.cookie, first.clubId);
-    // Join after the fixture is live so this user cannot be the fixture's
-    // opponent through AI replacement.
-    const other = await setupClub(app, "liveoutsider");
-
+    // Matches advance only on the server clock: the legacy acceleration
+    // endpoints must be gone for everyone, participants included.
     const tick = await app.inject({
       method: "POST",
       url: `/api/matches/${matchId}/tick`,
-      headers: { cookie: other.cookie },
+      headers: { cookie: first.cookie },
       payload: { minutes: 1 },
     });
-    expect(tick.statusCode).toBe(403);
+    expect(tick.statusCode).toBe(404);
 
     const finish = await app.inject({
       method: "POST",
       url: `/api/matches/${matchId}/finish`,
-      headers: { cookie: other.cookie },
+      headers: { cookie: first.cookie },
     });
-    expect(finish.statusCode).toBe(403);
+    expect(finish.statusCode).toBe(404);
     await app.close();
   });
 
-  it("streams the match by ticking, enforces subs, and finalizes", async () => {
+  it("finalizes on the server clock and enforces subs while live", async () => {
     const app = buildServer();
     await app.ready();
     const { cookie, clubId } = await setupClub(app, "restplayer");
@@ -115,27 +113,28 @@ describe("live match over REST", () => {
     const s0 = live0.json().state;
     expect(s0.phase).toBe("pregame");
     expect(s0.minute).toBe(0);
-    expect(s0.homeClubId).toBeTypeOf("number");
-    expect(s0.awayClubId).toBeTypeOf("number");
     expect(s0.homeOn.length).toBe(11);
     expect(s0.homeBench.length).toBeGreaterThan(0);
 
+    // Age the match past full time and run the worker's own advance path.
     await ageLiveMatch(app, matchId, 110);
+    const { loadGlobalWorld, persistWorld } = await import("../src/services/saveService");
+    const { advanceLiveMatches } = await import("../src/game/world");
     let state = s0;
-    let ticks = 0;
-    while (!state.ended && ticks < 40) {
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/matches/${matchId}/tick`,
-        headers: { cookie },
-        payload: { minutes: 5, resume: true },
-      });
-      expect(res.statusCode).toBe(200);
-      state = res.json().state;
-      ticks++;
+    for (let i = 0; i < 10 && !state.ended; i++) {
+      const loaded = await loadGlobalWorld(app.prisma);
+      if (!loaded) throw new Error("no world");
+      advanceLiveMatches(loaded.world, Date.now());
+      await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+      const live = await app.inject({ method: "GET", url: `/api/matches/${matchId}/live`, headers: { cookie } });
+      if (live.statusCode === 404) {
+        // Finalized matches drop out of the live list.
+        state = { ...state, ended: true, phase: "fulltime" };
+        break;
+      }
+      state = live.json().state;
     }
     expect(state.ended).toBe(true);
-    expect(state.phase).toBe("fulltime");
 
     const finish = await app.inject({ method: "POST", url: `/api/matches/${matchId}/finish`, headers: { cookie } });
     expect(finish.statusCode).toBe(404);
@@ -201,15 +200,17 @@ describe("live match over REST", () => {
     const afterPitch = (after.humanSide === 0 ? after.homeOn : after.awayOn).map((p: { id: number }) => p.id);
     expect(afterPitch).toContain(swappedIn);
     expect(afterPitch).not.toContain(swappedOut);
+    // Kick off on the server clock: age past kickoff and run the worker path.
     await ageLiveMatch(app, matchId, 1);
-    const tick1 = await app.inject({
-      method: "POST",
-      url: `/api/matches/${matchId}/tick`,
-      headers: { cookie },
-      payload: { minutes: 1 },
-    });
-    expect(tick1.statusCode).toBe(200);
-    expect(tick1.json().state.phase).toBe("first");
+    const { loadGlobalWorld, persistWorld } = await import("../src/services/saveService");
+    const { advanceLiveMatches } = await import("../src/game/world");
+    const loaded = await loadGlobalWorld(app.prisma);
+    if (!loaded) throw new Error("no world");
+    advanceLiveMatches(loaded.world, Date.now());
+    await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+    const live1 = await app.inject({ method: "GET", url: `/api/matches/${matchId}/live`, headers: { cookie } });
+    expect(live1.statusCode).toBe(200);
+    expect(live1.json().state.phase).toBe("first");
     const locked = await app.inject({
       method: "POST",
       url: `/api/matches/${matchId}/lineup`,
@@ -290,11 +291,10 @@ describe("live match over WebSocket", () => {
     const s0 = messages.find((m) => m.type === "state")!.state as { phase: string };
     expect(s0.phase).toBe("pregame");
 
+    // The elapsed-time catch-up tick advances the server-paced match; when it
+    // reaches full time the server broadcasts "finished" to every viewer.
     ws.send(JSON.stringify({ type: "tick", minutes: 4, resume: true }));
-    await waitFor("tick");
-
-    ws.send(JSON.stringify({ type: "finish" }));
-    await waitFor("finished", 10000);
+    await waitFor("finished", 20000);
 
     ws.close();
     await app.close();

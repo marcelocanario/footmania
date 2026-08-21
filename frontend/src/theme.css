@@ -10,9 +10,12 @@
    ============================================================ */
 
 :root {
-  /* pitch */
+  /* pitch — --bg is the main template color, used for page background.
+     Change --bg to re-theme the site; --bg-pattern is the tiled SVG overlay
+     (fill #101914 at 0.4 opacity is a lighter variant of --bg). */
   --bg: #050e09;
   --bg-2: #071309;
+  --bg-pattern: url("data:image/svg+xml,%3Csvg width='52' height='26' viewBox='0 0 52 26' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23101914' fill-opacity='0.4'%3E%3Cpath d='M10 10c0-2.21-1.79-4-4-4-3.314 0-6-2.686-6-6h2c0 2.21 1.79 4 4 4 3.314 0 6 2.686 6 6 0 2.21 1.79 4 4 4 3.314 0 6 2.686 6 6 0 2.21 1.79 4 4 4v2c-3.314 0-6-2.686-6-6 0-2.21-1.79-4-4-4-3.314 0-6-2.686-6-6zm25.464-1.95l8.486 8.486-1.414 1.414-8.486-8.486 1.414-1.414z' /%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
   --surface: #0c1c11;
   --surface-2: rgba(228, 245, 235, 0.05);
   --surface-3: rgba(228, 245, 235, 0.025);
@@ -52,9 +55,7 @@
   box-sizing: border-box;
 }
 
-html,
-body,
-#root {
+html {
   margin: 0;
   min-height: 100vh;
   background: var(--bg);
@@ -65,13 +66,24 @@ body,
   text-rendering: optimizeLegibility;
 }
 
+body,
+#root {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root {
+  background: transparent;
+}
+
 body {
-  background:
-    radial-gradient(1100px 520px at 50% -160px, rgba(240, 180, 41, 0.1), transparent 62%),
-    radial-gradient(1400px 720px at 88% 112%, rgba(35, 165, 90, 0.1), transparent 58%),
-    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.013) 0 88px, transparent 88px 176px),
-    linear-gradient(180deg, var(--bg-2), var(--bg));
-  background-attachment: fixed;
+  background-color: var(--bg);
+  background-image: var(--bg-pattern);
 }
 
 h1, h2, h3, h4 {
@@ -345,7 +357,7 @@ a { color: var(--grass-2); text-decoration: none; }
 /* ---------- cards ---------- */
 
 .card {
-  background: linear-gradient(180deg, rgba(228, 245, 235, 0.05), rgba(228, 245, 235, 0.02));
+  background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 20px;
@@ -830,6 +842,14 @@ a { color: var(--grass-2); text-decoration: none; }
 
 .p-dropdown { padding: 12px 14px; }
 .p-dropdown .p-dropdown-label { color: var(--text); }
+.p-dropdown .p-dropdown-label.p-inputtext {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.p-dropdown .p-dropdown-label.p-placeholder { color: var(--text-3); }
 .p-dropdown .p-dropdown-trigger { color: var(--text-3); }
 
 .p-dropdown-panel {
@@ -850,6 +870,31 @@ a { color: var(--grass-2); text-decoration: none; }
 }
 
 .p-password-panel { background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; }
+
+/* icon inside inputs (PrimeReact unstyled mode has no theme for this) */
+.p-input-icon-left,
+.p-input-icon-right {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+.p-input-icon-left > svg,
+.p-input-icon-right > svg {
+  position: absolute;
+  top: calc(50% + 7px);
+  transform: translateY(-50%);
+  color: var(--text-3);
+  pointer-events: none;
+  z-index: 1;
+}
+.p-input-icon-left > svg { left: 14px; }
+.p-input-icon-right > svg { right: 14px; }
+.p-input-icon-left > .p-inputtext { padding-left: 38px; }
+.p-input-icon-left > .p-password { width: 100%; }
+.p-input-icon-left > .p-password input { padding-left: 38px; }
+.p-input-icon-left > .p-dropdown { padding-left: 38px; }
+.p-input-icon-right > .p-inputtext { padding-right: 38px; }
+.p-input-icon-right > .p-dropdown { padding-right: 38px; }
 
 /* ---------- tabs ---------- */
 

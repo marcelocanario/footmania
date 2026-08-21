@@ -18,7 +18,6 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     tacPos: p.tacPos,
     tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
     overall: p.overall,
-    tier: p.tier,
     skills: p.skills,
     energy: p.energy,
     value: p.value,
@@ -186,7 +185,6 @@ export function buildSnapshot(world: World, clubId: number) {
           highestDivision: club.highestDivision,
           cash: club.cash,
           stadiumName: club.stadiumName,
-          stadiumCapacity: club.stadiumCapacity,
           primaryColor: club.primaryColor,
           secondaryColor: club.secondaryColor,
           coachName: club.coachName,
@@ -258,20 +256,5 @@ export function competitionTable(world: World, competition: Competition, myClubI
       secondary: world.clubs.find((c) => c.id === r.clubId)?.secondaryColor ?? "",
     },
     isHuman: r.clubId === myClubId,
-  }));
-}
-
-export function bracketView(world: World, competition: Competition) {
-  return competition.knockouts.map((round, ri) => ({
-    round: ri,
-    ties: round.map((tie) => ({
-      home: world.clubs.find((c) => c.id === tie.h)?.name ?? "TBD",
-      away: world.clubs.find((c) => c.id === tie.a)?.name ?? "TBD",
-      leg1: tie.leg1 ? `${tie.leg1.hs} - ${tie.leg1.as}` : null,
-      leg2: tie.leg2 ? `${tie.leg2.hs} - ${tie.leg2.as}` : null,
-      pen: tie.pen ? `${tie.pen.hs} - ${tie.pen.as}` : null,
-      winner: tie.winner !== null ? world.clubs.find((c) => c.id === tie.winner)?.name ?? "" : "",
-      played: tie.played,
-    })),
   }));
 }

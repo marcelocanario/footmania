@@ -84,11 +84,8 @@ model Save {
   newsItems      NewsItem[]
   ledgerEntries  LedgerEntry[]
   trophies       Trophy[]
-  managerHistory ManagerHistory[]
   seasonAwards   SeasonAward[]
   records        CareerRecord[]
-  ticketPrices   ClubTicketPrices[]
-  stadiumUpgrades StadiumUpgrade[]
   liveMatches    LiveMatch[]
   dailyExecutions DailyExecution[]
   transferAuctions TransferAuction[]
@@ -96,7 +93,6 @@ model Save {
   freeAgentListings FreeAgentListing[]
   marketReservations MarketReservation[]
   playerMarketTransactions PlayerMarketTransaction[]
-  aiEvaluations  AiEvaluation[]
   gameClock       GameClock?
   scheduledEvents ScheduledEvent[]
   schedulerAudits AdminSchedulerAudit[]
@@ -204,7 +200,6 @@ model Club {
   // Multiplayer: epoch ms when the club became abandonment-eligible (inactivity
   // threshold exceeded). Removal only happens at season rollover.
   abandonmentEligibleAt BigInt?
-  inactivityWarningStage Int @default(0)
   // Multiplayer: real timestamp (epoch ms) of the human's live league match
   // kickoff. Null when the club has no upcoming live match. Once the scheduled
   // kickoff passes, the match auto-plays to completion.
@@ -221,7 +216,6 @@ model Club {
   highestDivision  Int      @default(1)
   cash             Int
   stadiumName      String
-  stadiumCapacity  Int
   primaryColor     String
   secondaryColor   String
   coachName        String
@@ -255,7 +249,6 @@ model Player {
   side            Int
   overall         Int
   potential       Int
-  tier            Int
   characteristic1 Int
   characteristic2 Int
   energy          Int
@@ -321,6 +314,9 @@ model Loan {
   startDay   Int
   endDay     Int
   recalled   Boolean
+  // Lender-chosen claim fee (§55), snapshotted in absolute currency at listing
+  // time. Paid by the borrower to the lender at claim; 0 for legacy rows.
+  feeAmount  Int @default(0)
   // Multiplayer: real-time listing/claim window (§57) for the loan market.
   listedAt   BigInt
   claimableAt BigInt
@@ -407,8 +403,6 @@ model Match {
   awayScore        Int
   penaltyWinnerId  Int?
   penaltyScoreJson String?
-  attendance       Int
-  gateRevenue      Int
   extraTime        Boolean
   scheduledAt      BigInt?
   homeWasHuman     Boolean  @default(false)
@@ -503,18 +497,6 @@ model Trophy {
   @@index([saveId, clubId])
 }
 
-model ManagerHistory {
-  id           Int     @id @default(autoincrement())
-  saveId       Int
-  save         Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  clubId       Int
-  name         String
-  appointedDay Int
-  departedDay  Int?
-  gamesInCharge Int
-  reason       String?
-}
-
 model SeasonAward {
   id                  Int    @id @default(autoincrement())
   saveId              Int
@@ -535,33 +517,6 @@ model CareerRecord {
   category   String
   value      Int
   holderName String
-}
-
-model ClubTicketPrices {
-  id       Int    @id @default(autoincrement())
-  saveId   Int
-  save     Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  clubId   Int
-  sector0  Int
-  sector1  Int
-  sector2  Int
-  sector3  Int
-
-  @@unique([saveId, clubId])
-}
-
-model StadiumUpgrade {
-  id            Int     @id @default(autoincrement())
-  saveId        Int
-  save          Save    @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  clubId        Int
-  startedDay    Int
-  completesDay  Int
-  newCapacity   Int
-  cost          Int
-  completed     Boolean @default(false)
-
-  @@index([saveId, clubId])
 }
 
 model LiveMatch {
@@ -607,7 +562,6 @@ model TransferAuction {
   finalPrice            Int?
   cancelledAt           BigInt?
   softClosed            Boolean
-  softCloseExtensions   Int
   deadlineVersion       Int      @default(0)
 
   @@id([saveId, id])
@@ -647,9 +601,6 @@ model FreeAgentListing {
   playerValueAtListing Int
   openingPrice       Int
   bidIncrement       Int
-  // Legacy listing-wide terms are nullable; new bids choose their own terms.
-  demandedSalary     Int?
-  demandedContractDays Int?
   salaryBaselineAtListing Int?
   currentPrice       Int
   leadingClubId      Int?
@@ -666,7 +617,6 @@ model FreeAgentListing {
   blockedClubId      Int?
   unclaimedSince     BigInt?
   softClosed         Boolean
-  softCloseExtensions Int
 
   @@id([saveId, id])
   @@index([saveId, status])
@@ -706,29 +656,14 @@ model PlayerMarketTransaction {
   // loader supplies the legacy value until the next save rewrites the row.
   seasonDayIndex Int?
   matchday      Int?
+  // Monotonic completed-rounds counter at transaction time (resale anchor
+  // fade). Nullable for legacy rows written before the field existed.
+  completedRounds Int?
   contractSeasons Int?
   contractSalary  Int?
   timestamp  BigInt
 
   @@index([saveId, playerId])
-}
-
-// Durable AI market evaluation (BID/PASS) for idempotent retry (§34).
-model AiEvaluation {
-  id           Int    @id @default(autoincrement())
-  saveId       Int
-  save         Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
-  marketType   String // TRANSFER | FREE_AGENT
-  listingId    Int
-  clubId       Int
-  evaluatedAt  BigInt
-  decision     String // BID | PASS
-  maxBid       Int?
-  contractSeasons Int?
-  contractSalary  Int?
-
-  @@unique([saveId, marketType, listingId, clubId])
-  @@index([saveId, marketType, listingId])
 }
 
 // ---------------------------------------------------------------------------

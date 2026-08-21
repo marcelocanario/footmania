@@ -253,8 +253,9 @@ calibrationDescribe("senior generation (spec §70)", () => {
     expect(player.age).toBeLessThanOrEqual(38);
     expect(player.overall).toBeGreaterThanOrEqual(1);
     expect(player.overall).toBeLessThanOrEqual(100);
-    expect(player.tier).toBeGreaterThanOrEqual(1);
-    expect(player.tier).toBeLessThanOrEqual(5);
+    // The birth-quality tier is a server-private development input: it must
+    // never be stored on the player (no star/quality flag).
+    expect((player as unknown as { tier?: number }).tier).toBeUndefined();
     expect(player.developmentProfile.declineStartAge).toBeGreaterThanOrEqual(24);
     expect(player.potential).toBeGreaterThanOrEqual(player.overall);
     expect(player.isYouth).toBe(false);
@@ -298,8 +299,7 @@ calibrationDescribe("youth generation (spec §71)", () => {
     expect(player.age).toBeGreaterThanOrEqual(16);
     expect(player.age).toBeLessThanOrEqual(19);
     expect(player.contractDays).toBe(4 * gameConfig.seasonDays);
-    expect(player.tier).toBeGreaterThanOrEqual(1);
-    expect(player.tier).toBeLessThanOrEqual(5);
+    expect((player as unknown as { tier?: number }).tier).toBeUndefined();
     expect(player.generatedClubHighestDivision).toBe(1);
   });
 

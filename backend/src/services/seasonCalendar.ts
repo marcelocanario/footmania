@@ -85,12 +85,24 @@ export function scheduledMatchAt(seasonStartAt: Date | number, seasonDayIndex: n
   return start + seasonDayIndex * 24 * 60 * 60 * 1000 + configuredUtcHour(config.scheduler.leagueMatchStartUtc) * 60 * 60 * 1000;
 }
 
+/**
+ * Season day indices on which a payroll boundary falls (review C2). Derived
+ * from the configured `payrollIntervalDays` — never a hard-coded 7 — using the
+ * same one-based boundary convention as the daily handlers
+ * (`(index + 1) % interval === 0`).
+ */
 export function payrollDayIndices(config = gameConfig): number[] {
-  return Array.from({ length: Math.floor(config.seasonDays / 7) }, (_, i) => (i + 1) * 7 - 1);
+  return Array.from({ length: Math.floor(config.seasonDays / config.payrollIntervalDays) }, (_, i) => (i + 1) * config.payrollIntervalDays - 1);
+}
+
+/** Season day indices on which a weekly-simulation boundary falls. */
+export function weeklyDayIndices(config = gameConfig): number[] {
+  return Array.from({ length: Math.floor(config.seasonDays / config.weeklyIntervalDays) }, (_, i) => (i + 1) * config.weeklyIntervalDays - 1);
 }
 
 export function seasonSchedulePreview(config = gameConfig): SeasonScheduleEntry[] {
   const payroll = new Set(payrollDayIndices(config));
+  const weekly = new Set(weeklyDayIndices(config));
   return Array.from({ length: config.seasonDays }, (_, seasonDayIndex) => {
     const roundIndex = roundForSeasonDayIndex(seasonDayIndex, config);
     const phase = phaseForSeasonDayIndex(seasonDayIndex, config);
@@ -103,7 +115,7 @@ export function seasonSchedulePreview(config = gameConfig): SeasonScheduleEntry[
       round: roundIndex === null ? null : roundIndex + 1,
       phase,
       payroll: payroll.has(seasonDayIndex),
-      weeklySimulation: payroll.has(seasonDayIndex),
+      weeklySimulation: weekly.has(seasonDayIndex),
     };
   });
 }

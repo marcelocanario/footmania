@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Flag, Play, RefreshCw, Subscript, Users } from "lucide-react";
+import { Flag, RefreshCw, Subscript, Users } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -175,27 +175,15 @@ export function LiveMatch() {
     };
   }, [matchId, applyState]);
 
-  const handleFinished = useCallback(
-    (_result?: unknown) => {
-      setLiveMatch(null);
-      void (async () => {
-        await refresh();
-        navigate("/dashboard");
-      })();
-    },
-    [refresh, navigate, setLiveMatch]
-  );
-
-  const finish = useCallback(async () => {
-    if (!matchId) return;
-    if (send({ type: "finish" })) return;
-    try {
-      await api.liveFinish(matchId);
-      await handleFinished();
-    } catch (e) {
-      console.error(e);
-    }
-  }, [matchId, send, handleFinished]);
+  // Matches advance only on the server clock; when the live state is done the
+  // client simply returns to the dashboard.
+  const backToDashboard = useCallback(() => {
+    setLiveMatch(null);
+    void (async () => {
+      await refresh();
+      navigate("/dashboard");
+    })();
+  }, [refresh, navigate, setLiveMatch]);
 
   useEffect(() => {
     if (!matchId) return;
@@ -339,7 +327,7 @@ export function LiveMatch() {
               </div>
             </div>
             <button className="btn gold" style={{ fontSize: "1.05rem", padding: "12px 28px" }} onClick={() => void tick()}>
-              <Play size={17} /> Kick off
+              <RefreshCw size={17} /> Refresh
             </button>
           </div>
           <LineupPicker mode="match" matchId={state.matchId} liveState={state} />
@@ -419,7 +407,7 @@ export function LiveMatch() {
             <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
               <Subscript size={15} /> Substitutions
             </button>
-            <button className="btn gold" onClick={() => void tick()}>Resume</button>
+            <button className="btn gold" onClick={() => void tick()}>Refresh</button>
           </div>
           {showLineup && (
             <div style={{ textAlign: "left", marginTop: 16 }}>
@@ -491,8 +479,8 @@ export function LiveMatch() {
 
       <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
         {isDone ? (
-          <button className="btn gold" onClick={() => void finish()}>
-            <Flag size={15} /> Finish match
+          <button className="btn gold" onClick={backToDashboard}>
+            <Flag size={15} /> Back to dashboard
           </button>
         ) : (
           state.phase !== "halftime" && (

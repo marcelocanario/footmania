@@ -1,10 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateWorld, createHumanClub } from "../src/game/worldgen";
 import { initSeason, createDivision, ensureDivisionFull, divisionForClub, recordDivision, tierOf } from "../src/game/multiplayer";
-import { divisionTicketTier, calcGate } from "../src/game/club";
-import { matchRepsForDivisions } from "../src/game/match";
-import { createRng } from "../src/game/rng";
-import { generatePlayer } from "../src/game/player";
 
 function makeHumanClub(world: ReturnType<typeof generateWorld>, userId: number, name: string) {
   return createHumanClub(world, { userId, clubName: name, country: "BRA", timezone: "UTC" });
@@ -90,58 +86,5 @@ describe("recordDivision / highestDivision", () => {
       const div = world.competitions.find((c) => c.kind === "division" && c.standings[club.id] !== undefined);
       expect(club.highestDivision).toBe(tierOf(div!));
     }
-  });
-});
-
-describe("divisionTicketTier", () => {
-  it("maps the strongest division to the strongest bucket", () => {
-    expect(divisionTicketTier(1)).toBe(5);
-  });
-  it("decays sublinearly with division number", () => {
-    // Monotone non-increasing as division deepens.
-    const divisions = [1, 2, 3, 4, 5, 8, 16, 32];
-    for (let i = 1; i < divisions.length; i++) {
-      expect(divisionTicketTier(divisions[i])).toBeLessThanOrEqual(divisionTicketTier(divisions[i - 1]));
-    }
-    expect(divisionTicketTier(1)).toBeGreaterThanOrEqual(divisionTicketTier(1000));
-  });
-  it("clamps within 1..5", () => {
-    expect(divisionTicketTier(1)).toBeLessThanOrEqual(5);
-    expect(divisionTicketTier(1000)).toBeGreaterThanOrEqual(1);
-  });
-});
-
-describe("calcGate with division-derived tiers", () => {
-  it("computes gate from a division-based tier without a level field", () => {
-    const rng = createRng(1);
-    const world = generateWorld(1);
-    const home = makeHumanClub(world, 10, "Home FC");
-    const away = makeHumanClub(world, 11, "Away FC");
-    const away2 = makeHumanClub(world, 12, "Away 2 FC");
-    const players = [
-      generatePlayer(rng, home, { id: 1 }),
-      generatePlayer(rng, away, { id: 2 }),
-      generatePlayer(rng, away2, { id: 3 }),
-    ];
-    const gate = calcGate(rng, home, away, "division", undefined, 1, 2);
-    expect(gate.attendance).toBeGreaterThan(0);
-    expect(gate.revenue).toBeGreaterThan(0);
-    // A stronger home division (1) prices higher than a weak one (16).
-    const strongHome = calcGate(rng, home, away, "division", undefined, 1, 16);
-    const weakHome = calcGate(rng, home, away2, "division", undefined, 16, 1);
-    expect(strongHome.revenue).toBeGreaterThanOrEqual(weakHome.revenue);
-    expect(players.length).toBe(3);
-  });
-});
-
-describe("matchRepsForDivisions", () => {
-  it("derives strength reps from divisions via the shared curve", () => {
-    expect(matchRepsForDivisions(1, 1)).toEqual({ homeRep: 5, awayRep: 5 });
-    expect(matchRepsForDivisions(1, 16)).toEqual({ homeRep: 5, awayRep: 1 });
-    const r = matchRepsForDivisions(3, 7);
-    expect(r.homeRep).toBeGreaterThanOrEqual(1);
-    expect(r.homeRep).toBeLessThanOrEqual(5);
-    expect(r.awayRep).toBeGreaterThanOrEqual(1);
-    expect(r.awayRep).toBeLessThanOrEqual(5);
   });
 });

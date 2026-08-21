@@ -1,5 +1,6 @@
 import { gameConfig } from "../config";
 import type { Player, World } from "./types";
+import { isEphemeralAI } from "./club";
 
 /** Starts a new ownership/salary period for a player. */
 export function resetPayrollPeriod(player: Player, day: number): void {
@@ -23,8 +24,11 @@ export function settlePlayerPayroll(world: World, player: Player, throughDay = w
   normalizePayrollState(player);
   // Provisional and dormant clubs do not pay salaries (plan §19/§47). Their
   // players keep accruing age/development but the wage clock stays frozen.
+  // Ephemeral filler-AI clubs are financially inert (invariant #28): no wages
+  // are ever charged to them and their cash never changes.
   if (player.clubId !== null) {
     const club = world.clubs.find((candidate) => candidate.id === player.clubId);
+    if (club && isEphemeralAI(club)) return 0;
     if (club && club.competitionState !== "ACTIVE") return 0;
   }
   const startDay = player.payrollPaidThroughDay;

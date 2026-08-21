@@ -20,15 +20,12 @@ describe("active contract-market migration", () => {
     const free = createFreeAgentListing(world, freeAgent, { now: 200, salaryBaselineAtListing: 123_000, unclaimedSince: 150 });
     if (!free.ok) throw new Error(free.error);
     expect(applyFreeAgentBid(world, { listing: free.listing, club: buyer, player: freeAgent, proposedMaximum: free.listing.openingPrice, immediateAvailableCash: 50_000_000, now: 201 }).ok).toBe(true);
-    world.aiEvaluations.push({ marketType: "TRANSFER", listingId: transfer.listing.id, clubId: buyer.id, evaluatedAt: 101, decision: "BID", maxBid: transfer.listing.openingPrice });
-    world.aiEvaluations.push({ marketType: "FREE_AGENT", listingId: free.listing.id, clubId: buyer.id, evaluatedAt: 201, decision: "BID", maxBid: free.listing.openingPrice });
 
     expect(migrateActiveContractMarket(world, 1_000)).toBe(true);
     expect(transfer.listing.status).toBe("CANCELLED");
     expect(transferPlayer.onSale).toBe(false);
     expect(free.listing.status).toBe("CANCELLED");
     expect(world.marketBids).toHaveLength(0);
-    expect(world.aiEvaluations).toHaveLength(0);
     expect(world.marketReservations.every((reservation) => reservation.releasedAt !== null)).toBe(true);
     const activeFreeAgents = world.freeAgentListings.filter((listing) => listing.status === "ACTIVE");
     expect(activeFreeAgents).toHaveLength(1);

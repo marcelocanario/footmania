@@ -21,7 +21,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     highestDivision: 1,
     cash: 10_000_000,
     stadiumName: "St",
-    stadiumCapacity: 40000,
     primaryColor: "#000",
     secondaryColor: "#fff",
     coachName: "Coach",
@@ -38,7 +37,7 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
 
 describe("releasePlayer", () => {
   it("pays the release clause and moves a senior player to free agency", () => {
-    const club = makeClub(1, { cash: 5_000_000 });
+    const club = makeClub(1, { cash: 5_000_000, isHuman: true });
     const rng = createRng(9);
     const player = generatePlayer(rng, club, { id: 1 });
     player.releaseClause = 1_000_000;

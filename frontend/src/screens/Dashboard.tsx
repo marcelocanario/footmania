@@ -145,7 +145,7 @@ export function Dashboard() {
             <div className="label"><Wallet size={12} /> {strings.dashboard.cash}</div>
             <div className="value" style={{ color: (club.cash ?? 0) >= 0 ? "var(--grass-2)" : "var(--red-2)" }}>{money(club.cash ?? 0)}</div>
           </div>
-          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>{club.stadiumName} · {club.stadiumCapacity.toLocaleString()}</div>
+          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>{club.stadiumName}</div>
         </div>
 
         <div className="card">

@@ -14,10 +14,10 @@ import {
 } from "../src/game/economy";
 import { generatePlayer, refreshPlayerDerived } from "../src/game/player";
 import { createRng } from "../src/game/rng";
-import { contractCycle, processContractExpiry, promoteYouthPlayer, rolloverSeason } from "../src/game/season";
+import { contractCycle, processContractExpiry, promoteYouthPlayer, processSeasonEndContracts, processSeasonalAcademyIntake, commitSeasonRollover } from "../src/game/season";
 import { settlePayroll } from "../src/game/season";
 import { applyMaxBid, createTransferAuction, settleTransferAuction } from "../src/game/market";
-import { gameConfig } from "../src/config";
+import { MARKET_CONFIG, gameConfig } from "../src/config";
 import { makeClub, makeWorld } from "./helpers";
 
 describe("removed concepts", () => {
@@ -174,8 +174,22 @@ describe("contract renewal demand", () => {
     const player = generatePlayer(createRng(31), club, { id: 31, isYouth: false });
     player.contractDays = contractDaysForTerm(4);
     const world = makeWorld([club], [player]);
-    rolloverSeason(world.rng, world);
+    processSeasonEndContracts(world.rng, world);
+    processSeasonalAcademyIntake(world.rng, world);
+    commitSeasonRollover(world);
     expect(player.contractDays).toBe(gameConfig.seasonDays * 4);
+  });
+
+  it("renewing early costs less per season but covers strictly more raised service (review B4)", () => {
+    const baseline = 100_000;
+    const seasons = 5;
+    const early = calculateContractDemand(baseline, 80, 25, seasons, 1); // renew on day 0
+    const late = calculateContractDemand(baseline, 80, 25, seasons, 0.05); // renew near season end
+    expect(early).toBeLessThan(late);
+    // Total spend: the early renewal covers fraction(=1) + n year-equivalents
+    // of raise-adjusted service; the late one only ~n. Early is cheaper per
+    // season precisely because it buys more service — intended pro-rating.
+    expect(early * (1 + seasons)).toBeGreaterThan(late * (0.05 + seasons));
   });
 
   it("converts a 10% raise over 5 seasons to the equivalent fixed salary", () => {
@@ -271,7 +285,9 @@ describe("salary persistence", () => {
     const salaryBefore = p.salary;
     const world = makeWorld([club], [p]);
     const contractBefore = p.contractDays;
-    rolloverSeason(world.rng, world);
+    processSeasonEndContracts(world.rng, world);
+    processSeasonalAcademyIntake(world.rng, world);
+    commitSeasonRollover(world);
     expect(p.age).toBeGreaterThan(0);
     expect(p.salary).toBe(salaryBefore);
     expect(p.contractDays).toBe(contractBefore - gameConfig.seasonDays);
@@ -322,13 +338,16 @@ describe("season timing", () => {
     const settled = settleTransferAuction(world, listed.listing, settleAt);
     expect(settled.ok).toBe(true);
     const buyerSalary = p.salary;
-    // Seller receives the final price (opening 2M for a single bid) minus the
-    // seller's prorated wages through day 10.
+    // Seller receives the final price minus the transfer sales tax and the
+    // seller's prorated wages through day 10. The tax is burned: no club is
+    // credited with it.
     const fee = listed.listing.openingPrice;
-    expect(seller.cash).toBe(sellerAfterCycle + fee - Math.round(100_000 * 3 / gameConfig.seasonDays));
+    const tax = Math.round(fee * MARKET_CONFIG.transferTax.rate);
+    expect(seller.cash).toBe(sellerAfterCycle + fee - tax - Math.round(100_000 * 3 / gameConfig.seasonDays));
     world.dayIndex = 14;
     settlePayroll(world.rng, world);
-    expect(seller.cash).toBe(sellerAfterCycle + fee - Math.round(100_000 * 3 / gameConfig.seasonDays));
+    expect(seller.cash).toBe(sellerAfterCycle + fee - tax - Math.round(100_000 * 3 / gameConfig.seasonDays));
+    expect(seller.ledger.expense.filter((e) => e.code === 17).reduce((sum, e) => sum + e.amount, 0)).toBe(tax);
     expect(buyer.ledger.expense.filter((e) => e.code === 4).reduce((sum, e) => sum + e.amount, 0)).toBe(
       Math.round(buyerSalary * (14 - 10) / gameConfig.seasonDays)
     );
@@ -336,7 +355,7 @@ describe("season timing", () => {
 });
 
 describe("AI contract renewals", () => {
-  it("AI clubs use the same renewal-demand model as the human player", () => {
+  it("ephemeral AI clubs never renew or expire contracts (invariant #28)", () => {
     const club = makeClub();
     club.isHuman = false;
     const rng = createRng(23);
@@ -346,19 +365,11 @@ describe("AI contract renewals", () => {
     const world = makeWorld([club], [p]);
     world.news = [];
     contractCycle(world.rng, world);
-    // If renewed, salary must equal the canonical demand for some 1..max term;
-    // otherwise the offer was declined/rejected, but salary stays unchanged
-    // and the old formula (random 0-50% bump capped at 1.3x) must never apply.
-    if (p.clubId !== null) {
-      if (p.salary !== 100_000) {
-        const max = gameConfig.maxContractSeasons;
-        const canonical = Array.from({ length: max }, (_, i) => calculateContractDemand(100_000, p.overall, p.age, i + 1, remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex)));
-        expect(canonical).toContain(p.salary);
-        expect(p.salary).toBeLessThanOrEqual(100_000 * 1.3);
-      }
-      expect(remainingSeasons(p.contractDays)).toBeGreaterThanOrEqual(1);
-      expect(remainingSeasons(p.contractDays)).toBeLessThanOrEqual(gameConfig.maxContractSeasons);
-    }
+    // The AI wage clock is frozen: no renewal demand, no expiry, no news.
+    expect(p.salary).toBe(100_000);
+    expect(p.clubId).toBe(club.id);
+    expect(world.freeAgentListings).toHaveLength(0);
+    expect(world.news).toHaveLength(0);
   });
 });
 

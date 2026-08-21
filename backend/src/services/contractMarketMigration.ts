@@ -28,8 +28,8 @@ export function migrateActiveContractMarket(world: World, now: number): boolean 
     const unclaimedSince = related.reduce((earliest, candidate) => Math.min(earliest, candidate.unclaimedSince ?? candidate.createdAt), Number.POSITIVE_INFINITY);
     const earliestWithBaseline = [...related]
       .sort((a, b) => (a.unclaimedSince ?? a.createdAt) - (b.unclaimedSince ?? b.createdAt))
-      .find((candidate) => candidate.salaryBaselineAtListing !== undefined || candidate.demandedSalary !== undefined);
-    const salaryBaselineAtListing = earliestWithBaseline?.salaryBaselineAtListing ?? earliestWithBaseline?.demandedSalary;
+      .find((candidate) => candidate.salaryBaselineAtListing !== undefined);
+    const salaryBaselineAtListing = earliestWithBaseline?.salaryBaselineAtListing;
     if (!existing) {
       activeFreeAgents.set(listing.playerId, {
         unclaimedSince: Number.isFinite(unclaimedSince) ? unclaimedSince : listing.createdAt,
@@ -47,7 +47,6 @@ export function migrateActiveContractMarket(world: World, now: number): boolean 
 
   const clearedListingIds = new Set([...transferIds, ...activeFreeAgentIds]);
   world.marketBids = world.marketBids.filter((bid) => !clearedListingIds.has(bid.listingId));
-  world.aiEvaluations = world.aiEvaluations.filter((evaluation) => !clearedListingIds.has(evaluation.listingId));
 
   for (const [playerId, preserved] of activeFreeAgents) {
     const player = world.players.find((candidate) => candidate.id === playerId);

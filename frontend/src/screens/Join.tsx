@@ -229,7 +229,7 @@ export function Join() {
         </div>
       )}
 
-      <div className="card" style={{ maxWidth: 620 }}>
+      <div className="card">
         <p style={{ color: "var(--text-2)", marginTop: 0 }}>{strings.saves.createTeamHint}</p>
 
         <div style={{ display: "grid", gap: 14 }}>

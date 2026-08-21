@@ -17,7 +17,7 @@ import {
   academyIntakeDone,
 } from "../src/game/clubGenerator";
 import { applyDevelopment, potentialGrowth, aging } from "../src/game/player";
-import { rolloverSeason } from "../src/game/season";
+import { processSeasonEndContracts, processSeasonalAcademyIntake, commitSeasonRollover } from "../src/game/season";
 import { overallFromSkills } from "../src/game/rating";
 import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
@@ -299,16 +299,18 @@ describe("season rollover intake uses the new season's division (spec §44)", ()
     const world = generateWorld(5);
     const club = makeClub({ id: 70, highestDivision: 1 });
     world.clubs.push(club);
-    // Establish a real season context so rolloverSeason runs the fixed intake.
+    // Establish a real season context so the rollover runs the fixed intake.
     world.mp.seasonId = 1;
     world.mp.seasonYear = 2026;
     world.mp.seasonMonth = 1;
     const seasonId = world.mp.seasonId;
     const ctx = { world, club, currentDivision: 1, highestDivisionReached: 1, totalDivisions: 1, seasonId };
     generateInitialAcademy(ctx);
-    // Simulate a rollover: rolloverSeason ages/promotes and generates intake.
+    // Simulate a rollover: contracts age/promote and generate intake.
     const rng = createRng(42);
-    rolloverSeason(rng, world);
+    processSeasonEndContracts(rng, world);
+    processSeasonalAcademyIntake(rng, world);
+    commitSeasonRollover(world);
     // The intake marker should be set for the season.
     expect(world.generationEvents.some((e) => e.startsWith(`academy-intake:${club.id}:`))).toBe(true);
   });

@@ -2,7 +2,6 @@ import type { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { gameConfig } from "../config";
 
-const locks = new Map<number, Promise<unknown>>();
 let globalLock: Promise<unknown> = Promise.resolve();
 
 const GLOBAL_LEASE_KEY = "__SCHEDULER_GLOBAL_LEASE__";
@@ -10,16 +9,6 @@ const GLOBAL_LEASE_KEY = "__SCHEDULER_GLOBAL_LEASE__";
 export interface GlobalLease {
   owner: string;
   value: string;
-}
-
-export function withSaveLock<T>(saveId: number, fn: () => Promise<T>): Promise<T> {
-  const prev = locks.get(saveId) ?? Promise.resolve();
-  const next = prev.then(fn, fn);
-  locks.set(
-    saveId,
-    next.catch(() => {})
-  );
-  return next;
 }
 
 /** Serialize all global-world mutations through one lock. */

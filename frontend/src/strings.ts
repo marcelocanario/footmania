@@ -44,8 +44,6 @@ export const strings = {
     nextFixture: "Next Match",
     noNextFixture: "No upcoming matches",
     cash: "Cash",
-    board: "Board",
-    fans: "Fans",
     news: "News",
     position: "League Position",
     seasonEnded: "Season Complete",
@@ -157,10 +155,6 @@ export const strings = {
     error: "Something went wrong",
   },
   settings: {
-    matchDurationTitle: "Human match duration",
-    matchDurationHint: "How long (in real time) a match you play should last. AI-vs-AI matches always resolve instantly with the same engine.",
-    matchDuration: "Match duration",
-    matchDurationPreview: "Estimated",
     saved: "Saved",
   },
 };

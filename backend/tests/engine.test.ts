@@ -1,13 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { generateWorld } from "../src/game/worldgen";
 import { initSeason } from "../src/game/multiplayer";
-import { simulateMatch, createLiveMatchState, tickLiveMatch, performLiveSub, buildMatchFromState, matchRating, midfieldStrength, defenseStrength, attackStrength, isHalftime, livePhase, rebuildLiveHumanLineup } from "../src/game/match";
-import { divisionTicketTier } from "../src/game/club";
+import { simulateMatch, createLiveMatchState, tickLiveMatch, performLiveSub, buildMatchFromState, isHalftime, livePhase, rebuildLiveHumanLineup } from "../src/game/match";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import { calculatePlayerValue, calculateBaseSalary } from "../src/game/economy";
 import type { Club, Player, Position } from "../src/game/types";
-import type { RatingContext } from "../src/game/match";
 import type { RngState } from "../src/game/rng";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../src/matchSimulatorConfig";
 import { EVENT_CODES } from "../src/game/constants";
@@ -33,7 +31,6 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
     highestDivision: 1,
     cash: 10000000,
     stadiumName: "St",
-    stadiumCapacity: 40000,
     primaryColor: "#000",
     secondaryColor: "#fff",
     coachName: "Coach",
@@ -87,11 +84,6 @@ function cloneSquad(squad: Player[]): Player[] {
   return squad.map(clonePlayer);
 }
 
-function leagueCtx(home: Club, away: Club): RatingContext {
-  const rep = (club: Club) => divisionTicketTier(club.highestDivision ?? 1);
-  return { kind: "league", homeRep: rep(home), awayRep: rep(away), awayClubId: away.id };
-}
-
 describe("match engine", () => {
   calibrationDescribe("match aggregate calibration", () => {
   it("produces a plausible goal distribution (2.5-4.5 goals per match)", async () => {
@@ -107,7 +99,7 @@ describe("match engine", () => {
       for (let i = 0; i < 80; i++) {
         const matchRng = createRng(seed * 10_000 + i);
         const players = [...cloneSquad(homeSquad), ...cloneSquad(awaySquad)];
-        const { match } = simulateMatch(matchRng, home, away, players, { competitionId: 1, fixtureId: i, year: 1, reps: { homeRep: 4, awayRep: 4 } });
+        const { match } = simulateMatch(matchRng, home, away, players, { competitionId: 1, fixtureId: i, year: 1 });
         total += match.homeScore + match.awayScore;
         if (i % 10 === 9) await yieldToEventLoop();
       }
@@ -129,9 +121,9 @@ describe("match engine", () => {
     let neutralHomeXg = 0;
     for (let i = 0; i < 100; i++) {
       const playersA = [...cloneSquad(sharedSquad), ...cloneSquad(awaySquad)];
-      const ma = simulateMatch(createRng(21 * 10_000 + i), home, away, playersA, { competitionId: 1, fixtureId: i, year: 1, reps: { homeRep: 4, awayRep: 4 }, homeNeutral: false });
+      const ma = simulateMatch(createRng(21 * 10_000 + i), home, away, playersA, { competitionId: 1, fixtureId: i, year: 1, homeNeutral: false });
       const playersN = [...cloneSquad(sharedSquad), ...cloneSquad(awaySquad)];
-      const mn = simulateMatch(createRng(21 * 10_000 + 10_000 + i), home, away, playersN, { competitionId: 1, fixtureId: i + 10_000, year: 1, reps: { homeRep: 4, awayRep: 4 }, homeNeutral: true });
+      const mn = simulateMatch(createRng(21 * 10_000 + 10_000 + i), home, away, playersN, { competitionId: 1, fixtureId: i + 10_000, year: 1, homeNeutral: true });
       advHomeXg += ma.match.stats.home.xG;
       neutralHomeXg += mn.match.stats.home.xG;
       if (i % 10 === 9) await yieldToEventLoop();
@@ -150,7 +142,7 @@ describe("match engine", () => {
     for (let i = 0; i < 60; i++) {
       const matchRng = createRng(21 * 10_000 + i);
       const players = [...cloneSquad(homeSquad), ...cloneSquad(awaySquad)];
-      const { match } = simulateMatch(matchRng, home, away, players, { competitionId: 1, fixtureId: i, year: 1, reps: { homeRep: 4, awayRep: 4 } });
+      const { match } = simulateMatch(matchRng, home, away, players, { competitionId: 1, fixtureId: i, year: 1 });
       const total = match.stats.home.controlledBallSeconds + match.stats.away.controlledBallSeconds;
       const homePct = total > 0 ? (match.stats.home.controlledBallSeconds / total) * 100 : 50;
       const awayPct = 100 - homePct;
@@ -160,19 +152,7 @@ describe("match engine", () => {
     }
   });
 
-  it("pressing raises midfield strength and increases card frequency", () => {
-    const rng = createRng(5);
-    const lightClub = makeClub(70, { tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
-    const pressClub = makeClub(71, { tactics: { formation: 4, style: 0, pressing: 2, direction: 0 } });
-    const squad = makeSquad(rng, lightClub, 30);
-    const ctx = leagueCtx(lightClub, pressClub);
-    for (const p of squad) {
-      if (p.tacPos < 0) p.tacPos = 14;
-    }
-    const light = midfieldStrength(squad, lightClub, ctx);
-    const press = midfieldStrength(squad, pressClub, ctx);
-    expect(press).toBeGreaterThan(light);
-
+  it("pressing increases card frequency", () => {
     let lightYellows = 0;
     let pressYellows = 0;
     const n = 60;
@@ -183,7 +163,7 @@ describe("match engine", () => {
       const h1Squad = makeSquad(createRng(1000 + i), h1, 30);
       const a1Squad = makeSquad(createRng(1000 + i), a1, 30, 30);
       const players = [...cloneSquad(h1Squad), ...cloneSquad(a1Squad)];
-      const { match } = simulateMatch(matchRng, h1, a1, players, { competitionId: 1, fixtureId: i, year: 1, reps: { homeRep: 4, awayRep: 4 } });
+      const { match } = simulateMatch(matchRng, h1, a1, players, { competitionId: 1, fixtureId: i, year: 1 });
       lightYellows += match.stats.home.yellows + match.stats.away.yellows;
 
       const matchRng2 = createRng(2000 + i);
@@ -192,7 +172,7 @@ describe("match engine", () => {
       const h2Squad = makeSquad(createRng(2000 + i), h2, 30);
       const a2Squad = makeSquad(createRng(2000 + i), a2, 30, 30);
       const players2 = [...cloneSquad(h2Squad), ...cloneSquad(a2Squad)];
-      const { match: m2 } = simulateMatch(matchRng2, h2, a2, players2, { competitionId: 1, fixtureId: i, year: 1, reps: { homeRep: 4, awayRep: 4 } });
+      const { match: m2 } = simulateMatch(matchRng2, h2, a2, players2, { competitionId: 1, fixtureId: i, year: 1 });
       pressYellows += m2.stats.home.yellows + m2.stats.away.yellows;
     }
     expect(pressYellows).toBeGreaterThan(lightYellows);
@@ -221,7 +201,7 @@ describe("match engine", () => {
       // taken against the OPPOSING keeper.
       homeGk.skills.gol = 40;
       awayGk.skills.gol = 95;
-      tickLiveMatch(matchRng, home, away, players, st, 500, { ignoreHalfTime: true, reps: { homeRep: 4, awayRep: 4 } });
+      tickLiveMatch(matchRng, home, away, players, st, 500, { ignoreHalfTime: true });
       // Away shots (index 1) are taken against home's weak GK.
       againstWeakGkShots += st.stats.away.shots;
       againstWeakGkGoals += st.scores[1];
@@ -233,33 +213,6 @@ describe("match engine", () => {
     const strongGkConv = againstStrongGkGoals / Math.max(1, againstStrongGkShots);
     expect(weakGkConv).toBeGreaterThan(strongGkConv);
   });
-  });
-
-  it("sending a defender off lowers the conceding team's sector strength", () => {
-    const rng = createRng(9);
-    const club = makeClub(75);
-    const squad = makeSquad(rng, club, 30);
-    const ctx = leagueCtx(club, club);
-    const xi = squad.slice(0, 11);
-    const formation = [1, 22, 24, 11, 13, 14, 16, 2, 9, 3, 5];
-    for (let i = 0; i < 11; i++) xi[i].tacPos = formation[i];
-    const before = defenseStrength(xi, ctx);
-    const cb = xi.find((p) => p.tacPos === 3)!;
-    xi.splice(xi.indexOf(cb), 1);
-    const after = defenseStrength(xi, ctx);
-    expect(after).toBeLessThan(before);
-  });
-
-  it("match ratings follow the position-specific Brasfoot weights", () => {
-    const rng = createRng(3);
-    const club = makeClub(75);
-    const p = generatePlayer(rng, club, { id: 1, position: 4 });
-    p.tacPos = 18;
-    p.skills = { gol: 1, vel: 80, tec: 80, pas: 40, des: 20, arm: 30, fin: 80 };
-    const ctx = leagueCtx(club, club);
-    const r = matchRating(p, ctx);
-    const expected = (Math.round(80 * 0.25) + Math.round(80 * 0.15) + Math.round(40 * 0.15) + Math.round(30 * 0.05) + Math.round(80 * 0.4)) / 10;
-    expect(r).toBeCloseTo(expected, 5);
   });
 });
 
@@ -326,14 +279,14 @@ describe("live match engine", () => {
     const away = makeClub(75);
     const players1 = [...makeSquad(rng1, home, 30), ...makeSquad(rng1, away, 30)];
     const players2 = [...makeSquad(rng2, home, 30), ...makeSquad(rng2, away, 30)];
-    const instant = simulateMatch(rng1, home, away, players1, { competitionId: 1, fixtureId: 1, reps: { homeRep: 4, awayRep: 4 } });
+    const instant = simulateMatch(rng1, home, away, players1, { competitionId: 1, fixtureId: 1 });
     const st = createLiveMatchState(rng2, home, away, players2, { matchId: 1, competitionId: 1, fixtureId: 1 });
     let guard = 0;
     while (!st.ended && guard++ < 500) {
-      tickLiveMatch(rng2, home, away, players2, st, 1, { ignoreHalfTime: true, reps: { homeRep: 4, awayRep: 4 } });
+      tickLiveMatch(rng2, home, away, players2, st, 1, { ignoreHalfTime: true });
     }
     expect(st.ended).toBe(true);
-    const match = buildMatchFromState(st, home, away, players2, { homeRep: 4, awayRep: 4 });
+    const match = buildMatchFromState(st, home, away, players2);
     expect(match.homeScore).toBe(instant.match.homeScore);
     expect(match.awayScore).toBe(instant.match.awayScore);
     expect(st.events.length).toBe(instant.match.events.length);
@@ -348,7 +301,7 @@ describe("live match engine", () => {
     const find = (id: number) => players.find((p) => p.id === id)!;
     const outId = st.homeOn.find((id) => find(id).tacPos !== 1)!;
     const inId = st.homeSubs[0];
-    const res = performLiveSub(rng, home, away, players, st, 0, outId, inId, { homeRep: 4, awayRep: 4 });
+    const res = performLiveSub(rng, home, away, players, st, 0, outId, inId);
     expect(res.error).toBeUndefined();
     expect(res.event?.type).toBe(6);
     expect(st.homeOn).toContain(inId);
@@ -356,13 +309,13 @@ describe("live match engine", () => {
     expect(st.homeSubs).not.toContain(inId);
     expect(st.usedSubs[0]).toBe(1);
     const opponentId = st.awayOn[0];
-    const unauthorized = performLiveSub(rng, home, away, players, st, 0, st.homeOn[0], opponentId, { homeRep: 4, awayRep: 4 });
+    const unauthorized = performLiveSub(rng, home, away, players, st, 0, st.homeOn[0], opponentId);
     expect(unauthorized.error).toBe("Player not on the bench");
     const gkId = st.homeOn.find((id) => find(id).position === 0)!;
     const nonGk = st.homeSubs.find((id) => find(id).position !== 0)!;
-    const res2 = performLiveSub(rng, home, away, players, st, 0, gkId, nonGk, { homeRep: 4, awayRep: 4 });
+    const res2 = performLiveSub(rng, home, away, players, st, 0, gkId, nonGk);
     expect(res2.error).toBeDefined();
-    const bad = performLiveSub(rng, home, away, players, st, 0, 99999, inId, { homeRep: 4, awayRep: 4 });
+    const bad = performLiveSub(rng, home, away, players, st, 0, 99999, inId);
     expect(bad.error).toBeDefined();
   });
 
@@ -374,7 +327,7 @@ describe("live match engine", () => {
       const players = [...makeSquad(rng, home, 30), ...makeSquad(rng, away, 30, 30)];
       const st = createLiveMatchState(rng, home, away, players, { matchId: 1, competitionId: 1, fixtureId: 1, decider: seed % 2 === 0 });
       let guard = 0;
-      while (!st.ended && guard++ < 500) tickLiveMatch(rng, home, away, players, st, 5, { ignoreHalfTime: true, reps: { homeRep: 4, awayRep: 4 } });
+      while (!st.ended && guard++ < 500) tickLiveMatch(rng, home, away, players, st, 5, { ignoreHalfTime: true });
       expect(st.ended).toBe(true);
       if (st.decider) {
         if (st.scores[0] === st.scores[1]) {

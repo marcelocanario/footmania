@@ -160,6 +160,22 @@ export function calculateRenewalDemand(currentSalary: number, raise: number, req
  * Equivalent fixed per-season salary including the remaining current season.
  * The current-season fraction is intentionally explicit because callers that
  * are calculating historical/full-season values may not have a live clock.
+ *
+ * Intended semantics (review B4, pinned by tests): a renewal always covers the
+ * remainder of the current season plus `requestedSeasons` full seasons, and
+ * the flat demand is the per-season equivalent of the player's expected raise
+ * stream over that whole horizon — brought to "present value" by amortizing
+ * the compounded raises into one constant figure.
+ *
+ *   total  = currentSalary × fraction + currentSalary × Σ_{i=1..n} (1+r)^i
+ *   demand = total / (fraction + n)
+ *
+ * So renewing on day 0 of a season with a 5-season term costs approximately
+ * the price of 6 raised seasons spread over 6 year-equivalents, while
+ * renewing on the last day costs approximately the price of 5 raised seasons
+ * over 5 years. Renewing early is therefore cheaper PER SEASON but covers
+ * strictly more service time — the timing quirk is the pro-rating working as
+ * designed, not an exploit.
  */
 export function calculateRenewalDemandWithCurrentSeason(
   currentSalary: number,

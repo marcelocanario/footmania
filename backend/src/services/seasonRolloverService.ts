@@ -1,12 +1,14 @@
 import type { PrismaClient } from "@prisma/client";
-import type { RolloverContext, RolloverWorkflowStep, World } from "../game/types";
+import type { RolloverContext, RolloverWorkflowStep, SeasonHistoryEntry, World } from "../game/types";
 import { gameConfig } from "../config";
 import {
+  clubById,
   computeNextTierAssignments,
   createDivision,
   divisionsInSeason,
   ensureDivisionFull,
   generateDivisionFixtures,
+  groupIndexOf,
   rebuildTierDivisions,
   recordDivision,
   recordInitialDivision,
@@ -14,10 +16,11 @@ import {
   syncMemberships,
   tierOf,
 } from "../game/multiplayer";
-import { validateDoubleRoundRobinFixtures } from "../game/league";
-import { commitSeasonRollover, processContractExpiry, processSeasonEndContracts, processSeasonalAcademyIntake } from "../game/season";
+import { standingsTiebreak, validateDoubleRoundRobinFixtures } from "../game/league";
+import { commitSeasonRollover, computeSeasonAwards, processContractExpiry, processSeasonEndContracts, processSeasonalAcademyIntake, updateCareerRecords } from "../game/season";
+import { applySeasonalEloRegression, eloRatings } from "../game/elo";
+import { revokeUnclaimedLoans } from "../game/loans";
 import { ensureSeasonRow, issueAllocation, removeFillerClubs } from "./mpService";
-import { applySeasonalEloRegression } from "../game/elo";
 import { nextUint } from "../game/rng";
 
 export const ROLLOVER_WORKFLOW_STEPS: readonly RolloverWorkflowStep[] = [
@@ -95,6 +98,71 @@ function targetHumanClubs(world: World, seasonId: number): { clubId: number; tie
   return result;
 }
 
+/**
+ * Archive the finished season (invariant #19): snapshot every division's final
+ * standings with club names as of archive time, hand out division titles,
+ * record the Division-1 champion/runner-up summary, and write season awards +
+ * career records. Runs in SEASON_RESULTS_FINALIZE — before divisions are
+ * archived and filler clubs destroyed — so names and rows are still live.
+ * Idempotent: a retry after a crash cannot duplicate history, trophies or
+ * awards for the same season.
+ */
+function archiveSeasonResults(world: World, context: RolloverContext): void {
+  const divisions = divisionsInSeason(world, context.sourceSeasonId).filter((candidate) => candidate.status !== "ARCHIVED");
+  const ratings = eloRatings(world);
+  const entry: SeasonHistoryEntry = {
+    seasonId: context.sourceSeasonId,
+    seasonKey: `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`,
+    archivedAt: Date.now(),
+    divisions: divisions.map((comp) => ({
+      divisionId: comp.id,
+      divisionName: comp.name,
+      tier: tierOf(comp),
+      groupIndex: groupIndexOf(comp),
+      standings: standingsTiebreak(Object.values(comp.standings), ratings).map((row) => {
+        const club = clubById(world, row.clubId);
+        return {
+          clubId: row.clubId,
+          clubName: club?.name ?? `Club ${row.clubId}`,
+          played: row.played,
+          wins: row.wins,
+          draws: row.draws,
+          losses: row.losses,
+          goalsFor: row.goalsFor,
+          goalsAgainst: row.goalsAgainst,
+          points: row.points,
+        };
+      }),
+    })),
+  };
+
+  const alreadyArchived = world.seasonHistory.some((history) => history.seasonId === entry.seasonId);
+  if (!alreadyArchived) {
+    world.seasonHistory.push(entry);
+
+    // Trophies: each division champion adds one title under its name.
+    for (const div of entry.divisions) {
+      const champion = div.standings[0];
+      if (!champion || champion.played === 0) continue;
+      const club = clubById(world, champion.clubId);
+      if (club) club.trophies[div.divisionName] = (club.trophies[div.divisionName] ?? 0) + 1;
+    }
+
+    // Season summary: the top tier's champion and runner-up.
+    const topDivision = entry.divisions.filter((div) => div.tier === 1).sort((a, b) => a.groupIndex - b.groupIndex)[0];
+    if (topDivision) {
+      world.seasonSummary = {
+        leagueChampionId: topDivision.standings[0]?.clubId ?? null,
+        leagueRunnerUpId: topDivision.standings[1]?.clubId ?? null,
+      };
+    }
+
+    computeSeasonAwards(world);
+  }
+  // Records upsert monotonically, so recomputing is always safe.
+  updateCareerRecords(world);
+}
+
 /** Execute one meaningful, independently retryable rollover operation. */
 export async function executeRolloverStep(
   prisma: PrismaClient,
@@ -109,6 +177,13 @@ export async function executeRolloverStep(
   if (stepDone(context, step)) return;
 
   if (step === "SEASON_RESULTS_FINALIZE") {
+    // Loan-market freeze (review C7): the last league game day has passed, so
+    // every unclaimed listing is revoked. Claimed loans keep running until the
+    // rollover reconcile returns their players. Idempotent via `recalled`.
+    revokeUnclaimedLoans(world);
+    // Invariant #19: archive standings/trophies/awards while the finished
+    // season's divisions and names are still live.
+    archiveSeasonResults(world, context);
     world.mp.rolloverPhase = "RESULTS_FINALIZED";
   } else if (step === "INTERSEASON_START") {
     world.mp.seasonStatus = "INTERSEASON";

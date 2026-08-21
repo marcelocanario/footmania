@@ -2,9 +2,9 @@ import type { PrismaClient } from "@prisma/client";
 import type { World } from "../game/types";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave } from "./saveService";
 import { seasonRefFor, seasonKey, joinLockRound } from "../game/clock";
-import { MP_CONFIG, scaleReferenceSeasonFlow } from "../config";
+import { MP_CONFIG, gameConfig, scaleReferenceSeasonFlow } from "../config";
 import { initSeason } from "../game/multiplayer";
-import { releaseAllReservations } from "../game/market";
+import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "../game/market";
 import { migrateActiveContractMarket } from "./contractMarketMigration";
 
 export async function configuredInactivityThresholds(prisma: PrismaClient): Promise<{ 1: number; 2: number; default: number }> {
@@ -70,16 +70,63 @@ function seasonOrder(year: number, month: number): number {
   return year * 12 + (month - 1);
 }
 
-/** Remove ephemeral filler clubs when a season's divisions are rebuilt. */
+/**
+ * Remove ephemeral filler clubs when a season's divisions are rebuilt.
+ *
+ * Mirrors `retireFillerClub`'s market reconciliation (plan §102.9): a removed
+ * filler's own commitments are voided, and its active transfer listings are
+ * force-settled to their leading surviving bidder (or cancelled without bids)
+ * BEFORE the squad players are destroyed, so paid commitments are honored and
+ * no listing references a deleted club or player.
+ */
 export function removeFillerClubs(world: World): void {
   const removed = new Set(world.clubs.filter((club) => club.ownerUserId === null && club.isHuman === false).map((club) => club.id));
   if (removed.size === 0) return;
 
-  const removedPlayerIds = new Set(world.players.filter((player) => player.clubId !== null && removed.has(player.clubId)).map((player) => player.id));
+  // 1. Void every removed club's own market commitments first so destroyed
+  //    fillers can neither win nor influence surviving listings.
+  for (const clubId of removed) {
+    purgeClubBids(world, clubId);
+  }
+
+  // 2. Resolve listings owned by removed clubs while the sellers/players
+  //    still exist: with surviving bids -> force settlement; without -> cancel.
+  const now = Date.now();
+  for (const listing of [...world.transferAuctions]) {
+    if (listing.status !== "ACTIVE" || !removed.has(listing.sellerClubId)) continue;
+    const hasBids = world.marketBids.some((bid) => bid.marketType === "TRANSFER" && bid.listingId === listing.id);
+    if (hasBids) {
+      const settled = settleTransferAuction(world, listing, now, { forceClose: true });
+      if (settled.ok) continue;
+    }
+    releaseAllReservations(world, listing.id, "TRANSFER");
+    listing.status = "CANCELLED";
+    listing.cancelledAt = now;
+    const player = world.players.find((candidate) => candidate.id === listing.playerId);
+    if (player) player.onSale = false;
+    if (hasBids) {
+      world.news.push({
+        dayIndex: world.dayIndex,
+        text: `The auction for ${player?.name ?? "a player"} was cancelled because it could not be settled`,
+        kind: "auction",
+      });
+    }
+  }
+  for (const listing of world.freeAgentListings) {
+    if (listing.status !== "ACTIVE") continue;
+    const player = world.players.find((candidate) => candidate.id === listing.playerId);
+    if (!player || player.clubId === null || !removed.has(player.clubId)) continue;
+    releaseAllReservations(world, listing.id, "FREE_AGENT");
+    listing.status = "CANCELLED";
+    listing.completedAt = now;
+  }
+
+  // 3. Detach loaned-out players, then destroy the remaining rosters/clubs.
+  //    Force-settled players now belong to their winners and survive.
   const loanIds = new Set(world.loans.filter((loan) => removed.has(loan.fromClubId) || (loan.toClubId !== null && removed.has(loan.toClubId))).map((loan) => loan.id));
-  const removedListingIds = new Set<number>();
+  const removedPlayerIds = new Set(world.players.filter((player) => player.clubId !== null && removed.has(player.clubId)).map((player) => player.id));
   for (const player of world.players) {
-    if (player.clubId !== null && removed.has(player.clubId)) {
+    if (removedPlayerIds.has(player.id)) {
       player.clubId = null;
       player.loanId = null;
       player.starter = false;
@@ -93,27 +140,7 @@ export function removeFillerClubs(world: World): void {
   }
   world.players = world.players.filter((player) => !removedPlayerIds.has(player.id));
   world.loans = world.loans.filter((loan) => !loanIds.has(loan.id));
-  for (const listing of world.transferAuctions) {
-    if (listing.status !== "ACTIVE" || (!removedPlayerIds.has(listing.playerId) && !removed.has(listing.sellerClubId))) continue;
-    removedListingIds.add(listing.id);
-    releaseAllReservations(world, listing.id, "TRANSFER");
-    listing.status = "CANCELLED";
-    listing.cancelledAt = Date.now();
-    const player = world.players.find((candidate) => candidate.id === listing.playerId);
-    if (player) player.onSale = false;
-  }
-  for (const listing of world.freeAgentListings) {
-    if (listing.status !== "ACTIVE" || !removedPlayerIds.has(listing.playerId)) continue;
-    removedListingIds.add(listing.id);
-    releaseAllReservations(world, listing.id, "FREE_AGENT");
-    listing.status = "CANCELLED";
-    listing.completedAt = Date.now();
-  }
-  world.marketBids = world.marketBids.filter((bid) => !removedListingIds.has(bid.listingId));
-  world.aiEvaluations = world.aiEvaluations.filter((evaluation) => !removedListingIds.has(evaluation.listingId));
   world.clubs = world.clubs.filter((club) => !removed.has(club.id));
-  for (const id of removed) delete world.ticketPrices[id];
-  world.stadiumUpgrades = world.stadiumUpgrades.filter((upgrade) => !removed.has(upgrade.clubId));
 }
 
 /** Find the MpSeason row for a calendar month, creating it if needed. */
@@ -148,7 +175,6 @@ export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonH
   if ((world.mp.calendarMigrationVersion ?? 0) < 1) {
     for (const player of world.players) player.salary = scaleReferenceSeasonFlow(player.salary);
     for (const listing of world.freeAgentListings) {
-      if (listing.demandedSalary !== undefined) listing.demandedSalary = scaleReferenceSeasonFlow(listing.demandedSalary);
       if (listing.salaryBaselineAtListing !== undefined) listing.salaryBaselineAtListing = scaleReferenceSeasonFlow(listing.salaryBaselineAtListing);
     }
     for (const allocation of world.seasonAllocations) allocation.amount = scaleReferenceSeasonFlow(allocation.amount);
@@ -205,7 +231,9 @@ export async function issueAllocation(
   if (existing) return existing.amount;
   const { tierBudget, proratedBudget } = await import("../game/budget");
   const full = await tierBudget(prisma, tier);
-  const amount = opts.type === "ACTIVE_PRORATED" ? proratedBudget(full, opts.remainingRounds ?? 14, 14) : full;
+  const amount = opts.type === "ACTIVE_PRORATED"
+    ? proratedBudget(full, opts.remainingRounds ?? gameConfig.roundsPerSeason, gameConfig.roundsPerSeason)
+    : full;
   const club = world.clubs.find((c) => c.id === clubId);
   if (club) {
     club.cash += amount;

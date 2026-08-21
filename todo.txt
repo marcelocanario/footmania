@@ -69,13 +69,15 @@ Multiplayer:
 		AI always adapts (available 24h)
 		if a team joins mid-season, fixtures are not re-generated
 		last matches (last round) of the season are always at the same time for a given group (not through different groups). for each group, try to minimize distance of preferred times
+	allow admins to remove team logos, reset team names, reset player nicknames (issuing warnings to players with reason) and can ban players
 
 Technical/housekeeping:
 	create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.
 		implement full visibility to admin of what is scheduled to happen in each "tick". allow admin to trigger any scheduled event ahead of time (immediately), for testing purposes
-	remove stadium, remove fan support level
+	[DONE] remove stadium
+	remove fan support level
 	migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)
-	[PLANNING] when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
+	[DONE] when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
 	confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
 		consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
 

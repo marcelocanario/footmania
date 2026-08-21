@@ -26,7 +26,6 @@ interface SettingsState {
   maxContractSeasons: number;
   loading: boolean;
   load: () => Promise<void>;
-  setMatchDurationMinutes: (n: number) => Promise<void>;
 }
 
 export const useSettings = create<SettingsState>((set) => ({
@@ -38,7 +37,8 @@ export const useSettings = create<SettingsState>((set) => ({
     set({ loading: true });
     try {
       const res = await api.settings();
-      const n = Math.round(res.humanMatchDurationMinutes);
+      // Matches are paced by the server clock; the value is display-only.
+      const n = Math.round(res.matchDurationMinutes);
       if (Number.isFinite(n) && n >= 1 && n <= 60) {
         write(n);
         set({ matchDurationMinutes: n });
@@ -51,17 +51,6 @@ export const useSettings = create<SettingsState>((set) => ({
       /* keep local value */
     } finally {
       set({ loading: false });
-    }
-  },
-
-  setMatchDurationMinutes: async (n) => {
-    const clamped = Math.max(1, Math.min(60, Math.round(n)));
-    write(clamped);
-    set({ matchDurationMinutes: clamped });
-    try {
-      await api.updateSettings(clamped);
-    } catch {
-      /* server may reject; keep local value */
     }
   },
 }));

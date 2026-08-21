@@ -4,22 +4,14 @@ import type {
   Fixture,
   LiveMatchState,
   Match,
-  Player,
   World,
 } from "./types";
-import { createLiveMatchState, simulateMatch, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, matchRepsForDivisions } from "./match";
-import { updateStandings, isLeagueFinished } from "./league";
-import { calcGate } from "./club";
-import { MP_CONFIG, gameConfig } from "../config";
+import { createLiveMatchState, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch } from "./match";
+import { updateStandings } from "./league";
+import { MP_CONFIG } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
-import { auditMultiplayerEvent, syncClubSeasons, divisionForClub } from "./multiplayer";
-import { missingDailyDates, processDailyDate, utcDateKey } from "./daily";
-import { seasonRefFor } from "./clock";
+import { syncClubSeasons } from "./multiplayer";
 import { applyMatchElo } from "./elo";
-
-export function nextId(world: World): number {
-  return world.nextId++;
-}
 
 function emptyTeamStats() {
   return {
@@ -56,10 +48,6 @@ export function findCompetition(world: World, id: number): Competition | undefin
   return world.competitions.find((c) => c.id === id);
 }
 
-export function fixturesForDay(world: World, dayIndex: number): Fixture[] {
-  return world.fixtures.filter((f) => f.dayIndex === dayIndex && !f.played);
-}
-
 // ---------------------------------------------------------------------------
 // Multiplayer worker core (server-authoritative)
 // ---------------------------------------------------------------------------
@@ -81,8 +69,6 @@ export function startLiveMatch(world: World, fixture: Fixture): Match | null {
     homeScore: 0,
     awayScore: 0,
     penaltyWinnerId: null,
-    attendance: 0,
-    gateRevenue: 0,
     events: [],
     stats: { home: emptyTeamStats(), away: emptyTeamStats() },
     minuteEvents: [],
@@ -143,7 +129,7 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
       : ((st.half === 1 ? st.firstHalfLen : 0) + st.minute) * 60;
     const remainingMinutes = Math.max(0, (MS.timing.regulationSeconds - clockSeconds) / 60);
     const minutes = Math.min(wholeMinutes, Math.max(1, Math.ceil(remainingMinutes)));
-    tickLiveMatch(world.rng, home, away, world.players, st, minutes, { ignoreHalfTime: true, reps: matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id)) });
+    tickLiveMatch(world.rng, home, away, world.players, st, minutes, { ignoreHalfTime: true });
     // The match is now fully simulated up to the real time that `minutes`
     // match-minutes represent. Any sub-minute fraction of the elapsed window
     // is preserved for the next tick (lastAdvancedAt only moves forward by the
@@ -157,26 +143,20 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
   return finished;
 }
 
-/** Finalize a finished live match: apply gate, standings, player effects. */
+/** Finalize a finished live match: apply standings and player effects. */
 export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | null {
-  const rng = world.rng;
   const home = findClub(world, st.homeClubId);
   const away = findClub(world, st.awayClubId);
   const fixture = world.fixtures.find((f) => f.id === st.fixtureId);
   if (!home || !away) return null;
   const live = world.liveMatches.find((x) => x.matchId === st.matchId);
-  const match = live ? buildMatchFromState(live, home, away, world.players, matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id))) : null;
+  const match = live ? buildMatchFromState(live, home, away, world.players) : null;
   if (!match) return null;
   const existing = world.matches.find((m) => m.id === st.matchId);
   match.homeWasHuman = existing?.homeWasHuman ?? home.ownerUserId !== null;
   match.awayWasHuman = existing?.awayWasHuman ?? away.ownerUserId !== null;
   match.eloProcessed = existing?.eloProcessed ?? false;
   const comp = fixture ? findCompetition(world, fixture.competitionId) : undefined;
-  const gate = calcGate(rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id], divisionForClub(world, home.id), divisionForClub(world, away.id));
-  match.attendance = gate.attendance;
-  match.gateRevenue = gate.revenue;
-  home.cash += gate.revenue;
-  home.ledger.income.push({ code: 1, amount: gate.revenue, day: world.dayIndex, label: `Gate receipts (${comp?.name ?? ""})` });
 
   if (existing) Object.assign(existing, match, { id: st.matchId });
   else world.matches.push(match);
@@ -200,132 +180,6 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   world.liveMatches = world.liveMatches.filter((x) => x.matchId !== st.matchId);
   for (const club of [home, away]) club.liveMatchAt = null;
   return match;
-}
-
-/** Play a fixture instantly (no live watch) — used for division history sim. */
-export function playFixtureInstant(world: World, fixture: Fixture): Match | null {
-  const home = findClub(world, fixture.homeClubId);
-  const away = findClub(world, fixture.awayClubId);
-  if (!home || !away) return null;
-  const comp = findCompetition(world, fixture.competitionId);
-  const match: Match = {
-    id: world.nextId++,
-    fixtureId: fixture.id,
-    competitionId: fixture.competitionId,
-    homeClubId: fixture.homeClubId,
-    awayClubId: fixture.awayClubId,
-    homeScore: 0,
-    awayScore: 0,
-    penaltyWinnerId: null,
-    attendance: 0,
-    gateRevenue: 0,
-    events: [],
-    stats: { home: emptyTeamStats(), away: emptyTeamStats() },
-    minuteEvents: [],
-    homeWasHuman: home.ownerUserId !== null,
-    awayWasHuman: away.ownerUserId !== null,
-    eloProcessed: false,
-  };
-  const sim = simulateMatch(world.rng, home, away, world.players, {
-    competitionId: fixture.competitionId,
-    fixtureId: fixture.id,
-    homeNeutral: false,
-    decider: false,
-    compKind: comp?.kind ?? "division",
-    year: world.mp.seasonYear,
-  });
-  match.homeScore = sim.homeGoals;
-  match.awayScore = sim.awayGoals;
-  match.events = sim.match.events;
-  match.stats = sim.match.stats;
-  match.penaltyWinnerId = sim.match.penaltyWinnerId;
-  match.penaltyScore = sim.match.penaltyScore;
-  match.extraTime = sim.match.extraTime;
-  match.minuteEvents = sim.match.minuteEvents;
-  match.minutes = sim.match.minutes;
-  const gate = calcGate(world.rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id], divisionForClub(world, home.id), divisionForClub(world, away.id));
-  match.attendance = gate.attendance;
-  match.gateRevenue = gate.revenue;
-  home.cash += gate.revenue;
-  home.ledger.income.push({ code: 1, amount: gate.revenue, day: world.dayIndex, label: `Gate receipts (${comp?.name ?? ""})` });
-  fixture.played = true;
-  world.matches.push(match);
-  applyMatchToPlayers(match, world);
-  applyMatchElo(world, match);
-  for (const id of sim.suspensionClears) {
-    const player = world.players.find((candidate) => candidate.id === id);
-    if (player) player.suspendedGames = Math.max(0, player.suspendedGames - 1);
-  }
-  if (comp && comp.kind === "division") {
-    updateStandings(comp, fixture.homeClubId, fixture.awayClubId, match.homeScore, match.awayScore);
-    if (comp.seasonId !== undefined) syncClubSeasons(world, comp.seasonId);
-  }
-  return match;
-}
-
-/** Kick off every due fixture (kickoff <= now, not played, not already live). */
-export function processDueFixtures(world: World, now: number): Match[] {
-  const started: Match[] = [];
-  const liveFixtureIds = new Set(world.liveMatches.map((s) => s.fixtureId));
-  for (const f of world.fixtures) {
-    if (f.played) continue;
-    if (f.kickoffAt !== undefined && f.kickoffAt > now) continue;
-    if (liveFixtureIds.has(f.id)) continue;
-    const m = startLiveMatch(world, f);
-    if (m) started.push(m);
-  }
-  return started;
-}
-
-/** Update world.mp.completedRounds from the real clock. */
-export function syncCompletedRounds(world: World, now: number): void {
-  void now;
-  const divisions = world.competitions.filter((competition) => competition.kind === "division" && competition.status !== "ARCHIVED");
-  let completed = 0;
-  for (let round = 0; round < gameConfig.roundsPerSeason; round++) {
-    const fixtures = world.fixtures.filter((fixture) => fixture.round === round && divisions.some((division) => division.id === fixture.competitionId));
-    if (fixtures.length === 0 || fixtures.some((fixture) => !fixture.played)) break;
-    completed = round + 1;
-  }
-  world.mp.completedRounds = Math.max(world.mp.completedRounds, completed);
-  world.mp.seasonStatus = world.mp.phase === "INTERSEASON" ? "INTERSEASON" : "ACTIVE";
-  const lockRound = world.mp.joinLockRound;
-  if (world.mp.completedRounds >= lockRound && world.mp.joinState !== "LOCKED") {
-    world.mp.joinState = "LOCKED";
-    auditMultiplayerEvent(world, "JOIN_LOCK_ACTIVATED", { metadata: JSON.stringify({ completedRounds: world.mp.completedRounds, joinLockRound: lockRound }) });
-  }
-}
-
-/** Daily tick: energy, development, payroll, weekly sim, auctions, AI activity.
- *  Delegates to the date-aware processor in ./daily (worker plan §3). The
- *  worker drives catch-up through `missingDailyDates` + `processDailyDate`
- *  directly so it can persist after every missed date; this shim advances the
- *  current date only and is retained for callers that tick the live world. */
-export function runDailyTick(world: World, now: number) {
-  const todayKey = utcDateKey(new Date(now));
-  if (world.mp.lastDailyTickDate === todayKey) return;
-  const dates = missingDailyDates(world.mp.lastDailyTickDate, new Date(now));
-  for (const date of dates) {
-    const day = new Date(Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))));
-    const ref = seasonRefFor(day);
-    // Only process dates inside the world's current season month; month-boundary
-    // transitions are owned by the season scheduler / daily processor.
-    if (ref.year !== world.mp.seasonYear || ref.month !== world.mp.seasonMonth) continue;
-    processDailyDate(world, { date, now: day.getTime() });
-    world.mp.lastDailyTickDate = date;
-  }
-}
-
-export function allDivisionsFinished(world: World): boolean {
-  const divs = world.competitions.filter((c) => c.kind === "division" && c.status !== "ARCHIVED");
-  if (divs.length === 0) return false;
-  return divs.every((c) => isLeagueFinished(c, world.fixtures) && Object.values(c.standings).length > 0);
-}
-
-function applyMatchToStandings(world: World, fixture: Fixture, match: Match) {
-  const comp = findCompetition(world, fixture.competitionId);
-  if (!comp) return;
-  if (comp.kind === "division") updateStandings(comp, fixture.homeClubId, fixture.awayClubId, match.homeScore, match.awayScore);
 }
 
 export function roundLabelFor(competition: Competition, round: number): string {

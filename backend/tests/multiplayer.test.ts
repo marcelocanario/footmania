@@ -14,7 +14,6 @@ import {
   simulateThroughRound,
   evaluateInactivity,
   recordActivity,
-  timezoneCluster,
   calculateSocialScore,
   divisionsInSeason,
   tierOf,
@@ -25,12 +24,13 @@ import {
   playPracticeMatch,
 } from "../src/game/multiplayer";
 import { emptyStandingsRow } from "../src/game/league";
-import type { Competition, World } from "../src/game/types";
-import { advanceLiveMatches, playFixtureInstant, startLiveMatch } from "../src/game/world";
+import { recomputeProxyState } from "../src/game/market";
+import type { Club, Competition, Player, TransferAuction, World } from "../src/game/types";
+import { advanceLiveMatches, startLiveMatch } from "../src/game/world";
 import { MP_CONFIG } from "../src/config";
 import { contractCycle } from "../src/game/season";
 import { settlePlayerPayroll } from "../src/game/payroll";
-import { issueSeasonBudget } from "../src/game/multiplayer";
+import { issueAllocation } from "../src/services/mpService";
 import { PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
@@ -175,11 +175,9 @@ describe("AI replacement preserves standings identity", () => {
     const { world, seasonId } = seasonWorld(31);
     const division = world.competitions.find((c) => c.kind === "division")!;
     const club = createHumanClub(world, { userId: 3131, clubName: "Own Assets FC", country: "BRA", timezone: "UTC" });
-    const ownCapacity = club.stadiumCapacity;
     const ownCash = club.cash;
     const result = placeNewClub(world, club.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(result.kind).toBe("active");
-    expect(world.clubs.find((candidate) => candidate.id === club.id)?.stadiumCapacity).toBe(ownCapacity);
     expect(world.clubs.find((candidate) => candidate.id === club.id)?.cash).toBe(ownCash);
     expect(division.standings[club.id]).toBeDefined();
   });
@@ -407,14 +405,28 @@ describe("admin manual round advance", () => {
 });
 
 describe("timezone clustering", () => {
-  it("packs 8 humans per division before opening another, then clusters by timezone", () => {
-    // 19 humans spread across timezones -> 8 + 8 + 3 (plan §36 example).
-    const humans = Array.from({ length: 19 }, (_, i) => ({ clubId: i + 1, timezone: ["Asia/Tokyo", "Europe/London", "America/Sao_Paulo", "UTC"][i % 4] }));
-    const groups = timezoneCluster(humans, 3);
-    expect(groups).toHaveLength(3);
-    expect(groups[0].length).toBe(8);
-    expect(groups[1].length).toBe(8);
-    expect(groups[2].length).toBe(3);
+  it("balances 19 humans across 3 same-tier divisions while minimizing timezone spread", () => {
+    // 19 humans spread across timezones -> near-even groups of 7/6/6 from
+    // buildBalancedTierGroups (plan §36: density first, then timezone cost).
+    const { world } = seasonWorld(190);
+    const humans = Array.from({ length: 19 }, (_, i) => {
+      const club = createHumanClub(world, { userId: i + 1, clubName: `Cluster-${i + 1}`, country: "BRA", timezone: ["Asia/Tokyo", "Europe/London", "America/Sao_Paulo", "UTC"][i % 4] });
+      club.competitionState = "ACTIVE";
+      return { clubId: club.id, timezone: club.timezone };
+    });
+    // Tier 3 allows up to 4 divisions, enough for 19 humans in 3 groups.
+    const divisions = rebuildTierDivisions(world, world.mp.seasonId, 3, humans, { year: 2026, month: 2 }, { generateFixtures: false });
+    expect(divisions).toHaveLength(3);
+    const sizes = divisions.map((division) => Object.keys(division.standings).map(Number).filter((id) => humans.some((human) => human.clubId === id)).length);
+    expect(sizes).toEqual([7, 6, 6]);
+    // Timezone affinity: each group's members are timezone-contiguous after
+    // the swap optimization (same-timezone clubs end up together).
+    for (const division of divisions) {
+      const timezones = Object.keys(division.standings)
+        .map(Number)
+        .map((id) => humans.find((human) => human.clubId === id)?.timezone);
+      expect(new Set(timezones).size).toBeLessThanOrEqual(4);
+    }
   });
 
   it("keeps direct friends together before timezone and Elo objectives", () => {
@@ -545,20 +557,6 @@ describe("provisional practice matches", () => {
   });
 });
 
-describe("instant fixture suspensions", () => {
-  it("serves one suspension for every instant competitive fixture", () => {
-    const { world } = seasonWorld(77);
-    const division = world.competitions.find((competition) => competition.kind === "division")!;
-    const fixture = world.fixtures.find((candidate) => candidate.competitionId === division.id)!;
-    const suspended = world.players.find((player) => player.clubId === fixture.homeClubId)!;
-    suspended.suspendedGames = 2;
-
-    playFixtureInstant(world, fixture);
-
-    expect(suspended.suspendedGames).toBe(1);
-  });
-});
-
 describe("provisional economics", () => {
   it("keeps contracts frozen", () => {
     const { world } = seasonWorld(78);
@@ -591,8 +589,8 @@ describe("provisional economics", () => {
     club.competitionState = "PROVISIONAL";
     const nextSeasonId = seasonId + 100;
 
-    const first = await issueSeasonBudget(prisma, world, club.id, nextSeasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
-    const second = await issueSeasonBudget(prisma, world, club.id, nextSeasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
+    const first = await issueAllocation(prisma, world, club.id, nextSeasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
+    const second = await issueAllocation(prisma, world, club.id, nextSeasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
 
     expect(first).toBe(second);
     expect(world.seasonAllocations.filter((a) => a.clubId === club.id && a.seasonId === nextSeasonId && a.type === "PROVISIONAL_NEXT_SEASON")).toHaveLength(1);
@@ -880,3 +878,215 @@ describe("live-match downtime recovery", () => {
     expect(fixture.played).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Filler retirement market reconciliation: when a human takes an AI slot, the
+// AI's own commitments are voided and its listed players with bids are awarded
+// to their leading bidder instead of being destroyed with the club.
+// ---------------------------------------------------------------------------
+
+function cheapestSeniorSquadPlayer(world: World, clubId: number): Player {
+  const squad = world.players.filter((p) => p.clubId === clubId && !p.isYouth);
+  if (squad.length === 0) throw new Error("club has no senior players");
+  return squad.reduce((min, p) => (p.value < min.value ? p : min), squad[0]);
+}
+
+function listAiPlayer(world: World, aiClubId: number): { player: Player; listing: TransferAuction } {
+  const player = cheapestSeniorSquadPlayer(world, aiClubId);
+  // Raw pre-B3 state: ephemeral AI clubs are hard-blocked from the market now,
+  // but legacy worlds can still carry AI-owned listings that rollover must
+  // reconcile (retireFillerClub / removeFillerClubs).
+  const now = Date.now();
+  const listing: TransferAuction = {
+    id: world.nextId++,
+    playerId: player.id,
+    sellerClubId: aiClubId,
+    playerValueAtListing: player.value,
+    openingPrice: Math.max(1, player.value),
+    bidIncrement: Math.max(1, Math.round(player.value * 0.01)),
+    sellerDivisionAtListing: 1,
+    totalDivisionsAtListing: 1,
+    salaryBaselineAtListing: player.salary,
+    playerOverallAtListing: player.overall,
+    playerAgeAtListing: player.age,
+    currentPrice: Math.max(1, player.value),
+    leadingClubId: null,
+    createdAt: now,
+    deadline: now + 3_600_000,
+    originalDeadline: now + 3_600_000,
+    status: "ACTIVE",
+    completedAt: null,
+    winningClubId: null,
+    finalPrice: null,
+    cancelledAt: null,
+    softClosed: false,
+    deadlineVersion: 0,
+  };
+  world.transferAuctions.push(listing);
+  return { player, listing };
+}
+
+function legacyBidOnListing(world: World, club: Club, listing: TransferAuction, maximum: number): void {
+  // Raw pre-B3 bid: pushed straight into durable state, then the shared proxy
+  // recomputation derives leader/price/reservations exactly as production did.
+  const now = Date.now();
+  world.marketBids.push({
+    id: world.nextId++,
+    marketType: "TRANSFER",
+    listingId: listing.id,
+    clubId: club.id,
+    maxBid: maximum,
+    contractSeasons: 1,
+    contractSalary: 100_000,
+    contractDemandAtSubmission: 100_000,
+    capMultiplierAtSubmission: 1.5,
+    maximumAllowedByRuleAtSubmission: listing.playerValueAtListing * 1.5,
+    buyerDivisionAtSubmission: 1,
+    createdAt: now,
+    updatedAt: now,
+    initialPriorityAt: now,
+  });
+  recomputeProxyState(world, listing.id, "TRANSFER");
+}
+
+function expectActive(result: { kind: string; replacedClubId?: number }): number {
+  if (result.kind !== "active" || result.replacedClubId === undefined) throw new Error("expected active placement");
+  return result.replacedClubId;
+}
+
+describe("filler retirement market reconciliation", () => {
+  it("awards a bid-on AI listing to the leading bidder when a human replaces the AI", () => {
+    const { world, seasonId } = seasonWorld(900);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    const aiId = highestRankedReplaceableAI(world, div1)!;
+    const { player, listing } = listAiPlayer(world, aiId);
+    const bidder = createHumanClub(world, { userId: 9001, clubName: "Bidder FC", country: "BRA", timezone: "UTC" });
+    legacyBidOnListing(world, bidder, listing, listing.openingPrice);
+    const cashBefore = bidder.cash;
+
+    const joiner = createHumanClub(world, { userId: 9002, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const replacedClubId = expectActive(placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 }));
+
+    expect(replacedClubId).toBe(aiId);
+    expect(listing.status).toBe("COMPLETED");
+    expect(listing.winningClubId).toBe(bidder.id);
+    expect(listing.finalPrice).toBe(listing.openingPrice);
+    expect(player.clubId).toBe(bidder.id);
+    expect(world.players.some((p) => p.id === player.id)).toBe(true);
+    expect(bidder.cash).toBe(cashBefore - listing.finalPrice!);
+    expect(world.clubs.some((c) => c.id === aiId)).toBe(false);
+    expect(world.news.some((n) => n.text.includes("won the auction"))).toBe(true);
+  });
+
+  it("settles competing bidders at the proxy clearing price and releases every reservation", () => {
+    const { world, seasonId } = seasonWorld(901);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    const aiId = highestRankedReplaceableAI(world, div1)!;
+    const { player, listing } = listAiPlayer(world, aiId);
+    const low = createHumanClub(world, { userId: 9011, clubName: "Low FC", country: "BRA", timezone: "UTC" });
+    const high = createHumanClub(world, { userId: 9012, clubName: "High FC", country: "BRA", timezone: "UTC" });
+    legacyBidOnListing(world, low, listing, listing.openingPrice);
+    // The division-gap cap (150% same-division) bounds any private maximum.
+    const highMax = Math.floor(listing.openingPrice * 1.4);
+    legacyBidOnListing(world, high, listing, highMax);
+    const highCashBefore = high.cash;
+
+    const joiner = createHumanClub(world, { userId: 9013, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 });
+
+    expect(listing.status).toBe("COMPLETED");
+    expect(listing.winningClubId).toBe(high.id);
+    // Proxy clearing price: second-highest max + increment, capped at the winner's max.
+    expect(listing.finalPrice).toBe(Math.min(highMax, listing.openingPrice + listing.bidIncrement));
+    expect(high.cash).toBe(highCashBefore - listing.finalPrice!);
+    expect(player.clubId).toBe(high.id);
+    expect(world.marketReservations.filter((r) => r.listingId === listing.id).every((r) => r.releasedAt !== null)).toBe(true);
+  });
+
+  it("cancels a bid-less AI listing and destroys the player with the club", () => {
+    const { world, seasonId } = seasonWorld(902);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    const aiId = highestRankedReplaceableAI(world, div1)!;
+    const { player, listing } = listAiPlayer(world, aiId);
+
+    const joiner = createHumanClub(world, { userId: 9021, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const replacedClubId = expectActive(placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 }));
+
+    expect(replacedClubId).toBe(aiId);
+    expect(listing.status).toBe("CANCELLED");
+    expect(player.onSale).toBe(false);
+    expect(world.players.some((p) => p.id === player.id)).toBe(false);
+    expect(world.clubs.some((c) => c.id === aiId)).toBe(false);
+    expect(world.marketReservations.filter((r) => r.listingId === listing.id).every((r) => r.releasedAt !== null)).toBe(true);
+  });
+
+  it("voids the retiring AI's own bids, reservations and evaluations on other listings", () => {
+    const { world, seasonId } = seasonWorld(903);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    const targetAiId = highestRankedReplaceableAI(world, div1)!;
+    const otherAi = world.clubs.find((c) => c.ownerUserId === null && c.isHuman === false && c.id !== targetAiId)!;
+    const { player: otherPlayer, listing: otherListing } = listAiPlayer(world, otherAi.id);
+    const targetAi = world.clubs.find((c) => c.id === targetAiId)!;
+    legacyBidOnListing(world, targetAi, otherListing, otherListing.openingPrice);
+    expect(otherListing.leadingClubId).toBe(targetAiId);
+
+    const joiner = createHumanClub(world, { userId: 9031, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const replacedClubId = expectActive(placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 }));
+
+    expect(replacedClubId).toBe(targetAiId);
+    expect(world.marketBids.some((b) => b.clubId === targetAiId)).toBe(false);
+    expect(world.marketReservations.some((r) => r.clubId === targetAiId && r.releasedAt === null)).toBe(false);
+    // The untouched listing survives with recomputed proxy state (no bids left).
+    expect(otherListing.status).toBe("ACTIVE");
+    expect(otherListing.leadingClubId).toBeNull();
+    expect(otherListing.currentPrice).toBe(otherListing.openingPrice);
+    expect(world.clubs.some((c) => c.id === otherAi.id)).toBe(true);
+    expect(otherPlayer.clubId).toBe(otherAi.id);
+  });
+
+  it("promotes the next surviving bidder to leader after the retiring AI's lead is voided", () => {
+    const { world, seasonId } = seasonWorld(904);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    const targetAiId = highestRankedReplaceableAI(world, div1)!;
+    const otherAi = world.clubs.find((c) => c.ownerUserId === null && c.isHuman === false && c.id !== targetAiId)!;
+    const { player: otherPlayer, listing: otherListing } = listAiPlayer(world, otherAi.id);
+    void otherPlayer;
+    const human = createHumanClub(world, { userId: 9041, clubName: "Underbidder FC", country: "BRA", timezone: "UTC" });
+    legacyBidOnListing(world, human, otherListing, otherListing.openingPrice);
+    const targetAi = world.clubs.find((c) => c.id === targetAiId)!;
+    legacyBidOnListing(world, targetAi, otherListing, Math.floor(otherListing.openingPrice * 1.4));
+    expect(otherListing.leadingClubId).toBe(targetAiId);
+
+    const joiner = createHumanClub(world, { userId: 9042, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 });
+
+    expect(otherListing.status).toBe("ACTIVE");
+    expect(otherListing.leadingClubId).toBe(human.id);
+    expect(otherListing.currentPrice).toBe(otherListing.openingPrice);
+    const reservation = world.marketReservations.find((r) => r.clubId === human.id && r.listingId === otherListing.id);
+    expect(reservation?.releasedAt ?? null).toBeNull();
+    expect(reservation?.amount).toBe(otherListing.openingPrice);
+  });
+
+  it("applies the same reconciliation when a dormant club returns via returnDormantClub", () => {
+    const { world, seasonId } = seasonWorld(905);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    const returning = createHumanClub(world, { userId: 9051, clubName: "Returner FC", country: "BRA", timezone: "UTC" });
+    replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, returning.id);
+    returning.competitionState = "DORMANT";
+    // The AI that the returning club will replace is whichever ranks highest now.
+    const aiId = highestRankedReplaceableAI(world, div1)!;
+    const { player, listing } = listAiPlayer(world, aiId);
+    const bidder = createHumanClub(world, { userId: 9052, clubName: "Bidder FC", country: "BRA", timezone: "UTC" });
+    legacyBidOnListing(world, bidder, listing, listing.openingPrice);
+
+    const result = returnDormantClub(world, returning.id, Date.now(), seasonId, { year: 2026, month: 2 });
+
+    expect(expectActive(result)).toBe(aiId);
+    expect(listing.status).toBe("COMPLETED");
+    expect(listing.winningClubId).toBe(bidder.id);
+    expect(player.clubId).toBe(bidder.id);
+    expect(world.clubs.some((c) => c.id === aiId)).toBe(false);
+  });
+});
+

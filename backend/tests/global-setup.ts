@@ -35,7 +35,7 @@ export default async function setup(): Promise<void> {
       }]),
     ),
   };
-  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db", "test-scheduler.db"]) {
+  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db", "test-scheduler.db", "test-season-archive.db"]) {
     const url = `file:${join(cwd, "prisma", name).replaceAll("\\", "/")}`;
     const prisma = new PrismaClient({ datasourceUrl: url, log: [] });
     try {
@@ -53,18 +53,14 @@ export default async function setup(): Promise<void> {
       await prisma.club.deleteMany();
       await prisma.loan.deleteMany();
       await prisma.trophy.deleteMany();
-      await prisma.managerHistory.deleteMany();
       await prisma.seasonAward.deleteMany();
       await prisma.careerRecord.deleteMany();
-      await prisma.clubTicketPrices.deleteMany();
-      await prisma.stadiumUpgrade.deleteMany();
       await prisma.liveMatch.deleteMany();
       await prisma.marketBid.deleteMany();
       await prisma.transferAuction.deleteMany();
       await prisma.freeAgentListing.deleteMany();
       await prisma.marketReservation.deleteMany();
       await prisma.playerMarketTransaction.deleteMany();
-      await prisma.aiEvaluation.deleteMany();
       await prisma.mpMembership.deleteMany();
       await prisma.mpClubSeason.deleteMany();
       await prisma.mpQueue.deleteMany();

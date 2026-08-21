@@ -1,5 +1,45 @@
 import { createRng } from "../src/game/rng";
-import type { Club, Player, World } from "../src/game/types";
+import { MP_CONFIG } from "../src/config";
+import type { Club, Competition, Player, World } from "../src/game/types";
+
+/**
+ * Seed the minimum number of played league fixtures for every club so tests
+ * that exercise outbound markets are past the new-club sell lock by default.
+ * Sell-lock tests reset this via `{ competitions: [], fixtures: [] }` overrides.
+ */
+function seedPlayedMatches(world: World): void {
+  const division: Competition = {
+    id: 900_001,
+    kind: "division",
+    name: "1",
+    round: 0,
+    stage: "group",
+    seasonId: world.mp.seasonId,
+    tier: 1,
+    groupIndex: 0,
+    status: "ACTIVE",
+    config: { clubs: [], turns: 2, groups: [], bracket: [], promoted: 2, relegated: 2, groupQualifiers: 0 },
+    standings: {},
+    groupStandings: [],
+    winners: [],
+    knockouts: [],
+  };
+  world.competitions.push(division);
+  let fixtureId = 800_000;
+  for (const club of world.clubs) {
+    for (let round = 0; round < MP_CONFIG.newClubSellLockMatches; round++) {
+      world.fixtures.push({
+        id: fixtureId++,
+        competitionId: division.id,
+        round,
+        homeClubId: club.id,
+        awayClubId: -club.id,
+        dayIndex: round,
+        played: true,
+      });
+    }
+  }
+}
 
 export function makeClub(overrides: Partial<Club> = {}): Club {
   return {
@@ -16,7 +56,6 @@ export function makeClub(overrides: Partial<Club> = {}): Club {
     highestDivision: 1,
     cash: 100_000_000,
     stadiumName: "St",
-    stadiumCapacity: 40000,
     primaryColor: "#000",
     secondaryColor: "#fff",
     coachName: "Coach",
@@ -32,7 +71,7 @@ export function makeClub(overrides: Partial<Club> = {}): Club {
 }
 
 export function makeWorld(clubs: Club[], players: Player[], overrides: Partial<World> = {}): World {
-  return {
+  const world: World = {
     seed: 1,
     year: 2026,
     dayIndex: 0,
@@ -50,16 +89,11 @@ export function makeWorld(clubs: Club[], players: Player[], overrides: Partial<W
     freeAgentListings: [],
     marketReservations: [],
     playerMarketHistory: [],
-    aiEvaluations: [],
     seasonAwards: [],
     records: [],
-    managerHistory: [],
-    ticketPrices: {},
-    stadiumUpgrades: [],
-    humanClubId: clubs[0]?.id ?? null,
+    humanClubId: null,
     seasonSummary: null,
     rng: createRng(42),
-    contractWarnings: [],
     financialInterventions: [],
     mp: {
       seasonId: 1,
@@ -88,6 +122,7 @@ export function makeWorld(clubs: Club[], players: Player[], overrides: Partial<W
     mpAudits: [],
     seasonHistory: [],
     generationEvents: [],
-    ...overrides,
   };
+  seedPlayedMatches(world);
+  return Object.assign(world, overrides);
 }

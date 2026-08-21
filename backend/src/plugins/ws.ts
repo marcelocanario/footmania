@@ -2,9 +2,8 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorld, persistWorld } from "../services/saveService";
 import { liveStateView } from "../services/liveView";
-import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, matchRepsForDivisions } from "../game/match";
+import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
 import { advanceLiveMatches } from "../game/world";
-import { divisionForClub } from "../game/multiplayer";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
 import { StaleWorldError } from "../services/saveService";
@@ -113,7 +112,7 @@ async function handleMessage(
     send(ws, { type: "pong" });
     return;
   }
-  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "finish" && msg.type !== "state" && msg.type !== "lineup") {
+  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup") {
     send(ws, { type: "error", message: "Unknown message type" });
     return;
   }
@@ -174,7 +173,7 @@ async function handleMessage(
           return;
         }
         const humanSide = st.homeClubId === humanClub.id ? 0 : 1;
-        const res = performLiveSub(world.rng, home, away, world.players, st, humanSide, msg.outId ?? -1, msg.inId ?? -1, matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id)));
+        const res = performLiveSub(world.rng, home, away, world.players, st, humanSide, msg.outId ?? -1, msg.inId ?? -1);
         if (res.error) {
           send(ws, { type: "sub", error: res.error, state: liveStateView(world, st, meta.userId) });
           return;
@@ -215,22 +214,9 @@ async function handleMessage(
         broadcastState(world);
         return;
       }
-      if (msg.type === "finish") {
-        if (!isParticipant) {
-          send(ws, { type: "error", message: "You are not a participant in this match" });
-          return;
-        }
-        advanceLiveMatches(world, Date.now());
-        if (!st.ended) {
-          send(ws, { type: "error", message: "Match is still in progress" });
-          return;
-        }
-        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-        for (const ws2 of conns.get(meta.matchId) ?? []) {
-          send(ws2, { type: "finished", matchId: meta.matchId });
-        }
-        return;
-      }
+      // Matches advance only on the server clock: the "tick" message is a
+      // strictly elapsed-time catch-up for viewers and can never accelerate
+      // play. There is deliberately no client-driven finish/force-advance.
       send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
     } catch (e) {
       if (e instanceof StaleWorldError) throw e;

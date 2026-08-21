@@ -142,10 +142,9 @@ export async function savesRoutes(app: FastifyInstance) {
         world.mpQueue.push({ clubId: club.id, source: "NEW_CLUB", queuedAt: Date.now(), preferredSeasonId: nextSeason.seasonId });
       } else {
         const completed = world.mp.completedRounds;
-        const total = 14;
         await issueAllocation(app.prisma, world, club.id, seasonId, result.tier, {
           type: "ACTIVE_PRORATED",
-          remainingRounds: Math.max(0, total - completed),
+          remainingRounds: Math.max(0, gameConfig.roundsPerSeason - completed),
         });
       }
 
@@ -327,17 +326,11 @@ export async function savesRoutes(app: FastifyInstance) {
   });
 
   // --- Settings -----------------------------------------------------------
+  // Read-only static config for the frontend (contract terms, live pacing).
   app.get("/settings", async () => ({
-    humanMatchDurationMinutes: gameConfig.humanMatchDurationMinutes,
     maxContractSeasons: gameConfig.maxContractSeasons,
+    matchDurationMinutes: MP_CONFIG.matchDurationMinutes,
   }));
-
-  app.put("/settings", async (req) => {
-    const parsed = z.object({ humanMatchDurationMinutes: z.number().int().min(1).max(60) }).safeParse(req.body);
-    if (!parsed.success) return { error: "Invalid input" };
-    gameConfig.humanMatchDurationMinutes = parsed.data.humanMatchDurationMinutes;
-    return { humanMatchDurationMinutes: gameConfig.humanMatchDurationMinutes };
-  });
 
   // Countries list for club creation.
   app.get("/mp/countries", async () => ({

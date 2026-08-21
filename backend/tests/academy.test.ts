@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../src/game/rng";
 import { generatePlayer } from "../src/game/player";
-import { dismissYouthPlayer, promoteYouthPlayer, promotedYouthSalary, rolloverSeason } from "../src/game/season";
+import { dismissYouthPlayer, promoteYouthPlayer, promotedYouthSalary, processSeasonEndContracts, processSeasonalAcademyIntake, commitSeasonRollover } from "../src/game/season";
 import { calculateBaseSalary } from "../src/game/economy";
 import { makeClub, makeWorld } from "./helpers";
 
@@ -27,7 +27,9 @@ describe("youth academy", () => {
     youth.age = 20;
     const world = makeWorld([club], [youth]);
 
-    rolloverSeason(world.rng, world);
+    processSeasonEndContracts(world.rng, world);
+  processSeasonalAcademyIntake(world.rng, world);
+  commitSeasonRollover(world);
 
     expect(youth.age).toBe(21);
     expect(youth.isYouth).toBe(false);

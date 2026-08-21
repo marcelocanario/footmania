@@ -10,6 +10,7 @@ export default defineConfig({
       "tests/persistence.test.ts",
       "tests/scheduler.test.ts",
       "tests/worker.test.ts",
+      "tests/seasonArchive.test.ts",
     ],
     environment: "node",
     testTimeout: 60000,
@@ -18,3 +19,4 @@ export default defineConfig({
     testNamePattern: /^(?!.*\[calibration\])/,
   },
 });
+

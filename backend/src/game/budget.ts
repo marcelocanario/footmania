@@ -90,8 +90,9 @@ export function calculateInitialFirstDivisionSeasonBudget(): number {
   const expectedTransferSpend = MP_CONFIG.expectedMeaningfulSigningsPerSeason * strongStarterValue;
 
   // Recurring operating costs are intentionally NOT funded directly by the
-  // seasonal allocation: clubs have gate revenue and prizes as separate income
-  // streams. Counting them again here would double-fund wages.
+  // seasonal allocation beyond this estimate; there is no gate-revenue income
+  // stream (the stadium/ticket mechanics were removed), so this budget is the
+  // club's primary funding and must cover wages plus planned transfer spend.
   const rawTier1Budget = expectedSeasonWages + expectedTransferSpend;
 
   // Sanity check against representative values:
@@ -139,14 +140,6 @@ export async function prizeBudgetForTier(prisma: PrismaClient, tier: number): Pr
 export function proratedBudget(fullBudget: number, remainingRounds: number, totalRounds: number): number {
   if (totalRounds <= 0) return fullBudget;
   return Math.round((fullBudget * Math.max(0, remainingRounds)) / totalRounds);
-}
-
-/** Small performance modifier based on previous-season finish (plan §17A). */
-export function performanceModifier(finishPosition: number, divisionSize: number): number {
-  // Small range around 1.0: leaders get a small bump, relegation zone a small cut.
-  const mid = (divisionSize + 1) / 2;
-  const delta = (mid - finishPosition) / (Math.max(1, divisionSize - 1));
-  return Math.max(0.85, Math.min(1.15, 1 + delta * 0.06));
 }
 
 /** Calculate a configured tier budget, including hypothetical tier 0. */

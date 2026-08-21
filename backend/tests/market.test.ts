@@ -35,7 +35,9 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     id,
     name: `Club ${id}`,
     shortName: `C${id}`,
-    ownerUserId: id === 1 ? 1 : null,
+    // Human by default: market participants are always human clubs
+    // (invariant #28 — filler-AI clubs cannot list, bid or claim).
+    ownerUserId: 1000 + id,
     timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
@@ -45,15 +47,14 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     highestDivision: 1,
     cash: 10_000_000,
     stadiumName: "St",
-    stadiumCapacity: 40000,
-    primaryColor: "#000",
+        primaryColor: "#000",
     secondaryColor: "#fff",
     coachName: "Coach",
     tactics: { formation: 4, style: 0, pressing: 0, direction: 0 },
     trainingFocus: "assistant",
     captainId: null,
     penaltyTakerId: null,
-    isHuman: false,
+    isHuman: true,
     ledger: { income: [], expense: [] },
     trophies: {},
     ...overrides,
@@ -117,15 +118,16 @@ describe("auction listing rules (§9/§64.1)", () => {
     expect(resolveOpeningPrice(world, player, max).ok).toBe(true);
   });
 
-  it("bases the opening range on the player's recent trade price when recently traded (§48)", () => {
+  it("bases the opening range on the player's recent trade price when recently traded (§48/C4)", () => {
     const rng = createRng(1);
     const club = makeClub(1, { cash: 50_000_000 });
     const player = generatePlayer(rng, club, { id: 1, isYouth: false });
     player.value = 5_000_000;
     const world = makeWorldWithClubs([club]);
-    // Round 1 is played on day 1; round 3 is played on day 5 (interval 2).
-    world.dayIndex = 5;
-    // The player was signed cheaply from free agency on season day 1.
+    // The player was signed cheaply from free agency two completed rounds ago.
+    // The stamp is the monotonic completed-rounds counter, so the CURRENT day
+    // being an off-match day must not affect the fade (review C4).
+    world.mp.completedRounds = 2;
     recordTransaction(world, {
       playerId: player.id,
       listingId: 500,
@@ -138,10 +140,11 @@ describe("auction listing rules (§9/§64.1)", () => {
       seasonDayIndex: 1,
       timestamp: 1_700_000_000_000,
     });
+    world.mp.completedRounds = 4;
+    world.dayIndex = 6; // an off-match day under the configured calendar
 
     const base = recentTradeBaseValue(world, player);
-    // roundForDay(5) = round 3; roundForDay(1) = round 1; gamesSinceTrade = 2.
-    // t = 2/6 → base = 500K + 4.5M × (2/6) = 2M.
+    // gamesSinceTrade = 4 - 2 = 2. t = 2/6 → base = 500K + 4.5M × (2/6) = 2M.
     const expected = 500_000 + (5_000_000 - 500_000) * (2 / 6);
     expect(base).toBeCloseTo(expected, 0);
 
@@ -159,10 +162,9 @@ describe("auction listing rules (§9/§64.1)", () => {
     const player = generatePlayer(rng, club, { id: 1, isYouth: false });
     player.value = 5_000_000;
     const world = makeWorldWithClubs([club]);
-    // The final inter-season days have no round number, so use the completed
-    // round counter to represent a current owner past the fade window.
-    world.dayIndex = 29;
-    world.mp.completedRounds = 7;
+    // The trade is stamped one completed round in; the current counter is far
+    // past the fade window.
+    world.mp.completedRounds = 1;
     recordTransaction(world, {
       playerId: player.id,
       listingId: 500,
@@ -175,10 +177,38 @@ describe("auction listing rules (§9/§64.1)", () => {
       seasonDayIndex: 1,
       timestamp: 1_700_000_000_000,
     });
+    world.mp.completedRounds = 8;
 
     const base = recentTradeBaseValue(world, player);
-    // Six completed rounds since acquisition reaches the full player.value.
+    // More than six completed rounds since acquisition reaches the full value.
     expect(base).toBe(5_000_000);
+  });
+
+  it("treats a legacy unstamped trade on a non-match day as fully faded (C4)", () => {
+    const rng = createRng(1);
+    const club = makeClub(1, { cash: 50_000_000 });
+    const player = generatePlayer(rng, club, { id: 1, isYouth: false });
+    player.value = 5_000_000;
+    const world = makeWorldWithClubs([club]);
+    // Legacy row written before the completedRounds stamp existed, on a season
+    // day that resolves to no league round. It must not pin the base at the
+    // old trade price forever: it counts as fully faded (review follow-up).
+    world.playerMarketHistory.push({
+      id: world.nextId++,
+      playerId: player.id,
+      listingId: 500,
+      type: "FREE_AGENT_SIGNING",
+      fromClubId: null,
+      toClubId: club.id,
+      price: 500_000,
+      seasonId: world.mp.seasonId,
+      seasonKey: "2026-01",
+      seasonDayIndex: gameConfig.lastLeagueMatchDayIndex + 1,
+      timestamp: 1_700_000_000_000,
+    });
+    world.mp.completedRounds = 3;
+
+    expect(recentTradeBaseValue(world, player)).toBe(5_000_000);
   });
 
   it("rejects youth players, non-squad players, and duplicate active listings", () => {
@@ -341,7 +371,6 @@ describe("maximum bid validation (§15/§19/§21/§24)", () => {
       finalPrice: null,
       cancelledAt: null,
       softClosed: false,
-      softCloseExtensions: 0,
       ...opts,
     };
   }
@@ -562,41 +591,54 @@ describe("soft close (§18)", () => {
       bidIncrement: 100_000, sellerDivisionAtListing: 1, totalDivisionsAtListing: 3, currentPrice: 8_500_000,
       leadingClubId: null, createdAt: 1, deadline: 10_000, originalDeadline: 10_000, status: "ACTIVE",
       completedAt: null, winningClubId: null, finalPrice: null, cancelledAt: null, softClosed: false,
-      softCloseExtensions: 0,
     };
   }
 
-  it("extends the deadline only on a leader or price change", () => {
+  it("resets the deadline only on a leader or price change", () => {
     const listing = baseListing();
     const unchanged = extendDeadline({
       listing, previousLeader: null, previousPrice: 8_500_000, newLeader: null, newPrice: 8_500_000, now: 9_000,
     });
     expect(unchanged).toBe(listing.deadline);
 
-    const extended = extendDeadline({
+    const reset = extendDeadline({
       listing, previousLeader: null, previousPrice: 8_500_000, newLeader: 1, newPrice: 9_000_000, now: 9_000,
     });
-    // Extension is measured from the listing's deadline (§18: 15:00 -> 15:03).
-    expect(extended).toBe(listing.deadline + MARKET_CONFIG.transferAuction.extensionMinutes * 60_000);
+    // A competitive bid inside the window resets the close a full window away.
+    expect(reset).toBe(9_000 + MARKET_CONFIG.transferAuction.softCloseWindowMinutes * 60_000);
   });
 
-  it("does not let a leader extend repeatedly beyond the maximum window", () => {
+  it("leaves the deadline untouched while more than the window remains", () => {
     const listing = baseListing();
-    // 30min cap / 5min per extension => 6 extensions max.
-    listing.softCloseExtensions = 6;
-    const capped = extendDeadline({
-      listing, previousLeader: 1, previousPrice: 9_000_000, newLeader: 2, newPrice: 9_100_000, now: 9_500,
+    listing.deadline = 10_000 + MARKET_CONFIG.transferAuction.softCloseWindowMinutes * 60_000;
+    const extended = extendDeadline({
+      listing, previousLeader: null, previousPrice: 8_500_000, newLeader: 1, newPrice: 9_000_000,
+      now: 10_000,
     });
-    expect(capped).toBe(listing.deadline);
+    expect(extended).toBe(listing.deadline);
   });
 
-  it("allows a soft-close extension to cross the season boundary", () => {
+  it("every late competitive bid pushes the close a full window away (no cap)", () => {
+    const listing = baseListing();
+    let now = 9_000;
+    for (let i = 0; i < 5; i++) {
+      const extended = extendDeadline({
+        listing, previousLeader: i, previousPrice: 9_000_000 + i * 100_000, newLeader: i + 1, newPrice: 9_100_000 + i * 100_000, now,
+      });
+      expect(extended).toBe(now + MARKET_CONFIG.transferAuction.softCloseWindowMinutes * 60_000);
+      // Move the clock to just before the new close and bid again.
+      now = extended - 60_000;
+      listing.deadline = extended;
+    }
+  });
+
+  it("allows a soft-close reset to cross the season boundary", () => {
     const listing = baseListing();
     const extended = extendDeadline({
       listing, previousLeader: null, previousPrice: 8_500_000, newLeader: 1, newPrice: 9_000_000,
       now: 9_000, seasonRolloverAt: 9_000 + 60_000,
     });
-    expect(extended).toBe(listing.deadline + MARKET_CONFIG.transferAuction.extensionMinutes * 60_000);
+    expect(extended).toBe(9_000 + MARKET_CONFIG.transferAuction.softCloseWindowMinutes * 60_000);
   });
 });
 
@@ -734,7 +776,9 @@ describe("market history (§72)", () => {
 describe("settlement (§22)", () => {
   function setupWorldWithBids() {
     const rng = createRng(11);
-    const seller = makeClub(10, { cash: 10_000_000 });
+    // The seller is a human club: production sellers always are (AI clubs are
+    // inert), and the payroll accrual under test only applies to humans.
+    const seller = makeClub(10, { cash: 10_000_000, isHuman: true });
     const buyerA = makeClub(1, { cash: 30_000_000, isHuman: true });
     const buyerB = makeClub(2, { cash: 30_000_000 });
     const player = generatePlayer(rng, seller, { id: 1, isYouth: false });
@@ -766,12 +810,15 @@ describe("settlement (§22)", () => {
     expect(result.finalPrice).toBe(10_000_000 + listing.bidIncrement);
     expect(result.finalPrice).toBeLessThan(12_000_000);
 
-    // Cash: winner pays clearing price. The seller is first charged the
-    // player's accrued payroll through dayIndex (5 days of a 500K wage),
-    // then receives the clearing price.
+    // Cash: winner pays the clearing price. The seller is first charged the
+    // player's accrued payroll through dayIndex (5 days of a 500K wage), then
+    // receives the clearing price MINUS the transfer sales tax (review B1).
     const accruedPayroll = Math.round((sellerSalary * world.dayIndex) / gameConfig.seasonDays);
+    const tax = Math.round(result.finalPrice! * MARKET_CONFIG.transferTax.rate);
     expect(buyerB.cash).toBe(buyerBCash - result.finalPrice!);
-    expect(seller.cash).toBe(sellerCash - accruedPayroll + result.finalPrice!);
+    expect(seller.cash).toBe(sellerCash - accruedPayroll + result.finalPrice! - tax);
+    // The burned tax appears as a seller ledger expense and no club holds it.
+    expect(seller.ledger.expense.filter((e) => e.code === 17).reduce((sum, e) => sum + e.amount, 0)).toBe(tax);
     // Loser pays nothing.
     expect(buyerA.cash).toBe(buyerACash);
 

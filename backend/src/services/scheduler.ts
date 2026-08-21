@@ -6,17 +6,15 @@ import { gameConfig } from "../config";
 import { calendarValues, payrollDayIndices } from "./seasonCalendar";
 import { MP_CONFIG } from "../config";
 import { startLiveMatch, advanceLiveMatches } from "../game/world";
-import { settleTransferAuction } from "../game/market";
+import { settleTransferAuction, cancelUnsettleableAuction, releaseAllReservations } from "../game/market";
 import { processDueFreeAgentListing } from "../game/freeAgents";
-import { processGameDayEnd, processGameDayPayroll, processGameDayStart, processGameDayWeekly } from "../game/daily";
-import { runAiMarketTick } from "../game/aiMarket";
-import { endLoan, processContractExpiry, processContractWarning, stadiumCycle } from "../game/season";
+import { processGameDayPayroll, processGameDayStart, processGameDayWeekly } from "../game/daily";
+import { endLoan, processContractExpiry, processContractWarning } from "../game/season";
 import { executeRolloverStep, ROLLOVER_WORKFLOW_STEPS } from "./seasonRolloverService";
 
 export enum ScheduledEventType {
   GAME_DAY_ADVANCE = "GAME_DAY_ADVANCE",
   BEGIN_GAME_DAY = "BEGIN_GAME_DAY",
-  END_GAME_DAY = "END_GAME_DAY",
   MATCH_START = "MATCH_START",
   MATCH_COMPLETE = "MATCH_COMPLETE",
   PAYROLL_RUN = "PAYROLL_RUN",
@@ -27,7 +25,6 @@ export enum ScheduledEventType {
   CONTRACT_WARNING = "CONTRACT_WARNING",
   CONTRACT_EXPIRE = "CONTRACT_EXPIRE",
   CONTRACT_END_PROCESSING = "CONTRACT_END_PROCESSING",
-  STADIUM_UPGRADE_COMPLETE = "STADIUM_UPGRADE_COMPLETE",
   SEASON_RESULTS_FINALIZE = "SEASON_RESULTS_FINALIZE",
   INTERSEASON_START = "INTERSEASON_START",
   PROMOTION_RELEGATION = "PROMOTION_RELEGATION",
@@ -76,7 +73,6 @@ export const SCHEDULED_EVENT_PRIORITIES: Record<string, number> = {
   CONTRACT_WARNING: 200,
   CONTRACT_EXPIRE: 300,
   LOAN_END: 400,
-  STADIUM_UPGRADE_COMPLETE: 500,
   WEEKLY_SIM_UPDATE: 600,
   AI_TRANSFER_TICK: 700,
   PAYROLL_RUN: 800,
@@ -91,7 +87,6 @@ export const SCHEDULED_EVENT_PRIORITIES: Record<string, number> = {
   NEXT_SEASON_PREPARATION_OPEN: 2800,
   NEXT_SEASON_FIXTURE_GENERATION: 2900,
   NEXT_SEASON_STRUCTURE_VALIDATE: 3000,
-  END_GAME_DAY: 9000,
   SEASON_ROLLOVER: 9400,
   SEASON_ROLLOVER_COMMIT: 9500,
 };
@@ -246,12 +241,10 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
   for (let index = 0; index < calendar.seasonDays; index++) {
     const due = gameDay(index);
     queue({ saveId, type: ScheduledEventType.BEGIN_GAME_DAY, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "BEGIN_OF_DAY", idempotencyKey: `BEGIN_GAME_DAY:${seasonId}:${due}` });
-    queue({ saveId, type: ScheduledEventType.END_GAME_DAY, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "END_OF_DAY", idempotencyKey: `END_GAME_DAY:${seasonId}:${due}` });
     if (payrollDayIndices().includes(index)) {
       queue({ saveId, type: ScheduledEventType.PAYROLL_RUN, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "END_OF_DAY", idempotencyKey: `PAYROLL_RUN:${seasonId}:${due}` });
       queue({ saveId, type: ScheduledEventType.WEEKLY_SIM_UPDATE, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "END_OF_DAY", idempotencyKey: `WEEKLY_SIM_UPDATE:${seasonId}:${due}` });
     }
-    queue({ saveId, type: ScheduledEventType.AI_TRANSFER_TICK, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "INTRADAY", idempotencyKey: `AI_TRANSFER_TICK:${due}` });
     if (index === calendar.lastLeagueMatchDayIndex) {
       queue({
         saveId,
@@ -321,7 +314,15 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
     queue({ saveId, type: ScheduledEventType.AUCTION_END, timeBasis: "REAL_TIME", dueAt: new Date(auction.deadline), phase: "INTRADAY", entityType: "AUCTION", entityId: String(auction.id), payload: { auctionId: auction.id, deadlineVersion: auction.deadlineVersion ?? 0 }, idempotencyKey: `AUCTION_END:${auction.id}:${auction.deadlineVersion ?? 0}` });
   }
   for (const listing of world.freeAgentListings.filter((candidate) => candidate.status === "ACTIVE")) {
-    queue({ saveId, type: ScheduledEventType.AUCTION_END, timeBasis: "REAL_TIME", dueAt: new Date(listing.deadline), phase: "INTRADAY", entityType: "FREE_AGENT", entityId: String(listing.id), payload: { listingId: listing.id, marketType: "FREE_AGENT" }, idempotencyKey: `AUCTION_END:FREE_AGENT:${listing.id}:${listing.deadline}` });
+    // A soft-close bid replaces the deadline; cancel pending events queued for
+    // the superseded deadline so they cannot fire early and fail noisily.
+    const pendingFaEvents = await prisma.scheduledEvent.findMany({ where: { saveId, type: ScheduledEventType.AUCTION_END, entityType: "FREE_AGENT", entityId: String(listing.id), status: "PENDING" } });
+    for (const pending of pendingFaEvents) {
+      if (Number(parsePayload(pending.payloadJson).deadline ?? 0) !== listing.deadline) {
+        await prisma.scheduledEvent.update({ where: { id: pending.id }, data: { status: "CANCELLED", version: { increment: 1 } } });
+      }
+    }
+    queue({ saveId, type: ScheduledEventType.AUCTION_END, timeBasis: "REAL_TIME", dueAt: new Date(listing.deadline), phase: "INTRADAY", entityType: "FREE_AGENT", entityId: String(listing.id), payload: { listingId: listing.id, marketType: "FREE_AGENT", deadline: listing.deadline }, idempotencyKey: `AUCTION_END:FREE_AGENT:${listing.id}:${listing.deadline}` });
   }
   const currentAbsolute = world.mp.absoluteGameDay ?? world.dayIndex;
   const warningDays = gameConfig.seasonDays * gameConfig.contractWarningSeasons;
@@ -363,20 +364,6 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
       entityId: String(loan.id),
       payload: { loanId: loan.id },
       idempotencyKey: `LOAN_END:${loan.id}:${dueAbsolute}`,
-    });
-  }
-  for (const upgrade of world.stadiumUpgrades.filter((candidate) => !candidate.completed)) {
-    const dueAbsolute = world.mp.stadiumCompletionAbsoluteGameDays?.[String(upgrade.clubId)] ?? currentAbsolute + Math.max(0, upgrade.completesDay - upgrade.startedDay);
-    queue({
-      saveId,
-      type: ScheduledEventType.STADIUM_UPGRADE_COMPLETE,
-      timeBasis: "GAME_DAY",
-      dueAbsoluteGameDay: dueAbsolute,
-      phase: "END_OF_DAY",
-      entityType: "STADIUM",
-      entityId: String(upgrade.clubId),
-      payload: { clubId: upgrade.clubId },
-      idempotencyKey: `STADIUM_UPGRADE_COMPLETE:${upgrade.clubId}:${dueAbsolute}`,
     });
   }
   for (const player of world.players.filter((candidate) => candidate.clubId !== null && candidate.contractDays > 0 && candidate.contractDays <= warningDays)) {
@@ -512,7 +499,6 @@ const MANDATORY_ADVANCE_EVENTS = new Set<string>([
   ScheduledEventType.LOAN_END,
   ScheduledEventType.CONTRACT_WARNING,
   ScheduledEventType.CONTRACT_EXPIRE,
-  ScheduledEventType.STADIUM_UPGRADE_COMPLETE,
   ScheduledEventType.SEASON_RESULTS_FINALIZE,
   ScheduledEventType.INTERSEASON_START,
   ScheduledEventType.PROMOTION_RELEGATION,
@@ -525,7 +511,6 @@ const MANDATORY_ADVANCE_EVENTS = new Set<string>([
   ScheduledEventType.SEASON_ROLLOVER,
   ScheduledEventType.SEASON_ROLLOVER_COMMIT,
   ScheduledEventType.CONTRACT_END_PROCESSING,
-  ScheduledEventType.END_GAME_DAY,
 ]);
 
 /** Drain mandatory events while the caller already owns WORLD_CLOCK. */
@@ -598,7 +583,17 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         if (!listing || listing.status !== "ACTIVE") return;
         const settleAt = context.ignoreDueTime ? Math.max(now.getTime(), listing.deadline) : now.getTime();
         const result = processDueFreeAgentListing(world, listing, settleAt);
-        if (result.kind === "FAILED") throw new Error(result.error);
+        if (result.kind === "FAILED") {
+          // Terminal failures (missing reservation, roster cap breach) can
+          // never succeed on retry: fail closed instead of exhausting attempts.
+          if (result.terminal) {
+            releaseAllReservations(world, listing.id, "FREE_AGENT");
+            listing.status = "CANCELLED";
+            listing.completedAt = settleAt;
+            return;
+          }
+          throw new Error(result.error);
+        }
         if (result.kind === "RELISTED") {
           const relisted = world.freeAgentListings.find((candidate) => candidate.id === result.newListingId);
           if (relisted) {
@@ -633,7 +628,15 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       if (payload.deadlineVersion !== undefined && Number(payload.deadlineVersion) !== (listing.deadlineVersion ?? 0)) return;
       const settleAt = context.ignoreDueTime ? Math.max(now.getTime(), listing.deadline) : now.getTime();
       const result = settleTransferAuction(world, listing, settleAt);
-      if (!result.ok) throw new Error(result.error);
+      if (!result.ok) {
+        // Terminal failures (missing reservation, roster cap breach) can never
+        // succeed on retry: fail closed instead of exhausting attempts.
+        if (result.terminal) {
+          cancelUnsettleableAuction(world, listing, settleAt, result.error);
+          return;
+        }
+        throw new Error(result.error);
+      }
       return;
     }
     case ScheduledEventType.LOAN_END: {
@@ -663,13 +666,11 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       processContractExpiry(world, Number(payload.playerId ?? entityId));
       return;
     }
-    case ScheduledEventType.STADIUM_UPGRADE_COMPLETE: {
-      const clubId = Number(payload.clubId ?? entityId);
-      const dueAbsolute = world.mp.stadiumCompletionAbsoluteGameDays?.[String(clubId)];
-      if (!context.ignoreDueTime && dueAbsolute !== undefined && dueAbsolute > (world.mp.absoluteGameDay ?? world.dayIndex)) throw new Error("Stadium upgrade is not due");
-      stadiumCycle(world);
+    // Legacy event types whose mechanics were removed. Handled as no-ops so
+    // rows persisted before the removal complete instead of erroring forever.
+    case "STADIUM_UPGRADE_COMPLETE":
+    case "END_GAME_DAY":
       return;
-    }
     case ScheduledEventType.GAME_DAY_ADVANCE: {
       const { advanceGameDayInLock } = await import("./gameClockService");
       await advanceGameDayInLock(prisma, { source: context.source, adminUserId: context.adminUserId, reason: context.reason, force: context.ignoreDueTime, leaseHeld: true });
@@ -685,10 +686,9 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       processGameDayWeekly(world, world.mp.seasonDayIndex ?? world.dayIndex);
       return;
     case ScheduledEventType.AI_TRANSFER_TICK:
-      runAiMarketTick(world, now.getTime());
-      return;
-    case ScheduledEventType.END_GAME_DAY:
-      processGameDayEnd(world);
+      // Legacy event type: AI clubs are ephemeral season fillers with no
+      // market participation (invariant #28). Handled as a no-op so rows
+      // persisted before the removal complete instead of erroring forever.
       return;
     case ScheduledEventType.INTERSEASON_START:
     case ScheduledEventType.PROMOTION_RELEGATION:

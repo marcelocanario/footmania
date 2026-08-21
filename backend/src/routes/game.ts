@@ -12,21 +12,25 @@ import { cancelLoanListing, claimLoan, claimableInSeconds, offerPlayerForLoan } 
 import { getCommitmentTotals, getImmediateAvailableCash, financialState, remainingSeasonFraction } from "../game/finance";
 import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from "../game/economy";
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
-import { performLiveSub, tickLiveMatch, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
+import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
 import { roundLabelFor, findCompetition } from "../game/world";
 import { recordActivity } from "../game/multiplayer";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
-import { lineupForMatch, peekLineup, applySavedLineup, divisionTicketTier } from "../game/club";
-import { contractDemand, dismissYouthPlayer, promoteYouthPlayer, startStadiumUpgrade } from "../game/season";
+import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
+import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { World } from "../game/types";
-import { TICKET_PRICES } from "../game/constants";
 import { materializeSeasonEvents } from "../services/scheduler";
 
 const auctionCreateSchema = z.object({ playerId: z.number().int(), openingPrice: z.number().int().positive().optional() });
 const maxBidSchema = z.object({ maxBid: z.number().int().positive(), contractSeasons: z.number().int().min(1).max(gameConfig.maxContractSeasons) });
-const loanCreateSchema = z.object({ playerId: z.number().int() });
+const loanCreateSchema = z.object({
+  playerId: z.number().int(),
+  // Lender-chosen claim fee as a fraction of the player's value (§55). The
+  // configured band is enforced server-side in offerPlayerForLoan.
+  feeRatio: z.number().min(0).max(1).optional(),
+});
 
 const contractSchema = z.object({
   length: z.number().int().min(1).max(gameConfig.maxContractSeasons),
@@ -40,7 +44,6 @@ const tacticsSchema = z.object({
 });
 
 const academyActionSchema = z.object({ action: z.enum(["promote", "dismiss"]) });
-const ticketSchema = z.object({ prices: z.array(z.number().int().min(1)).length(4) });
 
 const trainingSchema = z.object({ focus: z.enum(["assistant", "primary", "secondary"]) });
 
@@ -50,11 +53,6 @@ const lineupSchema = z.object({
   subs: z.array(z.number().int()).max(11),
   penaltyTakerId: z.number().int().nullable(),
   freeKickTakerId: z.number().int().nullable(),
-});
-
-const liveTickSchema = z.object({
-  minutes: z.number().int().min(1).max(10).default(1),
-  resume: z.boolean().optional(),
 });
 
 function userClub(world: World, userId: number) {
@@ -161,8 +159,6 @@ export async function gameRoutes(app: FastifyInstance) {
         homeScore: match.homeScore,
         awayScore: match.awayScore,
         stats: match.stats,
-        attendance: match.attendance,
-        gateRevenue: match.gateRevenue,
       },
       events,
     };
@@ -175,28 +171,6 @@ export async function gameRoutes(app: FastifyInstance) {
     const st = loaded.world.liveMatches.find((s) => s.matchId === matchId);
     if (!st) return reply.code(404).send({ error: "No live match in progress" });
     return { state: liveStateView(loaded.world, st, req.user!.id) };
-  });
-
-  app.post("/matches/:id/tick", async (req, reply) => {
-    const matchId = Number((req.params as { id: string }).id);
-    const parsed = liveTickSchema.safeParse(req.body ?? {});
-    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
-    const res = await withWorld(app, req.user!.id, "match_tick", async (world, clubId) => {
-      const st = world.liveMatches.find((s) => s.matchId === matchId);
-      if (!st) return { error: { code: 404, body: { error: "No live match in progress" } } };
-      if (st.homeClubId !== clubId && st.awayClubId !== clubId) {
-        return { error: { code: 403, body: { error: "You are not a participant in this match" } } };
-      }
-      const home = world.clubs.find((c) => c.id === st.homeClubId)!;
-      const away = world.clubs.find((c) => c.id === st.awayClubId)!;
-      const result = tickLiveMatch(world.rng, home, away, world.players, st, parsed.data.minutes, { resume: parsed.data.resume });
-      if (result.finished) {
-        const { finalizeLiveMatch } = await import("../game/world");
-        finalizeLiveMatch(world, st);
-      }
-      return { value: { events: result.events, atHalfTime: result.atHalfTime, state: liveStateView(world, st, req.user!.id) } };
-    });
-    return replyFrom(res, reply);
   });
 
   app.post("/matches/:id/sub", async (req, reply) => {
@@ -216,26 +190,6 @@ export async function gameRoutes(app: FastifyInstance) {
       const result = performLiveSub(world.rng, home, away, world.players, st, side, parsed.data.outId, parsed.data.inId);
       if (result.error) return { error: { code: 400, body: { error: result.error } } };
       return { value: { event: result.event, state: liveStateView(world, st, req.user!.id) } };
-    });
-    return replyFrom(res, reply);
-  });
-
-  app.post("/matches/:id/finish", async (req, reply) => {
-    const matchId = Number((req.params as { id: string }).id);
-    const res = await withWorld(app, req.user!.id, "match_finish", async (world, clubId) => {
-      const st = world.liveMatches.find((s) => s.matchId === matchId);
-      if (!st) return { error: { code: 404, body: { error: "No live match in progress" } } };
-      if (st.homeClubId !== clubId && st.awayClubId !== clubId) {
-        return { error: { code: 403, body: { error: "You are not a participant in this match" } } };
-      }
-      const { finalizeLiveMatch } = await import("../game/world");
-      if (!st.ended) {
-        const home = world.clubs.find((c) => c.id === st.homeClubId)!;
-        const away = world.clubs.find((c) => c.id === st.awayClubId)!;
-        tickLiveMatch(world.rng, home, away, world.players, st, 200, { ignoreHalfTime: true });
-      }
-      finalizeLiveMatch(world, st);
-      return { value: { ok: true } };
     });
     return replyFrom(res, reply);
   });
@@ -538,15 +492,8 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const club = userClub(loaded.world, req.user!.id);
     if (!club) return reply.code(400).send({ error: "You have no club" });
-    const division = divisionForClub(loaded.world, club.id);
-    const reference = TICKET_PRICES[Math.min(5, divisionTicketTier(division))].map((x) => Math.max(1, Math.round(x / 200)));
-    const nextCapacity = club.stadiumCapacity + 5000;
     return {
-      ticketPrices: loaded.world.ticketPrices[club.id] ?? reference,
-      ticketBounds: reference.map((x) => ({ min: Math.max(1, Math.round(x * 0.5)), max: Math.round(x * 2.5) })),
-      stadiumUpgrade: loaded.world.stadiumUpgrades.find((u) => u.clubId === club.id && !u.completed) ?? null,
-      nextStadiumUpgradeCost: Math.round((nextCapacity / 5000) ** 2 * 1_000_000),
-       records: loaded.world.records,
+      records: loaded.world.records,
       awards: loaded.world.seasonAwards.slice(-20).reverse(),
     };
   });
@@ -555,31 +502,6 @@ export async function gameRoutes(app: FastifyInstance) {
     const loaded = await loadGlobalWorld(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     return { records: loaded.world.records, awards: loaded.world.seasonAwards.slice().reverse() };
-  });
-
-  app.post("/club/tickets", async (req, reply) => {
-    const parsed = ticketSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
-    const res = await withWorld(app, req.user!.id, "ticket_prices", async (world, clubId) => {
-      const club = world.clubs.find((c) => c.id === clubId)!;
-      const division = divisionForClub(world, clubId);
-      const reference = TICKET_PRICES[Math.min(5, divisionTicketTier(division))].map((x) => Math.max(1, Math.round(x / 200)));
-      const valid = parsed.data.prices.every((price, i) => price >= Math.max(1, Math.round(reference[i] * 0.5)) && price <= Math.round(reference[i] * 2.5));
-      if (!valid) return { error: { code: 400, body: { error: "Ticket prices are outside the allowed range" } } };
-      world.ticketPrices[club.id] = parsed.data.prices as [number, number, number, number];
-      return { value: { ok: true, prices: world.ticketPrices[club.id] } };
-    });
-    return replyFrom(res, reply);
-  });
-
-  app.post("/club/stadium-upgrade", async (req, reply) => {
-    const res = await withWorld(app, req.user!.id, "stadium_upgrade", async (world, clubId) => {
-      const club = world.clubs.find((c) => c.id === clubId)!;
-      const result = startStadiumUpgrade(world, club);
-      if (result.error) return { error: { code: 400, body: { error: result.error } } };
-      return { value: { ok: true, upgrade: result.upgrade } };
-    });
-    return replyFrom(res, reply);
   });
 
   app.get("/transfers/loans", async (req, reply) => {
@@ -603,7 +525,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = world.players.find((candidate) => candidate.id === parsed.data.playerId);
       if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
-      const result = offerPlayerForLoan(world, club, player);
+      const result = offerPlayerForLoan(world, club, player, { feeRatio: parsed.data.feeRatio });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: { ok: true, loan: result.loan } };
     });

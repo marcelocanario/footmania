@@ -1,17 +1,9 @@
 import type { Club, Player, World } from "./types";
-import { positionCount } from "./club";
 import { DAYS_PER_YEAR } from "./constants";
 import { resetPayrollPeriod, settlePlayerPayroll } from "./payroll";
 import { playerHasActiveListing } from "./market";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { getImmediateAvailableCash } from "./finance";
-
-const MIN_SQUAD = [3, 4, 4, 5, 4];
-
-export function squadNeeds(club: Club, allPlayers: Player[]): number[] {
-  const counts = positionCount(club, allPlayers);
-  return counts.map((count, position) => Math.max(0, MIN_SQUAD[position] - count));
-}
 
 /** Release a player into the normalized free-agent market lifecycle. */
 export function releasePlayer(world: World, player: Player, club: Club): { ok: boolean; error?: string; cost: number } {

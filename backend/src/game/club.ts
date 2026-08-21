@@ -1,14 +1,10 @@
 import type { Club, Player, RngState } from "./types";
 import { nextInt, shuffle } from "./rng";
 import { tacticalSkillRating } from "./rating";
-import { DAYS_PER_YEAR } from "./constants";
-import { MARKET_CONFIG } from "../config";
 import {
   BENCH_ORDER,
   FORMATION_POSITIONS,
-  TICKET_PRICES,
-  TICKET_PRICE_NOISE,
-  TICKET_SPLIT,
+  SENIOR_SQUAD_LIMIT,
 } from "./constants";
 
 export function tacticsForClub(rng: RngState): Club["tactics"] {
@@ -33,15 +29,6 @@ export function tacticsForClub(rng: RngState): Club["tactics"] {
     pressing: nextInt(rng, 100) <= 70 ? 0 : 1,
     direction: direction <= 70 ? 0 : 1,
   };
-}
-
-export function squadByPosition(players: Player[]): Record<number, Player[]> {
-  const byPos: Record<number, Player[]> = { 0: [], 1: [], 2: [], 3: [], 4: [] };
-  for (const p of players) {
-    if (!p.clubId) continue;
-    if (p.position >= 0 && p.position <= 4) byPos[p.position].push(p);
-  }
-  return byPos;
 }
 
 export function eligible(players: Player[]): Player[] {
@@ -248,118 +235,31 @@ export function lineupForMatch(club: Club, allPlayers: Player[]): Lineup | null 
   return buildLineup(club, allPlayers);
 }
 
-export function squadStrength(club: Club, allPlayers: Player[]): number {
-  const roster = allPlayers.filter((p) => p.clubId === club.id);
-  const lineup = buildLineup(club, allPlayers);
-  const base = lineup ? lineup.starters.reduce((s, p) => s + p.overall, 0) : 0;
-  const squad = roster.reduce((s, p) => s + p.overall, 0);
-  return Math.round(base / 11 + squad / 55);
+/**
+ * Senior (non-youth) squad size. Loaned-in players count (they occupy a squad
+ * slot at the borrowing club); loaned-out players do not (their clubId is the
+ * borrower). The single source for the SENIOR_SQUAD_LIMIT cap on every
+ * acquisition path.
+ */
+export function seniorRosterCount(world: import("./types").World, clubId: number): number {
+  return world.players.filter((p) => p.clubId === clubId && !p.isYouth).length;
 }
 
-export function positionCount(club: Club, allPlayers: Player[]): number[] {
-  const counts = [0, 0, 0, 0, 0];
-  for (const p of allPlayers) {
-    if (p.clubId === club.id) counts[p.position]++;
-  }
-  return counts;
+/** Error string when the senior roster is at/over the shared cap, else null. */
+export function seniorRosterFullError(world: import("./types").World, clubId: number): string | null {
+  return seniorRosterCount(world, clubId) >= SENIOR_SQUAD_LIMIT
+    ? `Senior squad is full (${SENIOR_SQUAD_LIMIT} players)`
+    : null;
 }
-
-export function weeklySalary(club: Club, allPlayers: Player[]): number {
-  let total = 0;
-  for (const p of allPlayers) {
-    if (p.clubId === club.id) total += Math.round((p.salary * 7) / DAYS_PER_YEAR);
-  }
-  return total;
-}
-
-/** Total seasonal wage bill (Player.salary is the wage for one season). */
-export function seasonSalary(club: Club, allPlayers: Player[]): number {
-  let total = 0;
-  for (const p of allPlayers) {
-    if (p.clubId === club.id) total += p.salary;
-  }
-  return total;
-}
-
-export function sectorCapacity(capacity: number): number[] {
-  return [
-    Math.round(capacity * TICKET_SPLIT[0]),
-    Math.round(capacity * TICKET_SPLIT[1]),
-    Math.round(capacity * TICKET_SPLIT[2]),
-    Math.round(capacity * TICKET_SPLIT[3]),
-  ];
-}
-
-export interface TicketCalc {
-  attendance: number;
-  revenue: number;
-  sectors: number[];
-}
-
-const ATTENDANCE_BY_COMP: Record<string, number[][]> = {
-  league: [
-    [5, 18, 25, 45], [15, 25, 40, 90], [10, 20, 30, 80], [8, 16, 25, 50], [5, 14, 20, 40],
-  ],
-  state: [
-    [3, 5, 12, 20], [3, 12, 15, 30], [3, 12, 15, 30], [5, 12, 20, 50], [10, 15, 25, 70],
-  ],
-  cup: [
-    [3, 12, 15, 30], [3, 12, 15, 30], [3, 12, 15, 30], [7, 13, 20, 70], [10, 15, 25, 80],
-  ],
-};
 
 /**
- * Map a club's division number (1 = strongest) to a 1..maxTier ticket bucket
- * used to index the TICKET_PRICES / TICKET_PRICE_NOISE / ATTENDANCE tables.
- * Monotone sublinear curve so the strongest division always tops the bucket
- * range while deeper divisions decay smoothly (never hard-coded — MARKET_CONFIG).
+ * Ephemeral filler-AI club (invariant #28). AI teams exist for a single
+ * season: they have a fixed generated roster, no owner, no finances and no
+ * market participation. They are destroyed when a human takes their slot or at
+ * rollover, and every surviving AI is replaced by a fresh team each season.
+ * Lives here (not in multiplayer.ts) so low-level modules like payroll can
+ * use it without import cycles.
  */
-export function divisionTicketTier(division: number): number {
-  const { maxTier, curveK } = MARKET_CONFIG.ticketTier;
-  return Math.max(1, Math.min(maxTier, Math.round(maxTier / Math.max(1, Math.pow(division, curveK)))));
-}
-
-export function calcGate(
-  rng: RngState,
-  home: Club,
-  away: Club,
-  compKind: string,
-  configuredPrices?: [number, number, number, number],
-  homeDivision?: number,
-  awayDivision?: number
-): TicketCalc {
-  const homeTier = divisionTicketTier(homeDivision ?? 1);
-  const awayTier = divisionTicketTier(awayDivision ?? 1);
-  const sectors = sectorCapacity(home.stadiumCapacity);
-  const reference = TICKET_PRICES[Math.min(5, homeTier)].map((x) => Math.max(1, Math.round(x / 200)));
-  let prices = configuredPrices ? [...configuredPrices] : [...reference] as number[];
-  if (!configuredPrices && (compKind === "state" || compKind === "cup")) prices = prices.map((x) => Math.max(1, Math.round(x * 0.7)));
-  const noise = TICKET_PRICE_NOISE[Math.min(4, homeTier)];
-  if (!configuredPrices) {
-    for (let i = 0; i < 4; i++) prices[i] += nextInt(rng, Math.max(1, Math.round(noise[i] / 10)) + 1);
-  }
-  let demand = 0.3;
-  if (compKind === "league") demand += 0.15;
-  if (compKind === "state" || compKind === "cup") demand += 0.3;
-  for (let i = 0; i < 4; i++) prices[i] = Math.max(1, Math.round(prices[i] * (1 + demand)));
-  const diff = Math.min(5, Math.abs(awayTier - homeTier));
-  const factor = [0, 0.05, 0.1, 0.15, 0.2, 0.25][diff];
-  for (let i = 0; i < 4; i++) {
-    const adj = Math.round(prices[i] * factor);
-    prices[i] = awayTier > homeTier ? prices[i] + adj : Math.max(1, prices[i] - adj);
-  }
-  const table = ATTENDANCE_BY_COMP[compKind] ?? ATTENDANCE_BY_COMP.league;
-  const attIdx = Math.min(4, Math.max(0, homeTier - 1));
-  const attPct = table[attIdx] ?? table[0];
-  let attendance = 0;
-  let revenue = 0;
-  for (let i = 0; i < 4; i++) {
-    const cap = sectors[i];
-    const referencePrice = Math.max(1, reference[i]);
-    const elasticity = Math.max(0.35, Math.min(1.5, 1 / (1 + (prices[i] - referencePrice) / referencePrice)));
-    const tickets = Math.min(cap, Math.max(0, Math.round((cap * attPct[i] * elasticity) / 100)));
-    attendance += tickets;
-    revenue += tickets * prices[i];
-  }
-  return { attendance, revenue, sectors };
+export function isEphemeralAI(club: Club): boolean {
+  return club.ownerUserId === null && !club.isHuman;
 }

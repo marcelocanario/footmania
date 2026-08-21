@@ -161,9 +161,11 @@ export function initialPotential(overall: number, age: number, declineStartAge: 
 // ---------------------------------------------------------------------------
 
 /**
- * Map a raw (unshifted) birth-quality Z to a tier 1..5 using exact standard
- * normal percentile thresholds. Raw Z — not ZA — keeps academy pedigree from
- * indirectly modifying future development through player.tier.
+ * Map a raw (unshifted) birth-quality Z to a hidden growth tier 1..5 using
+ * exact standard normal percentile thresholds. Raw Z — not ZA — keeps academy
+ * pedigree from indirectly modifying future development. The tier is a server-
+ * private development input only: it is never stored on the player and never
+ * exposed through any API view.
  */
 export function tierFromZ(z: number): number {
   if (z < TIER_Z_BOUNDS[0]) return 1;
@@ -501,7 +503,6 @@ function buildGeneratedPlayer(
   profile: { declineStartAge: number; developmentRate: number; developmentVolatility: number },
   rawZ: number,
   actualOverall: number,
-  tier: number,
   potential: number,
   skills: SkillSet,
   c1: number,
@@ -521,7 +522,6 @@ function buildGeneratedPlayer(
     skills,
     overall: actualOverall,
     potential,
-    tier,
     characteristic1: c1,
     characteristic2: c2,
     energy: 100,
@@ -576,9 +576,8 @@ export function generateSeniorPlayer(ctx: GeneratePlayerContext): Player {
   const { skills, c1, c2 } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
   const actualOverall = overallFromSkills(ctx.position, skills);
   const profile = generateDevelopmentProfile(rng);
-  const tier = tierFromZ(rawZ);
   const potential = initialPotential(actualOverall, age, profile.declineStartAge, profile.developmentRate);
-  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, tier, potential, skills, c1, c2);
+  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills, c1, c2);
 }
 
 /** Youth age generation (spec §31): UniformInteger(academyMinAge, academyMaxAge). */
@@ -602,9 +601,8 @@ export function generateYouthPlayer(ctx: GeneratePlayerContext): Player {
   const { skills, c1, c2 } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
   const actualOverall = overallFromSkills(ctx.position, skills);
   const profile = generateDevelopmentProfile(rng);
-  const tier = tierFromZ(rawZ);
   const potential = initialPotential(actualOverall, age, profile.declineStartAge, profile.developmentRate);
-  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, tier, potential, skills, c1, c2);
+  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills, c1, c2);
 }
 
 export { gameConfig };

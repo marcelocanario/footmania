@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   activeBidCommitments,
-  aiAffordableCommitment,
-  evaluateAIDecision,
   financialState,
   getCommitmentTotals,
   getFinancialCushion,
@@ -13,8 +11,7 @@ import {
 } from "../src/game/finance";
 import { createTransferAuction, applyMaxBid, upsertReservation } from "../src/game/market";
 import { applyFreeAgentBid } from "../src/game/freeAgents";
-import { startStadiumUpgrade } from "../src/game/season";
-import { processDailyDate } from "../src/game/daily";
+import { processGameDayPayroll } from "../src/game/daily";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, Player, World } from "../src/game/types";
@@ -93,15 +90,6 @@ describe("immediate available cash (§9/§64)", () => {
     upsertReservation(world, { clubId: 1, listingId: 1, marketType: "TRANSFER", amount: 8_000_000 });
     expect(getImmediateAvailableCash(world, club)).toBe(2_000_000);
   });
-
-  it("a stadium-style expense over the immediate cash is rejected", () => {
-    const club = makeClubFn(1, { cash: 10_000_000 });
-    const world = makeWorld([club], []);
-    upsertReservation(world, { clubId: 1, listingId: 1, marketType: "TRANSFER", amount: 8_000_000 });
-    // 3M upgrade cost exceeds the 2M immediately available.
-    const res = startStadiumUpgrade(world, club);
-    expect(res.error).toMatch(/unreserved cash/i);
-  });
 });
 
 describe("human vs AI (§63)", () => {
@@ -132,47 +120,19 @@ describe("human vs AI (§63)", () => {
     expect(getFinancialCushion(world, buyer)).toBeLessThan(0);
   });
 
-  it("an AI rejects the same action via evaluateAIDecision", () => {
-    const club = makeClubFn(1, { cash: 10_000_000, isHuman: false });
+  it("ephemeral AI clubs never pay wages and never enter interventions (invariant #28)", () => {
+    const club = makeClubFn(1, { cash: 0, isHuman: false, ownerUserId: null });
     const world = makeWorld([club], []);
     const rng = createRng(9);
-    const p = clubPlayer(rng, club, 10, { salary: 8_000_000, payrollPaidThroughDay: 0 });
+    const p = clubPlayer(rng, club, 10, { salary: 8_000_000, payrollPaidThroughDay: 0, payrollPaidAmount: 0, payrollPeriodStartDay: 0 });
     world.players.push(p);
-    // Adding a 5M bid + 2M acquisition salary would push cushion below 0.
-    const ok = evaluateAIDecision(world, club, { immediateCost: 0, newBidCommitments: 5_000_000, additionalSalary: 2_000_000 });
-    expect(ok).toBe(false);
-  });
-
-  it("includes existing contingent salary when evaluating another AI decision", () => {
-    const buyer = makeClubFn(1, { cash: 8_000_000, isHuman: false });
-    const seller = makeClubFn(2, { cash: 5_000_000 });
-    const player = clubPlayer(createRng(10), seller, 20, { salary: 6_000_000, value: 4_000_000 });
-    const world = makeWorld([buyer, seller], [player]);
-    const listed = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 2, totalDivisions: 3 });
-    if (!listed.ok) throw new Error(listed.error);
-    const bid = applyMaxBid(world, {
-      listing: listed.listing,
-      club: buyer,
-      player,
-      proposedMaximum: 4_000_000,
-      buyerDivision: 1,
-      immediateAvailableCash: buyer.cash,
-    });
-    expect(bid.ok).toBe(true);
-    expect(getFinancialCushion(world, buyer)).toBeLessThan(0);
-    expect(evaluateAIDecision(world, buyer, { immediateCost: 0, newBidCommitments: 0, additionalSalary: 0 })).toBe(false);
-  });
-
-  it("AI free-agent valuation caps at the cushion-safe ceiling", () => {
-    const club = makeClubFn(1, { cash: 10_000_000, isHuman: false });
-    const world = makeWorld([club], []);
-    const rng = createRng(9);
-    const p = clubPlayer(rng, club, 10, { salary: 8_000_000, payrollPaidThroughDay: 0 });
-    world.players.push(p);
-    const affordable = aiAffordableCommitment(world, club, 5_000_000);
-    // cash 10M - salaries 8M - acquisition salary commitment ~ (5M * remaining/30)
-    expect(affordable).toBeLessThan(2_000_000);
-    expect(affordable).toBeGreaterThanOrEqual(0);
+    world.mp.seasonId = 1;
+    // A payroll boundary passes: the AI wage clock stays frozen and cash is
+    // untouched (AI clubs hold no finances at all).
+    processGameDayPayroll(world, 6, Date.UTC(2026, 0, 7));
+    expect(club.cash).toBe(0);
+    expect(p.payrollPaidAmount).toBe(0);
+    expect(world.financialInterventions).toHaveLength(0);
   });
 });
 
@@ -438,7 +398,7 @@ describe("provisional clubs (§7/§76)", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("includes funded youth wages and applies the AI guardrail before activation", () => {
+  it("includes funded youth wages while provisional and keeps wages frozen before activation", () => {
     const club = makeClubFn(1, { cash: 1_000_000, competitionState: "PROVISIONAL", isHuman: false });
     const youth = clubPlayer(createRng(32), club, 10, {
       isYouth: true,
@@ -449,38 +409,48 @@ describe("provisional clubs (§7/§76)", () => {
     });
     const world = makeWorld([club], [youth]);
     expect(remainingSalaryCommitments(world, club)).toBe(5_000_000);
-    expect(evaluateAIDecision(world, club, {
-      immediateCost: 0,
-      newBidCommitments: 0,
-      additionalSalary: 0,
-    })).toBe(false);
+    // No intervention while salaries are frozen.
+    const res = runFinancialIntervention(world, club, { seasonId: 1, payrollCycleId: 7 });
+    expect(res.ok).toBe(false);
   });
 });
 
 describe("payroll grace period (§19/§65/§66)", () => {
-  it("records one intervention execution type when multiple clubs intervene on the same payroll date", () => {
+  it("intervenes only for clubs already cash-negative before a payroll that stays negative", () => {
     const firstClub = makeClubFn(1, { cash: -1_000_000 });
-    const secondClub = makeClubFn(2, { cash: -2_000_000 });
-    const world = makeWorld([firstClub, secondClub], []);
+    const secondClub = makeClubFn(2, { cash: 500_000 });
+    const player = clubPlayer(createRng(15), secondClub, 10, { salary: 3_000_000, payrollPaidThroughDay: 0, payrollPaidAmount: 0, payrollPeriodStartDay: 0 });
+    const world = makeWorld([firstClub, secondClub], [player]);
     world.mp.seasonId = 1;
 
-    const result = processDailyDate(world, { date: "2026-01-07", now: Date.UTC(2026, 0, 7) });
+    // First payroll boundary (season day index 6 => human day 7).
+    processGameDayPayroll(world, 6, Date.UTC(2026, 0, 7));
+    expect(world.financialInterventions.map((i) => `${i.clubId}:${i.payrollCycleId}`)).toEqual([`${firstClub.id}:6`]);
 
-    expect(world.financialInterventions).toHaveLength(2);
-    expect(result.executed.filter((type) => type === "FINANCIAL_INTERVENTION")).toHaveLength(1);
+    // Second boundary (human day 14): the still-distressed first club gets a
+    // NEW intervention row for the new cycle, and secondClub — pushed
+    // negative by its FIRST payroll — now enters intervention under the
+    // one-cycle grace rule.
+    expect(secondClub.cash).toBeLessThan(0);
+    processGameDayPayroll(world, 13, Date.UTC(2026, 0, 14));
+    expect(world.financialInterventions.map((i) => `${i.clubId}:${i.payrollCycleId}`)).toEqual([
+      `${firstClub.id}:6`,
+      `${firstClub.id}:13`,
+      `${secondClub.id}:13`,
+    ]);
   });
 
-  it("does not intervene when the first payroll turns cash negative, but does at the next negative payroll", () => {
+  it("intervenes at the next negative payroll for a club pushed negative earlier", () => {
     const club = makeClubFn(1, { cash: 500_000 });
     const player = clubPlayer(createRng(15), club, 10, { salary: 3_000_000, payrollPaidThroughDay: 0, payrollPaidAmount: 0, payrollPeriodStartDay: 0 });
     const world = makeWorld([club], [player]);
     world.mp.seasonId = 1;
 
-    processDailyDate(world, { date: "2026-01-07", now: Date.UTC(2026, 0, 7) });
+    processGameDayPayroll(world, 6, Date.UTC(2026, 0, 7));
     expect(club.cash).toBeLessThan(0);
     expect(world.financialInterventions).toHaveLength(0);
 
-    processDailyDate(world, { date: "2026-01-14", now: Date.UTC(2026, 0, 14) });
+    processGameDayPayroll(world, 13, Date.UTC(2026, 0, 14));
     expect(world.financialInterventions).toHaveLength(1);
   });
 
@@ -489,9 +459,9 @@ describe("payroll grace period (§19/§65/§66)", () => {
     const player = clubPlayer(createRng(16), club, 10, { salary: 3_000_000, payrollPaidThroughDay: 0, payrollPaidAmount: 0, payrollPeriodStartDay: 0 });
     const world = makeWorld([club], [player]);
     world.mp.seasonId = 1;
-    processDailyDate(world, { date: "2026-01-07", now: Date.UTC(2026, 0, 7) });
+    processGameDayPayroll(world, 6, Date.UTC(2026, 0, 7));
     club.cash += 5_000_000;
-    processDailyDate(world, { date: "2026-01-14", now: Date.UTC(2026, 0, 14) });
+    processGameDayPayroll(world, 13, Date.UTC(2026, 0, 14));
     expect(club.cash).toBeGreaterThanOrEqual(0);
     expect(world.financialInterventions).toHaveLength(0);
   });

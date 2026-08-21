@@ -4,6 +4,7 @@ import type {
   Club,
   ClubEloEvent,
   Competition,
+  FreeAgentListing,
   GroupStandings,
   LiveMatchState,
   Match,
@@ -50,14 +51,10 @@ const TABLE_NAMES = [
   "freeAgentListing",
   "marketReservation",
   "playerMarketTransaction",
-  "aiEvaluation",
   "trophy",
   "loan",
-  "managerHistory",
   "seasonAward",
   "careerRecord",
-  "clubTicketPrices",
-  "stadiumUpgrade",
   "liveMatch",
 ] as const;
 
@@ -130,12 +127,8 @@ export function deserializeWorld(json: string): World {
    world.loans ??= [];
    world.seasonAwards ??= [];
    world.records ??= [];
-   world.managerHistory ??= [];
-   world.ticketPrices ??= {};
-   world.stadiumUpgrades ??= [];
    world.humanClubId ??= null;
    world.seasonSummary ??= null;
-   world.contractWarnings ??= [];
    world.rng ??= createRng(world.seed);
    world.mp ??= {
      seasonId: 0,
@@ -166,14 +159,23 @@ export function deserializeWorld(json: string): World {
          calendarMigrationVersion: 0,
          contractMarketMigrationVersion: 0,
        loanEndAbsoluteGameDays: {},
-       stadiumCompletionAbsoluteGameDays: {},
-    };
+     };
    world.marketBids ??= [];
    world.transferAuctions ??= [];
    world.freeAgentListings ??= [];
+   // Legacy free-agent listings carried listing-wide demanded terms; the
+   // contract-market model uses the frozen per-listing baseline instead. Map
+   // once on load so old saves keep their terms (field is no longer persisted).
+   for (const listing of world.freeAgentListings) {
+     const legacy = listing as FreeAgentListing & { demandedSalary?: number; demandedContractDays?: number };
+     if (listing.salaryBaselineAtListing === undefined && legacy.demandedSalary !== undefined) {
+       listing.salaryBaselineAtListing = legacy.demandedSalary;
+     }
+     delete (legacy as unknown as Record<string, unknown>).demandedSalary;
+     delete (legacy as unknown as Record<string, unknown>).demandedContractDays;
+   }
    world.marketReservations ??= [];
    world.playerMarketHistory ??= [];
-   world.aiEvaluations ??= [];
    world.financialInterventions ??= [];
    world.mpQueue ??= [];
    world.liveMatches ??= legacyLiveMatch ? [legacyLiveMatch] : [];
@@ -195,15 +197,11 @@ export function deserializeWorld(json: string): World {
     world.mp.clockVersion ??= 0;
      world.mp.startAbsoluteGameDay ??= world.mp.absoluteGameDay - world.mp.seasonDayIndex;
      world.mp.seasonStartAt ??= world.mp.lastAdvancedAt ?? null;
-      world.mp.rolloverContext ??= null;
-      world.mp.loanEndAbsoluteGameDays ??= {};
-      world.mp.stadiumCompletionAbsoluteGameDays ??= {};
-      for (const loan of world.loans) {
-        world.mp.loanEndAbsoluteGameDays[String(loan.id)] ??= (world.mp.absoluteGameDay ?? world.dayIndex) + Math.max(0, loan.endDay - loan.startDay);
-      }
-      for (const upgrade of world.stadiumUpgrades) {
-        world.mp.stadiumCompletionAbsoluteGameDays[String(upgrade.clubId)] ??= (world.mp.absoluteGameDay ?? world.dayIndex) + Math.max(0, upgrade.completesDay - upgrade.startedDay);
-      }
+       world.mp.rolloverContext ??= null;
+       world.mp.loanEndAbsoluteGameDays ??= {};
+       for (const loan of world.loans) {
+         world.mp.loanEndAbsoluteGameDays[String(loan.id)] ??= (world.mp.absoluteGameDay ?? world.dayIndex) + Math.max(0, loan.endDay - loan.startDay);
+       }
 
   for (const club of world.clubs) {
     club.ledger ??= { income: [], expense: [] };
@@ -415,6 +413,7 @@ export async function persistWorld(
           rngState: BigInt(world.rng.state),
           mpStateJson: JSON.stringify(world.mp),
           seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
+          seasonHistoryJson: world.seasonHistory.length > 0 ? JSON.stringify(world.seasonHistory) : null,
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
           generationEventsJson: world.generationEvents ? JSON.stringify(world.generationEvents) : null,
@@ -437,6 +436,7 @@ export async function persistWorld(
           rngState: BigInt(world.rng.state),
           mpStateJson: JSON.stringify(world.mp),
           seasonSummaryJson: world.seasonSummary ? JSON.stringify(world.seasonSummary) : null,
+          seasonHistoryJson: world.seasonHistory.length > 0 ? JSON.stringify(world.seasonHistory) : null,
           pendingEventsJson: world.pendingDayEvents ? JSON.stringify(world.pendingDayEvents) : null,
           pendingMatchIdsJson: world.pendingDayMatchIds ? JSON.stringify(world.pendingDayMatchIds) : null,
           generationEventsJson: world.generationEvents ? JSON.stringify(world.generationEvents) : null,
@@ -455,7 +455,7 @@ export async function persistWorld(
       await tx.player.createMany({ data: world.players.map((p) => playerRow(p, saveId)) });
     }
      if (world.loans.length > 0) {
-       await tx.loan.createMany({ data: world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })) });
+       await tx.loan.createMany({ data: world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: Math.max(0, Math.round(l.feeAmount ?? 0)), listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })) });
      }
     if (world.competitions.length > 0) {
       await tx.competition.createMany({ data: world.competitions.map((c) => competitionRow(c, saveId)) });
@@ -476,7 +476,7 @@ export async function persistWorld(
       await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, scheduledSeasonDayIndex: f.scheduledSeasonDayIndex ?? null })) });
     }
     if (world.matches.length > 0) {
-       await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, attendance: m.attendance, gateRevenue: m.gateRevenue, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null, homeWasHuman: m.homeWasHuman ?? false, awayWasHuman: m.awayWasHuman ?? false, eloProcessed: m.eloProcessed ?? false })) });
+       await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null, homeWasHuman: m.homeWasHuman ?? false, awayWasHuman: m.awayWasHuman ?? false, eloProcessed: m.eloProcessed ?? false })) });
        await tx.matchStat.createMany({ data: world.matches.map((m) => statRow(m, saveId)) });
       const evRows: { saveId: number; matchId: number; minute: number; half: number; type: number; subtype: number; clubId: number; playerId: number | null; player2Id: number | null; goalType: number; ordinal: number }[] = [];
       for (const m of world.matches) {
@@ -505,20 +505,11 @@ export async function persistWorld(
        }
      }
      if (trophyRows.length > 0) await tx.trophy.createMany({ data: trophyRows });
-     if (world.managerHistory.length > 0) {
-       await tx.managerHistory.createMany({ data: world.managerHistory.map((m) => ({ saveId, clubId: m.clubId, name: m.name, appointedDay: m.appointedDay, departedDay: m.departedDay, gamesInCharge: m.gamesInCharge, reason: m.reason })) });
-     }
      if (world.seasonAwards.length > 0) {
        await tx.seasonAward.createMany({ data: world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })) });
      }
      if (world.records.length > 0) {
        await tx.careerRecord.createMany({ data: world.records.map((r) => ({ saveId, category: r.category, value: r.value, holderName: r.holderName })) });
-    }
-    if (Object.keys(world.ticketPrices).length > 0) {
-      await tx.clubTicketPrices.createMany({ data: Object.entries(world.ticketPrices).map(([clubId, p]) => ({ saveId, clubId: Number(clubId), sector0: p[0], sector1: p[1], sector2: p[2], sector3: p[3] })) });
-    }
-    if (world.stadiumUpgrades.length > 0) {
-      await tx.stadiumUpgrade.createMany({ data: world.stadiumUpgrades.map((u) => ({ saveId, clubId: u.clubId, startedDay: u.startedDay, completesDay: u.completesDay, newCapacity: u.newCapacity, cost: u.cost, completed: u.completed })) });
     }
      if (world.liveMatches.length > 0) {
        await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, stateJson: JSON.stringify(st) })) });
@@ -552,11 +543,10 @@ export async function persistWorld(
            finalPrice: a.finalPrice,
            cancelledAt: a.cancelledAt !== null ? BigInt(a.cancelledAt) : null,
             softClosed: a.softClosed,
-            softCloseExtensions: a.softCloseExtensions,
             deadlineVersion: a.deadlineVersion ?? 0,
-         })),
-       });
-     }
+          })),
+        });
+      }
      if (world.marketBids.length > 0) {
        await tx.marketBid.createMany({
          data: world.marketBids.map((b) => ({
@@ -587,8 +577,6 @@ export async function persistWorld(
            playerValueAtListing: l.playerValueAtListing,
            openingPrice: l.openingPrice,
            bidIncrement: l.bidIncrement,
-            demandedSalary: l.demandedSalary ?? null,
-            demandedContractDays: l.demandedContractDays ?? null,
             salaryBaselineAtListing: l.salaryBaselineAtListing ?? null,
            currentPrice: l.currentPrice,
            leadingClubId: l.leadingClubId,
@@ -601,10 +589,9 @@ export async function persistWorld(
             finalPrice: l.finalPrice,
             previousListingId: l.previousListingId,
             blockedClubId: l.blockedClubId,
-            unclaimedSince: l.unclaimedSince !== undefined ? BigInt(l.unclaimedSince) : null,
-            softClosed: l.softClosed,
-            softCloseExtensions: l.softCloseExtensions,
-          })),
+             unclaimedSince: l.unclaimedSince !== undefined ? BigInt(l.unclaimedSince) : null,
+             softClosed: l.softClosed,
+           })),
         });
       }
       if (world.marketReservations.length > 0) {
@@ -621,39 +608,25 @@ export async function persistWorld(
          })),
        });
      }
-     if (world.playerMarketHistory.length > 0) {
-       await tx.playerMarketTransaction.createMany({
-         data: world.playerMarketHistory.map((t) => ({
-           id: t.id,
-           saveId,
-           playerId: t.playerId,
-           listingId: t.listingId,
-           type: t.type,
-           fromClubId: t.fromClubId,
-           toClubId: t.toClubId,
-            price: t.price,
-            seasonId: t.seasonId,
-            seasonKey: t.seasonKey,
-       seasonDayIndex: t.seasonDayIndex ?? (t as unknown as { matchday?: number }).matchday ?? 0,
-            contractSeasons: t.contractSeasons ?? null,
-            contractSalary: t.contractSalary ?? null,
-           timestamp: BigInt(t.timestamp),
-         })),
-       });
-     }
-      if (world.aiEvaluations.length > 0) {
-        await tx.aiEvaluation.createMany({
-          data: world.aiEvaluations.map((e) => ({
+      if (world.playerMarketHistory.length > 0) {
+        await tx.playerMarketTransaction.createMany({
+          data: world.playerMarketHistory.map((t) => ({
+            id: t.id,
             saveId,
-            marketType: e.marketType,
-            listingId: e.listingId,
-            clubId: e.clubId,
-             evaluatedAt: BigInt(e.evaluatedAt),
-             decision: e.decision,
-             maxBid: e.maxBid,
-             contractSeasons: e.contractSeasons ?? null,
-             contractSalary: e.contractSalary ?? null,
-           })),
+            playerId: t.playerId,
+            listingId: t.listingId,
+            type: t.type,
+            fromClubId: t.fromClubId,
+            toClubId: t.toClubId,
+             price: t.price,
+             seasonId: t.seasonId,
+             seasonKey: t.seasonKey,
+        seasonDayIndex: t.seasonDayIndex ?? (t as unknown as { matchday?: number }).matchday ?? 0,
+            completedRounds: t.completedRounds ?? null,
+             contractSeasons: t.contractSeasons ?? null,
+             contractSalary: t.contractSalary ?? null,
+            timestamp: BigInt(t.timestamp),
+          })),
         });
       }
       if (world.mp.seasonId !== 0) {
@@ -742,7 +715,6 @@ function clubRow(c: Club, saveId: number) {
      competitionState: c.competitionState,
      lastMeaningfulActivityAt: c.lastMeaningfulActivityAt !== null ? BigInt(c.lastMeaningfulActivityAt) : null,
      abandonmentEligibleAt: c.abandonmentEligibleAt !== null ? BigInt(c.abandonmentEligibleAt) : null,
-     inactivityWarningStage: c.inactivityWarningStage ?? 0,
      liveMatchAt: c.liveMatchAt !== null ? BigInt(c.liveMatchAt) : null,
      name: c.name,
      shortName: c.shortName,
@@ -750,7 +722,6 @@ function clubRow(c: Club, saveId: number) {
      highestDivision: c.highestDivision,
      cash: c.cash,
      stadiumName: c.stadiumName,
-     stadiumCapacity: c.stadiumCapacity,
      primaryColor: c.primaryColor,
      secondaryColor: c.secondaryColor,
      coachName: c.coachName,
@@ -780,7 +751,6 @@ function playerRow(p: Player, saveId: number) {
     side: p.side,
     overall: p.overall,
     potential: p.potential,
-    tier: p.tier,
     characteristic1: p.characteristic1,
     characteristic2: p.characteristic2,
     energy: p.energy,
@@ -916,7 +886,7 @@ function statRow(m: Match, saveId: number) {
 
 async function rebuildWorld(
   prisma: PrismaClient,
-  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null; generationEventsJson?: string | null; financialInterventionsJson?: string | null }
+  saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; seasonHistoryJson?: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null; generationEventsJson?: string | null; financialInterventionsJson?: string | null }
 ): Promise<World> {
    const [
      clubRows,
@@ -935,13 +905,9 @@ async function rebuildWorld(
      freeAgentListingRows,
      marketReservationRows,
      playerMarketTransactionRows,
-     aiEvaluationRows,
      trophyRows,
-     managerRows,
      awardRows,
      recordRows,
-     ticketRows,
-     upgradeRows,
      liveRow,
      mpQueueRows,
      mpAllocationRows,
@@ -967,13 +933,9 @@ async function rebuildWorld(
      prisma.freeAgentListing.findMany({ where: { saveId: saveRow.id } }),
      prisma.marketReservation.findMany({ where: { saveId: saveRow.id } }),
      prisma.playerMarketTransaction.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-     prisma.aiEvaluation.findMany({ where: { saveId: saveRow.id } }),
-     prisma.trophy.findMany({ where: { saveId: saveRow.id } }),
-     prisma.managerHistory.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-     prisma.seasonAward.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+      prisma.trophy.findMany({ where: { saveId: saveRow.id } }),
+      prisma.seasonAward.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
      prisma.careerRecord.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
-     prisma.clubTicketPrices.findMany({ where: { saveId: saveRow.id } }),
-     prisma.stadiumUpgrade.findMany({ where: { saveId: saveRow.id } }),
      prisma.liveMatch.findMany({ where: { saveId: saveRow.id } }),
      prisma.mpQueue.findMany({ orderBy: { queuedAt: "asc" } }),
      prisma.mpAllocation.findMany(),
@@ -992,7 +954,6 @@ async function rebuildWorld(
       competitionState: string;
       lastMeaningfulActivityAt: bigint | null;
       abandonmentEligibleAt: bigint | null;
-      inactivityWarningStage: number | null;
       liveMatchAt: bigint | null;
        highestDivision: number | null;
        eloRating: number | null;
@@ -1008,7 +969,6 @@ async function rebuildWorld(
       competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
       lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null && r2.lastMeaningfulActivityAt !== undefined ? Number(r2.lastMeaningfulActivityAt) : null,
       abandonmentEligibleAt: r2.abandonmentEligibleAt !== null && r2.abandonmentEligibleAt !== undefined ? Number(r2.abandonmentEligibleAt) : null,
-      inactivityWarningStage: r2.inactivityWarningStage ?? 0,
       liveMatchAt: r2.liveMatchAt !== null && r2.liveMatchAt !== undefined ? Number(r2.liveMatchAt) : null,
       country: r.country,
        highestDivision: r2.highestDivision ?? 1,
@@ -1016,7 +976,6 @@ async function rebuildWorld(
        eloRatedMatches: r2.eloRatedMatches ?? 0,
       cash: r.cash,
       stadiumName: r.stadiumName,
-      stadiumCapacity: r.stadiumCapacity,
       primaryColor: r.primaryColor,
       secondaryColor: r.secondaryColor,
       coachName: r.coachName,
@@ -1055,10 +1014,9 @@ async function rebuildWorld(
        position: r.position as Player["position"],
        side: r.side,
        skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
-       overall: r.overall,
-       potential: r.potential,
-       tier: r.tier,
-       characteristic1: r.characteristic1,
+        overall: r.overall,
+        potential: r.potential,
+        characteristic1: r.characteristic1,
        characteristic2: r.characteristic2,
        energy: r.energy,
        salary: r.salary,
@@ -1174,8 +1132,6 @@ async function rebuildWorld(
       awayScore: r.awayScore,
       penaltyWinnerId: r.penaltyWinnerId,
       penaltyScore: jsonOr<[number, number] | undefined>(r.penaltyScoreJson, undefined),
-      attendance: r.attendance,
-      gateRevenue: r.gateRevenue,
       events: eventsByMatch.get(r.id) ?? [],
       stats: s
         ? jsonOr<MatchStats>(
@@ -1234,10 +1190,9 @@ async function rebuildWorld(
      winningClubId: a.winningClubId,
      finalPrice: a.finalPrice,
      cancelledAt: a.cancelledAt !== null ? Number(a.cancelledAt) : null,
-     softClosed: a.softClosed,
-      softCloseExtensions: a.softCloseExtensions,
+      softClosed: a.softClosed,
       deadlineVersion: (a as unknown as { deadlineVersion: number }).deadlineVersion ?? 0,
-   }));
+    }));
 
    const freeAgentListings = freeAgentListingRows.map((l) => ({
      id: l.id,
@@ -1245,9 +1200,9 @@ async function rebuildWorld(
      playerValueAtListing: l.playerValueAtListing,
      openingPrice: l.openingPrice,
      bidIncrement: l.bidIncrement,
-      demandedSalary: l.demandedSalary ?? undefined,
-      demandedContractDays: l.demandedContractDays ?? undefined,
-      salaryBaselineAtListing: l.salaryBaselineAtListing ?? undefined,
+      // Legacy rows stored a listing-wide demanded salary before the frozen
+      // per-listing baseline existed; map it once on load.
+      salaryBaselineAtListing: l.salaryBaselineAtListing ?? (l as unknown as { demandedSalary?: number | null }).demandedSalary ?? undefined,
      currentPrice: l.currentPrice,
      leadingClubId: l.leadingClubId,
      relistStage: l.relistStage,
@@ -1267,9 +1222,8 @@ async function rebuildWorld(
       previousListingId: l.previousListingId,
       blockedClubId: l.blockedClubId ?? null,
       unclaimedSince: l.unclaimedSince !== null ? Number(l.unclaimedSince) : Number(l.createdAt),
-     softClosed: l.softClosed,
-     softCloseExtensions: l.softCloseExtensions,
-   }));
+      softClosed: l.softClosed,
+    }));
 
    const marketBidsList = marketBidRows.map((b) => ({
      id: b.id,
@@ -1309,20 +1263,10 @@ async function rebuildWorld(
      seasonId: t.seasonId,
      seasonKey: t.seasonKey,
        seasonDayIndex: t.seasonDayIndex ?? (t as unknown as { matchday?: number }).matchday ?? 0,
+      completedRounds: (t as unknown as { completedRounds?: number | null }).completedRounds ?? undefined,
       contractSeasons: t.contractSeasons,
       contractSalary: t.contractSalary,
      timestamp: Number(t.timestamp),
-   }));
-
-   const aiEvaluations = aiEvaluationRows.map((e) => ({
-     marketType: (e.marketType as "TRANSFER" | "FREE_AGENT"),
-     listingId: e.listingId,
-     clubId: e.clubId,
-     evaluatedAt: Number(e.evaluatedAt),
-      decision: e.decision,
-      maxBid: e.maxBid ?? null,
-      contractSeasons: e.contractSeasons,
-      contractSalary: e.contractSalary,
    }));
 
    const world: World = {
@@ -1343,17 +1287,12 @@ async function rebuildWorld(
      freeAgentListings,
      marketReservations,
      playerMarketHistory,
-     aiEvaluations,
-     loans: loanRows.map((l) => ({ id: l.id, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, listedAt: Number(l.listedAt), claimableAt: Number(l.claimableAt) })),
+     loans: loanRows.map((l) => ({ id: l.id, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: (l as unknown as { feeAmount?: number | null }).feeAmount ?? 0, listedAt: Number(l.listedAt), claimableAt: Number(l.claimableAt) })),
      seasonAwards: awardRows.map((a) => ({ season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })),
      records: recordRows.map((r) => ({ category: r.category, value: r.value, holderName: r.holderName })),
-     managerHistory: managerRows.map((m) => ({ clubId: m.clubId, name: m.name, appointedDay: m.appointedDay, departedDay: m.departedDay, gamesInCharge: m.gamesInCharge, reason: m.reason })),
-     ticketPrices: Object.fromEntries(ticketRows.map((t) => [t.clubId, [t.sector0, t.sector1, t.sector2, t.sector3]])),
-    stadiumUpgrades: upgradeRows.map((u) => ({ clubId: u.clubId, startedDay: u.startedDay, completesDay: u.completesDay, newCapacity: u.newCapacity, cost: u.cost, completed: u.completed })),
      humanClubId: saveRow.humanClubId,
      seasonSummary: jsonOr(saveRow.seasonSummaryJson, null),
      rng: createRng(saveRow.seed),
-     contractWarnings: [],
      mp: {
        seasonId: 0,
        seasonYear: saveRow.year,
@@ -1380,7 +1319,7 @@ async function rebuildWorld(
      mpClubSeasons: [],
      mpActivities: [],
      mpAudits: [],
-      seasonHistory: [],
+      seasonHistory: jsonOr<World["seasonHistory"]>((saveRow as { seasonHistoryJson?: string | null }).seasonHistoryJson, []),
       generationEvents: [],
       financialInterventions: [],
   };

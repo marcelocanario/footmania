@@ -322,7 +322,6 @@ export function Squad() {
               <div style={{ margin: "14px 0 4px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-3)", marginBottom: 5 }}>
                   <span>Overall</span>
-                  <span>Tier {selectedPlayer.tier}</span>
                 </div>
                 <RatingBar value={selectedPlayer.overall} />
               </div>

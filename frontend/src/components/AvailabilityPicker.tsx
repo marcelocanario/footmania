@@ -64,37 +64,60 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
         ))}
         <button type="button" className="btn sm ghost" disabled={disabled} onClick={() => onChange([])}>Clear</button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(24, 1fr)", gap: 3, userSelect: "none", touchAction: "none" }}>
-        {Array.from({ length: SLOTS_PER_DAY }, (_, slot) => {
-          const isSel = selected.has(slot);
-          return (
-            <button
-              key={slot}
-              type="button"
-              title={slotLabel(slot)}
-              aria-label={slotLabel(slot)}
-              aria-pressed={isSel}
-              disabled={disabled}
-              onPointerDown={() => {
-                const mode = !isSel;
-                painting.current = { active: true, mode };
-                apply(slot, mode);
-              }}
-              onPointerEnter={(e) => {
-                if (painting.current.active && e.buttons > 0) apply(slot, painting.current.mode);
-              }}
-              style={{
-                height: 26,
-                borderRadius: 5,
-                cursor: "pointer",
-                border: isSel ? "1px solid var(--grass-2)" : "1px solid var(--line)",
-                background: isSel ? "var(--grass-2)" : "transparent",
-                padding: 0,
-                opacity: disabled ? 0.5 : 1,
-              }}
-            />
-          );
-        })}
+      {/* Each column is one hour: full hour (:00) stacked above its half-hour (:30),
+          with minute indicators on the left edge. */}
+      <div style={{ display: "flex", gap: 6 }}>
+        <div
+          aria-hidden
+          style={{
+            display: "grid",
+            gridTemplateRows: "26px 26px",
+            gap: 3,
+            fontSize: "0.68rem",
+            color: "var(--text-3)",
+            alignItems: "center",
+            textAlign: "right",
+            minWidth: 16,
+            userSelect: "none",
+          }}
+        >
+          <span>:00</span>
+          <span>:30</span>
+        </div>
+        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(24, 1fr)", gap: 3, userSelect: "none", touchAction: "none" }}>
+          {Array.from({ length: SLOTS_PER_DAY }, (_, slot) => {
+            const isSel = selected.has(slot);
+            return (
+              <button
+                key={slot}
+                type="button"
+                title={slotLabel(slot)}
+                aria-label={slotLabel(slot)}
+                aria-pressed={isSel}
+                disabled={disabled}
+                onPointerDown={() => {
+                  const mode = !isSel;
+                  painting.current = { active: true, mode };
+                  apply(slot, mode);
+                }}
+                onPointerEnter={(e) => {
+                  if (painting.current.active && e.buttons > 0) apply(slot, painting.current.mode);
+                }}
+                style={{
+                  height: 26,
+                  borderRadius: 5,
+                  cursor: "pointer",
+                  border: isSel ? "1px solid var(--grass-2)" : "1px solid var(--line)",
+                  background: isSel ? "var(--grass-2)" : "transparent",
+                  padding: 0,
+                  opacity: disabled ? 0.5 : 1,
+                  gridColumn: Math.floor(slot / 2) + 1,
+                  gridRow: (slot % 2) + 1,
+                }}
+              />
+            );
+          })}
+        </div>
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "var(--text-3)", marginTop: 4 }}>
         <span>00:00</span>
