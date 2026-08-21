@@ -70,9 +70,11 @@ export default async function setup(): Promise<void> {
       await prisma.mpQueue.deleteMany();
       await prisma.mpAllocation.deleteMany();
       await prisma.mpActivity.deleteMany();
-      await prisma.mpAudit.deleteMany();
-      await prisma.mpSeason.deleteMany();
-      await prisma.session.deleteMany();
+       await prisma.mpAudit.deleteMany();
+       await prisma.mpSeason.deleteMany();
+       await prisma.invitation.deleteMany();
+       await prisma.friendship.deleteMany();
+       await prisma.session.deleteMany();
       await prisma.setting.deleteMany();
       await prisma.dailyExecution.deleteMany();
       await prisma.save.deleteMany();

@@ -29,6 +29,8 @@ const gameConfigSchema = z
       restDaysBetweenMatches: z.number().int().min(0),
     }),
     interseasonDays: z.number().int().min(1),
+    interseasonAfterMatchDays: z.number().int().min(0).default(2),
+    interseasonBeforeNextSeasonDays: z.number().int().min(0).default(5),
     scheduler: z.object({
       gameDayRolloverUtc: timeSchema,
       leagueMatchStartUtc: timeSchema,
@@ -144,6 +146,13 @@ const gameConfigSchema = z
     }
     if (seasonDays - (lastLeagueMatchDayIndex + 1) !== cfg.interseasonDays) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "interseasonDays must equal the derived season remainder", path: ["interseasonDays"] });
+    }
+    if (cfg.interseasonAfterMatchDays + cfg.interseasonBeforeNextSeasonDays !== cfg.interseasonDays) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "interseasonAfterMatchDays + interseasonBeforeNextSeasonDays must equal interseasonDays",
+        path: ["interseasonAfterMatchDays"],
+      });
     }
   });
 
@@ -333,7 +342,7 @@ const gameConfigSchema = z
 
   // Multiplayer settings, all tunable without code changes. Kept out of the
   // strict game.config schema because they may not exist in older config files.
-  export const MP_CONFIG = {
+export const MP_CONFIG = {
   // Fraction of rounds after which no new humans may join the current season.
   joinThresholdPercent: 0.5,
   // UTC hour at which every scheduled round kicks off (GLOBAL_FIXED mode).
@@ -361,6 +370,16 @@ const gameConfigSchema = z
   expectedMeaningfulSigningsPerSeason: 2,
 } as const;
 
+/** Human-club Elo settings. Elo is intentionally hidden from player-facing APIs. */
+export const ELO_CONFIG = {
+  initial: 1500,
+  scale: 400,
+  kFactor: 24,
+  homeAdvantage: 60,
+  seasonRetention: 0.9,
+  costEpsilon: 0.000001,
+} as const;
+
 export type GameConfig = z.infer<typeof gameConfigSchema> & {
   roundsPerSeason: number;
   matchSpacingDays: number;
@@ -371,6 +390,8 @@ export type GameConfig = z.infer<typeof gameConfigSchema> & {
 const DEFAULT_GAME_CONFIG: GameConfig = {
   league: { teams: 8, turns: 2, startDay: 1, restDaysBetweenMatches: 1 },
   interseasonDays: 7,
+  interseasonAfterMatchDays: 2,
+  interseasonBeforeNextSeasonDays: 5,
   scheduler: { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
   economy: { referenceSeasonDays: 30 },
   payrollIntervalDays: 7,
@@ -450,22 +471,48 @@ export function parseGameConfig(raw: unknown): GameConfig {
   // shipped config and all runtime values use the derived calendar fields;
   // legacy `seasonDays` is never read by the game after this normalization.
   let normalized = raw as Record<string, unknown>;
-  if (normalized && typeof normalized === "object" && "seasonDays" in normalized) {
+  if (normalized && typeof normalized === "object") {
     const legacy = normalized as Record<string, unknown>;
     const legacyLeague = (legacy.league ?? {}) as Record<string, unknown>;
     const seasonDays = Number(legacy.seasonDays);
     const matchIntervalDays = Number(legacyLeague.matchIntervalDays);
-    const last = Number(legacyLeague.startDay ?? 0) + (Number(legacyLeague.turns ?? 0) * (Number(legacyLeague.teams ?? 0) - 1) - 1) * matchIntervalDays;
-    if (seasonDays <= last) throw new Error(`Invalid game.config.jsonc: lastMatchDay (${last}) must be < seasonDays (${seasonDays})`);
-    normalized = {
-      ...legacy,
-      league: { ...legacyLeague, restDaysBetweenMatches: matchIntervalDays - 1 },
-      interseasonDays: seasonDays - (last + 1),
-      scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
-      economy: legacy.economy ?? { referenceSeasonDays: 30 },
-    };
-    delete normalized.seasonDays;
-    delete (normalized.league as Record<string, unknown>).matchIntervalDays;
+    const hasLegacyShape = "seasonDays" in legacy || Number.isFinite(matchIntervalDays);
+    if (hasLegacyShape) {
+      const restDays = Number.isFinite(matchIntervalDays) ? matchIntervalDays - 1 : Number(legacyLeague.restDaysBetweenMatches ?? 0);
+      const last = Number(legacyLeague.startDay ?? 0) + (Number(legacyLeague.turns ?? 0) * (Number(legacyLeague.teams ?? 0) - 1) - 1) * (restDays + 1);
+      if (!Number.isFinite(seasonDays)) {
+        // Old interval-only configs did not carry a separate duration. Keep the
+        // canonical seven-day remainder unless the config already supplied one.
+        normalized = {
+          ...legacy,
+          league: { ...legacyLeague, restDaysBetweenMatches: restDays },
+          interseasonDays: legacy.interseasonDays ?? 7,
+          scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+          economy: legacy.economy ?? { referenceSeasonDays: 30 },
+        };
+        delete (normalized.league as Record<string, unknown>).matchIntervalDays;
+      } else {
+        if (seasonDays <= last) throw new Error(`Invalid game.config.jsonc: lastMatchDay (${last}) must be < seasonDays (${seasonDays})`);
+        const gap = seasonDays - (last + 1);
+        const explicitAfter = Number(legacy.interseasonAfterMatchDays);
+        const explicitBefore = Number(legacy.interseasonBeforeNextSeasonDays);
+        const hasAfter = Object.prototype.hasOwnProperty.call(legacy, "interseasonAfterMatchDays");
+        const hasBefore = Object.prototype.hasOwnProperty.call(legacy, "interseasonBeforeNextSeasonDays");
+        const after = hasAfter ? explicitAfter : hasBefore ? gap - explicitBefore : 0;
+        const before = hasBefore ? explicitBefore : gap - after;
+        normalized = {
+          ...legacy,
+          league: { ...legacyLeague, restDaysBetweenMatches: restDays },
+          interseasonDays: gap,
+          interseasonAfterMatchDays: after,
+          interseasonBeforeNextSeasonDays: before,
+          scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+          economy: legacy.economy ?? { referenceSeasonDays: 30 },
+        };
+        delete normalized.seasonDays;
+        delete (normalized.league as Record<string, unknown>).matchIntervalDays;
+      }
+    }
   }
   const parsed = gameConfigSchema.safeParse(normalized);
   if (!parsed.success) {

@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { gameConfig, configuredUtcHour } from "../config";
-import { phaseForSeasonDayIndex } from "./seasonCalendar";
+import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { withGlobalLease, withGlobalLock } from "./lock";
 import { loadGlobalWorld, persistWorld } from "./saveService";
 import { executeGameDayEventsInLock, executeMandatoryEventsInLock, materializeSeasonEvents, scheduleEvent, ScheduledEventType } from "./scheduler";
@@ -12,7 +12,13 @@ export interface GameClockView {
   seasonId: number;
   seasonNumber: number;
   seasonDayIndex: number;
-  phase: "ACTIVE" | "INTERSEASON";
+  phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+  interseasonDays: number;
+  interseasonAfterMatchDays: number;
+  interseasonBeforeNextSeasonDays: number;
+  lastLeagueMatchDayIndex: number;
+  interseasonStartIndex: number;
+  preparationStartIndex: number;
   lastAdvancedAt: Date;
   version: number;
 }
@@ -70,13 +76,20 @@ export async function ensureGameClock(prisma: PrismaClient, saveId: number, worl
 }
 
 function toClockView(row: { absoluteGameDay: number; seasonId: number; seasonNumber: number; seasonDayIndex: number; phase: string; lastAdvancedAt: Date; version: number }): GameClockView {
+  const calendar = calendarValues();
   return {
     id: "WORLD",
     absoluteGameDay: row.absoluteGameDay,
     seasonId: row.seasonId,
     seasonNumber: row.seasonNumber,
     seasonDayIndex: row.seasonDayIndex,
-    phase: row.phase === "INTERSEASON" ? "INTERSEASON" : "ACTIVE",
+    phase: row.phase === "INTERSEASON" || row.phase === "POST_MATCH" ? row.phase : "ACTIVE",
+    interseasonDays: calendar.interseasonDays,
+    interseasonAfterMatchDays: calendar.interseasonAfterMatchDays,
+    interseasonBeforeNextSeasonDays: calendar.interseasonBeforeNextSeasonDays,
+    lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
+    interseasonStartIndex: calendar.interseasonStartIndex,
+    preparationStartIndex: calendar.preparationStartIndex,
     lastAdvancedAt: row.lastAdvancedAt,
     version: row.version,
   };

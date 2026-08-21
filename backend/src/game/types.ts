@@ -143,6 +143,9 @@ export interface Club {
   isHuman: boolean;
   ledger: Ledger;
   trophies: Record<string, number>;
+  /** Hidden competitive rating used for human-vs-human promotion comparisons. */
+  eloRating?: number;
+  eloRatedMatches?: number;
 }
 
 export interface StandingsRow {
@@ -343,6 +346,10 @@ export interface Match {
   extraTime?: boolean;
   scheduledAt?: number;
   minuteEvents: MatchEvent[][];
+  /** Captured at kickoff so later ownership changes cannot rewrite history. */
+  homeWasHuman?: boolean;
+  awayWasHuman?: boolean;
+  eloProcessed?: boolean;
   // not persisted — used for activity tracking
   minutes?: Record<number, number>;
   /** not persisted — available for calibration/instrumentation consumers */
@@ -683,10 +690,13 @@ export interface RolloverContext {
   targetSeasonId: number;
   targetYear: number;
   targetMonth: number;
+  /** Seed shared by all next-season group-assignment tie-breaks. */
+  groupAssignmentSeed?: number;
   assignments: Record<string, number>;
   abandonedClubIds: number[];
   provisionalClubIds: number[];
   completedSteps: RolloverWorkflowStep[];
+  eloRegressionApplied?: boolean;
 }
 
 export interface MpState {
@@ -719,7 +729,7 @@ export interface MpState {
   absoluteGameDay?: number;
   seasonNumber?: number;
   seasonDayIndex?: number;
-  phase?: "ACTIVE" | "INTERSEASON";
+  phase?: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
   lastAdvancedAt?: number | null;
   clockVersion?: number;
   startAbsoluteGameDay?: number;
@@ -813,12 +823,30 @@ export interface MpClubSeasonEntry {
   relegationStatus: string;
 }
 
+export interface ClubEloEvent {
+  id: number;
+  matchId: number;
+  clubId: number;
+  opponentClubId: number;
+  ratingBefore: number;
+  ratingAfter: number;
+  delta: number;
+  expectedScore: number;
+  actualScore: number;
+  createdAt: number;
+}
+
 export interface MpActivityEntry {
   userId: number;
   clubId: number;
   activityType: string;
   occurredAt: number;
   metadata: string | null;
+}
+
+export interface MpFriendshipEntry {
+  userAId: number;
+  userBId: number;
 }
 
 export interface MpAuditEntry {
@@ -867,6 +895,7 @@ export interface World {
   competitions: Competition[];
   fixtures: Fixture[];
   matches: Match[];
+  clubEloEvents?: ClubEloEvent[];
   news: NewsItem[];
   loans: Loan[];
   // Multiplayer transfer market (transfer-market-overhaul Phase 2+).
@@ -906,6 +935,8 @@ export interface World {
   // Multiplayer: audit trail of meaningful activity (mirror of MpActivity).
   mpActivities: MpActivityEntry[];
   mpAudits: MpAuditEntry[];
+  /** Accepted human friendships used only during same-tier regrouping. */
+  friendships?: MpFriendshipEntry[];
   // Multiplayer: final standings snapshots for completed seasons (plan §70).
   seasonHistory: SeasonHistoryEntry[];
   // Idempotency ledger for player generation events (player-generation §45/§46).

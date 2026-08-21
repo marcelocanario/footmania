@@ -107,14 +107,18 @@ export function emptyStandingsRow(clubId: number): StandingsRow {
   return { clubId, played: 0, wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, points: 0 };
 }
 
-export function standingsTiebreak(rows: StandingsRow[]): StandingsRow[] {
+export function standingsTiebreak(rows: StandingsRow[], eloRatings?: ReadonlyMap<number, number>): StandingsRow[] {
   return [...rows].sort((a, b) => {
     if (a.points !== b.points) return b.points - a.points;
     if (a.wins !== b.wins) return b.wins - a.wins;
     const gdA = a.goalsFor - a.goalsAgainst;
     const gdB = b.goalsFor - b.goalsAgainst;
     if (gdA !== gdB) return gdB - gdA;
-    return b.goalsFor - a.goalsFor;
+    if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
+    const eloA = eloRatings?.get(a.clubId) ?? 0;
+    const eloB = eloRatings?.get(b.clubId) ?? 0;
+    if (eloA !== eloB) return eloB - eloA;
+    return a.clubId - b.clubId;
   });
 }
 
@@ -148,13 +152,13 @@ export function updateStandings(competition: Competition, homeId: number, awayId
   }
 }
 
-export function sortedStandings(competition: Competition): StandingsRow[] {
+export function sortedStandings(competition: Competition, eloRatings?: ReadonlyMap<number, number>): StandingsRow[] {
   const rows = Object.values(competition.standings);
-  return standingsTiebreak(rows);
+  return standingsTiebreak(rows, eloRatings);
 }
 
-export function getPosition(competition: Competition, clubId: number): number {
-  const rows = sortedStandings(competition);
+export function getPosition(competition: Competition, clubId: number, eloRatings?: ReadonlyMap<number, number>): number {
+  const rows = sortedStandings(competition, eloRatings);
   const idx = rows.findIndex((r) => r.clubId === clubId);
   return idx < 0 ? 0 : idx + 1;
 }

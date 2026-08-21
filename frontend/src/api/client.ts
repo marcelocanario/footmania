@@ -90,6 +90,15 @@ export interface MpStatus {
     completedRounds: number;
     joinLockRound: number;
     joinState: "OPEN" | "LOCKED";
+    seasonDayIndex: number;
+    seasonDay: number;
+    seasonDays: number;
+    phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+    interseasonAfterMatchDays: number;
+    interseasonBeforeNextSeasonDays: number;
+    lastLeagueMatchDayIndex: number;
+    interseasonStartIndex: number;
+    preparationStartIndex: number;
   };
   userClubId: number | null;
   club: {
@@ -113,7 +122,13 @@ export interface SchedulerClockView {
   seasonDayIndex: number;
   seasonDay: number;
   seasonDays: number;
-  phase: "ACTIVE" | "INTERSEASON";
+  phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+  interseasonDays: number;
+  interseasonAfterMatchDays: number;
+  interseasonBeforeNextSeasonDays: number;
+  lastLeagueMatchDayIndex: number;
+  interseasonStartIndex: number;
+  preparationStartIndex: number;
   lastAdvancedAt: string;
   nextAutomaticDayAdvance: string | null;
   lastDayAdvance: string;
@@ -183,7 +198,7 @@ export interface SchedulerPreviewEntry {
   seasonDay: number;
   label: string;
   round: number | null;
-  phase: string;
+  phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
   payroll: boolean;
   weeklySimulation: boolean;
 }
@@ -252,7 +267,20 @@ export interface FixtureView {
 }
 
 export interface Snapshot {
-  save: { year: number; dayIndex: number; dateLabel: string; dayOfWeek: string; seasonDays: number };
+  save: {
+    year: number;
+    dayIndex: number;
+    dateLabel: string;
+    dayOfWeek: string;
+    seasonDays: number;
+    seasonDayIndex: number;
+    phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+    interseasonAfterMatchDays: number;
+    interseasonBeforeNextSeasonDays: number;
+    lastLeagueMatchDayIndex: number;
+    interseasonStartIndex: number;
+    preparationStartIndex: number;
+  };
   seasonSummary: {
     leagueChampion: string | null;
     leagueRunnerUp: string | null;

@@ -1,9 +1,11 @@
 import type { Competition, World } from "../game/types";
 import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { sortedStandings, getPosition } from "../game/league";
+import { eloRatings } from "../game/elo";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
+import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
   return {
@@ -67,6 +69,8 @@ export function buildSnapshot(world: World, clubId: number) {
   const dayLabel = (day: number) => multiplayerDayLabel(day);
   const currentDateLabel = multiplayerDayLabel(world.dayIndex);
   const currentDayOfWeek = new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, world.dayIndex))).getUTCDay();
+  const calendar = calendarValues();
+  const seasonDayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
   const currentSeasonDivisions = new Set(
     world.competitions
       .filter((c) => c.kind === "division" && c.seasonId === world.mp.seasonId)
@@ -79,7 +83,7 @@ export function buildSnapshot(world: World, clubId: number) {
   const competitions = world.competitions
     .filter((c) => c.kind !== "division" || c.seasonId === world.mp.seasonId)
     .map((c) => {
-    const position = c.kind === "league" || c.kind === "division" ? getPosition(c, clubId) : 0;
+    const position = c.kind === "league" || c.kind === "division" ? getPosition(c, clubId, eloRatings(world)) : 0;
     return {
       id: c.id,
       kind: c.kind,
@@ -158,7 +162,14 @@ export function buildSnapshot(world: World, clubId: number) {
       dayIndex: world.dayIndex,
        dateLabel: currentDateLabel,
        dayOfWeek: weekdayName(currentDayOfWeek),
-      seasonDays: gameConfig.seasonDays,
+       seasonDays: calendar.seasonDays,
+       seasonDayIndex,
+       phase: world.mp.phase ?? phaseForSeasonDayIndex(seasonDayIndex),
+       interseasonAfterMatchDays: calendar.interseasonAfterMatchDays,
+       interseasonBeforeNextSeasonDays: calendar.interseasonBeforeNextSeasonDays,
+       lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
+       interseasonStartIndex: calendar.interseasonStartIndex,
+       preparationStartIndex: calendar.preparationStartIndex,
     },
     seasonSummary: world.seasonSummary
       ? {
@@ -237,7 +248,7 @@ export function buildSnapshot(world: World, clubId: number) {
 }
 
 export function competitionTable(world: World, competition: Competition, myClubId: number | null = null) {
-  const rows = sortedStandings(competition);
+  const rows = sortedStandings(competition, eloRatings(world));
   return rows.map((r) => ({
     ...r,
     clubName: world.clubs.find((c) => c.id === r.clubId)?.name ?? "",

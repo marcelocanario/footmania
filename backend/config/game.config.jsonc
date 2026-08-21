@@ -16,6 +16,9 @@
   // Guaranteed full game-days after the final league round and before the
   // following season begins. Derived season length = 35 days.
   "interseasonDays": 7,
+  // Split the canonical gap without changing the total season length.
+  "interseasonAfterMatchDays": 2,
+  "interseasonBeforeNextSeasonDays": 5,
 
   "scheduler": {
     "gameDayRolloverUtc": "00:00",

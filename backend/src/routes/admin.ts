@@ -11,7 +11,7 @@ import { getCommitmentTotals } from "../game/finance";
 import { gameConfig } from "../config";
 import { advanceGameDay, ensureGameClock } from "../services/gameClockService";
 import { cancelScheduledEvent, executeScheduledEvent, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
-import { seasonSchedulePreview } from "../services/seasonCalendar";
+import { calendarValues, seasonSchedulePreview } from "../services/seasonCalendar";
 
 const advanceSchema = z.object({
   // Target round to simulate through (1..14). Rounds already played are
@@ -279,6 +279,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const loaded = await loadGlobalWorld(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World unavailable" });
     const clock = await ensureGameClock(app.prisma, loaded.save.id, loaded.world);
+    const calendar = calendarValues();
     const now = new Date();
     const [pendingEvents, overdueEvents, failedEvents, oldest, review] = await Promise.all([
       app.prisma.scheduledEvent.count({ where: { saveId: loaded.save.id, status: "PENDING" } }),
@@ -291,7 +292,13 @@ export async function adminRoutes(app: FastifyInstance) {
       clock: {
         ...clock,
         seasonDay: clock.seasonDayIndex + 1,
-        seasonDays: gameConfig.seasonDays,
+        seasonDays: calendar.seasonDays,
+        interseasonDays: calendar.interseasonDays,
+        interseasonAfterMatchDays: calendar.interseasonAfterMatchDays,
+        interseasonBeforeNextSeasonDays: calendar.interseasonBeforeNextSeasonDays,
+        lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
+        interseasonStartIndex: calendar.interseasonStartIndex,
+        preparationStartIndex: calendar.preparationStartIndex,
         nextAutomaticDayAdvance: await app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" }, orderBy: { dueAt: "asc" }, select: { dueAt: true } }).then((event) => event?.dueAt ?? null),
         lastDayAdvance: clock.lastAdvancedAt,
         health: review?.value === "1" ? "SCHEDULER_REQUIRES_ADMIN_REVIEW" : failedEvents > 0 ? "FAILED_EVENTS" : overdueEvents > 0 ? "OVERDUE" : "HEALTHY",

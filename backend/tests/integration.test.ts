@@ -88,4 +88,28 @@ describe("API flow", () => {
     expect(join2.statusCode).toBe(409);
     await app.close();
   });
+
+  it("accepts an invitation by creating an idempotent friendship at signup", async () => {
+    const app = buildServer();
+    await app.ready();
+    const inviter = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "inviter", password: "secret123" },
+    });
+    const inviterCookie = (inviter.headers["set-cookie"] as string).split(";")[0];
+    const invitation = await app.inject({ method: "POST", url: "/api/auth/invite", headers: { cookie: inviterCookie } });
+    expect(invitation.statusCode).toBe(200);
+    const inviteToken = invitation.json().inviteToken;
+
+    const invitee = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "invitee", password: "secret123", inviteToken },
+    });
+    expect(invitee.statusCode).toBe(200);
+    expect(await app.prisma.friendship.count()).toBe(1);
+    expect(await app.prisma.invitation.count({ where: { token: inviteToken, acceptedAt: { not: null } } })).toBe(1);
+    await app.close();
+  });
 });

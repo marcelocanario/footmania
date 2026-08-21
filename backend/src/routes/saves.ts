@@ -11,6 +11,7 @@ import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../servic
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
 import { standingsTiebreak } from "../game/league";
+import { calendarValues, phaseForSeasonDayIndex } from "../services/seasonCalendar";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -56,6 +57,8 @@ export async function savesRoutes(app: FastifyInstance) {
         return { ready: false as const, saveId: null };
       }
       const world = loaded.world;
+      const calendar = calendarValues();
+      const seasonDayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
       const user = req.user!;
       const club = world.clubs.find((c) => c.ownerUserId === user.id) ?? null;
       return {
@@ -69,6 +72,15 @@ export async function savesRoutes(app: FastifyInstance) {
           completedRounds: world.mp.completedRounds,
           joinLockRound: world.mp.joinLockRound,
           joinState: world.mp.joinState,
+          seasonDayIndex,
+          seasonDay: seasonDayIndex + 1,
+          seasonDays: calendar.seasonDays,
+          phase: world.mp.phase ?? phaseForSeasonDayIndex(seasonDayIndex),
+          interseasonAfterMatchDays: calendar.interseasonAfterMatchDays,
+          interseasonBeforeNextSeasonDays: calendar.interseasonBeforeNextSeasonDays,
+          lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
+          interseasonStartIndex: calendar.interseasonStartIndex,
+          preparationStartIndex: calendar.preparationStartIndex,
         },
         userClubId: club?.id ?? null,
         club: club

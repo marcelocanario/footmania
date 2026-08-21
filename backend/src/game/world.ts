@@ -15,6 +15,7 @@ import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { auditMultiplayerEvent, syncClubSeasons, divisionForClub } from "./multiplayer";
 import { missingDailyDates, processDailyDate, utcDateKey } from "./daily";
 import { seasonRefFor } from "./clock";
+import { applyMatchElo } from "./elo";
 
 export function nextId(world: World): number {
   return world.nextId++;
@@ -85,6 +86,9 @@ export function startLiveMatch(world: World, fixture: Fixture): Match | null {
     events: [],
     stats: { home: emptyTeamStats(), away: emptyTeamStats() },
     minuteEvents: [],
+    homeWasHuman: home.ownerUserId !== null,
+    awayWasHuman: away.ownerUserId !== null,
+    eloProcessed: false,
   };
   world.matches.push(match);
   const st = createLiveMatchState(world.rng, home, away, world.players, {
@@ -163,6 +167,10 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   const live = world.liveMatches.find((x) => x.matchId === st.matchId);
   const match = live ? buildMatchFromState(live, home, away, world.players, matchRepsForDivisions(divisionForClub(world, home.id), divisionForClub(world, away.id))) : null;
   if (!match) return null;
+  const existing = world.matches.find((m) => m.id === st.matchId);
+  match.homeWasHuman = existing?.homeWasHuman ?? home.ownerUserId !== null;
+  match.awayWasHuman = existing?.awayWasHuman ?? away.ownerUserId !== null;
+  match.eloProcessed = existing?.eloProcessed ?? false;
   const comp = fixture ? findCompetition(world, fixture.competitionId) : undefined;
   const gate = calcGate(rng, home, away, comp?.kind ?? "division", world.ticketPrices[home.id], divisionForClub(world, home.id), divisionForClub(world, away.id));
   match.attendance = gate.attendance;
@@ -170,7 +178,6 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   home.cash += gate.revenue;
   home.ledger.income.push({ code: 1, amount: gate.revenue, day: world.dayIndex, label: `Gate receipts (${comp?.name ?? ""})` });
 
-  const existing = world.matches.find((m) => m.id === st.matchId);
   if (existing) Object.assign(existing, match, { id: st.matchId });
   else world.matches.push(match);
   if (fixture) fixture.played = true;
@@ -179,6 +186,8 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   // save/reload or a worker tick cannot reset in-match fatigue.
   applyLiveMatchEnergy(st, world.players);
   applyMatchToPlayers(match, world);
+  applyMatchElo(world, match);
+  if (existing) existing.eloProcessed = match.eloProcessed;
   for (const id of st.suspensionClears ?? []) {
     const p = world.players.find((x) => x.id === id);
     if (p) p.suspendedGames = Math.max(0, p.suspendedGames - 1);
@@ -213,6 +222,9 @@ export function playFixtureInstant(world: World, fixture: Fixture): Match | null
     events: [],
     stats: { home: emptyTeamStats(), away: emptyTeamStats() },
     minuteEvents: [],
+    homeWasHuman: home.ownerUserId !== null,
+    awayWasHuman: away.ownerUserId !== null,
+    eloProcessed: false,
   };
   const sim = simulateMatch(world.rng, home, away, world.players, {
     competitionId: fixture.competitionId,
@@ -239,6 +251,7 @@ export function playFixtureInstant(world: World, fixture: Fixture): Match | null
   fixture.played = true;
   world.matches.push(match);
   applyMatchToPlayers(match, world);
+  applyMatchElo(world, match);
   for (const id of sim.suspensionClears) {
     const player = world.players.find((candidate) => candidate.id === id);
     if (player) player.suspendedGames = Math.max(0, player.suspendedGames - 1);

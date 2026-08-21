@@ -3,7 +3,7 @@ import type { RolloverWorkflowStep } from "../game/types";
 import { acquireGlobalLease, releaseGlobalLease, withGlobalLease, withGlobalLock } from "./lock";
 import { loadGlobalWorld, persistWorld } from "./saveService";
 import { gameConfig } from "../config";
-import { payrollDayIndices } from "./seasonCalendar";
+import { calendarValues, payrollDayIndices } from "./seasonCalendar";
 import { MP_CONFIG } from "../config";
 import { startLiveMatch, advanceLiveMatches } from "../game/world";
 import { settleTransferAuction } from "../game/market";
@@ -205,12 +205,45 @@ async function scheduleEvents(prisma: PrismaClient, inputs: ScheduleEventInput[]
 
 /** Materialize the current season without creating years of empty events. */
 export async function materializeSeasonEvents(prisma: PrismaClient, saveId: number, world: import("../game/types").World): Promise<void> {
+  const calendar = calendarValues();
   const startAbsolute = world.mp.startAbsoluteGameDay ?? ((world.mp.absoluteGameDay ?? world.dayIndex) - (world.mp.seasonDayIndex ?? world.dayIndex));
   const seasonId = world.mp.seasonId;
   const queued: ScheduleEventInput[] = [];
   const queue = (input: ScheduleEventInput) => queued.push(input);
   const gameDay = (index: number) => startAbsolute + index;
-  for (let index = 0; index < gameConfig.seasonDays; index++) {
+  const transitionTypes = [
+    ScheduledEventType.INTERSEASON_START,
+    ScheduledEventType.PROMOTION_RELEGATION,
+    ScheduledEventType.DIVISION_RESTRUCTURE,
+    ScheduledEventType.WAITING_POOL_ASSIGNMENT,
+    ScheduledEventType.NEXT_SEASON_BUDGET_ALLOCATION,
+    ScheduledEventType.CONTRACT_END_PROCESSING,
+    ScheduledEventType.SEASONAL_ACADEMY_INTAKE,
+    ScheduledEventType.NEXT_SEASON_PREPARATION_OPEN,
+    ScheduledEventType.NEXT_SEASON_FIXTURE_GENERATION,
+  ];
+  const finalDayTypes = [
+    ScheduledEventType.NEXT_SEASON_STRUCTURE_VALIDATE,
+    ScheduledEventType.SEASON_ROLLOVER,
+    ScheduledEventType.SEASON_ROLLOVER_COMMIT,
+  ];
+  // A changed split must not leave pending calendar events at their old due
+  // day. Completed rows remain untouched so their idempotency keys stay final.
+  const calendarTypes = [ScheduledEventType.SEASON_RESULTS_FINALIZE, ...transitionTypes, ...finalDayTypes];
+  const pendingCalendarEvents = await prisma.scheduledEvent.findMany({
+    where: { saveId, type: { in: calendarTypes }, entityType: "SEASON", entityId: String(seasonId), status: { in: ["PENDING", "FAILED"] } },
+    select: { id: true, type: true },
+  });
+  for (const event of pendingCalendarEvents) {
+    const index = event.type === ScheduledEventType.SEASON_RESULTS_FINALIZE
+      ? calendar.lastLeagueMatchDayIndex
+      : transitionTypes.includes(event.type as ScheduledEventType)
+        ? calendar.interseasonStartIndex
+        : calendar.seasonDays - 1;
+    const phase = event.type === ScheduledEventType.SEASON_RESULTS_FINALIZE || finalDayTypes.includes(event.type as ScheduledEventType) ? "END_OF_DAY" : "BEGIN_OF_DAY";
+    await prisma.scheduledEvent.update({ where: { id: event.id }, data: { dueAbsoluteGameDay: gameDay(index), phase, version: { increment: 1 } } });
+  }
+  for (let index = 0; index < calendar.seasonDays; index++) {
     const due = gameDay(index);
     queue({ saveId, type: ScheduledEventType.BEGIN_GAME_DAY, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "BEGIN_OF_DAY", idempotencyKey: `BEGIN_GAME_DAY:${seasonId}:${due}` });
     queue({ saveId, type: ScheduledEventType.END_GAME_DAY, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "END_OF_DAY", idempotencyKey: `END_GAME_DAY:${seasonId}:${due}` });
@@ -219,7 +252,7 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
       queue({ saveId, type: ScheduledEventType.WEEKLY_SIM_UPDATE, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "END_OF_DAY", idempotencyKey: `WEEKLY_SIM_UPDATE:${seasonId}:${due}` });
     }
     queue({ saveId, type: ScheduledEventType.AI_TRANSFER_TICK, timeBasis: "GAME_DAY", dueAbsoluteGameDay: due, phase: "INTRADAY", idempotencyKey: `AI_TRANSFER_TICK:${due}` });
-    if (index === gameConfig.lastLeagueMatchDayIndex) {
+    if (index === calendar.lastLeagueMatchDayIndex) {
       queue({
         saveId,
         type: ScheduledEventType.SEASON_RESULTS_FINALIZE,
@@ -232,17 +265,7 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
         idempotencyKey: rolloverEventKey("SEASON_RESULTS_FINALIZE", seasonId),
       });
     }
-    if (index === gameConfig.lastLeagueMatchDayIndex + 1) {
-      const transitionTypes = [
-        ScheduledEventType.INTERSEASON_START,
-        ScheduledEventType.PROMOTION_RELEGATION,
-        ScheduledEventType.DIVISION_RESTRUCTURE,
-        ScheduledEventType.WAITING_POOL_ASSIGNMENT,
-        ScheduledEventType.NEXT_SEASON_BUDGET_ALLOCATION,
-        ScheduledEventType.CONTRACT_END_PROCESSING,
-        ScheduledEventType.SEASONAL_ACADEMY_INTAKE,
-        ScheduledEventType.NEXT_SEASON_PREPARATION_OPEN,
-      ];
+    if (index === calendar.interseasonStartIndex) {
       for (const type of transitionTypes) {
         queue({
           saveId,
@@ -257,8 +280,8 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
         });
       }
     }
-    if (index === gameConfig.seasonDays - 1) {
-      for (const type of [ScheduledEventType.NEXT_SEASON_FIXTURE_GENERATION, ScheduledEventType.NEXT_SEASON_STRUCTURE_VALIDATE, ScheduledEventType.SEASON_ROLLOVER, ScheduledEventType.SEASON_ROLLOVER_COMMIT]) {
+    if (index === calendar.seasonDays - 1) {
+      for (const type of finalDayTypes) {
         queue({
           saveId,
           type,

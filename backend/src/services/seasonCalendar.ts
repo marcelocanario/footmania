@@ -1,13 +1,18 @@
 import { configuredUtcHour, gameConfig, type GameConfig } from "../config";
 
-export type SeasonPhase = "ACTIVE" | "INTERSEASON";
+export type SeasonPhase = "ACTIVE" | "POST_MATCH" | "INTERSEASON";
 
 export interface CalendarValues {
   roundsPerSeason: number;
   matchSpacingDays: number;
   lastLeagueMatchDayIndex: number;
   seasonDays: number;
+  interseasonDays: number;
+  interseasonAfterMatchDays: number;
+  interseasonBeforeNextSeasonDays: number;
+  postMatchStartIndex: number;
   interseasonStartIndex: number;
+  preparationStartIndex: number;
 }
 
 export interface SeasonScheduleEntry {
@@ -20,13 +25,23 @@ export interface SeasonScheduleEntry {
   weeklySimulation: boolean;
 }
 
-export function calendarValues(config: Pick<GameConfig, "league" | "interseasonDays" | "seasonDays" | "roundsPerSeason" | "matchSpacingDays" | "lastLeagueMatchDayIndex"> = gameConfig): CalendarValues {
+export function calendarValues(config: Pick<GameConfig, "league" | "interseasonDays" | "interseasonAfterMatchDays" | "interseasonBeforeNextSeasonDays" | "seasonDays" | "roundsPerSeason" | "matchSpacingDays" | "lastLeagueMatchDayIndex"> = gameConfig): CalendarValues {
+  const interseasonStartIndex = config.lastLeagueMatchDayIndex + 1 + config.interseasonAfterMatchDays;
+  const preparationStartIndex = config.seasonDays - config.interseasonBeforeNextSeasonDays;
+  if (interseasonStartIndex !== preparationStartIndex) {
+    throw new Error("Inter-season calendar boundaries do not agree");
+  }
   return {
     roundsPerSeason: config.roundsPerSeason,
     matchSpacingDays: config.matchSpacingDays,
     lastLeagueMatchDayIndex: config.lastLeagueMatchDayIndex,
     seasonDays: config.seasonDays,
-    interseasonStartIndex: config.lastLeagueMatchDayIndex + 1,
+    interseasonDays: config.interseasonDays,
+    interseasonAfterMatchDays: config.interseasonAfterMatchDays,
+    interseasonBeforeNextSeasonDays: config.interseasonBeforeNextSeasonDays,
+    postMatchStartIndex: config.lastLeagueMatchDayIndex + 1,
+    interseasonStartIndex,
+    preparationStartIndex,
   };
 }
 
@@ -50,7 +65,8 @@ export function roundForSeasonDayIndex(seasonDayIndex: number, config = gameConf
 
 export function phaseForSeasonDayIndex(seasonDayIndex: number, config = gameConfig): SeasonPhase {
   if (seasonDayIndex < 0 || seasonDayIndex >= config.seasonDays) throw new Error(`Invalid season day index: ${seasonDayIndex}`);
-  return seasonDayIndex <= config.lastLeagueMatchDayIndex ? "ACTIVE" : "INTERSEASON";
+  if (seasonDayIndex <= config.lastLeagueMatchDayIndex) return "ACTIVE";
+  return seasonDayIndex < calendarValues(config).interseasonStartIndex ? "POST_MATCH" : "INTERSEASON";
 }
 
 export function daysForSeasons(seasons: number, config = gameConfig): number {
@@ -77,13 +93,15 @@ export function seasonSchedulePreview(config = gameConfig): SeasonScheduleEntry[
   const payroll = new Set(payrollDayIndices(config));
   return Array.from({ length: config.seasonDays }, (_, seasonDayIndex) => {
     const roundIndex = roundForSeasonDayIndex(seasonDayIndex, config);
-    const interseason = phaseForSeasonDayIndex(seasonDayIndex, config) === "INTERSEASON";
+    const phase = phaseForSeasonDayIndex(seasonDayIndex, config);
     return {
       seasonDayIndex,
       seasonDay: seasonDayIndex + 1,
-      label: roundIndex === null ? (interseason ? "Inter-season" : seasonDayIndex === 0 ? "Preparation" : "Rest") : `Round ${roundIndex + 1}`,
+      label: roundIndex === null
+        ? phase === "POST_MATCH" ? "Post-match buffer" : phase === "INTERSEASON" ? "Inter-season / preparation" : seasonDayIndex === 0 ? "Preparation" : "Rest"
+        : `Round ${roundIndex + 1}`,
       round: roundIndex === null ? null : roundIndex + 1,
-      phase: interseason ? "INTERSEASON" : "ACTIVE",
+      phase,
       payroll: payroll.has(seasonDayIndex),
       weeklySimulation: payroll.has(seasonDayIndex),
     };

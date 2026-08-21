@@ -17,6 +17,8 @@ import {
 import { validateDoubleRoundRobinFixtures } from "../game/league";
 import { commitSeasonRollover, processContractExpiry, processSeasonEndContracts, processSeasonalAcademyIntake } from "../game/season";
 import { ensureSeasonRow, issueAllocation, removeFillerClubs } from "./mpService";
+import { applySeasonalEloRegression } from "../game/elo";
+import { nextUint } from "../game/rng";
 
 export const ROLLOVER_WORKFLOW_STEPS: readonly RolloverWorkflowStep[] = [
   "SEASON_RESULTS_FINALIZE",
@@ -68,10 +70,12 @@ async function initializeContext(prisma: PrismaClient, world: World, options: Ro
     targetSeasonId: target.seasonId,
     targetYear: target.year,
     targetMonth: target.month,
+    groupAssignmentSeed: nextUint(world.rng),
     assignments: {},
     abandonedClubIds: [],
-    provisionalClubIds: [],
-    completedSteps: [],
+     provisionalClubIds: [],
+     completedSteps: [],
+     eloRegressionApplied: false,
   };
   world.mp.rolloverContext = context;
   return context;
@@ -113,6 +117,10 @@ export async function executeRolloverStep(
     const computed = computeNextTierAssignments(world, context.sourceSeasonId);
     context.assignments = Object.fromEntries(computed.assignments);
     context.abandonedClubIds = computed.abandonedClubIds;
+    if (!context.eloRegressionApplied) {
+      applySeasonalEloRegression(world);
+      context.eloRegressionApplied = true;
+    }
     for (const clubId of computed.abandonedClubIds) {
       const club = world.clubs.find((candidate) => candidate.id === clubId);
       if (!club) continue;
@@ -123,6 +131,10 @@ export async function executeRolloverStep(
     }
     world.mp.rolloverPhase = "MOVEMENTS_CALCULATED";
   } else if (step === "DIVISION_RESTRUCTURE") {
+    // Contexts created before seeded regrouping may not have this field yet.
+    // Allocate it once and keep it in the persisted rollover context so a
+    // retry cannot choose a different arrangement.
+    context.groupAssignmentSeed ??= nextUint(world.rng);
     const assignments = new Map(Object.entries(context.assignments).map(([clubId, tier]) => [Number(clubId), tier]));
     for (const division of divisionsInSeason(world, context.sourceSeasonId)) division.status = "ARCHIVED";
     removeFillerClubs(world);
@@ -155,7 +167,7 @@ export async function executeRolloverStep(
     world.mp.lastProcessedGameDay = 0;
     world.mp.manualRound = null;
     world.mp.seasonStartAt = now;
-    for (const [tier, humans] of byTier) rebuildTierDivisions(world, context.targetSeasonId, tier, humans, ref, { generateFixtures: false });
+    for (const [tier, humans] of byTier) rebuildTierDivisions(world, context.targetSeasonId, tier, humans, ref, { generateFixtures: false, assignmentSeed: context.groupAssignmentSeed });
     if (byTier.size === 0) {
       const division = createDivision(world, { tier: 1, groupIndex: 0, seasonId: context.targetSeasonId, ref });
       ensureDivisionFull(world, division);

@@ -4,7 +4,7 @@ import { nextInt } from "../game/rng";
 import { tacticsForClub, divisionTicketTier } from "../game/club";
 import { STARTING_CASH, TICKET_PRICES } from "../game/constants";
 import { generateName } from "../game/names";
-import { MP_CONFIG } from "../config";
+import { ELO_CONFIG, MP_CONFIG } from "../config";
 import { generateNewClubRoster, totalDivisionsForGeneration } from "./clubGenerator";
 
 /**
@@ -25,6 +25,7 @@ export function generateWorld(seed: number): World {
     competitions: [],
     fixtures: [],
     matches: [],
+    clubEloEvents: [],
     news: [{ dayIndex: 0, text: "Welcome to Footmania! A new season is about to begin.", kind: "season" }],
     loans: [],
     marketBids: [],
@@ -81,6 +82,7 @@ export function generateWorld(seed: number): World {
     mpClubSeasons: [],
     mpActivities: [],
     mpAudits: [],
+    friendships: [],
     seasonHistory: [],
     generationEvents: [],
   };
@@ -136,6 +138,8 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     isHuman: true,
     ledger: { income: [], expense: [] },
     trophies: {},
+    eloRating: ELO_CONFIG.initial,
+    eloRatedMatches: 0,
   };
   world.clubs.push(club);
   const base = TICKET_PRICES[divisionTicketTier(1)].map((x) => Math.max(1, Math.round(x / 200))) as [number, number, number, number];

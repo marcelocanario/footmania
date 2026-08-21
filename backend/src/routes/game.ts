@@ -638,13 +638,15 @@ export async function gameRoutes(app: FastifyInstance) {
 }
 
 /** Real timestamp of the next payroll cycle (UTC midnight of that game-day). */
-function nextPayrollTimestamp(world: World): number | null {
+export function nextPayrollTimestamp(world: World): number | null {
   const interval = gameConfig.payrollIntervalDays;
-  const day = world.dayIndex;
-  const next = Math.ceil((day + 1) / interval) * interval;
-  if (next <= gameConfig.seasonDays) return Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, next);
-  // Payroll resumes on the first interval day of the next funded season.
-  return Date.UTC(world.mp.seasonYear, world.mp.seasonMonth, interval);
+  const dayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
+  let nextIndex = (Math.floor(dayIndex / interval) + 1) * interval - 1;
+  if (nextIndex <= dayIndex) nextIndex += interval;
+  const seasonStart = world.mp.seasonStartAt ?? Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, 1);
+  if (nextIndex < gameConfig.seasonDays) return seasonStart + nextIndex * 24 * 60 * 60 * 1000;
+  // Payroll resumes on the first interval day of the next game season.
+  return seasonStart + (gameConfig.seasonDays + interval - 1) * 24 * 60 * 60 * 1000;
 }
 
 function replyFrom(res: { error?: { code: number; body: unknown }; value?: unknown }, reply: import("fastify").FastifyReply) {

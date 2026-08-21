@@ -15,6 +15,7 @@ import {
   evaluateInactivity,
   recordActivity,
   timezoneCluster,
+  calculateSocialScore,
   divisionsInSeason,
   tierOf,
   groupIndexOf,
@@ -414,6 +415,45 @@ describe("timezone clustering", () => {
     expect(groups[0].length).toBe(8);
     expect(groups[1].length).toBe(8);
     expect(groups[2].length).toBe(3);
+  });
+
+  it("keeps direct friends together before timezone and Elo objectives", () => {
+    const { world } = seasonWorld(191);
+    const humans = Array.from({ length: 8 }, (_, index) => {
+      const club = createHumanClub(world, { userId: index + 1, clubName: `Friend-${index + 1}`, country: "BRA", timezone: "UTC" });
+      club.competitionState = "ACTIVE";
+      return { clubId: club.id, timezone: club.timezone };
+    });
+    world.friendships = [
+      { userAId: 1, userBId: 5 },
+      { userAId: 2, userBId: 6 },
+      { userAId: 3, userBId: 7 },
+      { userAId: 4, userBId: 8 },
+    ];
+    const divisions = rebuildTierDivisions(world, world.mp.seasonId, 1, humans, { year: 2026, month: 2 }, { generateFixtures: false });
+    const groups = divisions.map((division) => Object.keys(division.standings)
+      .map(Number)
+      .filter((clubId) => humans.some((human) => human.clubId === clubId))
+      .map((clubId) => ({ clubId })));
+    expect(calculateSocialScore(groups, world).direct).toBe(4);
+  });
+
+  it("reproduces seeded group tie-breaks across retries", () => {
+    const makeWorld = () => {
+      const { world } = seasonWorld(192);
+      const humans = Array.from({ length: 16 }, (_, index) => {
+        const club = createHumanClub(world, { userId: index + 1, clubName: `Seeded-${index + 1}`, country: "BRA", timezone: "UTC" });
+        club.competitionState = "ACTIVE";
+        return { clubId: club.id, timezone: club.timezone };
+      });
+      return { world, humans };
+    };
+    const first = makeWorld();
+    const second = makeWorld();
+    const firstDivisions = rebuildTierDivisions(first.world, first.world.mp.seasonId, 2, first.humans, { year: 2026, month: 2 }, { generateFixtures: false, assignmentSeed: 0x12345678 });
+    const secondDivisions = rebuildTierDivisions(second.world, second.world.mp.seasonId, 2, second.humans, { year: 2026, month: 2 }, { generateFixtures: false, assignmentSeed: 0x12345678 });
+    const groups = (divisions: typeof firstDivisions) => divisions.map((division) => Object.keys(division.standings).map(Number).filter((id) => first.humans.some((human) => human.clubId === id)));
+    expect(groups(firstDivisions)).toEqual(groups(secondDivisions));
   });
 });
 

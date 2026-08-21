@@ -42,6 +42,20 @@ describe("global multiplayer world persistence", () => {
     world.fixtures.push(...fixtures);
     world.mpQueue.push({ clubId: world.clubs[0].id, source: "NEW_CLUB", queuedAt: Date.now(), preferredSeasonId: seasonId });
     world.seasonAllocations.push({ clubId: world.clubs[0].id, seasonId, type: "PROVISIONAL_NEXT_SEASON", amount: 5_000_000, issuedAt: Date.now() });
+    world.clubs[0].eloRating = 1538.427;
+    world.clubs[0].eloRatedMatches = 3;
+    world.clubEloEvents = [{
+      id: 880001,
+      matchId: 880000,
+      clubId: world.clubs[0].id,
+      opponentClubId: world.clubs[1].id,
+      ratingBefore: 1500,
+      ratingAfter: 1538.427,
+      delta: 38.427,
+      expectedScore: 0.5,
+      actualScore: 1,
+      createdAt: Date.now(),
+    }];
 
     await persistWorld(prisma, saveId, saveId, world);
 
@@ -54,6 +68,10 @@ describe("global multiplayer world persistence", () => {
     expect(reloaded!.world.mpQueue.length).toBe(1);
     expect(reloaded!.world.seasonAllocations.length).toBe(1);
     expect(reloaded!.world.seasonAllocations[0].type).toBe("PROVISIONAL_NEXT_SEASON");
+    expect(reloaded!.world.clubs[0].eloRating).toBeCloseTo(1538.427, 6);
+    expect(reloaded!.world.clubEloEvents).toHaveLength(1);
+    expect(reloaded!.world.clubEloEvents![0].matchId).toBe(880000);
+    expect(reloaded!.world.nextId).toBeGreaterThan(880001);
   });
 
   it("round-trips live match state (multiple) and records player minutes on finish", async () => {
@@ -334,5 +352,16 @@ describe("global multiplayer world persistence", () => {
     });
     const reloaded = await loadGlobalWorld(prisma);
     expect(reloaded?.world.playerMarketHistory[0].seasonDayIndex).toBe(9);
+  });
+
+  it("migrates persisted legacy phases through the authoritative calendar", async () => {
+    const { saveId, world } = await freshGlobalWorld(904);
+    world.mp.seasonDayIndex = 28;
+    world.mp.absoluteGameDay = 28;
+    world.mp.phase = "ACTIVE";
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded?.world.mp.phase).toBe("POST_MATCH");
   });
 });

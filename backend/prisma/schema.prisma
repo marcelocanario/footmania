@@ -17,6 +17,9 @@ model User {
   sessions     Session[]
   saves        Save[]
   club         Club?    @relation("ClubOwner")
+  friendshipsA Friendship[] @relation("FriendshipA")
+  friendshipsB Friendship[] @relation("FriendshipB")
+  invitations  Invitation[]
 }
 
 model Session {
@@ -75,6 +78,7 @@ model Save {
   standingsRows  StandingsRow[]
   fixtures       Fixture[]
   matches        Match[]
+  clubEloEvents  ClubEloEvent[]
   matchStats     MatchStat[]
   matchEvents    MatchEvent[]
   newsItems      NewsItem[]
@@ -96,6 +100,30 @@ model Save {
   gameClock       GameClock?
   scheduledEvents ScheduledEvent[]
   schedulerAudits AdminSchedulerAudit[]
+}
+
+model Friendship {
+  id        Int      @id @default(autoincrement())
+  userAId   Int
+  userBId   Int
+  userA     User     @relation("FriendshipA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User     @relation("FriendshipB", fields: [userBId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+}
+
+model Invitation {
+  token         String    @id
+  inviterUserId Int
+  inviteeUserId Int?
+  inviter       User      @relation(fields: [inviterUserId], references: [id], onDelete: Cascade)
+  acceptedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([inviterUserId])
 }
 
 // Persistent authoritative clock for the global world.
@@ -202,6 +230,8 @@ model Club {
   tacticsDirection Int
   trainingFocus   String @default("assistant")
   savedLineupJson  String?
+  eloRating        Float    @default(1500)
+  eloRatedMatches  Int      @default(0)
 
   @@id([saveId, id])
   @@index([saveId])
@@ -377,10 +407,31 @@ model Match {
   gateRevenue      Int
   extraTime        Boolean
   scheduledAt      BigInt?
+  homeWasHuman     Boolean  @default(false)
+  awayWasHuman     Boolean  @default(false)
+  eloProcessed     Boolean  @default(false)
 
   @@id([saveId, id])
   @@index([saveId])
   @@unique([saveId, fixtureId])
+}
+
+model ClubEloEvent {
+  id              Int      @id @default(autoincrement())
+  saveId          Int
+  save            Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  matchId         Int
+  clubId          Int
+  opponentClubId  Int
+  ratingBefore    Float
+  ratingAfter     Float
+  delta           Float
+  expectedScore   Float
+  actualScore     Float
+  createdAt       DateTime @default(now())
+
+  @@unique([saveId, matchId, clubId])
+  @@index([saveId, clubId, createdAt])
 }
 
 model MatchStat {

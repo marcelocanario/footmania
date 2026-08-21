@@ -1,24 +1,9 @@
-import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass, AlertTriangle } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
 import { money } from "../format";
-
-/** Days remaining until the end of the current calendar month (interseason). */
-function SeasonCountdown({ seasonKey }: { seasonKey: string }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const iv = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(iv);
-  }, []);
-  const [year, month] = seasonKey.split("-").map(Number);
-  if (!year || !month) return null;
-  const endOfMonth = Date.UTC(month === 12 ? year + 1 : year, month % 12, 1);
-  const daysLeft = Math.max(0, Math.ceil((endOfMonth - now) / (24 * 60 * 60 * 1000)));
-  return <span> · {daysLeft}d left in the season</span>;
-}
 
 export function Dashboard() {
   const { snapshot, status, liveMatchId } = useGame();
@@ -49,7 +34,7 @@ export function Dashboard() {
           <div className="kicker">
             Season {season?.key ?? ""} · Round {season?.completedRounds ?? 0}
             {season?.joinState === "OPEN" ? " · joining open" : " · joining locked"}
-            {season?.key && <SeasonCountdown seasonKey={season.key} />}
+             {season && ` · Day ${season.seasonDay} / ${season.seasonDays} · ${season.phase.toLowerCase().replace("_", " ")}`}
           </div>
           <h1>{club.name}</h1>
           <div className="head-chips">

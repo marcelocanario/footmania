@@ -147,9 +147,12 @@ export function Admin() {
             <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
               <div>
                 <h3 style={{ marginBottom: 6 }}>Durable scheduler</h3>
-                <div style={{ color: "var(--text-2)", fontSize: "0.9rem" }}>
-                  Season {clock.seasonNumber}, Day {clock.seasonDay} / {clock.seasonDays} · {clock.phase}
-                </div>
+               <div style={{ color: "var(--text-2)", fontSize: "0.9rem" }}>
+                   Season {clock.seasonNumber}, Day {clock.seasonDay} / {clock.seasonDays} · {clock.phase}
+                 </div>
+                 <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 4 }}>
+                   Post-match buffer: {clock.interseasonAfterMatchDays} day(s) · Inter-season starts Day {clock.interseasonStartIndex + 1} · Preparation window: {clock.interseasonBeforeNextSeasonDays} day(s)
+                 </div>
               </div>
               <div style={{ color: clock.health === "HEALTHY" ? "var(--grass-2)" : "#ff6b6b", fontWeight: 700 }}>
                 {clock.health.replace("_", " ")}
@@ -168,9 +171,9 @@ export function Admin() {
               <input
                 type="number"
                 min={1}
-                max={35}
+                 max={clock.seasonDays}
                 value={advanceDays}
-                onChange={(e) => setAdvanceDays(Math.max(1, Math.min(35, Number(e.target.value) || 1)))}
+                 onChange={(e) => setAdvanceDays(Math.max(1, Math.min(clock.seasonDays, Number(e.target.value) || 1)))}
                 style={{ width: 70, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
               />
               <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerAdvanceMany(advanceDays, reason || undefined); setMessage(`${advanceDays} game day(s) advanced.`); })}>

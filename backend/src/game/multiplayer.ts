@@ -3,10 +3,11 @@ import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStand
 import { simulateMatch } from "./match";
 import { kickoffForRound, seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
 import { roundDayIndex } from "../services/seasonCalendar";
-import { gameConfig, MP_CONFIG } from "../config";
+import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
 import { overallFromSkills } from "./rating";
+import { applyMatchElo, eloRatings } from "./elo";
 import { tierBudget, proratedBudget, performanceModifier } from "./budget";
 import { releaseAllReservations } from "./market";
 import { generateNewClubRoster, totalDivisionsForGeneration } from "./clubGenerator";
@@ -86,7 +87,7 @@ export function isHumanClub(world: World, clubId: number): boolean {
 
 /** Ranked human clubs of a division, best-first by the plan's promotion rules. */
 export function humanRanking(world: World, comp: Competition): { clubId: number; rank: number }[] {
-  const rows = standingsTiebreak(Object.values(comp.standings));
+  const rows = standingsTiebreak(Object.values(comp.standings), eloRatings(world));
   const humans = rows
     .filter((r) => isHumanClub(world, r.clubId))
     .map((r, i) => ({ clubId: r.clubId, rank: i + 1 }));
@@ -94,7 +95,7 @@ export function humanRanking(world: World, comp: Competition): { clubId: number;
 }
 
 export function highestRankedReplaceableAI(world: World, comp: Competition): number | null {
-  const rows = standingsTiebreak(Object.values(comp.standings));
+  const rows = standingsTiebreak(Object.values(comp.standings), eloRatings(world));
   for (const row of rows) {
     const club = clubById(world, row.clubId);
     // Never replace a filler while its scheduled match is already live. The
@@ -226,6 +227,8 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
     isHuman: false,
     ledger: { income: [], expense: [] },
     trophies: {},
+    eloRating: ELO_CONFIG.initial,
+    eloRatedMatches: 0,
   };
   world.clubs.push(club);
   generateNewClubRoster({
@@ -393,8 +396,12 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
       events: sim.match.events,
       stats: sim.match.stats,
       extraTime: false,
-      minuteEvents: [],
-    });
+        minuteEvents: [],
+        homeWasHuman: home.ownerUserId !== null,
+        awayWasHuman: away.ownerUserId !== null,
+        eloProcessed: false,
+      });
+    applyMatchElo(world, world.matches[world.matches.length - 1]);
     updateStandings(comp, f.homeClubId, f.awayClubId, sim.homeGoals, sim.awayGoals);
   }
   if (comp.status === "SIMULATING_HISTORY") comp.status = "ACTIVE";
@@ -549,7 +556,7 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
 }
 
 function positionInDivision(world: World, comp: Competition, clubId: number): number {
-  const rows = standingsTiebreak(Object.values(comp.standings));
+  const rows = standingsTiebreak(Object.values(comp.standings), eloRatings(world));
   const idx = rows.findIndex((r) => r.clubId === clubId);
   return idx < 0 ? 0 : idx + 1;
 }
@@ -617,6 +624,33 @@ export interface TierAssignment {
   previousDivision: string;
 }
 
+export interface PromotionCandidate {
+  clubId: number;
+  humanRank: number;
+  row: StandingsRow;
+  eloRating: number;
+}
+
+/** Cross-group promotion ordering used after every group's automatic winner. */
+export function promotionCandidateTiebreak(a: PromotionCandidate, b: PromotionCandidate): number {
+  if (b.eloRating !== a.eloRating) return b.eloRating - a.eloRating;
+  const matchesA = a.row.played;
+  const matchesB = b.row.played;
+  const ppgA = matchesA === 0 ? 0 : a.row.points / matchesA;
+  const ppgB = matchesB === 0 ? 0 : b.row.points / matchesB;
+  if (ppgB !== ppgA) return ppgB - ppgA;
+  const gdA = matchesA === 0 ? 0 : (a.row.goalsFor - a.row.goalsAgainst) / matchesA;
+  const gdB = matchesB === 0 ? 0 : (b.row.goalsFor - b.row.goalsAgainst) / matchesB;
+  if (gdB !== gdA) return gdB - gdA;
+  const gfA = matchesA === 0 ? 0 : a.row.goalsFor / matchesA;
+  const gfB = matchesB === 0 ? 0 : b.row.goalsFor / matchesB;
+  if (gfB !== gfA) return gfB - gfA;
+  const winsA = matchesA === 0 ? 0 : a.row.wins / matchesA;
+  const winsB = matchesB === 0 ? 0 : b.row.wins / matchesB;
+  if (winsB !== winsA) return winsB - winsA;
+  return a.clubId - b.clubId;
+}
+
 /** Record a meaningful-activity audit row (plan §40/§55) and refresh the club's
  *  last activity timestamp used by abandonment evaluation. */
 export function recordActivity(world: World, userId: number, clubId: number, activityType: string, metadata?: string): void {
@@ -677,7 +711,7 @@ export function syncMemberships(world: World, seasonId: number): void {
   world.mpMemberships = [];
   const divs = divisionsInSeason(world, seasonId).filter((c) => c.status !== "ARCHIVED");
   for (const comp of divs) {
-    const rows = standingsTiebreak(Object.values(comp.standings));
+    const rows = standingsTiebreak(Object.values(comp.standings), eloRatings(world));
     rows.forEach((row, i) => {
       const club = clubById(world, row.clubId);
       world.mpMemberships.push({
@@ -699,11 +733,21 @@ export function syncMemberships(world: World, seasonId: number): void {
 export function syncClubSeasons(world: World, seasonId: number): void {
   const keep = new Set<number>();
   const divs = divisionsInSeason(world, seasonId).filter((c) => c.status !== "ARCHIVED");
+  const projectedAssignments = computeNextTierAssignments(world, seasonId).assignments;
   for (const comp of divs) {
-    const rows = standingsTiebreak(Object.values(comp.standings));
+    const rows = standingsTiebreak(Object.values(comp.standings), eloRatings(world));
     for (const row of rows) {
       const club = clubById(world, row.clubId);
-      const entry: MpClubSeasonEntry = {
+       const currentTier = tierOf(comp);
+       const rowsForPromotion = standingsTiebreak(Object.values(comp.standings), eloRatings(world))
+         .filter((candidate) => isHumanClub(world, candidate.clubId));
+       const humanRank = rowsForPromotion.findIndex((candidate) => candidate.clubId === row.clubId) + 1;
+       const hasUpperTier = currentTier > 1 && divisionsInTier(world, seasonId, currentTier - 1).length > 0;
+       const maxTierForSeason = Math.max(...divs.map((candidate) => tierOf(candidate)), currentTier);
+       const relegationRows = currentTier < maxTierForSeason
+         ? standingsTiebreak(Object.values(comp.standings), eloRatings(world)).slice(-(comp.config.relegated ?? 2))
+         : [];
+       const entry: MpClubSeasonEntry = {
         clubId: row.clubId,
         seasonId,
         divisionId: comp.id,
@@ -715,8 +759,14 @@ export function syncClubSeasons(world: World, seasonId: number): void {
         goalsFor: row.goalsFor,
         goalsAgainst: row.goalsAgainst,
         points: row.points,
-        promotionStatus: "NONE",
-        relegationStatus: "NONE",
+          promotionStatus: hasUpperTier
+            ? projectedAssignments.get(row.clubId)! < currentTier
+              ? "PROMOTED"
+              : humanRank > 0
+                ? "POSSIBLE"
+                : "NONE"
+            : "NONE",
+         relegationStatus: relegationRows.some((candidate) => candidate.clubId === row.clubId) ? "RELEGATED" : "NONE",
       };
       const existing = world.mpClubSeasons.find((e) => e.clubId === row.clubId && e.seasonId === seasonId);
       if (existing) Object.assign(existing, entry);
@@ -766,7 +816,7 @@ export function computeNextTierAssignments(world: World, seasonId: number): {
   for (const d of divisions) {
     const t = tierOf(d);
     if (t >= maxTier) continue; // bottom tier has no relegation target
-    const rows = standingsTiebreak(Object.values(d.standings));
+    const rows = standingsTiebreak(Object.values(d.standings), eloRatings(world));
     const relegateCount = d.config.relegated ?? 2;
     const doomed = rows.slice(-relegateCount).filter((r) => active.has(r.clubId));
     for (const r of doomed) {
@@ -775,58 +825,48 @@ export function computeNextTierAssignments(world: World, seasonId: number): {
     }
   }
 
-  // Promotions: best eligible humans from child divisions.
-  // For each parent tier (ascending), collect promotion candidates from its
-  // children and fill the parent's promotion slots (from humans only).
-  // Cascading: when a child's best humans promote, that child creates
-  // vacancies that the tier below fills next (plan §34).
+  // Promotions are selected for the whole target tier. Group membership is
+  // deliberately ignored here; it is rebuilt only after every target tier is
+  // finalised.
   for (let t = maxTier - 1; t >= 1; t--) {
     const parents = byTier.get(t) ?? [];
     const children = byTier.get(t + 1) ?? [];
     for (const parent of parents) {
-      // Existing members that stay get tier t (unless relegated above).
-      const existingHuman = Object.keys(parent.standings)
-        .map(Number)
-        .filter((id) => active.has(id) && isHumanClub(world, id));
-      for (const id of existingHuman) {
-        if (!assignments.has(id)) {
-          assignments.set(id, t);
-          tierOccupancy.set(t, (tierOccupancy.get(t) ?? 0) + 1);
-        }
+      for (const id of Object.keys(parent.standings).map(Number).filter((clubId) => active.has(clubId) && !assignments.has(clubId))) {
+        assignments.set(id, t);
+        tierOccupancy.set(t, (tierOccupancy.get(t) ?? 0) + 1);
       }
-      // Vacancies are actual departing slots, not "non-human" slots. Filler
-      // AI remains in place at the bottom edge; counting it as an opening
-      // would incorrectly promote enough humans to replace every AI in the
-      // parent division.
+    }
+
+    const targetClubIds = new Set(parents.flatMap((parent) => Object.keys(parent.standings).map(Number)));
+    const incomingRelegations = [...assignments.entries()].filter(([clubId, assignedTier]) => assignedTier === t && !targetClubIds.has(clubId)).length;
+    const openings = Math.max(0, parents.reduce((total, parent) => {
       const stayingMembers = Object.values(parent.standings).filter((row) => {
         const id = row.clubId;
         return !abandoned.has(id) && (assignments.get(id) ?? t) === t;
       }).length;
-      const openings = Math.max(0, CLUBS_PER_DIVISION - stayingMembers);
-      const myChildren = children.filter((c) => isChildOf(parent, c));
-      const candidatesByChild = myChildren.map((c) => standingsTiebreak(Object.values(c.standings))
-        .filter((r) => active.has(r.clubId) && isHumanClub(world, r.clubId) && !assignments.has(r.clubId))
-        .map((r, i) => ({ clubId: r.clubId, rank: i + 1, division: c, row: r })));
-      // When both children exist, reserve one promotion for each child before
-      // ranking any second candidates. With one child, its top two naturally
-      // fill both slots (plan §25/§26).
-      let promoted = 0;
-      const promotedIds = new Set<number>();
-      const reserveOnePerChild = candidatesByChild
-        .map((candidatesForChild) => candidatesForChild[0])
-        .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== undefined);
-      const orderedCandidates = [
-        ...reserveOnePerChild,
-        ...candidatesByChild.flatMap((candidatesForChild) => candidatesForChild.slice(1)),
-      ];
-      for (const cand of orderedCandidates) {
-        if (promoted >= openings) break;
-        if (promotedIds.has(cand.clubId)) continue;
-        assignments.set(cand.clubId, t);
-        promotedIds.add(cand.clubId);
-        tierOccupancy.set(t, (tierOccupancy.get(t) ?? 0) + 1);
-        promoted++;
-      }
+      return total + Math.max(0, CLUBS_PER_DIVISION - stayingMembers);
+    }, 0) - incomingRelegations);
+    const candidatesByChild = children.map((child) => {
+      const rows = standingsTiebreak(Object.values(child.standings), eloRatings(world));
+      let rank = 0;
+      return rows
+        .filter((row) => active.has(row.clubId) && isHumanClub(world, row.clubId) && !assignments.has(row.clubId))
+        .map((row) => ({ clubId: row.clubId, humanRank: ++rank, row, eloRating: clubById(world, row.clubId)?.eloRating ?? ELO_CONFIG.initial }));
+    });
+    const roundOne = candidatesByChild.flat().filter((candidate) => candidate.humanRank === 1);
+    if (roundOne.length > openings && openings > 0) {
+      auditMultiplayerEvent(world, "PROMOTION_CAPACITY_CONSTRAINT", { metadata: JSON.stringify({ tier: t, candidates: roundOne.length, openings }) });
+    }
+    const selected = [...roundOne].sort(promotionCandidateTiebreak).slice(0, openings);
+    if (selected.length < openings) {
+      const selectedIds = new Set(selected.map((candidate) => candidate.clubId));
+      const later = candidatesByChild.flat().filter((candidate) => candidate.humanRank >= 2 && !selectedIds.has(candidate.clubId));
+      selected.push(...later.sort(promotionCandidateTiebreak).slice(0, openings - selected.length));
+    }
+    for (const candidate of selected) {
+      assignments.set(candidate.clubId, t);
+      tierOccupancy.set(t, (tierOccupancy.get(t) ?? 0) + 1);
     }
   }
 
@@ -884,21 +924,90 @@ function validateAssignments(assignments: Map<number, number>, abandoned: Set<nu
   return errors;
 }
 
-function crossDivisionTiebreak(a: StandingsRow, b: StandingsRow): number {
-  if (b.points !== a.points) return b.points - a.points;
-  const gdA = a.goalsFor - a.goalsAgainst;
-  const gdB = b.goalsFor - b.goalsAgainst;
-  if (gdB !== gdA) return gdB - gdA;
-  if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor;
-  if (b.wins !== a.wins) return b.wins - a.wins;
-  return a.clubId - b.clubId;
-}
-
 export function timezoneCoordinate(tz: string | null): number {
   // Approximate IANA -> longitude-derived hour coordinate for clustering.
   // Falls back to UTC+0. Kept simple: sort roughly by UTC offset without DST.
   const offset = utcOffsetHours(tz);
   return offset;
+}
+
+export function timezoneOffsetMinutes(tz: string | null, at = Date.now()): number {
+  if (!tz) return 0;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" });
+    const name = fmt.formatToParts(new Date(at)).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+    const match = /GMT([+-])(\d{1,2})(?::?(\d{2}))?/.exec(name);
+    if (!match) return 0;
+    const minutes = Number(match[2]) * 60 + Number(match[3] ?? 0);
+    return match[1] === "-" ? -minutes : minutes;
+  } catch {
+    return 0;
+  }
+}
+
+export function calculateTimezoneDistance(offsetA: number, offsetB: number): number {
+  const raw = Math.abs(offsetA - offsetB) % 1440;
+  return Math.min(raw, 1440 - raw);
+}
+
+export function calculateTimezoneCost(groups: { timezone: string | null }[][], at = Date.now()): number {
+  return groups.reduce((total, group) => total + group.reduce((cost, a, i) => cost + group.slice(i + 1).reduce((pairCost, b) => {
+    const distance = calculateTimezoneDistance(timezoneOffsetMinutes(a.timezone, at), timezoneOffsetMinutes(b.timezone, at));
+    return pairCost + distance * distance;
+  }, 0), 0), 0);
+}
+
+export function calculateEloBalanceCost(groups: { clubId: number }[][], world: World): number {
+  const humans = groups.flat();
+  if (humans.length === 0) return 0;
+  const mean = humans.reduce((sum, human) => sum + (clubById(world, human.clubId)?.eloRating ?? ELO_CONFIG.initial), 0) / humans.length;
+  return groups.reduce((total, group) => {
+    if (group.length === 0) return total;
+    const groupMean = group.reduce((sum, human) => sum + (clubById(world, human.clubId)?.eloRating ?? ELO_CONFIG.initial), 0) / group.length;
+    return total + group.length * Math.pow(groupMean - mean, 2);
+  }, 0);
+}
+
+/**
+ * Return the lexicographic social score for a proposed grouping. Direct
+ * friendships always outrank friends-of-friends. Missing friendship data is
+ * intentionally treated as an empty graph for legacy worlds.
+ */
+export function calculateSocialScore(groups: { clubId: number }[][], world: World): { direct: number; friendsOfFriends: number } {
+  const clubsByUser = new Map(world.clubs.filter((club) => club.ownerUserId !== null).map((club) => [club.ownerUserId!, club.id]));
+  const direct = new Set<string>();
+  const neighbors = new Map<number, Set<number>>();
+  for (const friendship of world.friendships ?? []) {
+    if (friendship.userAId === friendship.userBId) continue;
+    const a = clubsByUser.get(friendship.userAId);
+    const b = clubsByUser.get(friendship.userBId);
+    if (a === undefined || b === undefined) continue;
+    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+    direct.add(key);
+    (neighbors.get(a) ?? new Set<number>()).add(b);
+    (neighbors.get(b) ?? new Set<number>()).add(a);
+    if (!neighbors.has(a)) neighbors.set(a, new Set([b]));
+    if (!neighbors.has(b)) neighbors.set(b, new Set([a]));
+  }
+  const directCount = (a: number, b: number) => direct.has(a < b ? `${a}:${b}` : `${b}:${a}`);
+  let directScore = 0;
+  let friendsOfFriendsScore = 0;
+  for (const group of groups) {
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const a = group[i].clubId;
+        const b = group[j].clubId;
+        if (directCount(a, b)) {
+          directScore++;
+          continue;
+        }
+        const aNeighbors = neighbors.get(a) ?? new Set<number>();
+        const bNeighbors = neighbors.get(b) ?? new Set<number>();
+        if ([...aNeighbors].some((neighbor) => bNeighbors.has(neighbor))) friendsOfFriendsScore++;
+      }
+    }
+  }
+  return { direct: directScore, friendsOfFriends: friendsOfFriendsScore };
 }
 
 const TZ_OFFSET_CACHE = new Map<string, number>();
@@ -937,7 +1046,7 @@ export function rebuildTierDivisions(
   tier: number,
   humans: { clubId: number; timezone: string | null }[],
   ref: { year: number; month: number },
-  options: { generateFixtures?: boolean } = {},
+  options: { generateFixtures?: boolean; assignmentSeed?: number } = {},
 ): Competition[] {
   // Remove existing divisions at this tier.
   const old = divisionsInTier(world, seasonId, tier);
@@ -946,8 +1055,10 @@ export function rebuildTierDivisions(
     world.fixtures = world.fixtures.filter((f) => f.competitionId !== c.id);
   }
 
-  const required = Math.max(1, Math.ceil(humans.length / CLUBS_PER_DIVISION));
-  const groups = timezoneCluster(humans, required);
+  const required = humans.length === 0 ? 0 : Math.ceil(humans.length / CLUBS_PER_DIVISION);
+  if (required === 0) return [];
+  if (required > MAX_DIVISIONS_PER_TIER(tier)) throw new Error(`Tier ${tier} cannot contain ${humans.length} human clubs`);
+  const groups = buildBalancedTierGroups(world, humans, required, ref, options.assignmentSeed);
 
   const created: Competition[] = [];
   for (let g = 0; g < groups.length; g++) {
@@ -956,8 +1067,8 @@ export function rebuildTierDivisions(
       div.standings[h.clubId] = emptyStandingsRow(h.clubId);
       clubById(world, h.clubId)!.competitionState = "ACTIVE";
     }
-    // AI filler only in the final incomplete group.
-    if (g === groups.length - 1) ensureDivisionFull(world, div);
+    // Filler is inserted only after all humans have been assigned.
+    ensureDivisionFull(world, div);
     if (options.generateFixtures !== false) {
       const fixtures = generateDivisionFixtures(world, div, ref);
       world.fixtures.push(...fixtures);
@@ -966,6 +1077,114 @@ export function rebuildTierDivisions(
     created.push(div);
   }
   return created;
+}
+
+function buildBalancedTierGroups(
+  world: World,
+  humans: { clubId: number; timezone: string | null }[],
+  required: number,
+  ref: { year: number; month: number },
+  assignmentSeed?: number,
+): { clubId: number; timezone: string | null }[][] {
+  const baseSize = Math.floor(humans.length / required);
+  const extra = humans.length % required;
+  const capacities = Array.from({ length: required }, (_, i) => baseSize + (i < extra ? 1 : 0));
+  const at = Date.UTC(ref.year, ref.month - 1, 1, 12);
+  const sorted = [...humans].sort((a, b) => {
+    const normalizedA = ((timezoneOffsetMinutes(a.timezone, at) % 1440) + 1440) % 1440;
+    const normalizedB = ((timezoneOffsetMinutes(b.timezone, at) % 1440) + 1440) % 1440;
+    if (normalizedA !== normalizedB) return normalizedA - normalizedB;
+    const tieA = assignmentSeed === undefined ? a.clubId : seededTieBreak(assignmentSeed, a.clubId);
+    const tieB = assignmentSeed === undefined ? b.clubId : seededTieBreak(assignmentSeed, b.clubId);
+    return tieA - tieB || a.clubId - b.clubId;
+  });
+  let best: { groups: { clubId: number; timezone: string | null }[][]; social: { direct: number; friendsOfFriends: number }; tz: number; elo: number; tieRank: number } | null = null;
+  for (let rotation = 0; rotation < sorted.length; rotation++) {
+    const rotated = sorted.map((_, i) => sorted[(i + rotation) % sorted.length]);
+    const groups: { clubId: number; timezone: string | null }[][] = [];
+    let cursor = 0;
+    for (const capacity of capacities) {
+      groups.push(rotated.slice(cursor, cursor + capacity));
+      cursor += capacity;
+    }
+    improveSocialAssignment(groups, world);
+    const social = calculateSocialScore(groups, world);
+    const tz = calculateTimezoneCost(groups, at);
+    const elo = calculateEloBalanceCost(groups, world);
+    const tieRank = assignmentSeed === undefined ? rotation : seededTieBreak(assignmentSeed, rotation);
+    if (!best || social.direct > best.social.direct ||
+      (social.direct === best.social.direct && (social.friendsOfFriends > best.social.friendsOfFriends ||
+        (social.friendsOfFriends === best.social.friendsOfFriends && (tz < best.tz ||
+          (tz === best.tz && (elo < best.elo - ELO_CONFIG.costEpsilon ||
+            (Math.abs(elo - best.elo) <= ELO_CONFIG.costEpsilon && tieRank < best.tieRank)))))))) {
+      best = { groups, social, tz, elo, tieRank };
+    }
+  }
+  if (!best) return [];
+
+  // Only swaps preserving both higher-priority objectives may improve Elo.
+  let improved = true;
+  while (improved) {
+    improved = false;
+    const currentElo = calculateEloBalanceCost(best.groups, world);
+    for (let leftIndex = 0; leftIndex < best.groups.length && !improved; leftIndex++) {
+      for (let rightIndex = leftIndex + 1; rightIndex < best.groups.length && !improved; rightIndex++) {
+        for (let leftMember = 0; leftMember < best.groups[leftIndex].length && !improved; leftMember++) {
+          for (let rightMember = 0; rightMember < best.groups[rightIndex].length; rightMember++) {
+            const candidate = best.groups.map((group) => [...group]);
+            [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
+            if (calculateTimezoneCost(candidate, at) !== best.tz) continue;
+            const social = calculateSocialScore(candidate, world);
+            if (social.direct !== best.social.direct || social.friendsOfFriends !== best.social.friendsOfFriends) continue;
+            const candidateElo = calculateEloBalanceCost(candidate, world);
+            if (candidateElo < currentElo - ELO_CONFIG.costEpsilon) {
+              best.groups = candidate;
+              best.social = social;
+              best.elo = candidateElo;
+              improved = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+  return best.groups;
+}
+
+/** Stable pseudo-random ordering for persisted group-assignment tie-breaks. */
+function seededTieBreak(seed: number, value: number): number {
+  let x = (seed ^ Math.imul(value, 0x9e3779b9)) >>> 0;
+  x ^= x >>> 16;
+  x = Math.imul(x, 0x85ebca6b) >>> 0;
+  x ^= x >>> 13;
+  x = Math.imul(x, 0xc2b2ae35) >>> 0;
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
+function improveSocialAssignment(groups: { clubId: number; timezone: string | null }[][], world: World): void {
+  let improved = true;
+  while (improved) {
+    improved = false;
+    const current = calculateSocialScore(groups, world);
+    for (let leftIndex = 0; leftIndex < groups.length && !improved; leftIndex++) {
+      for (let rightIndex = leftIndex + 1; rightIndex < groups.length && !improved; rightIndex++) {
+        for (let leftMember = 0; leftMember < groups[leftIndex].length && !improved; leftMember++) {
+          for (let rightMember = 0; rightMember < groups[rightIndex].length; rightMember++) {
+            const candidate = groups.map((group) => [...group]);
+            [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
+            const score = calculateSocialScore(candidate, world);
+            if (score.direct > current.direct || (score.direct === current.direct && score.friendsOfFriends > current.friendsOfFriends)) {
+              groups[leftIndex] = candidate[leftIndex];
+              groups[rightIndex] = candidate[rightIndex];
+              improved = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
 }
 
 /**

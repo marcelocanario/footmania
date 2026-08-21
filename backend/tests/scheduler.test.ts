@@ -16,6 +16,7 @@ import {
   ScheduledEventType,
 } from "../src/services/scheduler";
 import { ROLLOVER_WORKFLOW_STEPS } from "../src/services/seasonRolloverService";
+import { calendarValues } from "../src/services/seasonCalendar";
 
 const prisma = new PrismaClient();
 
@@ -74,6 +75,19 @@ describe("durable scheduler", () => {
     expect(first.dueAbsoluteGameDay).toBe(400);
     const rollover = await prisma.scheduledEvent.findUniqueOrThrow({ where: { idempotencyKey: rolloverEventKey("SEASON_ROLLOVER", world.mp.seasonId) } });
     expect(rollover.dueAbsoluteGameDay).toBe(400 + gameConfig.seasonDays - 1);
+  });
+
+  it("places inter-season workflow events at the configured boundary", async () => {
+    const { saveId, world } = await freshWorld();
+    await materializeSeasonEvents(prisma, saveId, world);
+    const calendar = calendarValues();
+    const start = world.mp.startAbsoluteGameDay ?? 0;
+    const transition = await prisma.scheduledEvent.findUniqueOrThrow({ where: { idempotencyKey: rolloverEventKey("INTERSEASON_START", world.mp.seasonId) } });
+    const fixtures = await prisma.scheduledEvent.findUniqueOrThrow({ where: { idempotencyKey: rolloverEventKey("NEXT_SEASON_FIXTURE_GENERATION", world.mp.seasonId) } });
+    const validation = await prisma.scheduledEvent.findUniqueOrThrow({ where: { idempotencyKey: rolloverEventKey("NEXT_SEASON_STRUCTURE_VALIDATE", world.mp.seasonId) } });
+    expect(transition.dueAbsoluteGameDay).toBe(start + calendar.interseasonStartIndex);
+    expect(fixtures.dueAbsoluteGameDay).toBe(transition.dueAbsoluteGameDay);
+    expect(validation.dueAbsoluteGameDay).toBe(start + calendar.seasonDays - 1);
   });
 
   it("converts legacy season flows exactly once at the save boundary", async () => {

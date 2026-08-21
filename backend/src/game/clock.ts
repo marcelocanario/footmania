@@ -143,7 +143,7 @@ export function joinLockRound(): number {
 }
 
 /** Season status string for a given instant. */
-export function seasonStatusFor(ref: SeasonRef, now: number, kickoffHourUtc: number = configuredKickoffHour()): "PREPARATION" | "ACTIVE" | "INTERSEASON" | "ROLLOVER" | "COMPLETE" {
+export function seasonStatusFor(ref: SeasonRef, now: number, kickoffHourUtc: number = configuredKickoffHour()): "PREPARATION" | "ACTIVE" | "POST_MATCH" | "INTERSEASON" | "ROLLOVER" | "COMPLETE" {
   if (now < ref.startsAt) return "PREPARATION";
   const dayIndex = Math.floor((now - ref.startsAt) / (24 * 60 * 60 * 1000));
   if (dayIndex >= gameConfig.seasonDays) return "COMPLETE";
@@ -151,7 +151,7 @@ export function seasonStatusFor(ref: SeasonRef, now: number, kickoffHourUtc: num
 }
 
 export function isSeasonOver(ref: SeasonRef, now: number): boolean {
-  return now >= ref.endsAt;
+  return now >= ref.startsAt + gameConfig.seasonDays * 24 * 60 * 60 * 1000;
 }
 
 /** UTC day key (yyyymmdd) used to make daily ticks idempotent. */
