@@ -212,6 +212,7 @@ export function deserializeWorld(json: string): World {
     club.country ??= "BRA"; // defensive: pre-country legacy rows would otherwise violate the NOT NULL column
     club.ownerUserId ??= null;
     club.timezone ??= null;
+    club.preferredHours ??= null;
     club.competitionState ??= "ACTIVE";
     club.lastMeaningfulActivityAt ??= null;
     club.abandonmentEligibleAt ??= null;
@@ -737,6 +738,7 @@ function clubRow(c: Club, saveId: number) {
      saveId,
      ownerUserId: c.ownerUserId,
      timezone: c.timezone,
+     preferredHoursJson: c.preferredHours ? JSON.stringify(c.preferredHours) : null,
      competitionState: c.competitionState,
      lastMeaningfulActivityAt: c.lastMeaningfulActivityAt !== null ? BigInt(c.lastMeaningfulActivityAt) : null,
      abandonmentEligibleAt: c.abandonmentEligibleAt !== null ? BigInt(c.abandonmentEligibleAt) : null,
@@ -986,6 +988,7 @@ async function rebuildWorld(
     const r2 = r as unknown as {
       ownerUserId: number | null;
       timezone: string | null;
+      preferredHoursJson: string | null;
       competitionState: string;
       lastMeaningfulActivityAt: bigint | null;
       abandonmentEligibleAt: bigint | null;
@@ -1001,6 +1004,7 @@ async function rebuildWorld(
       shortName: r.shortName,
       ownerUserId: r2.ownerUserId ?? null,
       timezone: r2.timezone ?? null,
+      preferredHours: jsonOr<number[] | null>(r2.preferredHoursJson, null),
       competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
       lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null && r2.lastMeaningfulActivityAt !== undefined ? Number(r2.lastMeaningfulActivityAt) : null,
       abandonmentEligibleAt: r2.abandonmentEligibleAt !== null && r2.abandonmentEligibleAt !== undefined ? Number(r2.abandonmentEligibleAt) : null,

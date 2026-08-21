@@ -123,6 +123,10 @@ export interface Club {
   inactivityWarningStage?: number;
   // Multiplayer: epoch ms of the scheduled live-match kickoff (if any).
   liveMatchAt: number | null;
+  // Preferred match-time half-hour slots (local wall clock, 0..47). Null =
+  // unconstrained (legacy humans, AI): every slot scores distance 0. Only
+  // consulted when a season's fixtures are generated; never reschedules.
+  preferredHours?: number[] | null;
   country: string;
   // Highest division this club has ever reached (1 = strongest). Historical
   // milestone, independent of the current division (which is derived from

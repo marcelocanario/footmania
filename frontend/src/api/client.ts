@@ -110,6 +110,7 @@ export interface MpStatus {
     cash: number;
     competitionState: string;
     timezone: string | null;
+    preferredHours: number[] | null;
     reservedNextSeasonAllocation: { seasonId: number; amount: number; issuedAt: number } | null;
     inactivity: { eligible: boolean; removedAtRollover: boolean; note: string | null } | null;
   } | null;
@@ -576,8 +577,10 @@ export const api = {
 
   // Multiplayer
   mpStatus: () => request<MpStatus>("/api/mp/status"),
-  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; stadiumName?: string }) =>
+  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; stadiumName?: string; preferredHours?: number[] }) =>
     request<{ ok: boolean; clubId: number }>("/api/mp/join", { method: "POST", body: JSON.stringify(payload) }),
+  updatePreferredHours: (preferredHours: number[]) =>
+    request<{ ok: boolean; preferredHours: number[] }>("/api/mp/preferred-hours", { method: "PUT", body: JSON.stringify({ preferredHours }) }),
   returnClub: () =>
     request<{ ok: boolean }>("/api/mp/return", { method: "POST" }),
   practice: () =>

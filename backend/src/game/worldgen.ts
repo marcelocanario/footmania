@@ -96,6 +96,8 @@ export interface HumanClubOptions {
   primaryColor?: string;
   secondaryColor?: string;
   stadiumName?: string;
+  /** Validated half-hour preferred-match slots (see game/scheduling.ts). */
+  preferredHours?: number[] | null;
 }
 
 /**
@@ -115,6 +117,7 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     shortName: name,
     ownerUserId: opts.userId,
     timezone: opts.timezone,
+    preferredHours: opts.preferredHours ?? null,
     competitionState: "NEW",
     lastMeaningfulActivityAt: Date.now(),
     abandonmentEligibleAt: null,

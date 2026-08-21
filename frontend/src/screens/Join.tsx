@@ -4,8 +4,9 @@ import { Dropdown } from "primereact/dropdown";
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
 import { useRef } from "react";
-import { Flag, Home, Palette, Play, Shield, Info } from "lucide-react";
+import { Flag, Home, Palette, Play, Shield, Info, Clock } from "lucide-react";
 import { api, type CountryOption, type MpStatus } from "../api/client";
+import { AvailabilityPicker, PRESET_EVENINGS, MIN_SLOTS } from "../components/AvailabilityPicker";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 
@@ -47,6 +48,7 @@ export function Join() {
   const [timezone, setTimezone] = useState<string>("America/Sao_Paulo");
   const [colorIdx, setColorIdx] = useState(0);
   const [stadiumName, setStadiumName] = useState("");
+  const [preferredHours, setPreferredHours] = useState<number[]>(PRESET_EVENINGS);
   const [joining, setJoining] = useState(false);
   const [countries, setCountries] = useState<CountryOption[]>([]);
   const [featured, setFeatured] = useState<CountryOption[]>([]);
@@ -131,6 +133,7 @@ export function Join() {
         primaryColor: color.primary,
         secondaryColor: color.secondary,
         stadiumName: stadiumName.trim() || undefined,
+        preferredHours,
       });
       setLiveMatch(null);
       await loadStatus();
@@ -307,13 +310,21 @@ export function Join() {
             </div>
           </div>
 
+          <div>
+            <label className="field-label" style={{ display: "block", marginBottom: 6, fontWeight: 600 }}><Clock size={14} style={{ verticalAlign: -2, marginRight: 4 }} />Preferred match times</label>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 8 }}>
+              When can you usually play? Fixtures are scheduled inside these windows whenever possible. You can change this later in Settings; it applies from your next season's schedule.
+            </div>
+            <AvailabilityPicker value={preferredHours} onChange={setPreferredHours} />
+          </div>
+
           <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-3)", fontSize: "0.85rem" }}>
             <Info size={14} /> Your club keeps its identity, roster and finances permanently. Joining early lets you take over a top AI slot.
           </div>
         </div>
 
         <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button className="btn gold" onClick={() => void join()} disabled={joining || !selectedCountry || !clubName.trim()}>
+          <button className="btn gold" onClick={() => void join()} disabled={joining || !selectedCountry || !clubName.trim() || preferredHours.length < MIN_SLOTS}>
             <Shield size={15} /> {joining ? strings.common.loading : strings.saves.continue}
           </button>
         </div>

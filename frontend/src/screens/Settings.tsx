@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Timer, Globe2 } from "lucide-react";
+import { Settings as SettingsIcon, Timer, Globe2, Clock } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { matchDurationLabel } from "../matchPace";
 import { strings } from "../strings";
+import { AvailabilityPicker, PRESET_EVENINGS, MIN_SLOTS } from "../components/AvailabilityPicker";
 
 const OPTIONS = [5, 10, 15, 20, 30, 45, 60];
 export function SettingsScreen() {
@@ -15,6 +16,9 @@ export function SettingsScreen() {
   const [saved, setSaved] = useState(false);
   const [timezone, setTimezone] = useState(status?.club?.timezone ?? "UTC");
   const [timezoneSaved, setTimezoneSaved] = useState(false);
+  const [preferredHours, setPreferredHours] = useState<number[]>(status?.club?.preferredHours ?? PRESET_EVENINGS);
+  const [hoursSaved, setHoursSaved] = useState(false);
+  const [savingHours, setSavingHours] = useState(false);
 
   useEffect(() => {
     void load();
@@ -22,7 +26,8 @@ export function SettingsScreen() {
 
   useEffect(() => {
     if (status?.club?.timezone) setTimezone(status.club.timezone);
-  }, [status?.club?.timezone]);
+    if (status?.club?.preferredHours) setPreferredHours(status.club.preferredHours);
+  }, [status?.club?.timezone, status?.club?.preferredHours]);
 
   const value = draft ?? matchDurationMinutes;
 
@@ -97,6 +102,34 @@ export function SettingsScreen() {
           await loadStatus();
           setTimezoneSaved(true);
         })()} disabled={!status?.club}>{timezoneSaved ? "Saved" : "Save timezone"}</button>
+      </div>
+
+      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
+        <h2 className="card-title"><Clock size={17} /> Preferred match times</h2>
+        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
+          When can you usually play? Fixtures are scheduled inside these windows whenever possible. Changes apply from the next season's fixture generation — current fixtures never move.
+        </div>
+        <AvailabilityPicker value={preferredHours} onChange={(next) => { setPreferredHours(next); setHoursSaved(false); }} disabled={!status?.club} />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <button
+            className="btn gold"
+            onClick={() => void (async () => {
+              setSavingHours(true);
+              try {
+                await api.updatePreferredHours(preferredHours);
+                await loadStatus();
+                setHoursSaved(true);
+                setTimeout(() => setHoursSaved(false), 2000);
+              } finally {
+                setSavingHours(false);
+              }
+            })()}
+            disabled={!status?.club || savingHours || preferredHours.length < MIN_SLOTS}
+          >
+            <SettingsIcon size={15} /> {savingHours ? strings.common.saving : strings.common.save}
+          </button>
+          {hoursSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{strings.settings.saved}</span>}
+        </div>
       </div>
     </div>
   );

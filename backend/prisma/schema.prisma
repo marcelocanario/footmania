@@ -209,6 +209,10 @@ model Club {
   // kickoff. Null when the club has no upcoming live match. Once the scheduled
   // kickoff passes, the match auto-plays to completion.
   liveMatchAt      BigInt?
+  // Preferred match-time windows as a JSON array of half-hour slot indices
+  // (0 = 00:00–00:30 local, 47 = 23:30–24:00). Null = unconstrained (legacy
+  // humans and all AI clubs); used only when a season's fixtures are generated.
+  preferredHoursJson String?
   name             String
   shortName        String
   country          String

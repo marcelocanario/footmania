@@ -1,8 +1,9 @@
 import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRow, World } from "./types";
 import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, sortedStandings, updateStandings, validateDoubleRoundRobinFixtures } from "./league";
 import { simulateMatch } from "./match";
-import { kickoffForRound, seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
+import { seasonRefFor, seasonKey, completedRounds, joinLockRound } from "./clock";
 import { roundDayIndex } from "../services/seasonCalendar";
+import { anchorMinutes, pickFixtureKickoff, pickSynchronizedKickoff, type PreferenceInput } from "./scheduling";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
@@ -346,15 +347,47 @@ export function setDivisionState(world: World, divisionId: number, state: "CREAT
   if (comp) comp.status = state;
 }
 
-/** Generate the 14-round schedule for a division and assign kickoff timestamps. */
+/**
+ * Generate the 14-round schedule for a division and assign kickoff timestamps.
+ *
+ * Kickoffs are optimized inside the clubs' preferred half-hour windows while
+ * game days/rounds stay fixed (see game/scheduling.ts):
+ * - ordinary rounds are optimized per fixture (home preference first, then
+ *   the away club's, ties toward the default kickoff);
+ * - the last round is synchronized per division/group: one shared instant
+ *   minimizes summed home distance, then summed away distance;
+ * - AI fillers and legacy humans without preferences are unconstrained.
+ * Fixtures are only timed here, at generation; they are never rescheduled
+ * afterwards (mid-season joins inherit existing kickoffs unchanged).
+ */
 export function generateDivisionFixtures(world: World, comp: Competition, ref: { year: number; month: number }): Fixture[] {
+  void ref;
   const clubIds = Object.keys(comp.standings).map(Number);
   const fixtures = createLeagueFixtures(world.rng, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
+  const seasonStart = world.mp.seasonStartAt ?? Date.now();
+  const anchorMin = anchorMinutes();
+  const prefOf = (clubId: number): PreferenceInput => {
+    const club = clubById(world, clubId);
+    return { timezone: club?.timezone ?? null, preferredSlots: club?.preferredHours ?? null };
+  };
+  const byRound = new Map<number, Fixture[]>();
+  for (const f of fixtures) {
+    const list = byRound.get(f.round) ?? [];
+    list.push(f);
+    byRound.set(f.round, list);
+  }
+  const lastRound = fixtures.reduce((max, f) => Math.max(max, f.round), 0);
+  for (const [round, roundFixtures] of byRound) {
+    const dayStart = seasonStart + roundDayIndex(round) * 24 * 60 * 60 * 1000;
+    if (round === lastRound) {
+      const kickoff = pickSynchronizedKickoff(roundFixtures.map((f) => ({ home: prefOf(f.homeClubId), away: prefOf(f.awayClubId) })), dayStart, anchorMin);
+      for (const f of roundFixtures) f.kickoffAt = kickoff;
+    } else {
+      for (const f of roundFixtures) f.kickoffAt = pickFixtureKickoff(prefOf(f.homeClubId), prefOf(f.awayClubId), dayStart, anchorMin);
+    }
+  }
   for (const f of fixtures) {
     f.id = world.nextId++;
-    const round = f.round + 1;
-    f.kickoffAt = kickoffForRound({ ...ref, seasonStartAt: world.mp.seasonStartAt ?? Date.now() }, round);
-    f.scheduledSeasonDayIndex = roundDayIndex(f.round);
   }
   validateDoubleRoundRobinFixtures(fixtures, clubIds, gameConfig.league.turns);
   comp.config.clubs = clubIds;

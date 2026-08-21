@@ -347,6 +347,13 @@ export const MP_CONFIG = {
   joinThresholdPercent: 0.5,
   // UTC hour at which every scheduled round kicks off (GLOBAL_FIXED mode).
   matchKickoffHourUtc: 20,
+  // Preferred-time scheduling: the day is divided into half-hour slots and
+  // humans pick at least `minPreferredSlots` of them (8 hours). Fixture
+  // kickoffs are optimized inside these slots; the configured
+  // scheduler.leagueMatchStartUtc remains the tie-break anchor.
+  preferredSlotMinutes: 30,
+  slotsPerDay: 48,
+  minPreferredSlots: 16,
   // Scheduling supports both the globally synchronized kickoff and a fixed
   // local hour for each division.  Fixture timestamps are always persisted in
   // UTC, so changing this setting affects only newly generated schedules.

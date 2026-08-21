@@ -5,7 +5,8 @@ import { buildSnapshot } from "../services/snapshot";
 import { createHumanClub } from "../game/worldgen";
 import { withGlobalLock } from "../services/lock";
 import { seasonKey } from "../game/clock";
-import { gameConfig } from "../config";
+import { gameConfig, MP_CONFIG } from "../config";
+import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
@@ -20,6 +21,7 @@ const joinSchema = z.object({
   primaryColor: z.string().optional(),
   secondaryColor: z.string().optional(),
   stadiumName: z.string().max(80).optional(),
+  preferredHours: z.array(z.number()).optional(),
 });
 
 async function withWorld(app: FastifyInstance, fn: (world: World) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>) {
@@ -93,6 +95,7 @@ export async function savesRoutes(app: FastifyInstance) {
               cash: club.cash,
               competitionState: club.competitionState,
               timezone: club.timezone,
+              preferredHours: club.preferredHours ?? null,
             }
           : null,
       };
@@ -103,6 +106,9 @@ export async function savesRoutes(app: FastifyInstance) {
   app.post("/mp/join", async (req, reply) => {
     const parsed = joinSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    // Signup requires at least 8 hours of preferred windows (16 half-hour slots).
+    const preferredHours = validatePreferredHours(parsed.data.preferredHours ?? []);
+    if (preferredHours === null) return reply.code(400).send({ error: `Select at least ${MP_CONFIG.minPreferredSlots / 2} hours of preferred match times` });
     const user = req.user!;
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
@@ -120,6 +126,7 @@ export async function savesRoutes(app: FastifyInstance) {
         primaryColor: parsed.data.primaryColor,
         secondaryColor: parsed.data.secondaryColor,
         stadiumName: parsed.data.stadiumName,
+        preferredHours,
       });
 
        const now = Date.now();
@@ -298,6 +305,25 @@ export async function savesRoutes(app: FastifyInstance) {
         away: away?.name ?? "",
       },
     };
+  });
+
+  // --- Preferred match times ----------------------------------------------
+  app.put("/mp/preferred-hours", async (req, reply) => {
+    const parsed = z.object({ preferredHours: z.array(z.number()) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const preferredHours = validatePreferredHours(parsed.data.preferredHours);
+    if (preferredHours === null) return reply.code(400).send({ error: `Select at least ${MP_CONFIG.minPreferredSlots / 2} hours of preferred match times` });
+    const res = await withWorld(app, async (world) => {
+      const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
+      if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
+      // Preferences only affect the next fixture generation; existing fixtures
+      // are never rescheduled.
+      club.preferredHours = preferredHours;
+      recordActivity(world, req.user!.id, club.id, "preferred-hours");
+      return { value: { ok: true, preferredHours } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
   });
 
   // --- Settings -----------------------------------------------------------

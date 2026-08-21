@@ -27,7 +27,7 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Marcelo FC", country: "BRA", timezone: "America/Sao_Paulo" },
+      payload: { clubName: "Marcelo FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join.statusCode).toBe(200);
     const joinBody = join.json();
@@ -76,14 +76,14 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "First FC", country: "BRA", timezone: "America/Sao_Paulo" },
+      payload: { clubName: "First FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join1.statusCode).toBe(200);
     const join2 = await app.inject({
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Second FC", country: "BRA", timezone: "America/Sao_Paulo" },
+      payload: { clubName: "Second FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join2.statusCode).toBe(409);
     await app.close();
