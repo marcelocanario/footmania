@@ -2,6 +2,7 @@ import type { LiveMatchState, World } from "../game/types";
 import { livePhase } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
 import { FORMATION_NAMES } from "../game/constants";
+import { resolveClubKits } from "../game/kits";
 
 export interface LiveEventView {
   sequence: number;
@@ -37,8 +38,8 @@ export interface LiveStateView {
   awayClubId: number;
   home: string;
   away: string;
-  homeKit: { primary: string; secondary: string };
-  awayKit: { primary: string; secondary: string };
+  homeKit: { primary: string; secondary: string; accent: string; numberColor: string; pattern: string };
+  awayKit: { primary: string; secondary: string; accent: string; numberColor: string; pattern: string };
   homeScore: number;
   awayScore: number;
   minute: number;
@@ -109,8 +110,27 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayClubId: st.awayClubId,
     home: home?.name ?? "",
     away: away?.name ?? "",
-    homeKit: { primary: home?.primaryColor ?? "#23a55a", secondary: home?.secondaryColor ?? "#14693c" },
-    awayKit: { primary: away?.primaryColor ?? "#f0b429", secondary: away?.secondaryColor ?? "#8c6510" },
+    // Kit Lab: full home/away designs so pitch markers can mirror the pattern.
+    homeKit: (() => {
+      const k = home ? resolveClubKits(home).home : null;
+      return {
+        primary: k?.primary ?? "#23a55a",
+        secondary: k?.secondary ?? "#14693c",
+        accent: k?.accent ?? "#ffffff",
+        numberColor: k?.numberColor ?? "#ffffff",
+        pattern: k?.pattern ?? "solid",
+      };
+    })(),
+    awayKit: (() => {
+      const k = away ? resolveClubKits(away).away : null;
+      return {
+        primary: k?.primary ?? "#f0b429",
+        secondary: k?.secondary ?? "#8c6510",
+        accent: k?.accent ?? "#ffffff",
+        numberColor: k?.numberColor ?? "#ffffff",
+        pattern: k?.pattern ?? "solid",
+      };
+    })(),
     homeScore: st.scores[0],
     awayScore: st.scores[1],
     minute: st.minute,

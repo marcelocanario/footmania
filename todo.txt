@@ -19,7 +19,7 @@ Game engine
 		extra time (calculated by events in the match, not too much time)
 		match start coin toss (currently, home team always starts with the ball); possession to team who loss coin tosse after half-time
 		MP_CONFIG constant should be configurable in game.config.jsonc (initially 30 min); there should also be a half-time pause setting for real-life pause time (only when a human team is involved) (initially 5 min, real-life). keep instant matches instant (AI vs AI, test matches)
-	player stats and history (goals in the carrer, yellow and red cards, injuries, etc.)
+	player stats and history (goals in the career, yellow and red cards, injuries, etc.)
 		only pro users can see history of other user's players
 		during auctions, everyone can see full history of the player in the auction
 
@@ -42,7 +42,8 @@ Multiplayer
 UI:
 	[DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
 	pro users can nickname players. nicknames are seen by everyone else as well
-	implement creation of club jersey. copy from: https://league-builder.app/kit-lab (you can copy the assets needed as well); then, in the live match UI, use the appropriate jerseys instead of the circles
+	[DONE] implement creation of club jersey. copy from: https://league-builder.app/kit-lab (you can copy the assets needed as well)
+		in the live match UI, use the appropriate jerseys instead of the circles
 	modify the tactics screen. I want something that looks like this: https://league-builder.app/lineup-creator
 
 Economy:

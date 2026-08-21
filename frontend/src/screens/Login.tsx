@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom";
 import { InputText } from "primereact/inputtext";
 import { Password } from "primereact/password";
 import { Toast } from "primereact/toast";
-import { Trophy } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
@@ -36,11 +35,9 @@ export function Login() {
       <Toast ref={toast} />
       <div className="auth-card">
         <div className="hero">
-          <div className="crest">
-            <Trophy size={32} />
-          </div>
-          <div className="kicker" style={{ justifyContent: "center" }}>{strings.app.tagline}</div>
+          <img src="/footmania-logo.svg" alt="Footmania" className="logo-img hero-logo" />
           <h1>{strings.app.name}</h1>
+          <div className="kicker" style={{ justifyContent: "center" }}>{strings.app.tagline}</div>
         </div>
 
         <div style={{ display: "flex", justifyContent: "center" }}>

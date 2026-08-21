@@ -218,6 +218,9 @@ model Club {
   stadiumName      String
   primaryColor     String
   secondaryColor   String
+  // Kit Lab: JSON-encoded {home,away,gk} jersey designs (game/kits.ts).
+  // Null = derive designs from the two identity colors.
+  kitJson          String?
   coachName        String
   isHuman          Boolean
   captainId        Int?

@@ -27,7 +27,7 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Marcelo FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "Marcelo FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Marcelo Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join.statusCode).toBe(200);
     const joinBody = join.json();
@@ -48,6 +48,25 @@ describe("API flow", () => {
     expect(pyramid.json().seasonKey).toBeTruthy();
     expect(pyramid.json().tiers.length).toBeGreaterThanOrEqual(1);
 
+    await app.close();
+  });
+
+  it("requires a stadium name when joining", async () => {
+    const app = buildServer();
+    await app.ready();
+    const register = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "stadiumrequired", password: "secret123" },
+    });
+    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie },
+      payload: { clubName: "Stadium FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+    });
+    expect(join.statusCode).toBe(400);
     await app.close();
   });
 
@@ -76,14 +95,14 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "First FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "First FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "First Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join1.statusCode).toBe(200);
     const join2 = await app.inject({
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Second FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "Second FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Second Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join2.statusCode).toBe(409);
     await app.close();

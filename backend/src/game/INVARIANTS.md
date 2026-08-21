@@ -125,3 +125,12 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     destroys them forever (`retireFillerClub` / `removeFillerClubs`), and every
     surviving filler is replaced by a fresh team when the next season's
     divisions are built (`ensureDivisionFull`).
+
+29. **An extinct bottom-edge tier vanishes instead of receiving relegations.**
+    A tier whose divisions contain no active human clubs at rollover (every
+    human abandonment-flagged or DORMANT) is removed from the movement
+    calculation: the tier above becomes the bottom tier and its bottom-2 are
+    not relegated. The vanished tier is not rebuilt next season. A humanless
+    tier ABOVE the deepest populated tier is not extinct: it still receives
+    relegations from above and promotions from below and repopulates that way.
+    The same rule is projected live into `relegationStatus` during the season.

@@ -6,6 +6,7 @@ import { createHumanClub } from "../game/worldgen";
 import { withGlobalLock } from "../services/lock";
 import { seasonKey } from "../game/clock";
 import { gameConfig, MP_CONFIG } from "../config";
+import { clubKitsSchema } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
@@ -20,7 +21,10 @@ const joinSchema = z.object({
   timezone: z.string().max(64).optional().nullable(),
   primaryColor: z.string().optional(),
   secondaryColor: z.string().optional(),
-  stadiumName: z.string().max(80).optional(),
+  // Kit Lab: full three-kit set designed in the wizard. Optional for legacy
+  // clients; when present the home shell becomes the club identity colors.
+  kits: clubKitsSchema.nullable().optional(),
+  stadiumName: z.string().trim().min(1).max(80),
   preferredHours: z.array(z.number()).optional(),
 });
 
@@ -67,6 +71,7 @@ export async function savesRoutes(app: FastifyInstance) {
         ready: true as const,
         saveId: loaded.save.id,
         season: {
+          seasonNumber: world.mp.seasonNumber ?? 1,
           key: seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth }),
           year: world.mp.seasonYear,
           month: world.mp.seasonMonth,
@@ -125,6 +130,7 @@ export async function savesRoutes(app: FastifyInstance) {
         timezone: parsed.data.timezone ?? null,
         primaryColor: parsed.data.primaryColor,
         secondaryColor: parsed.data.secondaryColor,
+        kits: parsed.data.kits ?? null,
         stadiumName: parsed.data.stadiumName,
         preferredHours,
       });
@@ -320,6 +326,54 @@ export async function savesRoutes(app: FastifyInstance) {
       club.preferredHours = preferredHours;
       recordActivity(world, req.user!.id, club.id, "preferred-hours");
       return { value: { ok: true, preferredHours } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  // --- Kit designer (Kit Lab clone): replace all three jersey designs ------
+  app.put("/mp/club/kit", async (req, reply) => {
+    const parsed = z.object({ kits: clubKitsSchema }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid kit design" });
+    const kits = parsed.data.kits;
+    const res = await withWorld(app, async (world) => {
+      const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
+      if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
+      club.kits = kits;
+      // Keep the legacy identity columns in sync with the home shell so every
+      // existing consumer (standings colors, live clash logic) stays correct.
+      club.primaryColor = kits.home.primary;
+      club.secondaryColor = kits.home.secondary;
+      recordActivity(world, req.user!.id, club.id, "kit");
+      return { value: { ok: true, kits } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  // --- Edit club identity (Kit Lab companion): rename club / stadium -------
+  app.put("/mp/club/profile", async (req, reply) => {
+    const parsed = z
+      .object({
+        clubName: z.string().trim().min(1).max(60).optional(),
+        stadiumName: z.string().trim().min(1).max(80).optional(),
+      })
+      .refine((d) => d.clubName !== undefined || d.stadiumName !== undefined, { message: "Nothing to update" })
+      .safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await withWorld(app, async (world) => {
+      const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
+      if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
+      // Country is intentionally immutable here: it drives player-name pools
+      // and next-season division clustering. Name changes are forward-looking
+      // only; completed seasons keep their recorded names (historical integrity).
+      if (parsed.data.clubName !== undefined) {
+        club.name = parsed.data.clubName;
+        club.shortName = parsed.data.clubName;
+      }
+      if (parsed.data.stadiumName !== undefined) club.stadiumName = parsed.data.stadiumName;
+      recordActivity(world, req.user!.id, club.id, "profile");
+      return { value: { ok: true, name: club.name, stadiumName: club.stadiumName } };
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;

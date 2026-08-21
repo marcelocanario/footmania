@@ -385,6 +385,83 @@ export const ELO_CONFIG = {
   costEpsilon: 0.000001,
 } as const;
 
+/**
+ * Kit-designer settings (Kit Lab clone). Cosmetic domain: palette, allowed
+ * pattern ids, and the light/dark derivation factors used for AI clubs and
+ * legacy fallbacks. Pattern ids are structural (the renderer geometry lives
+ * in the frontend kit components); this list is the validation authority.
+ */
+export const KIT_CONFIG = {
+  // Stored colors must be strict "#rrggbb".
+  hexPattern: /^#[0-9a-fA-F]{6}$/,
+  /** All valid pattern ids. Keep in sync with frontend kit/patterns.tsx. */
+  patternIds: [
+    "solid",
+    "stripes",
+    "broad-stripes",
+    "pinstripes",
+    "tricolor-stripes",
+    "vertical-band",
+    "vertical-band-half-and-half",
+    "vertical-band-pinstripes",
+    "double-stripe",
+    "hoops",
+    "broad-hoops",
+    "chest-band",
+    "halves",
+    "quarters",
+    "sash",
+    "checkered",
+    "herringbone",
+    "pattern-grid",
+    "top-gradient",
+    "zig-zag",
+    "chevron",
+    "hexagonal",
+    "geometric",
+    "grid",
+    "abstract",
+    "gradient",
+    "graphics",
+    "sunburst",
+    "wavy-hoops",
+    "jagged-chest-band",
+    "jagged-teeth",
+    "motion-stripes",
+    "halftone-stripes",
+    "blurred-stripes",
+    "plus-grid",
+    "diagonal-split",
+    "mosaic-shoulders",
+    "distressed-stripes",
+    "city-map",
+    "water-ripple",
+    "digital-camo",
+    "eiffel-graphic",
+    "shoulders",
+    "cross",
+  ],
+  // Base palette AI clubs draw their two main colors from (#rrggbb).
+  aiPalette: [
+    "#ffffff", "#111111", "#d40000", "#003399", "#ffdd00", "#008000",
+    "#87ceeb", "#800000", "#000080", "#ff8c00", "#660099", "#ff69b4",
+  ],
+  // Patterns AI clubs may wear (visually calm subset).
+  aiPatterns: ["solid", "stripes", "broad-stripes", "hoops", "halves", "sash"],
+  // Light/dark variant factors for the home/away split of the two base colors,
+  // iterated until the shells reach their luminance targets so the two kits
+  // are always clearly light-vs-dark regardless of the drawn palette colors.
+  lightenFactor: 0.55,
+  darkenFactor: 0.45,
+  aiLightLumaTarget: 205,
+  aiDarkLumaTarget: 100,
+  aiShadeMaxSteps: 6,
+  // Goalkeeper contrasting-shade bounds (HSL).
+  gkSaturation: 0.75,
+  gkLightnessMin: 0.22,
+  gkLightnessMax: 0.82,
+} as const;
+
 export type GameConfig = z.infer<typeof gameConfigSchema> & {
   roundsPerSeason: number;
   matchSpacingDays: number;

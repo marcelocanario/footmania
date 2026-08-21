@@ -18,6 +18,7 @@ import { generateWorld } from "../game/worldgen";
 import { createRng } from "../game/rng";
 import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
+import { deserializeClubKits, serializeClubKits } from "../game/kits";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
 import { ELO_CONFIG, gameConfig } from "../config";
@@ -722,9 +723,10 @@ function clubRow(c: Club, saveId: number) {
      highestDivision: c.highestDivision,
      cash: c.cash,
      stadiumName: c.stadiumName,
-     primaryColor: c.primaryColor,
-     secondaryColor: c.secondaryColor,
-     coachName: c.coachName,
+      primaryColor: c.primaryColor,
+      secondaryColor: c.secondaryColor,
+      kitJson: serializeClubKits(c.kits),
+      coachName: c.coachName,
      isHuman: c.isHuman,
      captainId: c.captainId,
      penaltyTakerId: c.penaltyTakerId,
@@ -978,6 +980,7 @@ async function rebuildWorld(
       stadiumName: r.stadiumName,
       primaryColor: r.primaryColor,
       secondaryColor: r.secondaryColor,
+      kits: deserializeClubKits((r as unknown as { kitJson?: string | null }).kitJson),
       coachName: r.coachName,
       tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
       trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],

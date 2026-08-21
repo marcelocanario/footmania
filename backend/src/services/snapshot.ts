@@ -5,6 +5,7 @@ import { eloRatings } from "../game/elo";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
+import { resolveClubKits } from "../game/kits";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
@@ -187,6 +188,7 @@ export function buildSnapshot(world: World, clubId: number) {
           stadiumName: club.stadiumName,
           primaryColor: club.primaryColor,
           secondaryColor: club.secondaryColor,
+          kits: resolveClubKits(club),
           coachName: club.coachName,
           trainingFocus: club.trainingFocus,
           competitionState: club.competitionState,
@@ -247,14 +249,21 @@ export function buildSnapshot(world: World, clubId: number) {
 
 export function competitionTable(world: World, competition: Competition, myClubId: number | null = null) {
   const rows = sortedStandings(competition, eloRatings(world));
-  return rows.map((r) => ({
-    ...r,
-    clubName: world.clubs.find((c) => c.id === r.clubId)?.name ?? "",
-    clubShort: world.clubs.find((c) => c.id === r.clubId)?.shortName ?? "",
-    colors: {
-      primary: world.clubs.find((c) => c.id === r.clubId)?.primaryColor ?? "",
-      secondary: world.clubs.find((c) => c.id === r.clubId)?.secondaryColor ?? "",
-    },
-    isHuman: r.clubId === myClubId,
-  }));
+  return rows.map((r) => {
+    const club = world.clubs.find((c) => c.id === r.clubId);
+    const kits = club ? resolveClubKits(club) : null;
+    return {
+      ...r,
+      clubName: club?.name ?? "",
+      clubShort: club?.shortName ?? "",
+      colors: {
+        primary: club?.primaryColor ?? "",
+        secondary: club?.secondaryColor ?? "",
+      },
+      // Kit Lab: pattern + trim for jersey-style badges in tables (null when
+      // the club is missing, which cannot happen in practice).
+      kit: kits ? { primary: kits.home.primary, secondary: kits.home.secondary, accent: kits.home.accent, numberColor: kits.home.numberColor, pattern: kits.home.pattern } : null,
+      isHuman: r.clubId === myClubId,
+    };
+  });
 }

@@ -30,7 +30,7 @@ async function setupClub(app: FastifyInstance, username: string, seed = 4242) {
     method: "POST",
     url: "/api/mp/join",
     headers: { cookie },
-    payload: { clubName: `${username} FC`, country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+    payload: { clubName: `${username} FC`, country: "BRA", timezone: "America/Sao_Paulo", stadiumName: `${username} Stadium`, preferredHours: Array.from({ length: 16 }, (_, i) => i) },
   });
   expect(join.statusCode).toBe(200);
   const body = join.json();

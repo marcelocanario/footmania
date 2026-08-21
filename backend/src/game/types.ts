@@ -134,6 +134,9 @@ export interface Club {
   stadiumName: string;
   primaryColor: string;
   secondaryColor: string;
+  /** Kit Lab: explicit jersey designs (home/away/GK). Null = derive from the
+   * two identity colors (see game/kits.ts). Serialized to Club.kitJson. */
+  kits?: import("./kits").ClubKits | null;
   coachName: string;
   tactics: Tactics;
   trainingFocus: "assistant" | "primary" | "secondary";

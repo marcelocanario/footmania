@@ -792,6 +792,41 @@ export function syncMemberships(world: World, seasonId: number): void {
 }
 
 /**
+ * Partition owned clubs into active and abandoned sets for rollover movement
+ * calculation (plan §42/§45). A club is abandoned for the NEXT season if it
+ * was marked abandonment-eligible during the season OR it is already DORMANT.
+ * Ordinary filler AI (no owner) is never a persistent club and is handled
+ * separately. PROVISIONAL clubs are queued for next season and are not part
+ * of this season's pyramid yet.
+ */
+function partitionHumanClubs(world: World): { active: Set<number>; abandoned: Set<number> } {
+  const active = new Set<number>();
+  const abandoned = new Set<number>();
+  for (const club of world.clubs) {
+    if (club.ownerUserId === null) continue;
+    if (club.competitionState === "DORMANT" || club.abandonmentEligibleAt !== null) abandoned.add(club.id);
+    else if (club.competitionState === "ACTIVE") active.add(club.id);
+  }
+  return { active, abandoned };
+}
+
+/**
+ * Divisions of the season containing at least one active human club. A
+ * division without any is "extinct": at the bottom edge of the pyramid it
+ * vanishes at rollover and must not receive relegations, so it does not count
+ * toward the deepest populated tier. Humanless divisions ABOVE the deepest
+ * populated tier are deliberately still returned by divisionsInSeason and
+ * kept in the tier map: they receive relegations from above and promotions
+ * from below and repopulate that way (plan §25/§26 edge cases).
+ */
+export function populatedDivisions(world: World, seasonId: number): Competition[] {
+  const { active } = partitionHumanClubs(world);
+  return divisionsInSeason(world, seasonId).filter(
+    (c) => c.status !== "ARCHIVED" && Object.keys(c.standings).some((id) => active.has(Number(id))),
+  );
+}
+
+/**
  * Upsert the per-club-per-season competition records (plan §55). Entries are
  * keyed by (clubId, seasonId); stale entries for the season are replaced.
  */
@@ -799,6 +834,7 @@ export function syncClubSeasons(world: World, seasonId: number): void {
   const keep = new Set<number>();
   const divs = divisionsInSeason(world, seasonId).filter((c) => c.status !== "ARCHIVED");
   const projectedAssignments = computeNextTierAssignments(world, seasonId).assignments;
+  const populatedTiers = new Set(populatedDivisions(world, seasonId).map((c) => tierOf(c)));
   for (const comp of divs) {
     const rows = standingsTiebreak(Object.values(comp.standings), eloRatings(world));
     for (const row of rows) {
@@ -808,7 +844,7 @@ export function syncClubSeasons(world: World, seasonId: number): void {
          .filter((candidate) => isHumanClub(world, candidate.clubId));
        const humanRank = rowsForPromotion.findIndex((candidate) => candidate.clubId === row.clubId) + 1;
        const hasUpperTier = currentTier > 1 && divisionsInTier(world, seasonId, currentTier - 1).length > 0;
-       const maxTierForSeason = Math.max(...divs.map((candidate) => tierOf(candidate)), currentTier);
+        const maxTierForSeason = Math.max(currentTier, ...populatedTiers);
        const relegationRows = currentTier < maxTierForSeason
          ? standingsTiebreak(Object.values(comp.standings), eloRatings(world)).slice(-(comp.config.relegated ?? 2))
          : [];
@@ -849,19 +885,7 @@ export function computeNextTierAssignments(world: World, seasonId: number): {
 } {
   const divisions = divisionsInSeason(world, seasonId).filter((c) => c.status !== "ARCHIVED");
   const assignments = new Map<number, number>();
-  const abandoned = new Set<number>();
-  const active = new Set<number>();
-
-  // Phase 4-5: identify abandoned clubs. A club is abandoned for the NEXT
-  // season if it was marked abandonment-eligible during the season OR it is
-  // already DORMANT (plan §42/§45). Ordinary filler AI (no owner) is never a
-  // persistent club and is handled separately. PROVISIONAL clubs are queued
-  // for next season and are not part of this season's pyramid yet.
-  for (const club of world.clubs) {
-    if (club.ownerUserId === null) continue;
-    if (club.competitionState === "DORMANT" || club.abandonmentEligibleAt !== null) abandoned.add(club.id);
-    else if (club.competitionState === "ACTIVE") active.add(club.id);
-  }
+  const { active, abandoned } = partitionHumanClubs(world);
 
   // Determine target tier for every club that remains active.
   // Top-down cascade: promotions bubble up; relegations push down.
@@ -871,7 +895,13 @@ export function computeNextTierAssignments(world: World, seasonId: number): {
     if (!byTier.has(t)) byTier.set(t, []);
     byTier.get(t)!.push(d);
   }
-  const tiers = [...byTier.keys()].sort((a, b) => a - b);
+  // The cascade is bounded by the deepest POPULATED tier: an extinct
+  // bottom-edge tier (no active humans left) vanishes instead of receiving
+  // relegations, making the tier above the new bottom tier. Humanless
+  // divisions above that tier stay in byTier and keep their self-healing
+  // flow (relegations from above + promotions from below repopulate them).
+  const populatedTiers = new Set(populatedDivisions(world, seasonId).map((c) => tierOf(c)));
+  const tiers = [...byTier.keys()].filter((t) => populatedTiers.has(t)).sort((a, b) => a - b);
   const maxTier = tiers.length > 0 ? Math.max(...tiers) : 1;
 
   // Track how many humans occupy each target tier (for compaction below).

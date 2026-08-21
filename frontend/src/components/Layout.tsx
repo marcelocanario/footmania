@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Trophy, Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, Settings as SettingsIcon, Radio, History as HistoryIcon } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, Settings as SettingsIcon, Radio, History as HistoryIcon, Shirt } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
+import { FootballKit } from "./kit/FootballKit";
+import { deriveKitDefaults } from "./kit/defaults";
 
 const NAV = [
   { to: "/dashboard", label: "Home", icon: <Home size={15} /> },
@@ -14,6 +16,7 @@ const NAV = [
   { to: "/matchday", label: "Matches", icon: <CalendarDays size={15} /> },
   { to: "/transfers", label: "Transfers", icon: <ArrowLeftRight size={15} /> },
   { to: "/finances", label: "Finances", icon: <Wallet size={15} /> },
+  { to: "/my-club", label: "My Club", icon: <Shirt size={15} /> },
   { to: "/history", label: "History", icon: <HistoryIcon size={15} /> },
   { to: "/records", label: "Records", icon: <Medal size={15} /> },
   { to: "/settings", label: "Settings", icon: <SettingsIcon size={15} /> },
@@ -53,9 +56,7 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="app-shell">
       <header className="topbar">
         <NavLink to="/dashboard" className="logo" style={{ textDecoration: "none" }}>
-          <span className="crest-mini">
-            <Trophy size={14} />
-          </span>
+          <img src="/footmania-logo.svg" alt="" className="logo-img" />
           {strings.app.name}
         </NavLink>
 
@@ -84,22 +85,11 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
           {club && (
             <span className="club-chip" onClick={() => navigate("/dashboard")} title={club.name}>
-              <span
-                style={{
-                  width: 26,
-                  height: 26,
-                  borderRadius: "50%",
-                  display: "inline-grid",
-                  placeItems: "center",
-                  background: `linear-gradient(135deg, ${club.primaryColor}, ${club.secondaryColor})`,
-                  fontSize: 11,
-                  fontWeight: 700,
-                  color: "#fff",
-                  border: "1px solid rgba(255,255,255,0.5)",
-                }}
-              >
-                {club.shortName.slice(0, 3).toUpperCase()}
-              </span>
+              <FootballKit
+                {...(club.kits?.home ?? deriveKitDefaults(club.primaryColor, club.secondaryColor).home)}
+                size={26}
+                flat
+              />
               {club.shortName}
               {provisional && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.4)", color: "var(--gold-2)" }}>PROV</span>}
               {dormant && <span className="chip" style={{ borderColor: "rgba(120,140,130,0.4)", color: "var(--text-3)" }}>DORMANT</span>}

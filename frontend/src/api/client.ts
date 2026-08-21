@@ -21,6 +21,22 @@ export interface SkillSet {
   fin: number;
 }
 
+/** Kit Lab: one jersey design (mirrors backend game/kits.ts). */
+export interface KitDesign {
+  primary: string;
+  secondary: string;
+  accent: string;
+  numberColor: string;
+  pattern: string;
+  number?: number | null;
+}
+
+export interface ClubKits {
+  home: KitDesign;
+  away: KitDesign;
+  gk: KitDesign;
+}
+
 export interface PlayerView {
   id: number;
   name: string;
@@ -68,6 +84,7 @@ export interface ClubView {
   stadiumName: string;
   primaryColor: string;
   secondaryColor: string;
+  kits?: ClubKits | null;
   coachName: string;
   trainingFocus: "assistant" | "primary" | "secondary";
   competitionState?: string;
@@ -81,6 +98,7 @@ export interface MpStatus {
   ready: boolean;
   saveId: number | null;
   season: {
+    seasonNumber: number;
     key: string;
     year: number;
     month: number;
@@ -236,6 +254,8 @@ export interface StandingsRow {
   clubName: string;
   clubShort: string;
   colors: { primary: string; secondary: string };
+  /** Kit Lab: home design for jersey-style badges; null for legacy payloads. */
+  kit?: KitDesign | null;
   isHuman: boolean;
   clubType: "HUMAN" | "AI";
   isMine: boolean;
@@ -474,8 +494,8 @@ export interface LiveState {
   awayClubId: number;
   home: string;
   away: string;
-  homeKit: { primary: string; secondary: string };
-  awayKit: { primary: string; secondary: string };
+  homeKit: KitDesign;
+  awayKit: KitDesign;
   homeScore: number;
   awayScore: number;
   minute: number;
@@ -570,8 +590,12 @@ export const api = {
 
   // Multiplayer
   mpStatus: () => request<MpStatus>("/api/mp/status"),
-  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; stadiumName?: string; preferredHours?: number[] }) =>
+  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; kits?: ClubKits; stadiumName: string; preferredHours?: number[] }) =>
     request<{ ok: boolean; clubId: number }>("/api/mp/join", { method: "POST", body: JSON.stringify(payload) }),
+  updateClubKit: (kits: ClubKits) =>
+    request<{ ok: boolean; kits: ClubKits }>("/api/mp/club/kit", { method: "PUT", body: JSON.stringify({ kits }) }),
+  updateClubProfile: (payload: { clubName?: string; stadiumName?: string }) =>
+    request<{ ok: boolean; name: string; stadiumName: string }>("/api/mp/club/profile", { method: "PUT", body: JSON.stringify(payload) }),
   updatePreferredHours: (preferredHours: number[]) =>
     request<{ ok: boolean; preferredHours: number[] }>("/api/mp/preferred-hours", { method: "PUT", body: JSON.stringify({ preferredHours }) }),
   returnClub: () =>

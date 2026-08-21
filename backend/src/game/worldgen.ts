@@ -88,6 +88,9 @@ export interface HumanClubOptions {
   timezone: string | null;
   primaryColor?: string;
   secondaryColor?: string;
+  /** Kit Lab: full three-kit set from the creation wizard. When present the
+   * home shell becomes the club identity colors. */
+  kits?: import("./kits").ClubKits | null;
   stadiumName?: string;
   /** Validated half-hour preferred-match slots (see game/scheduling.ts). */
   preferredHours?: number[] | null;
@@ -122,8 +125,12 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     // New clubs are funded exclusively by their season budget (MP_CONFIG).
     cash: MP_CONFIG.newClubStartingCash,
     stadiumName,
-    primaryColor: opts.primaryColor ?? "#d40000",
-    secondaryColor: opts.secondaryColor ?? "#ffffff",
+    // Kit designs: explicit from the wizard, else null (derived on read). The
+    // identity columns mirror the home shell so standings/live consumers that
+    // read primaryColor/secondaryColor stay authoritative.
+    kits: opts.kits ?? null,
+    primaryColor: opts.kits?.home.primary ?? opts.primaryColor ?? "#d40000",
+    secondaryColor: opts.kits?.home.secondary ?? opts.secondaryColor ?? "#ffffff",
     coachName: generateName(rng, opts.country),
     tactics: tacticsForClub(rng),
     trainingFocus: "assistant",

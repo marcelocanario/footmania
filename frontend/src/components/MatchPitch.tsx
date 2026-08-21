@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { LiveEvent, LivePlayer } from "../api/client";
+import type { KitDesign, LiveEvent, LivePlayer } from "../api/client";
+import { kitDotBackground } from "./kit/kitCss";
 import { cueForEvent, eventKey, teamPitchPoints, type PitchCue, type PitchPoint, type PitchSide } from "./matchPitchUtils";
 
 interface PitchTeam {
   clubId: number;
   name: string;
-  kit: { primary: string; secondary: string };
+  kit: KitDesign;
   players: LivePlayer[];
   formationId: number;
 }
@@ -30,7 +31,13 @@ const EVENT_COPY: Record<string, string> = {
 };
 
 function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer; point: PitchPoint; side: PitchSide; kit: PitchTeam["kit"]; highlighted: boolean }) {
-  const style = { left: `${point.x}%`, top: `${point.y}%`, "--kit": kit.primary, "--kit-2": kit.secondary } as CSSProperties;
+  const style = {
+    left: `${point.x}%`,
+    top: `${point.y}%`,
+    "--kit": kit.primary,
+    "--kit-2": kit.secondary,
+    "--kit-dot": kitDotBackground(kit),
+  } as CSSProperties;
   return (
     <span
       className={`pitch-player${highlighted ? " pitch-player-highlight" : ""}${player.injuryDays > 0 ? " pitch-player-injured" : ""}`}

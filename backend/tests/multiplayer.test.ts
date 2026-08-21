@@ -11,6 +11,7 @@ import {
   replaceClubInDivision,
   rebuildTierDivisions,
   computeNextTierAssignments,
+  syncClubSeasons,
   simulateThroughRound,
   evaluateInactivity,
   recordActivity,
@@ -344,6 +345,170 @@ describe("promotion / relegation", () => {
     const { assignments, abandonedClubIds } = computeNextTierAssignments(world, seasonId);
     expect(abandonedClubIds).toContain(humanId);
     expect(assignments.has(humanId)).toBe(false);
+  });
+});
+
+describe("extinct lower tier (invariant 29)", () => {
+  /** Tier 1 with tier1Humans humans; a tier-2 division with tier2Humans humans; filler AI elsewhere. */
+  function pyramidWithTier2(seed: number, tier1Humans: number, tier2Humans: number) {
+    const { world, seasonId } = seasonWorld(seed);
+    const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
+    for (let i = 1; i <= tier1Humans; i++) {
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
+      club.competitionState = "ACTIVE";
+    }
+    const div2 = createDivision(world, { tier: 2, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
+    ensureDivisionFull(world, div2);
+    for (let i = 1; i <= tier2Humans; i++) {
+      const club = createHumanClub(world, { userId: 100 + i, clubName: `D2-${i}`, country: "BRA", timezone: null });
+      replaceClubInDivision(world, div2, highestRankedReplaceableAI(world, div2)!, club.id);
+      club.competitionState = "ACTIVE";
+    }
+    return { world, seasonId, div1, div2 };
+  }
+
+  function humansOf(world: World, comp: Competition): number[] {
+    return Object.keys(comp.standings).map(Number).filter((id) => world.clubs.find((c) => c.id === id)?.ownerUserId !== null);
+  }
+
+  function flagAbandoned(world: World, ids: number[]) {
+    for (const id of ids) world.clubs.find((c) => c.id === id)!.abandonmentEligibleAt = Date.now();
+  }
+
+  /** Make `victims` the bottom two rows of their division's standings. */
+  function forceBottom(comp: Competition, victims: number[]) {
+    for (const row of Object.values(comp.standings)) row.points = 10;
+    victims.forEach((id, idx) => {
+      comp.standings[id].points = victims.length - idx;
+    });
+  }
+
+  it("does not relegate the tier above when the bottom tier's humans all abandon", () => {
+    const { world, seasonId, div1, div2 } = pyramidWithTier2(81, 5, 3);
+    const d1Humans = humansOf(world, div1);
+    forceBottom(div1, d1Humans.slice(-2));
+    flagAbandoned(world, humansOf(world, div2));
+    const { assignments } = computeNextTierAssignments(world, seasonId);
+    // Tier 1 is now the deepest populated tier: nobody moves into tier 2.
+    expect([...assignments.entries()].filter(([, tier]) => tier === 2)).toHaveLength(0);
+    for (const id of d1Humans) expect(assignments.get(id)).toBe(1);
+  });
+
+  it("still relegates when at least one lower-tier human remains active", () => {
+    const { world, seasonId, div1, div2 } = pyramidWithTier2(82, 5, 3);
+    const d1Humans = humansOf(world, div1);
+    const victims = d1Humans.slice(-2);
+    forceBottom(div1, victims);
+    const d2Humans = humansOf(world, div2);
+    flagAbandoned(world, d2Humans.slice(0, 2));
+    const { assignments } = computeNextTierAssignments(world, seasonId);
+    for (const id of victims) expect(assignments.get(id)).toBe(2);
+    for (const id of d1Humans.filter((id) => !victims.includes(id))) expect(assignments.get(id)).toBe(1);
+    // The two abandoned tier-2 clubs vacate slots, opening promotion capacity
+    // into tier 1: the surviving lower-tier human moves up instead of staying.
+    expect(assignments.get(d2Humans[2])).toBe(1);
+  });
+
+  it("treats an AI-only bottom division as extinct", () => {
+    const { world, seasonId } = pyramidWithTier2(83, 4, 0);
+    const { assignments } = computeNextTierAssignments(world, seasonId);
+    expect(assignments.size).toBe(4);
+    expect([...assignments.values()].every((tier) => tier === 1)).toBe(true);
+  });
+
+  it("restores relegation when flagged players resume activity before rollover", () => {
+    const { world, seasonId, div1, div2 } = pyramidWithTier2(84, 5, 3);
+    const d1Humans = humansOf(world, div1);
+    const victims = d1Humans.slice(-2);
+    forceBottom(div1, victims);
+    const d2Humans = humansOf(world, div2);
+    flagAbandoned(world, d2Humans);
+    expect([...computeNextTierAssignments(world, seasonId).assignments.entries()].filter(([, tier]) => tier === 2)).toHaveLength(0);
+    for (const id of d2Humans) world.clubs.find((c) => c.id === id)!.abandonmentEligibleAt = null;
+    const { assignments } = computeNextTierAssignments(world, seasonId);
+    for (const id of victims) expect(assignments.get(id)).toBe(2);
+  });
+
+  it("repopulates an all-abandoned middle tier via relegations and promotions", () => {
+    const { world, seasonId } = seasonWorld(85);
+    const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
+    for (let i = 1; i <= 5; i++) {
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
+      club.competitionState = "ACTIVE";
+    }
+    const div2 = createDivision(world, { tier: 2, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
+    ensureDivisionFull(world, div2);
+    for (let i = 1; i <= 3; i++) {
+      const club = createHumanClub(world, { userId: 100 + i, clubName: `D2-${i}`, country: "BRA", timezone: null });
+      replaceClubInDivision(world, div2, highestRankedReplaceableAI(world, div2)!, club.id);
+      club.competitionState = "ACTIVE";
+    }
+    const div3 = createDivision(world, { tier: 3, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
+    ensureDivisionFull(world, div3);
+    for (let i = 1; i <= 3; i++) {
+      const club = createHumanClub(world, { userId: 200 + i, clubName: `D3-${i}`, country: "BRA", timezone: null });
+      replaceClubInDivision(world, div3, highestRankedReplaceableAI(world, div3)!, club.id);
+      club.competitionState = "ACTIVE";
+    }
+    const d1Humans = humansOf(world, div1);
+    const victims = d1Humans.slice(-2);
+    forceBottom(div1, victims);
+    flagAbandoned(world, humansOf(world, div2));
+    const d3Humans = humansOf(world, div3);
+    for (const row of Object.values(div3.standings)) row.points = 0;
+    d3Humans.forEach((id, idx) => {
+      div3.standings[id].points = 30 - idx * 10;
+    });
+
+    const { assignments } = computeNextTierAssignments(world, seasonId);
+    for (const id of victims) expect(assignments.get(id)).toBe(2); // relegations flow into the corpse tier
+    expect(assignments.get(d3Humans[0])).toBe(2); // best tier-3 human promotes into it
+    for (const id of d3Humans.slice(1)) expect(assignments.get(id)).toBe(3); // rest stay
+    for (const id of humansOf(world, div2)) expect(assignments.has(id)).toBe(false); // abandoned never assigned
+  });
+
+  it("never relegates within a lone Division 1", () => {
+    const { world, seasonId } = seasonWorld(86);
+    const div1 = world.competitions.find((c) => c.kind === "division")!;
+    for (let i = 1; i <= 3; i++) {
+      const club = createHumanClub(world, { userId: i, clubName: `Lone-${i}`, country: "BRA", timezone: null });
+      replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
+      club.competitionState = "ACTIVE";
+    }
+    const { assignments } = computeNextTierAssignments(world, seasonId);
+    expect(assignments.size).toBe(3);
+    expect([...assignments.values()].every((tier) => tier === 1)).toBe(true);
+  });
+
+  it("projects lower-tier extinction live into relegationStatus", () => {
+    const { world, seasonId, div1, div2 } = pyramidWithTier2(87, 5, 3);
+    const d1Humans = humansOf(world, div1);
+    const victims = d1Humans.slice(-2);
+    forceBottom(div1, victims);
+    const statusOf = (id: number) => world.mpClubSeasons.find((e) => e.clubId === id && e.seasonId === seasonId)?.relegationStatus;
+
+    syncClubSeasons(world, seasonId);
+    for (const id of victims) expect(statusOf(id)).toBe("RELEGATED");
+
+    // The lower tier's last humans become abandonment-eligible -> extinct ->
+    // the upper tier's relegation zone flips to NONE.
+    const d2Humans = humansOf(world, div2);
+    flagAbandoned(world, d2Humans);
+    syncClubSeasons(world, seasonId);
+    for (const id of victims) expect(statusOf(id)).toBe("NONE");
+
+    // Abandoned clubs keep their completed-season entries.
+    for (const id of d2Humans) {
+      const entry = world.mpClubSeasons.find((e) => e.clubId === id && e.seasonId === seasonId);
+      expect(entry).toBeDefined();
+    }
+
+    // Activity resumes -> relegation is projected again.
+    for (const id of d2Humans) world.clubs.find((c) => c.id === id)!.abandonmentEligibleAt = null;
+    syncClubSeasons(world, seasonId);
+    for (const id of victims) expect(statusOf(id)).toBe("RELEGATED");
   });
 });
 

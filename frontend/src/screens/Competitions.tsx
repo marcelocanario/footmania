@@ -123,7 +123,7 @@ export function Competitions() {
                 />
                 <Column key="team" header={strings.squad.player} body={(r: StandingsRow) => (
                   <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <ClubBadge name={r.clubName} primary={r.colors?.primary} secondary={r.colors?.secondary} size={26} />
+                    <ClubBadge name={r.clubName} primary={r.colors?.primary} secondary={r.colors?.secondary} kit={r.kit} size={26} />
                     <span style={{ fontWeight: 600 }}>{r.clubName}</span>
                     {r.isMine && <span className="flag-chip fc-accent">YOU</span>}
                     {statusBadge(r)}
