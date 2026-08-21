@@ -34,6 +34,9 @@ export function Admin() {
   const [advanceDays, setAdvanceDays] = useState(1);
   const [reason, setReason] = useState("");
   const [auctionExtensionMinutes, setAuctionExtensionMinutes] = useState(30);
+  const [userSearch, setUserSearch] = useState("");
+  const [users, setUsers] = useState<{ id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt: string | null; banReason: string | null; createdAt: string }[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -111,6 +114,7 @@ export function Admin() {
         <a className="btn" href="#scheduled-auctions">Auctions</a>
         <a className="btn" href="#season-preview">Season Preview</a>
         <a className="btn" href="#scheduler-audit">Audit</a>
+        <a className="btn" href="#users">Users</a>
       </div>
 
       {error && <div className="card" style={{ borderColor: "rgba(255,99,99,0.5)", color: "#ff6b6b", marginBottom: 12 }}>{error}</div>}
@@ -263,6 +267,44 @@ export function Admin() {
            <button className="btn" disabled={loading || reason.trim().length < 10} onClick={() => void run(async () => { await api.adminSchedulerRollover(reason.trim()); setMessage("Rollover forced."); })}>
             <RefreshCw size={15} /> Force rollover
           </button>
+        </div>
+      </div>
+
+      <div id="users" className="card" style={{ padding: 20, marginTop: 16 }}>
+        <h3 style={{ marginBottom: 8 }}>Users · Pro & moderation</h3>
+        <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginBottom: 12 }}>Admins have cumulative permissions (Pro + Admin). Grant Pro to test or reward. Bans block login and kill sessions; warnings surface as a banner until acknowledged.</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search username" style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }} />
+          <button className="btn" disabled={usersLoading} onClick={() => void (async () => { setUsersLoading(true); try { const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); } finally { setUsersLoading(false); } })()}>{usersLoading ? "…" : "Search"}</button>
+          <button className="btn ghost" disabled={usersLoading} onClick={() => void (async () => { setUserSearch(""); setUsersLoading(true); try { const res = await api.adminListUsers(undefined, 30); setUsers(res.users); } finally { setUsersLoading(false); } })()}>List all</button>
+        </div>
+        {users.length > 0 && (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", minWidth: 700, borderCollapse: "collapse", fontSize: "0.85rem" }}>
+              <thead><tr style={{ color: "var(--text-3)", textAlign: "left" }}><th style={{ padding: "8px 6px" }}>User</th><th style={{ padding: "8px 6px" }}>Pro</th><th style={{ padding: "8px 6px" }}>Admin</th><th style={{ padding: "8px 6px" }}>Banned</th><th style={{ padding: "8px 6px" }}>Actions</th></tr></thead>
+              <tbody>
+                {users.map((u) => (
+                  <tr key={u.id} style={{ borderTop: "1px solid var(--line)" }}>
+                    <td style={{ padding: "9px 6px" }}>{u.username} <span style={{ color: "var(--text-3)" }}>#{u.id}</span></td>
+                    <td style={{ padding: "9px 6px" }}>{u.isPro ? "PRO" : "—"}</td>
+                    <td style={{ padding: "9px 6px" }}>{u.isAdmin ? "ADMIN" : "—"}</td>
+                    <td style={{ padding: "9px 6px" }}>{u.bannedAt ? `Banned: ${u.banReason ?? ""}` : "—"}</td>
+                    <td style={{ padding: "9px 6px", display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSetPro(u.id, !u.isPro); setMessage(`${u.username} Pro ${!u.isPro ? "granted" : "revoked"}`); const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); })}>{u.isPro ? "Revoke Pro" : "Grant Pro"}</button>
+                      {u.bannedAt ? <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminUnbanUser(u.id); setMessage(`${u.username} unbanned`); const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); })}>Unban</button> : <button className="btn ghost" disabled={loading || u.isAdmin} onClick={() => void run(async () => { const r = prompt(`Ban reason for ${u.username}:`); if (!r) return; await api.adminBanUser(u.id, r); setMessage(`${u.username} banned`); const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); })}>Ban</button>}
+                      <button className="btn ghost" disabled={loading} onClick={() => void run(async () => { const r = prompt(`Warning for ${u.username}:`); if (!r) return; await api.adminWarnUser(u.id, r); setMessage(`Warned ${u.username}`); })}>Warn</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <span className="kicker">Quick moderation (need club/player ids from World / Matches tabs):</span>
+          <button className="btn ghost" onClick={() => void run(async () => { const clubId = Number(prompt("Club id to reset name:")); if (!clubId) return; const name = prompt("New club name:"); if (!name) return; const r = prompt("Reason:"); if (!r) return; await api.adminResetClubName(clubId, name, r); setMessage("Club name reset"); })}>Reset club name</button>
+          <button className="btn ghost" onClick={() => void run(async () => { const clubId = Number(prompt("Club id to remove logo:")); if (!clubId) return; const r = prompt("Reason:"); if (!r) return; await api.adminRemoveLogo(clubId, r); setMessage("Logo removed"); })}>Remove logo</button>
+          <button className="btn ghost" onClick={() => void run(async () => { const pid = Number(prompt("Player id to clear nickname:")); if (!pid) return; const r = prompt("Reason:"); if (!r) return; await api.adminClearNickname(pid, r); setMessage("Nickname cleared"); })}>Clear nickname</button>
         </div>
       </div>
 

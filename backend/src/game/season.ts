@@ -80,35 +80,11 @@ export function dismissYouthPlayer(world: World, player: Player): { ok: boolean;
   return { ok: true };
 }
 
-export function clubLastMatch(world: World, clubId: number) {
-  for (let i = world.matches.length - 1; i >= 0; i--) {
-    const m = world.matches[i];
-    if (m.homeClubId === clubId || m.awayClubId === clubId) return m;
-  }
-  return null;
-}
-
 export function weeklyUpdate(rng: World["rng"], world: World) {
-  for (const club of world.clubs) {
-    const last = clubLastMatch(world, club.id);
-    const won =
-      last !== null &&
-      ((last.homeClubId === club.id && last.homeScore > last.awayScore) ||
-        (last.awayClubId === club.id && last.awayScore > last.homeScore));
-    const lost =
-      last !== null &&
-      ((last.homeClubId === club.id && last.homeScore < last.awayScore) ||
-        (last.awayClubId === club.id && last.awayScore < last.homeScore));
-    for (const player of world.players) {
-      if (player.clubId !== club.id) continue;
-      if (player.injuryDays > 0) player.injuryDays--;
-      if (player.energy < 100) player.energy += nextInt(rng, 6);
-      potentialGrowth(rng, player);
-      if (won) player.morale = Math.min(100, player.morale + 2);
-      if (lost) player.morale = Math.max(0, player.morale - 2);
-      if (player.starter) player.morale = Math.min(100, player.morale + 1);
-      else if (player.injuryDays === 0 && !player.isYouth) player.morale = Math.max(0, player.morale - 3);
-    }
+  for (const player of world.players) {
+    if (player.injuryDays > 0) player.injuryDays--;
+    if (player.energy < 100) player.energy += nextInt(rng, 6);
+    potentialGrowth(rng, player);
   }
 }
 
@@ -439,6 +415,5 @@ export function commitSeasonRollover(world: World): void {
     player.energy = 100;
     player.onSale = world.transferAuctions.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id)
       || world.freeAgentListings.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id);
-    player.morale = Math.max(30, Math.min(100, player.morale));
   }
 }

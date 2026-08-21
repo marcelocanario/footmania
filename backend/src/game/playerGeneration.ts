@@ -548,7 +548,6 @@ function buildGeneratedPlayer(
     tacPos: -1,
     onSale: false,
     suspendedGames: 0,
-    morale: 70,
     loanId: null,
     developmentProfile: profile,
     recentMinutes: [],

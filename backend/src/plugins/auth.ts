@@ -44,7 +44,10 @@ const authPlugin: FastifyPluginAsync = async (app) => {
     if (!session || session.expiresAt < new Date()) {
       return reply.code(401).send({ error: "Session expired" });
     }
-    req.user = { id: session.userId, username: session.user.username, isAdmin: session.user.isAdmin };
+    if (session.user.bannedAt) {
+      return reply.code(403).send({ error: "Account banned", reason: session.user.banReason ?? null });
+    }
+    req.user = { id: session.userId, username: session.user.username, isAdmin: session.user.isAdmin, isPro: Boolean(session.user.isPro || session.user.isAdmin) };
     req.sessionToken = token;
   });
 };

@@ -66,6 +66,7 @@ export function LiveMatch() {
   const [tickBusy, setTickBusy] = useState(false);
   const [noLive, setNoLive] = useState(false);
   const [liveId, setLiveId] = useState<number | null>(null);
+  const [autoBusy, setAutoBusy] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef<LiveState | null>(null);
 
@@ -157,6 +158,9 @@ export function LiveMatch() {
           setSubOut(null);
           setSubIn(null);
         }
+      } else if (msg.type === "automation" && msg.state) {
+        applyState(msg.state);
+        setAutoBusy(false);
       } else if (msg.type === "finished") {
         setNoLive(true);
       } else if (msg.type === "error") {
@@ -477,6 +481,27 @@ export function LiveMatch() {
         </div>
       </div>
 
+      {!isDone && state.automationDisabled !== undefined && (
+        <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 700 }}>Auto-presets</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{state.automationFiredCount ?? 0} rules fired · {state.automationDisabled?.[humanSide] ? "Automation paused for you" : "Automation active (use presets in My Club > Automation)"}</div>
+          </div>
+          <button
+            className={`btn ${state.automationDisabled?.[humanSide] ? "gold" : "ghost"}`}
+            disabled={autoBusy}
+            onClick={() => {
+              const enabled = Boolean(state.automationDisabled?.[humanSide]);
+              setAutoBusy(true);
+              const ok = send({ type: "automation", enabled });
+              if (!ok) setAutoBusy(false);
+            }}
+          >
+            {state.automationDisabled?.[humanSide] ? "Resume automation" : "Pause automation & take control"}
+          </button>
+        </div>
+      )}
+
       <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
         {isDone ? (
           <button className="btn gold" onClick={backToDashboard}>
@@ -514,7 +539,7 @@ export function LiveMatch() {
                       onClick={() => setSubOut(p)}
                     >
                       <span className="pos-tag">{p.tacPos}</span>
-                      <span style={{ flex: 1, textAlign: "left" }}>{p.name}</span>
+                      <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span style={{ color: "var(--text-3)" }}>{Math.round(p.energy)}</span>
                     </button>
                   ))}
@@ -531,7 +556,7 @@ export function LiveMatch() {
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
                       <span className="pos-tag">{p.position === 0 ? "GK" : ""}</span>
-                      <span style={{ flex: 1, textAlign: "left" }}>{p.name}</span>
+                      <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span style={{ color: "var(--text-3)" }}>{p.overall}</span>
                     </button>
                   ))}

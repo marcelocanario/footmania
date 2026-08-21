@@ -12,10 +12,13 @@ export function SettingsScreen() {
   const [preferredHours, setPreferredHours] = useState<number[]>(status?.club?.preferredHours ?? PRESET_EVENINGS);
   const [hoursSaved, setHoursSaved] = useState(false);
   const [savingHours, setSavingHours] = useState(false);
+  const [pushState, setPushState] = useState<"idle" | "subscribed" | "unsupported">("idle");
+  const [pushBusy, setPushBusy] = useState(false);
 
   useEffect(() => {
     if (status?.club?.timezone) setTimezone(status.club.timezone);
     if (status?.club?.preferredHours) setPreferredHours(status.club.preferredHours);
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) setPushState("unsupported");
   }, [status?.club?.timezone, status?.club?.preferredHours]);
 
   return (
@@ -69,8 +72,51 @@ export function SettingsScreen() {
           {hoursSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{strings.settings.saved}</span>}
         </div>
       </div>
+
+      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
+        <h2 className="card-title"><SettingsIcon size={17} /> Push notifications</h2>
+        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
+          Match started / finished pushes land in your in-app bell. Enable browser pushes to receive them when the site is closed. <b>Pro</b> also gets goal pings and league digests.
+        </div>
+        {pushState === "unsupported" ? (
+          <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>Push is not supported in this browser.</div>
+        ) : (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              className="btn"
+              disabled={pushBusy}
+              onClick={() => void (async () => {
+                setPushBusy(true);
+                try {
+                  const perm = await Notification.requestPermission();
+                  if (perm !== "granted") throw new Error("Permission denied");
+                  const reg = await navigator.serviceWorker.ready;
+                  const { publicKey } = await api.getVapidKey();
+                  if (!publicKey) throw new Error("Push not configured on server (VAPID keys missing)");
+                  const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(publicKey) });
+                  const json = sub.toJSON();
+                  await api.pushSubscribe(json.endpoint!, json.keys!.p256dh!, json.keys!.auth!);
+                  setPushState("subscribed");
+                } catch (e) { alert((e as Error).message); } finally { setPushBusy(false); }
+              })()}
+            >
+              {pushBusy ? "…" : pushState === "subscribed" ? "Subscribed ✓" : "Enable browser pushes"}
+            </button>
+            {pushState === "subscribed" && <button className="btn ghost" onClick={() => void (async () => { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) { await sub.unsubscribe(); await api.pushUnsubscribe(sub.endpoint); } setPushState("idle"); })()}>Unsubscribe</button>}
+          </div>
+        )}
+      </div>
     </div>
   );
+}
+
+function urlBase64ToUint8Array(base64String: string) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
 }
 
 const TIMEZONES = [

@@ -3,17 +3,16 @@ Game engine
 		[DONE] make players who have played a game this week develop more. players who have not played should receive a small debuff in development. similarly, not playing should negatively affect players who are decaying
 		[DONE] make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
 	[DONE] inter-seasons should be carefully calculated when defining the match schedule. ex: we have 8 teams per group, so it's 14 games or 28 days (considering games every other day). most Februarys have exactly 28 days, so we need to plan January and March so that the inter-season leaves at least 1-2 days between last Feb game and first Mar game or last Jan game and first Feb game. all months should be distributed in such a way that we have a little breathing room like that. should we consider making seasons longer, like 45 days and increase each group to 10? maybe keep as is but add a hard 7 days inter-season pause? so we are not following months exactly, we have our own calendar (37 days or so)
-	create a pro type of account with some benefits (not pay-to-win)
-		admins have cumulative permissions (pro + admin)
+	[IN PROGRESS] create a pro type of account with some benefits (not pay-to-win)
+		[IN PROGRESS] admins have cumulative permissions (pro + admin)
 	[PLANNED] plan a stamina system - players getting tired during the game and stamina changes have real effects in the match itself. maybe a logarithmic curve for stamina depletion per age?; stamina should recover as players do not play matches (off days or match days when they do not play, due to not being selected for the squad or being on the bench and not getting called into the pitch). i would like stamina regen to be a bit slower than expenditure, meaning a player that plays 3-4 full games in a row needs to sit out for a game to rest fully. if old player, maybe make this 2-3. if young, make this around. this needs to scale with season length
 	[PLANNED] how are the injuries happening? we need to think of a statistical model to model injuries
 		[PLANNED] how does training/improvement work? check. add very low chance of getting injured training. rare enough that we will have 1-2 players per season
 		[PLANNED] injuries can set back a player's skills (make it rare, logarithmic probability)
 		[PLANNED] model the severity of the injury (aka recovery time); has to scale with season length variables as well. younger players' injuries will generally be less severy, but not drastically
 		[PLANNED] the match simulator engine should incorporate the possibility of injuries (the more tired a player is, the more likely he is to become injured but does not affect severity). do we need to collect real injury data to tune coefficients?
-	users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
-		pro users can save one preset per tactic. regular users can only save one preset for one tactic
-	the match simulator should calculate extra time based on events but within a certain range 1-7 minutes
+	[IN PROGRESS] users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
+		[IN PROGRESS] pro users can save one preset per tactic. regular users can only save one preset for one tactic
 	implement:
 		AI substitutions in matches
 		extra time (calculated by events in the match, not too much time)
@@ -22,14 +21,17 @@ Game engine
 	player stats and history (goals in the career, yellow and red cards, injuries, etc.)
 		only pro users can see history of other user's players
 		during auctions, everyone can see full history of the player in the auction
+	[IN PROGRESS] remove player morale
+	make sure that the random player generator for each team will generate players from diverse positions and we do not end up with a team that has too many or too few players from the same positions
+	i would like to downgrade the division 1 benchmark of generated player quality so that 75 is the center of the "normal curve". what variable do I need to tune down?
 
 Multiplayer
 	[DONE] think of tournment structure
-	players create teams, choose team color, jerseys, country, stadium name, etc.
-		allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
+	[DONE] players create teams, choose team color, jerseys, country, stadium name, etc.
+		[IN PROGRESS] allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
 	[DONE] initial player names for that team should match the chosen country, same as youth-generated players
-	push notifications for match started and match ended
-		pros can see match goals and other events and also get their league results as push
+	[IN PROGRESS] push notifications for match started and match ended
+		[IN PROGRESS] pros can see match goals and other events and also get their league results as push
 	invite players should give some in-game advantage or give free pro
 	[DONE] let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
 		[DONE] spawn small leagues; human players automatically promoted over AI teams
@@ -38,13 +40,15 @@ Multiplayer
 	[DONE] re-shuffle teams with same division based on region grouping (least timezone difference), after promotions/relegations and removals of inactive/possibly groups are processed
 	[DONE] how are players ranked right now for the purpose of standings and relegation/promotion? what are the criteria? we should add elo as last criteria (though hidden)
 	[DONE] allow players to add friends. we will prioritize friends when creating the division groups (ie. same division (must) > friends (new) > least timezone difference > elo spreadout)
+	consider replacing timezone entirely by the aready existing "available slots" system
 
 UI:
 	[DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
-	pro users can nickname players. nicknames are seen by everyone else as well
+	[IN PROGRESS] pro users can nickname players. nicknames are seen by everyone else as well
 	[DONE] implement creation of club jersey. copy from: https://league-builder.app/kit-lab (you can copy the assets needed as well)
 		in the live match UI, use the appropriate jerseys instead of the circles
 	modify the tactics screen. I want something that looks like this: https://league-builder.app/lineup-creator
+	give the ability to hold shift and select multiple time slots at once in the "Matchday schedule" screen
 
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
@@ -79,8 +83,8 @@ Technical/housekeeping:
 	remove fan support level
 	migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)
 	[DONE] when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
-	confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
-		consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
+	[DONE] confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
+		[DONE] consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
 
 Tuning:
 	validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime

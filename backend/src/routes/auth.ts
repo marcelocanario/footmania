@@ -15,6 +15,10 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
+function toUserView(u: { id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt?: Date | null; banReason?: string | null }) {
+  return { id: u.id, username: u.username, isAdmin: u.isAdmin, isPro: Boolean(u.isPro || u.isAdmin), bannedAt: u.bannedAt ?? null, banReason: u.banReason ?? null };
+}
+
 export async function authRoutes(app: FastifyInstance) {
   app.post("/auth/register", async (req, reply) => {
     const parsed = registerSchema.safeParse(req.body);
@@ -53,7 +57,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const token = await app.createSession(user.id);
     reply.setCookie(COOKIE_NAME, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 30 * 24 * 3600 });
-    return { user: { id: user.id, username: user.username, isAdmin: user.isAdmin } };
+    return { user: toUserView(user as never) };
   });
 
   app.post("/auth/invite", async (req, reply) => {
@@ -74,9 +78,12 @@ export async function authRoutes(app: FastifyInstance) {
     if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
+    if (user.bannedAt) {
+      return reply.code(403).send({ error: "Account banned", reason: user.banReason ?? null });
+    }
     const token = await app.createSession(user.id);
     reply.setCookie(COOKIE_NAME, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 30 * 24 * 3600 });
-    return { user: { id: user.id, username: user.username, isAdmin: user.isAdmin } };
+    return { user: toUserView(user as never) };
   });
 
   app.post("/auth/logout", async (req, reply) => {
@@ -97,6 +104,27 @@ export async function authRoutes(app: FastifyInstance) {
     if (!session || session.expiresAt < new Date()) {
       return reply.code(401).send({ error: "Session expired" });
     }
-    return { user: { id: session.userId, username: session.user.username, isAdmin: session.user.isAdmin } };
+    if (session.user.bannedAt) {
+      return reply.code(403).send({ error: "Account banned", reason: session.user.banReason ?? null });
+    }
+    return { user: toUserView(session.user as never) };
+  });
+
+  // Warnings for the current user (own warnings only)
+  app.get("/auth/warnings", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const warnings = await app.prisma.warning.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: "desc" }, take: 50 });
+    return { warnings: warnings.map((w) => ({ id: w.id, reason: w.reason, createdAt: w.createdAt.toISOString(), acknowledgedAt: w.acknowledgedAt?.toISOString() ?? null })) };
+  });
+
+  app.post("/auth/warnings/:id/acknowledge", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const id = Number((req.params as { id: string }).id);
+    const w = await app.prisma.warning.findUnique({ where: { id } });
+    if (!w || w.userId !== req.user.id) return reply.code(404).send({ error: "Not found" });
+    if (!w.acknowledgedAt) await app.prisma.warning.update({ where: { id }, data: { acknowledgedAt: new Date() } });
+    return { ok: true };
   });
 }

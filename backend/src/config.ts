@@ -462,6 +462,55 @@ export const KIT_CONFIG = {
   gkLightnessMax: 0.82,
 } as const;
 
+/**
+ * Pro + automation + nickname + logo + notification tunables.
+ * Structural rules remain in domain services; these are the balance/cosmetic knobs.
+ */
+export const PRO_CONFIG = {
+  // Pro grants are permanent (admin toggle); invite-free-pro deferred (no expiry concept).
+  // Cumulative permissions: hasPro(user) = isPro || isAdmin.
+} as const;
+
+export const AUTOMATION_CONFIG = {
+  /** Regular users: at most 1 preset total. Pro: 1 preset per formation. */
+  maxPresetsRegular: 1,
+  maxPresetsPerFormationPro: 1,
+  /** Maximum rules per preset. */
+  maxRulesPerPreset: 6,
+  /** Allowed trigger event types. */
+  allowedEvents: ["MINUTE", "HALF_TIME", "GOAL_SCORED", "GOAL_CONCEDED", "RED_CARD"] as const,
+  /** Allowed conditions. */
+  allowedConditions: ["ANY", "WINNING", "LOSING", "DRAWING", "WINNING_BY_2", "LOSING_BY_2"] as const,
+  /** Allowed action kinds. */
+  allowedActions: ["SUB", "TACTICS"] as const,
+} as const;
+
+export const NICKNAME_CONFIG = {
+  maxLength: 24,
+  minLength: 1,
+  // Minimal profanity blocklist; extend in game.config.jsonc or env as needed.
+  blocklist: ["admin", "moderator", "fuck", "shit", "asshole"] as readonly string[],
+} as const;
+
+export const LOGO_CONFIG = {
+  // Raster uploads only (SVG rejected to avoid XSS). Stored as base64 TEXT (SQLite).
+  maxBytes: 262144, // 256 KB
+  allowedMimes: ["image/png", "image/jpeg", "image/webp"] as const,
+  maxDimension: 512,
+  // How many SVG crest variants exist today. Only 0 is valid; grows as art lands.
+  variantCount: 1,
+} as const;
+
+export const NOTIFICATION_CONFIG = {
+  retentionDays: 30,
+  // Types that exist in UserNotification.type
+  types: ["MATCH_STARTED", "MATCH_FINISHED", "MATCH_GOAL", "LEAGUE_RESULTS"] as const,
+  // Web Push VAPID keys come from env; empty means push delivery disabled, inbox still works.
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? "",
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? "",
+  vapidSubject: process.env.VAPID_SUBJECT ?? "mailto:admin@footmania.local",
+} as const;
+
 export type GameConfig = z.infer<typeof gameConfigSchema> & {
   roundsPerSeason: number;
   matchSpacingDays: number;

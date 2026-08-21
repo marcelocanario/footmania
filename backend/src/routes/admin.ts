@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorld, persistWorld } from "../services/saveService";
+import { loadGlobalWorld, persistWorld, StaleWorldError } from "../services/saveService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { simulateThroughRound, divisionsInSeason, isFillerAI, timezoneCoordinate } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
@@ -534,6 +534,168 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/admin/scheduler/season/:seasonId", async (req) => ({ seasonId: Number((req.params as { seasonId: string }).seasonId), season: seasonSchedulePreview() }));
+
+  // --- User management (Pro grants + moderation) ---------------------------
+  app.get("/admin/users", async (req, reply) => {
+    const q = (req.query as { search?: string; limit?: string }).search?.trim() ?? "";
+    const limit = Math.max(1, Math.min(100, Number((req.query as { limit?: string }).limit ?? 20) || 20));
+    const where = q ? { username: { contains: q } } : {};
+    const users = await app.prisma.user.findMany({ where, orderBy: { id: "asc" }, take: limit, select: { id: true, username: true, isAdmin: true, isPro: true, bannedAt: true, banReason: true, createdAt: true } });
+    return { users: users.map((u) => ({ ...u, bannedAt: u.bannedAt?.toISOString() ?? null, createdAt: u.createdAt.toISOString() })) };
+  });
+
+  app.post("/admin/users/:id/pro", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const parsed = z.object({ isPro: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const user = await app.prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.code(404).send({ error: "User not found" });
+    await app.prisma.user.update({ where: { id }, data: { isPro: parsed.data.isPro } });
+    return { ok: true };
+  });
+
+  app.post("/admin/users/:id/ban", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const user = await app.prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.code(404).send({ error: "User not found" });
+    if (user.isAdmin) return reply.code(400).send({ error: "Cannot ban an admin" });
+    await app.prisma.$transaction(async (tx) => {
+      await tx.user.update({ where: { id }, data: { bannedAt: new Date(), banReason: parsed.data.reason } });
+      await tx.session.deleteMany({ where: { userId: id } });
+    });
+    return { ok: true };
+  });
+
+  app.post("/admin/users/:id/unban", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const user = await app.prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.code(404).send({ error: "User not found" });
+    await app.prisma.user.update({ where: { id }, data: { bannedAt: null, banReason: null } });
+    return { ok: true };
+  });
+
+  app.post("/admin/users/:id/warn", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const parsed = z.object({ reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const user = await app.prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.code(404).send({ error: "User not found" });
+    const w = await app.prisma.warning.create({ data: { userId: id, reason: parsed.data.reason, issuedByAdminUserId: req.user!.id } });
+    return { ok: true, warningId: w.id };
+  });
+
+  app.get("/admin/users/:id/warnings", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const user = await app.prisma.user.findUnique({ where: { id } });
+    if (!user) return reply.code(404).send({ error: "User not found" });
+    const warnings = await app.prisma.warning.findMany({ where: { userId: id }, orderBy: { createdAt: "desc" }, take: 100 });
+    return { warnings: warnings.map((w) => ({ id: w.id, reason: w.reason, issuedByAdminUserId: w.issuedByAdminUserId, createdAt: w.createdAt.toISOString(), acknowledgedAt: w.acknowledgedAt?.toISOString() ?? null })) };
+  });
+
+  // Moderation resets: club name/stadium, player nickname, logo takedown
+  app.post("/admin/moderation/reset-club-name", async (req, reply) => {
+    const parsed = z.object({ clubId: z.number().int().min(1), name: z.string().trim().min(1).max(60), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const reason = parsed.data.reason;
+    const res = await withGlobalLock(async () => {
+      const loaded = await loadGlobalWorld(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
+      if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
+      const before = club.name;
+      club.name = parsed.data.name;
+      club.shortName = parsed.data.name;
+      if (club.ownerUserId !== null) {
+        await app.prisma.warning.create({ data: { userId: club.ownerUserId, reason: `Club name reset: ${reason}`, issuedByAdminUserId: req.user!.id } });
+      }
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      return { value: { ok: true, before, after: club.name } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  app.post("/admin/moderation/reset-stadium-name", async (req, reply) => {
+    const parsed = z.object({ clubId: z.number().int().min(1), stadiumName: z.string().trim().min(1).max(80), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await withGlobalLock(async () => {
+      const loaded = await loadGlobalWorld(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
+      if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
+      club.stadiumName = parsed.data.stadiumName;
+      if (club.ownerUserId !== null) {
+        await app.prisma.warning.create({ data: { userId: club.ownerUserId, reason: `Stadium name reset: ${parsed.data.reason}`, issuedByAdminUserId: req.user!.id } });
+      }
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      return { value: { ok: true } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  app.post("/admin/moderation/clear-nickname", async (req, reply) => {
+    const parsed = z.object({ playerId: z.number().int().min(1), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await withGlobalLock(async () => {
+      const loaded = await loadGlobalWorld(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const player = loaded.world.players.find((p) => p.id === parsed.data.playerId);
+      if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
+      if (!player.nickname) return { value: { ok: true, cleared: false } };
+      const club = player.clubId !== null ? loaded.world.clubs.find((c) => c.id === player.clubId) : null;
+      player.nickname = null;
+      if (club?.ownerUserId !== null && club?.ownerUserId !== undefined) {
+        await app.prisma.warning.create({ data: { userId: club.ownerUserId!, reason: `Nickname cleared: ${parsed.data.reason}`, issuedByAdminUserId: req.user!.id } });
+      }
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      return { value: { ok: true, cleared: true } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  app.post("/admin/moderation/remove-logo", async (req, reply) => {
+    const parsed = z.object({ clubId: z.number().int().min(1), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await withGlobalLock(async () => {
+      const loaded = await loadGlobalWorld(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
+      if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
+      if (!club.customLogo) return { value: { ok: true, removed: false } };
+      club.customLogo = null;
+      if (club.ownerUserId !== null) {
+        await app.prisma.warning.create({ data: { userId: club.ownerUserId, reason: `Custom logo removed: ${parsed.data.reason}`, issuedByAdminUserId: req.user!.id } });
+      }
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      return { value: { ok: true, removed: true } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
 }
 
 function jsonSafe(value: unknown): string {

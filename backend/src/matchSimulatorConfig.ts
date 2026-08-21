@@ -191,15 +191,6 @@ const counterattackSchema = z.object({
   endOrganisationFraction: z.number().min(0).max(1),
 });
 
-const moraleFormSchema = z.object({
-  starterMoraleWeight: nonNegativeNumber,
-  squadMoraleWeight: nonNegativeNumber,
-  formPointsCoefficient: z.number(),
-  moraleWeight: nonNegativeNumber,
-  formWeight: nonNegativeNumber,
-  teamSignalWeight: nonNegativeNumber,
-});
-
 const fatigueSchema = z.object({
   fatigueScale: positiveNumber,
   agePenaltyStartAge: z.number(),
@@ -330,7 +321,6 @@ const matchSimulatorSchema = z
     pressing: pressingSchema,
     defensiveOrganisation: defensiveOrganisationSchema,
     counterattack: counterattackSchema,
-    moraleForm: moraleFormSchema,
     fatigue: fatigueSchema,
     fouls: foulsSchema,
     cards: cardsSchema,

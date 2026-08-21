@@ -16,6 +16,7 @@ import { Segmented } from "../components/Segmented";
 import { LineupPicker } from "../components/LineupPicker";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
+import { InputText } from "primereact/inputtext";
 
 const STYLES = [
   { label: "Balanced", value: 0 },
@@ -59,6 +60,12 @@ export function Squad() {
   const [tab, setTab] = useState<Tab>("seniors");
   const [trainingFocus, setTrainingFocus] = useState<TrainingFocus>(snapshot?.club?.trainingFocus ?? "assistant");
   const toast = useRef<Toast>(null);
+  const user = useGame((s) => s.user);
+  const [nicknameInput, setNicknameInput] = useState("");
+  const [nicknameBusy, setNicknameBusy] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyData, setHistoryData] = useState<{ player: PlayerView & { displayName?: string }; seasons: { seasonKey: string; clubName: string; goals: number; assists: number; yellows: number; reds: number }[]; transfers: { type: string; price: number; seasonKey: string }[]; matches: { minute: number; type: number; matchHomeScore: number | null; matchAwayScore: number | null }[] } | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
   const seasonsOf = (days: number) => {
     const per = snapshot?.save.seasonDays;
     if (!per) return `${days}d`;
@@ -202,6 +209,44 @@ export function Squad() {
 
   const selectedPlayer = selected ?? rows[0];
 
+  useEffect(() => {
+    if (selectedPlayer) setNicknameInput(selectedPlayer.nickname ?? "");
+  }, [selectedPlayer?.id, selectedPlayer?.nickname]);
+
+  const saveNickname = async () => {
+    if (!selectedPlayer) return;
+    if (!user?.isPro) {
+      toast.current?.show({ severity: "warn", summary: "Pro required", detail: "Only Pro managers can nickname players." });
+      return;
+    }
+    setNicknameBusy(true);
+    try {
+      const raw = nicknameInput.trim();
+      await api.nicknamePlayer(selectedPlayer.id, raw.length === 0 ? null : raw);
+      toast.current?.show({ severity: "success", summary: "Nickname saved", detail: raw ? `"${raw}" is now visible to everyone.` : "Nickname cleared." });
+      await refresh();
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    } finally {
+      setNicknameBusy(false);
+    }
+  };
+
+  const openHistory = async (p: PlayerView) => {
+    setHistoryBusy(true);
+    setShowHistory(true);
+    setHistoryData(null);
+    try {
+      const data = await api.playerHistory(p.id);
+      setHistoryData(data as never);
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "History", detail: (e as Error).message });
+      setShowHistory(false);
+    } finally {
+      setHistoryBusy(false);
+    }
+  };
+
   return (
     <div>
       <Toast ref={toast} />
@@ -284,7 +329,6 @@ export function Squad() {
                 <Column field="overall" header={strings.squad.overall} body={ratingBody} style={{ width: 70 }} />
                 <Column field="age" header={strings.squad.age} style={{ width: 50 }} />
                 <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} />} style={{ width: 120 }} />
-                {!isMobile && <Column header="Morale" body={(p: PlayerView) => <RatingBar value={p.morale} />} style={{ width: 110 }} />}
                 {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} style={{ width: 90 }} />}
                 {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => `${money(p.salary)}/season`} style={{ width: 100 }} />}
               </DataTable>
@@ -295,11 +339,18 @@ export function Squad() {
             <div className="card" key={selectedPlayer.id}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                 <div style={{ minWidth: 0 }}>
-                  <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.name}</h3>
+                  <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
+                  {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>Real name: {selectedPlayer.name}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
                     {selectedPlayer.positionName} · {selectedPlayer.age} yrs · {selectedPlayer.country}
                     {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
                   </div>
+                  <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
+                    <InputText value={nicknameInput} onChange={(e) => setNicknameInput(e.target.value)} placeholder="Nickname (Pro)" maxLength={24} style={{ flex: 1, minWidth: 0 }} disabled={!user?.isPro} />
+                    <button className="btn" onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} title={!user?.isPro ? "Pro required" : undefined} style={{ whiteSpace: "nowrap" }}>{nicknameBusy ? "Saving…" : "Set nick"}</button>
+                    <button className="btn ghost" onClick={() => void openHistory(selectedPlayer)} disabled={historyBusy} title="View career history">{historyBusy ? "…" : "History"}</button>
+                  </div>
+                  {!user?.isPro && <div style={{ color: "var(--text-3)", fontSize: "0.75rem", marginTop: 4 }}>Only <b>Pro</b> managers can nickname (visible to everyone).</div>}
                 </div>
                 <span
                   style={{
@@ -324,11 +375,6 @@ export function Squad() {
                   <span>Overall</span>
                 </div>
                 <RatingBar value={selectedPlayer.overall} />
-              </div>
-
-              <div style={{ margin: "10px 0" }}>
-                <div style={{ color: "var(--text-3)", fontSize: "0.74rem", marginBottom: 4 }}>Morale {selectedPlayer.morale}%</div>
-                <RatingBar value={selectedPlayer.morale} />
               </div>
 
               <div style={{ margin: "14px 0", padding: "12px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
@@ -451,6 +497,32 @@ export function Squad() {
               <button className="btn red" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => void runConfirm()}>{strings.common.confirm}</button>
             </div>
           </>
+        )}
+      </Dialog>
+
+      <Dialog header={historyData ? `${historyData.player.displayName ?? historyData.player.name} — Career` : "Career history"} visible={showHistory} onHide={() => setShowHistory(false)} style={{ width: 520 }}>
+        {!historyData ? (
+          <div className="empty-state" style={{ padding: 20 }}>{historyBusy ? "Loading…" : "No data"}</div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 800 }}>{historyData.player.displayName ?? historyData.player.name} <span style={{ color: "var(--text-3)", fontWeight: 400 }}>· {historyData.player.age} yrs · OVR {historyData.player.overall}</span></div>
+              <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginTop: 4 }}>Career {historyData.player.careerGoals}G {historyData.player.careerAssists}A · Season {historyData.player.seasonGoals}G {historyData.player.seasonAssists}A · {historyData.player.yellows}Y {historyData.player.reds}R {historyData.player.injuryDays > 0 ? `· Injured ${historyData.player.injuryDays}d` : ""}</div>
+            </div>
+            <div>
+              <div className="section-label">Per-season</div>
+              {historyData.seasons.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No past seasons archived yet. Past seasons appear at rollover.</div> : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{historyData.seasons.map((s) => <div key={s.seasonKey} className="news-item" style={{ display: "flex", justifyContent: "space-between" }}><span>{s.seasonKey} · {s.clubName}</span><span>{s.goals}G {s.assists}A {s.yellows}Y {s.reds}R</span></div>)}</div>}
+            </div>
+            <div>
+              <div className="section-label">Transfers</div>
+              {historyData.transfers.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No market moves.</div> : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{historyData.transfers.map((t, i) => <div key={i} className="news-item">{t.type} · {money(t.price)} · {t.seasonKey}</div>)}</div>}
+            </div>
+            <div>
+              <div className="section-label">Recent matches (goals/cards/injuries)</div>
+              {historyData.matches.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No match events.</div> : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{historyData.matches.slice(0, 12).map((m, i) => <div key={i} className="news-item" style={{ fontSize: "0.85rem", display: "flex", justifyContent: "space-between" }}><span>Type {m.type} {m.minute}'</span><span>{m.matchHomeScore ?? "–"}–{m.matchAwayScore ?? "–"}</span></div>)}</div>}
+            </div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.75rem" }}>Own players always visible. Other clubs' full history requires <b>Pro</b>; during an active auction everyone sees the listed player's history.</div>
+          </div>
         )}
       </Dialog>
     </div>

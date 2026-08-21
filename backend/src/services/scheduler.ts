@@ -11,6 +11,7 @@ import { processDueFreeAgentListing } from "../game/freeAgents";
 import { processGameDayPayroll, processGameDayStart, processGameDayWeekly } from "../game/daily";
 import { endLoan, processContractExpiry, processContractWarning } from "../game/season";
 import { executeRolloverStep, ROLLOVER_WORKFLOW_STEPS } from "./seasonRolloverService";
+import { notifyMatchFinished, notifyMatchStarted } from "./notifications";
 
 export enum ScheduledEventType {
   GAME_DAY_ADVANCE = "GAME_DAY_ADVANCE",
@@ -567,6 +568,8 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         payload: { fixtureId, completionAt },
         idempotencyKey: `MATCH_COMPLETE:${fixtureId}`,
       });
+      // Inbox notification for both participants (best-effort, non-fatal)
+      try { await notifyMatchStarted(prisma, world, fixtureId); } catch {}
       return;
     }
     case ScheduledEventType.MATCH_COMPLETE: {
@@ -574,7 +577,10 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const fixtureId = Number(payload.fixtureId ?? entityId);
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
       if (fixture && !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixtureId)) startLiveMatch(world, fixture);
-      advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
+      const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
+      for (const m of finished) {
+        try { await notifyMatchFinished(prisma, world, m); } catch {}
+      }
       return;
     }
     case ScheduledEventType.AUCTION_END: {

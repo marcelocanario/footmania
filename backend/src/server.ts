@@ -8,6 +8,7 @@ import { authRoutes } from "./routes/auth";
 import { savesRoutes } from "./routes/saves";
 import { gameRoutes } from "./routes/game";
 import { adminRoutes } from "./routes/admin";
+import { proFeaturesRoutes } from "./routes/proFeatures";
 import { startWorker } from "./services/worker";
 import { ensureCurrentSeason } from "./services/mpService";
 import { ensureNamePools } from "./services/namePoolService";
@@ -32,6 +33,7 @@ export function buildServer() {
   void app.register(savesRoutes, { prefix: "/api" });
   void app.register(gameRoutes, { prefix: "/api" });
   void app.register(adminRoutes, { prefix: "/api" });
+  void app.register(proFeaturesRoutes, { prefix: "/api" });
 
   app.get("/api/health", async () => ({ ok: true }));
 

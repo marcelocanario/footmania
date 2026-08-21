@@ -4289,14 +4289,6 @@
         "activationThreshold": 0.35,
         "endOrganisationFraction": 0.85
       },
-      "moraleForm": {
-        "starterMoraleWeight": 0.75,
-        "squadMoraleWeight": 0.25,
-        "formPointsCoefficient": 3.33,
-        "moraleWeight": 0.8,
-        "formWeight": 0.2,
-        "teamSignalWeight": 0.15
-      },
       "fatigue": {
         "fatigueScale": 1,
         "agePenaltyStartAge": 27,

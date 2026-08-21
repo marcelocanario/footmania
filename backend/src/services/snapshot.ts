@@ -9,9 +9,12 @@ import { resolveClubKits } from "../game/kits";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
+  const nick = (p.nickname ?? "").trim();
   return {
     id: p.id,
     name: p.name,
+    nickname: p.nickname ?? null,
+    displayName: nick.length > 0 ? nick : p.name,
     age: p.age,
     country: p.country,
     position: p.position,
@@ -37,7 +40,6 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     onSale: p.onSale,
     suspended: p.suspendedGames > 0,
     suspendedGames: p.suspendedGames,
-    morale: p.morale,
     loanId: p.loanId,
     releaseClause: p.releaseClause,
     onLoan: loan?.onLoan ?? false,
@@ -189,6 +191,8 @@ export function buildSnapshot(world: World, clubId: number) {
           primaryColor: club.primaryColor,
           secondaryColor: club.secondaryColor,
           kits: resolveClubKits(club),
+          logoVariant: club.logoVariant ?? 0,
+          hasCustomLogo: Boolean(club.customLogo && club.customLogo.status === "ACTIVE"),
           coachName: club.coachName,
           trainingFocus: club.trainingFocus,
           competitionState: club.competitionState,

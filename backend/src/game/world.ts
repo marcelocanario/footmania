@@ -12,6 +12,7 @@ import { MP_CONFIG } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { syncClubSeasons } from "./multiplayer";
 import { applyMatchElo } from "./elo";
+import { processAutomation } from "./automation";
 
 function emptyTeamStats() {
   return {
@@ -129,7 +130,16 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
       : ((st.half === 1 ? st.firstHalfLen : 0) + st.minute) * 60;
     const remainingMinutes = Math.max(0, (MS.timing.regulationSeconds - clockSeconds) / 60);
     const minutes = Math.min(wholeMinutes, Math.max(1, Math.ceil(remainingMinutes)));
-    tickLiveMatch(world.rng, home, away, world.players, st, minutes, { ignoreHalfTime: true });
+    // Advance one match-minute at a time so per-minute automation triggers fire correctly
+    // even when catching up after downtime (otherwise a 10-minute catch-up would skip 9 minutes of rules).
+    for (let iter = 0; iter < minutes; iter++) {
+      if (st.ended) break;
+      const beforeLen = st.events.length;
+      tickLiveMatch(world.rng, home, away, world.players, st, 1, { ignoreHalfTime: true });
+      const newEvents = st.events.slice(beforeLen);
+      // Automation is human-only and retry-safe via st.automationFiredRuleIds.
+      processAutomation(world, st, newEvents);
+    }
     // The match is now fully simulated up to the real time that `minutes`
     // match-minutes represent. Any sub-minute fraction of the elapsed window
     // is preserved for the next tick (lastAdvancedAt only moves forward by the

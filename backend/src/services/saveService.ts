@@ -223,7 +223,6 @@ export function deserializeWorld(json: string): World {
     const legacy = player as Player & { suspended?: boolean };
     player.skillAcc ??= [0, 0, 0, 0, 0, 0, 0];
     player.suspendedGames ??= legacy.suspended ? 1 : 0;
-    player.morale ??= 50;
     player.loanId ??= null;
     if (!player.developmentProfile) {
       player.developmentProfile = backfillDevelopmentProfile(world.seed, player.id);
@@ -723,21 +722,26 @@ function clubRow(c: Club, saveId: number) {
      highestDivision: c.highestDivision,
      cash: c.cash,
      stadiumName: c.stadiumName,
-      primaryColor: c.primaryColor,
-      secondaryColor: c.secondaryColor,
-      kitJson: serializeClubKits(c.kits),
-      coachName: c.coachName,
-     isHuman: c.isHuman,
-     captainId: c.captainId,
-     penaltyTakerId: c.penaltyTakerId,
-     tacticsFormation: c.tactics.formation,
-     tacticsStyle: c.tactics.style,
-     tacticsPressing: c.tactics.pressing,
-     tacticsDirection: c.tactics.direction,
-     trainingFocus: c.trainingFocus,
-      savedLineupJson: c.savedLineup ? JSON.stringify(c.savedLineup) : null,
-      eloRating: c.eloRating,
-      eloRatedMatches: c.eloRatedMatches,
+       primaryColor: c.primaryColor,
+       secondaryColor: c.secondaryColor,
+       kitJson: serializeClubKits(c.kits),
+       logoVariant: c.logoVariant ?? 0,
+       customLogoMime: c.customLogo?.mime ?? null,
+       customLogoData: c.customLogo?.data ?? null,
+       customLogoStatus: c.customLogo?.status ?? "ACTIVE",
+       automationPresetsJson: c.automationPresets ? JSON.stringify(c.automationPresets) : null,
+       coachName: c.coachName,
+      isHuman: c.isHuman,
+      captainId: c.captainId,
+      penaltyTakerId: c.penaltyTakerId,
+      tacticsFormation: c.tactics.formation,
+      tacticsStyle: c.tactics.style,
+      tacticsPressing: c.tactics.pressing,
+      tacticsDirection: c.tactics.direction,
+      trainingFocus: c.trainingFocus,
+       savedLineupJson: c.savedLineup ? JSON.stringify(c.savedLineup) : null,
+       eloRating: c.eloRating,
+       eloRatedMatches: c.eloRatedMatches,
    };
  }
 
@@ -747,6 +751,7 @@ function playerRow(p: Player, saveId: number) {
     saveId,
     clubId: p.clubId,
     name: p.name,
+    nickname: p.nickname ?? null,
     country: p.country,
     age: p.age,
     position: p.position,
@@ -777,7 +782,6 @@ function playerRow(p: Player, saveId: number) {
     tacPos: p.tacPos,
      onSale: p.onSale,
      suspendedGames: p.suspendedGames,
-    morale: p.morale,
     loanId: p.loanId,
     skillGol: p.skills.gol,
     skillVel: p.skills.vel,
@@ -948,50 +952,62 @@ async function rebuildWorld(
        prisma.friendship.findMany({ orderBy: { id: "asc" } }),
    ]);
 
-  const clubs: Club[] = clubRows.map((r) => {
-    const r2 = r as unknown as {
-      ownerUserId: number | null;
-      timezone: string | null;
-      preferredHoursJson: string | null;
-      competitionState: string;
-      lastMeaningfulActivityAt: bigint | null;
-      abandonmentEligibleAt: bigint | null;
-      liveMatchAt: bigint | null;
-       highestDivision: number | null;
-       eloRating: number | null;
-       eloRatedMatches: number | null;
-    };
-    return {
-      id: r.id,
-      name: r.name,
-      shortName: r.shortName,
-      ownerUserId: r2.ownerUserId ?? null,
-      timezone: r2.timezone ?? null,
-      preferredHours: jsonOr<number[] | null>(r2.preferredHoursJson, null),
-      competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
-      lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null && r2.lastMeaningfulActivityAt !== undefined ? Number(r2.lastMeaningfulActivityAt) : null,
-      abandonmentEligibleAt: r2.abandonmentEligibleAt !== null && r2.abandonmentEligibleAt !== undefined ? Number(r2.abandonmentEligibleAt) : null,
-      liveMatchAt: r2.liveMatchAt !== null && r2.liveMatchAt !== undefined ? Number(r2.liveMatchAt) : null,
-      country: r.country,
-       highestDivision: r2.highestDivision ?? 1,
-       eloRating: r2.eloRating ?? ELO_CONFIG.initial,
-       eloRatedMatches: r2.eloRatedMatches ?? 0,
-      cash: r.cash,
-      stadiumName: r.stadiumName,
-      primaryColor: r.primaryColor,
-      secondaryColor: r.secondaryColor,
-      kits: deserializeClubKits((r as unknown as { kitJson?: string | null }).kitJson),
-      coachName: r.coachName,
-      tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
-      trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
-      captainId: r.captainId,
-      penaltyTakerId: r.penaltyTakerId,
-      savedLineup: jsonOr<Club["savedLineup"]>(r.savedLineupJson, null),
-      isHuman: r.isHuman,
-      ledger: { income: [], expense: [] },
-      trophies: {},
-    };
-  });
+   const clubs: Club[] = clubRows.map((r) => {
+     const r2 = r as unknown as {
+       ownerUserId: number | null;
+       timezone: string | null;
+       preferredHoursJson: string | null;
+       competitionState: string;
+       lastMeaningfulActivityAt: bigint | null;
+       abandonmentEligibleAt: bigint | null;
+       liveMatchAt: bigint | null;
+        highestDivision: number | null;
+        eloRating: number | null;
+        eloRatedMatches: number | null;
+       logoVariant: number | null;
+       customLogoMime: string | null;
+       customLogoData: string | null;
+       customLogoStatus: string | null;
+       automationPresetsJson: string | null;
+     };
+     const customLogo =
+       r2.customLogoData && r2.customLogoMime
+         ? { mime: r2.customLogoMime, data: r2.customLogoData, status: r2.customLogoStatus ?? "ACTIVE" }
+         : null;
+     return {
+       id: r.id,
+       name: r.name,
+       shortName: r.shortName,
+       ownerUserId: r2.ownerUserId ?? null,
+       timezone: r2.timezone ?? null,
+       preferredHours: jsonOr<number[] | null>(r2.preferredHoursJson, null),
+       competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
+       lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null && r2.lastMeaningfulActivityAt !== undefined ? Number(r2.lastMeaningfulActivityAt) : null,
+       abandonmentEligibleAt: r2.abandonmentEligibleAt !== null && r2.abandonmentEligibleAt !== undefined ? Number(r2.abandonmentEligibleAt) : null,
+       liveMatchAt: r2.liveMatchAt !== null && r2.liveMatchAt !== undefined ? Number(r2.liveMatchAt) : null,
+       country: r.country,
+        highestDivision: r2.highestDivision ?? 1,
+        eloRating: r2.eloRating ?? ELO_CONFIG.initial,
+        eloRatedMatches: r2.eloRatedMatches ?? 0,
+       cash: r.cash,
+       stadiumName: r.stadiumName,
+       primaryColor: r.primaryColor,
+       secondaryColor: r.secondaryColor,
+       kits: deserializeClubKits((r as unknown as { kitJson?: string | null }).kitJson),
+       logoVariant: r2.logoVariant ?? 0,
+       customLogo,
+       automationPresets: jsonOr<Club["automationPresets"]>(r2.automationPresetsJson, null),
+       coachName: r.coachName,
+       tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
+       trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
+       captainId: r.captainId,
+       penaltyTakerId: r.penaltyTakerId,
+       savedLineup: jsonOr<Club["savedLineup"]>(r.savedLineupJson, null),
+       isHuman: r.isHuman,
+       ledger: { income: [], expense: [] },
+       trophies: {},
+     };
+   });
 
    const players: Player[] = playerRows.map((r) => {
      const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
@@ -1009,46 +1025,46 @@ async function rebuildWorld(
            developmentVolatility: saved.developmentVolatility as number,
          }
        : backfillDevelopmentProfile(saveRow.seed, r.id);
-     return {
-       id: r.id,
-       name: r.name,
-       country: r.country,
-       age: r.age,
-       position: r.position as Player["position"],
-       side: r.side,
-       skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
-        overall: r.overall,
-        potential: r.potential,
-        characteristic1: r.characteristic1,
-       characteristic2: r.characteristic2,
-       energy: r.energy,
-       salary: r.salary,
-       payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
-       payrollPaidAmount: (r as typeof r & { payrollPaidAmount?: number }).payrollPaidAmount ?? 0,
-       payrollPeriodStartDay: (r as typeof r & { payrollPeriodStartDay?: number }).payrollPeriodStartDay ?? 0,
-       value: r.value,
-       releaseClause: r.releaseClause,
-       injuryDays: r.injuryDays,
-       contractDays: r.contractDays,
-       isYouth: r.isYouth,
-       starter: r.starter,
-       growthAcc: r.growthAcc,
-       potentialAcc: r.potentialAcc,
-       skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
-       careerGoals: r.careerGoals,
-       careerAssists: r.careerAssists,
-       seasonGoals: r.seasonGoals,
-       seasonAssists: r.seasonAssists,
-       yellows: r.yellows,
-       reds: r.reds,
-       clubId: r.clubId,
-       tacPos: r.tacPos,
-       onSale: r.onSale,
-       suspendedGames: r.suspendedGames,
-       morale: r.morale,
-       loanId: r.loanId,
-        developmentProfile: profile,
-        recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
+      return {
+        id: r.id,
+        name: r.name,
+        nickname: (r as unknown as { nickname?: string | null }).nickname ?? null,
+        country: r.country,
+        age: r.age,
+        position: r.position as Player["position"],
+        side: r.side,
+        skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
+         overall: r.overall,
+         potential: r.potential,
+         characteristic1: r.characteristic1,
+        characteristic2: r.characteristic2,
+        energy: r.energy,
+        salary: r.salary,
+        payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
+        payrollPaidAmount: (r as typeof r & { payrollPaidAmount?: number }).payrollPaidAmount ?? 0,
+        payrollPeriodStartDay: (r as typeof r & { payrollPeriodStartDay?: number }).payrollPeriodStartDay ?? 0,
+        value: r.value,
+        releaseClause: r.releaseClause,
+        injuryDays: r.injuryDays,
+        contractDays: r.contractDays,
+        isYouth: r.isYouth,
+        starter: r.starter,
+        growthAcc: r.growthAcc,
+        potentialAcc: r.potentialAcc,
+        skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
+        careerGoals: r.careerGoals,
+        careerAssists: r.careerAssists,
+        seasonGoals: r.seasonGoals,
+        seasonAssists: r.seasonAssists,
+        yellows: r.yellows,
+        reds: r.reds,
+        clubId: r.clubId,
+        tacPos: r.tacPos,
+        onSale: r.onSale,
+        suspendedGames: r.suspendedGames,
+        loanId: r.loanId,
+         developmentProfile: profile,
+         recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
         generatedClubId: (r as unknown as { generatedClubId?: number | null }).generatedClubId ?? null,
         generatedDivision: (r as unknown as { generatedDivision?: number | null }).generatedDivision ?? null,
         generatedSeasonId: (r as unknown as { generatedSeasonId?: number | null }).generatedSeasonId ?? null,
@@ -1437,6 +1453,8 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
   st.pressureWindowStartSeconds ??= [0, 0];
   st.pendingRestart ??= null;
   st.possessionFirstAction ??= null;
+  st.automationFiredRuleIds ??= [];
+  st.automationDisabled ??= [false, false];
   st.withBall ??= 0;
   st.playerEnergy ??= {};
   const playerIds = new Set([...st.homeXI, ...st.awayXI, ...st.homeSubs, ...st.awaySubs, ...st.homeOn, ...st.awayOn]);

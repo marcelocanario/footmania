@@ -183,6 +183,8 @@ export function createLiveMatchState(
     pressureWindowStartSeconds: [0, 0],
     pendingRestart: null,
     possessionFirstAction: null,
+    automationFiredRuleIds: [],
+    automationDisabled: [false, false],
   };
 }
 
@@ -512,7 +514,6 @@ export function applyMatchToPlayers(match: Match, world: World) {
           clubId: club.id,
         });
       }
-      p.morale = Math.max(0, p.morale - 20);
     }
   }
 }

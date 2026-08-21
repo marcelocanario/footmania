@@ -3,6 +3,7 @@ import { livePhase } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
 import { FORMATION_NAMES } from "../game/constants";
 import { resolveClubKits } from "../game/kits";
+import { displayName } from "../game/displayName";
 
 export interface LiveEventView {
   sequence: number;
@@ -20,6 +21,8 @@ export interface LiveEventView {
 export interface LivePlayerView {
   id: number;
   name: string;
+  displayName: string;
+  nickname: string | null;
   position: number;
   tacPos: number;
   overall: number;
@@ -62,6 +65,8 @@ export interface LiveStateView {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
+  automationDisabled?: [boolean, boolean];
+  automationFiredCount?: number;
 }
 
 export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: number | null): LiveStateView {
@@ -76,6 +81,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     return {
       id: p.id,
       name: p.name,
+      displayName: displayName(p),
+      nickname: p.nickname ?? null,
       position: p.position,
       tacPos: p.tacPos,
       overall: p.overall,
@@ -94,8 +101,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     clubId: e.clubId,
     playerId: e.playerId,
     player2Id: e.player2Id,
-    player: e.playerId ? byId.get(e.playerId)?.name ?? "" : "",
-    player2: e.player2Id ? byId.get(e.player2Id)?.name ?? "" : "",
+    player: e.playerId ? (byId.get(e.playerId) ? displayName(byId.get(e.playerId)!) : "") : "",
+    player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
   }));
   // Determine which side the viewer controls (if any).
   const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
@@ -155,6 +162,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayFormation: formationName(away),
     homeFormationId: home?.tactics?.formation ?? 4,
     awayFormationId: away?.tactics?.formation ?? 4,
+    automationDisabled: st.automationDisabled ?? [false, false],
+    automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
   };
 }
 

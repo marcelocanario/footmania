@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
-import { Flag, Globe2, Home, Save as SaveIcon, Shirt } from "lucide-react";
+import { BadgeCheck, Flag, Globe2, Home, Save as SaveIcon, Shirt, Image as ImageIcon, Upload } from "lucide-react";
 import { api } from "../api/client";
 import { KitDesigner } from "../components/kit/KitDesigner";
 import { deriveKitDefaults } from "../components/kit/defaults";
@@ -26,6 +26,9 @@ export function MyClub() {
   const [kits, setKits] = useState<ClubKits>(() => deriveKitDefaults("#d40000", "#ffffff"));
   const [kitsDirty, setKitsDirty] = useState(false);
   const [savingKits, setSavingKits] = useState(false);
+  const [logoVariant, setLogoVariant] = useState(0);
+  const [customLogoPreview, setCustomLogoPreview] = useState<string | null>(null);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
 
   // Adopt server state once per loaded club (initial load and after save+refresh).
   useEffect(() => {
@@ -34,9 +37,18 @@ export function MyClub() {
     setClubName(club.name);
     setStadiumName(club.stadiumName);
     setKits(club.kits ?? deriveKitDefaults(club.primaryColor, club.secondaryColor));
+    setLogoVariant((club as unknown as { logoVariant?: number }).logoVariant ?? 0);
     setKitsDirty(false);
     setProfileDirty(false);
   }, [club, loadedId]);
+
+  // Load custom logo preview if present (browser cache: use server image)
+  useEffect(() => {
+    if (!club) return;
+    const has = (club as unknown as { hasCustomLogo?: boolean }).hasCustomLogo;
+    if (has) setCustomLogoPreview(`/api/clubs/${club.id}/logo?ts=${Date.now()}`);
+    else setCustomLogoPreview(null);
+  }, [club?.id, (club as unknown as { hasCustomLogo?: boolean })?.hasCustomLogo]);
 
   const nameValid = clubName.trim().length >= 3 && clubName.trim().length <= 30;
   const stadiumValid = stadiumName.trim().length > 0;
@@ -70,6 +82,55 @@ export function MyClub() {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     } finally {
       setSavingKits(false);
+    }
+  };
+
+  const saveLogoVariant = async (v: number) => {
+    setLogoVariant(v);
+    try {
+      await api.updateLogoVariant(v);
+      await loadClub();
+      toast.current?.show({ severity: "success", summary: "Crest updated", life: 2000 });
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    }
+  };
+
+  const onLogoFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+      toast.current?.show({ severity: "warn", summary: "Unsupported file", detail: "Use PNG, JPEG or WebP." });
+      return;
+    }
+    if (file.size > 262144) {
+      toast.current?.show({ severity: "warn", summary: "Too large", detail: "Max 256 KB." });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64 = (reader.result as string).split(",")[1] ?? "";
+      setUploadingLogo(true);
+      try {
+        await api.uploadCustomLogo(file.type, base64);
+        await loadClub();
+        toast.current?.show({ severity: "success", summary: "Logo uploaded", detail: "Custom crest is live.", life: 2000 });
+      } catch (err) {
+        toast.current?.show({ severity: "error", summary: "Error", detail: (err as Error).message });
+      } finally {
+        setUploadingLogo(false);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const removeLogo = async () => {
+    try {
+      await api.deleteCustomLogo();
+      await loadClub();
+      toast.current?.show({ severity: "success", summary: "Logo removed", life: 2000 });
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
     }
   };
 
@@ -160,6 +221,45 @@ export function MyClub() {
         >
           <SaveIcon size={15} /> {savingKits ? "Saving…" : "Save kits"}
         </button>
+      </div>
+
+      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
+        <h2 className="card-title">
+          <ImageIcon size={17} /> Crest
+        </h2>
+        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
+          Your crest appears in standings and match headers. Only one SVG variant exists today; it tints with your club colours. <b>Pro</b> managers may upload a custom raster crest.
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+          <div style={{ width: 72, height: 72, borderRadius: 12, border: "1px solid var(--line)", display: "grid", placeItems: "center", overflow: "hidden", background: "#0f2a43" }}>
+            {customLogoPreview ? <img src={customLogoPreview} alt="crest" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <span style={{ fontWeight: 800, color: "white" }}>{club.name.slice(0, 2).toUpperCase()}</span>}
+          </div>
+          <div>
+            <div style={{ fontWeight: 700 }}>{club.name}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>Variant {logoVariant} · {customLogoPreview ? "custom raster" : "recoloured SVG"}</div>
+          </div>
+        </div>
+        <div className="form-group">
+          <label className="jm-label">Variant</label>
+          <select className="select" value={logoVariant} onChange={(e) => void saveLogoVariant(Number(e.target.value))} style={{ width: "100%" }}>
+            <option value={0}>Classic shield (recoloured)</option>
+          </select>
+          <div className="jm-hint">More variants will appear as art lands.</div>
+        </div>
+        <div className="form-group">
+          <label className="jm-label"><BadgeCheck size={13} /> Custom crest {useGame.getState().user?.isPro ? "(Pro)" : "(Pro only)"}</label>
+          {useGame.getState().user?.isPro ? (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <label className="btn" style={{ cursor: "pointer" }}>
+                <Upload size={14} /> {uploadingLogo ? "Uploading…" : "Upload PNG/JPEG/WebP ≤256 KB"}
+                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onLogoFile} style={{ display: "none" }} disabled={uploadingLogo} />
+              </label>
+              {customLogoPreview && <button className="btn ghost danger" onClick={() => void removeLogo()}>Remove custom</button>}
+            </div>
+          ) : (
+            <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>Upgrade to <b>Pro</b> (admin-granted) to upload your own crest. Everyone sees nicknames and custom crests.</div>
+          )}
+        </div>
       </div>
     </div>
   );

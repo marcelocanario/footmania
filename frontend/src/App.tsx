@@ -19,6 +19,7 @@ import { Records } from "./screens/Records";
 import { History } from "./screens/History";
 import { SettingsScreen } from "./screens/Settings";
 import { MyClub } from "./screens/MyClub";
+import { Automation } from "./screens/Automation";
 import { Admin } from "./screens/Admin";
 
 function Gate({ children }: { children: React.ReactNode }) {
@@ -82,6 +83,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/saves" element={<Join />} />
       <Route path="/my-club" element={<ClubGuard><MyClub /></ClubGuard>} />
+      <Route path="/automation" element={<ClubGuard><Automation /></ClubGuard>} />
       <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
       <Route path="/squad" element={<ClubGuard><Squad /></ClubGuard>} />
       <Route path="/competitions" element={<ClubGuard><Competitions /></ClubGuard>} />

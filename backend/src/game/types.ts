@@ -22,6 +22,8 @@ export interface PlayerDevelopmentProfile {
 export interface Player {
   id: number;
   name: string;
+  /** Pro-set nickname, visible to everyone; null = none. */
+  nickname?: string | null;
   country: string;
   age: number;
   position: Position;
@@ -55,7 +57,6 @@ export interface Player {
   tacPos: number;
   onSale: boolean;
   suspendedGames: number;
-  morale: number;
   loanId: number | null;
   developmentProfile: PlayerDevelopmentProfile;
   recentMinutes: number[];
@@ -102,6 +103,44 @@ export interface SavedLineup {
   freeKickTakerId: number | null;
 }
 
+export type AutomationTriggerKind = "MINUTE" | "HALF_TIME" | "GOAL_SCORED" | "GOAL_CONCEDED" | "RED_CARD";
+export type AutomationCondition = "ANY" | "WINNING" | "LOSING" | "DRAWING" | "WINNING_BY_2" | "LOSING_BY_2";
+export type AutomationActionKind = "SUB" | "TACTICS";
+
+export interface AutomationTrigger {
+  kind: AutomationTriggerKind;
+  /** For MINUTE only. 1..90. */
+  minute?: number;
+}
+
+export interface AutomationAction {
+  kind: AutomationActionKind;
+  /** SUB: player IDs */
+  outPlayerId?: number;
+  inPlayerId?: number;
+  /** TACTICS: partial tactics update */
+  formation?: number;
+  style?: number;
+  pressing?: number;
+  direction?: number;
+}
+
+export interface AutomationRule {
+  id: string;
+  trigger: AutomationTrigger;
+  condition: AutomationCondition;
+  action: AutomationAction;
+}
+
+export interface AutomationPreset {
+  id: string;
+  name: string;
+  /** Formation this preset applies to; null = any (regular users) */
+  formationId: number | null;
+  enabled: boolean;
+  rules: AutomationRule[];
+}
+
 export interface Club {
   id: number;
   name: string;
@@ -137,6 +176,12 @@ export interface Club {
   /** Kit Lab: explicit jersey designs (home/away/GK). Null = derive from the
    * two identity colors (see game/kits.ts). Serialized to Club.kitJson. */
   kits?: import("./kits").ClubKits | null;
+  /** Crest/badge variant (0 = default SVG recolored). Grows with art assets. */
+  logoVariant?: number;
+  /** Custom raster logo uploaded by Pro users (base64). Null = none/active variant fallback. */
+  customLogo?: { mime: string; data: string; status: string } | null;
+  /** Automation presets (JSON; one per formation for Pro, one total for regular). */
+  automationPresets?: AutomationPreset[] | null;
   coachName: string;
   tactics: Tactics;
   trainingFocus: "assistant" | "primary" | "secondary";
@@ -456,6 +501,10 @@ export interface LiveMatchState {
   pendingRestart: string | null;
   /** First action pinned by a possession start (resumed deterministically). */
   possessionFirstAction: string | null;
+  /** Automation: rule ids that have already fired this match (persisted for restart idempotency). */
+  automationFiredRuleIds?: string[];
+  /** Automation: per-side kill-switch set when viewer explicitly disables automation. */
+  automationDisabled?: [boolean, boolean];
 }
 
 export interface NewsItem {

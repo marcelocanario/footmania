@@ -163,6 +163,30 @@ function archiveSeasonResults(world: World, context: RolloverContext): void {
   updateCareerRecords(world);
 }
 
+async function writePlayerSeasonHistories(prisma: PrismaClient, world: World, context: RolloverContext): Promise<void> {
+  const save = await prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
+  if (!save) return;
+  const seasonKey = `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`;
+  // One row per player that belongs to a club this season (or has season stats). Idempotent upsert.
+  for (const p of world.players) {
+    // Only snapshot players with a club assignment or with season production
+    if (p.clubId === null && p.seasonGoals === 0 && p.seasonAssists === 0 && p.yellows === 0 && p.reds === 0) continue;
+    const club = p.clubId !== null ? world.clubs.find((c) => c.id === p.clubId) : null;
+    const clubName = club?.name ?? "Free Agent";
+    const appearances = 0; // placeholder: precise per-season minutes available via MatchEvents if needed
+    const minutes = 0;
+    try {
+      await prisma.playerSeasonHistory.upsert({
+        where: { saveId_playerId_seasonId: { saveId: save.id, playerId: p.id, seasonId: context.sourceSeasonId } },
+        create: { saveId: save.id, playerId: p.id, seasonId: context.sourceSeasonId, seasonKey, clubId: p.clubId ?? 0, clubName, appearances, goals: p.seasonGoals, assists: p.seasonAssists, yellows: p.yellows, reds: p.reds, minutes },
+        update: {},
+      });
+    } catch {
+      // Unique race across concurrent rollover retries is fine (idempotent)
+    }
+  }
+}
+
 /** Execute one meaningful, independently retryable rollover operation. */
 export async function executeRolloverStep(
   prisma: PrismaClient,
@@ -184,6 +208,8 @@ export async function executeRolloverStep(
     // Invariant #19: archive standings/trophies/awards while the finished
     // season's divisions and names are still live.
     archiveSeasonResults(world, context);
+    // Write-once per-player season snapshots for history (visible to Pro + auction viewers).
+    await writePlayerSeasonHistories(prisma, world, context);
     world.mp.rolloverPhase = "RESULTS_FINALIZED";
   } else if (step === "INTERSEASON_START") {
     world.mp.seasonStatus = "INTERSEASON";

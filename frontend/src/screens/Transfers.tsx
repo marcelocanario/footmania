@@ -40,6 +40,8 @@ export function Transfers() {
   const [auctionBidTarget, setAuctionBidTarget] = useState<AuctionView | null>(null);
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
   const [auctionContractSeasons, setAuctionContractSeasons] = useState(1);
+  const [historyTarget, setHistoryTarget] = useState<AuctionView | FreeAgentView | null>(null);
+  const [historyData, setHistoryData] = useState<{ player: { displayName: string; name: string; age: number; overall: number; careerGoals: number; careerAssists?: number; seasonGoals: number; seasonAssists?: number }; seasons: { seasonKey: string; clubName: string; goals: number; assists: number }[]; transfers: { type: string; price: number; seasonKey: string }[]; matches: { minute: number; type: number }[] } | null>(null);
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -152,6 +154,18 @@ export function Transfers() {
       loadAuctions();
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+    }
+  };
+
+  const openAuctionHistory = async (a: AuctionView | FreeAgentView, type: "TRANSFER" | "FREE_AGENT") => {
+    setHistoryTarget(a as never);
+    setHistoryData(null);
+    try {
+      const data = await api.marketPlayerHistory((a as AuctionView).id ?? (a as FreeAgentView).id, type);
+      setHistoryData(data as never);
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "History", detail: (e as Error).message });
+      setHistoryTarget(null);
     }
   };
 
@@ -273,9 +287,12 @@ export function Transfers() {
                         <div style={{ color: "var(--text-3)", fontSize: "0.84rem", marginTop: 4 }}>Your max: {money(a.myMaxBid)}</div>
                       )}
                     </div>
-                    <button className="btn" onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
-                      {a.myMaxBid !== null ? "Increase Max" : strings.transfers.bid}
-                    </button>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>History</button>
+                      <button className="btn" onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
+                        {a.myMaxBid !== null ? "Increase Max" : strings.transfers.bid}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -301,9 +318,12 @@ export function Transfers() {
                       OVR <b style={{ color: "var(--text-2)" }}>{fa.overall}</b> · {fa.age} yrs · Salary {money(fa.salary)}/season · Value {money(fa.value)} · Signing {money(fa.currentPrice)} · Bidders {fa.bidderCount}
                     </div>
                   </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button className="btn ghost" onClick={() => void openAuctionHistory(fa as never, "FREE_AGENT")}>History</button>
                     <button className="btn" onClick={() => { setFreeAgentTarget(fa); setFreeAgentContractSeasons(fa.myContractSeasons ?? 1); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
-                    {strings.transfers.sign}
-                  </button>
+                      {strings.transfers.sign}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -536,6 +556,21 @@ export function Transfers() {
               <button className="btn" style={{ flex: 1 }} title={strings.transfers.borrowLoanHint} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>
             </div>
           </>
+        )}
+      </Dialog>
+
+      <Dialog header={historyTarget ? `${(historyTarget as AuctionView).playerName ?? (historyTarget as FreeAgentView).playerName} — Full history` : "Full history"} visible={historyTarget !== null} onHide={() => { setHistoryTarget(null); setHistoryData(null); }} style={{ width: 520 }}>
+        {!historyData ? <div className="empty-state" style={{ padding: 20 }}>Loading…</div> : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 800 }}>{historyData.player.displayName} <span style={{ color: "var(--text-3)", fontWeight: 400 }}>· {historyData.player.age} yrs · OVR {historyData.player.overall}</span></div>
+              <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginTop: 4 }}>Career {historyData.player.careerGoals}G {(historyData.player.careerAssists ?? 0)}A · Season {historyData.player.seasonGoals}G</div>
+            </div>
+            <div><div className="section-label">Per-season</div>{historyData.seasons.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No season history yet.</div> : historyData.seasons.map((s, i) => <div key={i} className="news-item" style={{ display: "flex", justifyContent: "space-between" }}><span>{s.seasonKey} · {s.clubName}</span><span>{s.goals}G {s.assists}A</span></div>)}</div>
+            <div><div className="section-label">Market moves</div>{historyData.transfers.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No moves.</div> : historyData.transfers.map((t, i) => <div key={i} className="news-item">{t.type} {money(t.price)} {t.seasonKey}</div>)}</div>
+            <div><div className="section-label">Recent matches</div>{historyData.matches.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No match events.</div> : historyData.matches.slice(0, 12).map((m, i) => <div key={i} className="news-item" style={{ display: "flex", justifyContent: "space-between" }}><span>Type {m.type} {m.minute}'</span></div>)}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.75rem" }}>Auction view shows full history to everyone while listing is active.</div>
+          </div>
         )}
       </Dialog>
     </div>

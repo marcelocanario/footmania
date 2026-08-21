@@ -385,7 +385,6 @@ export async function gameRoutes(app: FastifyInstance) {
       player.salary = demand;
       player.contractDays = contractDaysForTerm(seasons);
       player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
-      player.morale = Math.min(100, player.morale + 5);
       world.news.push({ dayIndex: world.dayIndex, text: `${player.name} signed a new contract`, kind: "contract" });
       return { value: { ok: true, demand } };
     });

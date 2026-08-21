@@ -49,6 +49,11 @@ export default async function setup(): Promise<void> {
       await prisma.competition.deleteMany();
       await prisma.ledgerEntry.deleteMany();
       await prisma.newsItem.deleteMany();
+      // Pro/moderation tables are global (user-scoped) but sport-linked tables must be cleared first.
+      await prisma.playerSeasonHistory.deleteMany().catch(() => {});
+      await prisma.userNotification.deleteMany().catch(() => {});
+      await prisma.pushSubscription.deleteMany().catch(() => {});
+      await prisma.warning.deleteMany().catch(() => {});
       await prisma.player.deleteMany();
       await prisma.club.deleteMany();
       await prisma.loan.deleteMany();

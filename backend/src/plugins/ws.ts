@@ -7,6 +7,9 @@ import { advanceLiveMatches } from "../game/world";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
 import { StaleWorldError } from "../services/saveService";
+import { hasPro } from "../services/pro";
+import { createNotification, notifyMatchFinished } from "../services/notifications";
+import { EVENT_CODES } from "../game/constants";
 
 const COOKIE_NAME = "fm_session";
 const conns = new Map<number, Set<WebSocket>>();
@@ -69,6 +72,10 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
         reject(netSocket);
         return;
       }
+      if ((session.user as unknown as { bannedAt?: Date | null }).bannedAt) {
+        reject(netSocket);
+        return;
+      }
       const userId = session.userId;
       wss.handleUpgrade(req, socket, head, (ws) => {
         const meta = { matchId, userId } as { matchId: number; userId: number };
@@ -97,7 +104,7 @@ async function handleMessage(
   meta: { matchId: number; userId: number },
   raw: string
 ) {
-  let msg: { type?: string; minutes?: number; outId?: number; inId?: number; resume?: boolean; formation?: number; starters?: number[]; subs?: number[]; penaltyTakerId?: number | null; freeKickTakerId?: number | null };
+  let msg: { type?: string; minutes?: number; outId?: number; inId?: number; resume?: boolean; formation?: number; starters?: number[]; subs?: number[]; penaltyTakerId?: number | null; freeKickTakerId?: number | null; enabled?: boolean };
   try {
     msg = JSON.parse(raw);
   } catch {
@@ -112,7 +119,7 @@ async function handleMessage(
     send(ws, { type: "pong" });
     return;
   }
-  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup") {
+  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "automation") {
     send(ws, { type: "error", message: "Unknown message type" });
     return;
   }
@@ -149,12 +156,28 @@ async function handleMessage(
             return;
           }
         const beforeEvents = st.events.length;
-        advanceLiveMatches(world, Date.now());
+        const finished = advanceLiveMatches(world, Date.now());
         const res = {
           events: st.events.slice(beforeEvents),
           atHalfTime: isHalftime(st),
         };
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        // Best-effort inbox notifications for finished matches + pro goal pushes
+        for (const m of finished) {
+          try {
+            await notifyMatchFinished(app.prisma, world, m);
+          } catch {}
+        }
+        // Pro goal push (best-effort)
+        try {
+          const goalEvents = res.events.filter((e) => e.type === EVENT_CODES.GOAL);
+          if (goalEvents.length > 0) {
+            const u = await app.prisma.user.findUnique({ where: { id: meta.userId } });
+            if (u && hasPro(u as never)) {
+              for (const g of goalEvents) await createNotification(app.prisma, meta.userId, "MATCH_GOAL", { matchId: st.matchId, fixtureId: st.fixtureId, minute: g.minute, clubId: g.clubId, scores: st.scores });
+            }
+          }
+        } catch {}
         send(ws, { type: "tick", events: res.events, atHalfTime: res.atHalfTime, state: liveStateView(world, st, meta.userId) });
         if (st.ended || !world.liveMatches.some((match) => match.matchId === meta.matchId)) {
           for (const ws2 of conns.get(meta.matchId) ?? []) send(ws2, { type: "finished", matchId: meta.matchId });
@@ -211,6 +234,20 @@ async function handleMessage(
         rebuildLiveHumanLineup(st, humanClub, world.players);
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "lineup", state: liveStateView(world, st, meta.userId) });
+        broadcastState(world);
+        return;
+      }
+      if (msg.type === "automation") {
+        if (!humanClub || (st.homeClubId !== humanClub.id && st.awayClubId !== humanClub.id)) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
+          return;
+        }
+        const side = st.homeClubId === humanClub.id ? 0 : 1;
+        const enabled = Boolean(msg.enabled);
+        st.automationDisabled ??= [false, false];
+        st.automationDisabled[side] = !enabled;
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        send(ws, { type: "automation", enabled, state: liveStateView(world, st, meta.userId) });
         broadcastState(world);
         return;
       }

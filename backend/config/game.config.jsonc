@@ -35,7 +35,7 @@
   // the derived season length so a full season sums to the stored annual salary.
   // (e.g. 7 = wages are paid every 7 game-days.)
   "payrollIntervalDays": 7,
-  // Game-day cadence for weekly sim updates (energy recovery, morale,
+  // Game-day cadence for weekly sim updates (energy recovery,
   // potential growth, contracts).
   // (e.g. 7 = a weekly sim update runs every 7 game-days.)
   "weeklyIntervalDays": 7,

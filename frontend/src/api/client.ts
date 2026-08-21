@@ -2,6 +2,9 @@ export interface User {
   id: number;
   username: string;
   isAdmin?: boolean;
+  isPro?: boolean;
+  bannedAt?: string | null;
+  banReason?: string | null;
 }
 
 export interface CountryOption {
@@ -40,6 +43,8 @@ export interface ClubKits {
 export interface PlayerView {
   id: number;
   name: string;
+  nickname?: string | null;
+  displayName?: string;
   age: number;
   country: string;
   position: number;
@@ -65,7 +70,6 @@ export interface PlayerView {
   onSale: boolean;
   suspended: boolean;
   suspendedGames: number;
-  morale: number;
   loanId: number | null;
   releaseClause: number;
   onLoan: boolean;
@@ -85,6 +89,8 @@ export interface ClubView {
   primaryColor: string;
   secondaryColor: string;
   kits?: ClubKits | null;
+  logoVariant?: number;
+  hasCustomLogo?: boolean;
   coachName: string;
   trainingFocus: "assistant" | "primary" | "secondary";
   competitionState?: string;
@@ -433,6 +439,8 @@ export interface FreeAgentView {
 export interface LivePlayer {
   id: number;
   name: string;
+  displayName?: string;
+  nickname?: string | null;
   position: number;
   tacPos: number;
   overall: number;
@@ -518,6 +526,8 @@ export interface LiveState {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
+  automationDisabled?: [boolean, boolean];
+  automationFiredCount?: number;
 }
 
 export interface LineupPlayer {
@@ -726,4 +736,38 @@ export const api = {
     request<{ audit: SchedulerAuditView[] }>("/api/admin/scheduler/audit?limit=100"),
   adminSchedulerPreview: (seasonId: number) =>
     request<{ seasonId: number; season: SchedulerPreviewEntry[] }>(`/api/admin/scheduler/season/${seasonId}`),
+
+  // Pro features
+  getAutomation: () => request<{ presets: unknown[] }>("/api/mp/automation"),
+  setAutomation: (presets: unknown[]) => request<{ ok: boolean; presets: unknown[] }>("/api/mp/automation", { method: "PUT", body: JSON.stringify({ presets }) }),
+  updateLogoVariant: (variant: number) => request<{ ok: boolean; logoVariant: number }>("/api/mp/club/logo-variant", { method: "PUT", body: JSON.stringify({ variant }) }),
+  uploadCustomLogo: (mime: string, data: string) => request<{ ok: boolean }>("/api/mp/club/logo", { method: "POST", body: JSON.stringify({ mime, data }) }),
+  deleteCustomLogo: () => request<{ ok: boolean }>("/api/mp/club/logo", { method: "DELETE" }),
+  nicknamePlayer: (playerId: number, nickname: string | null) => request<{ ok: boolean; nickname: string | null; displayName: string }>(`/api/mp/players/${playerId}/nickname`, { method: "PUT", body: JSON.stringify({ nickname }) }),
+  playerHistory: (playerId: number) => request<{ player: PlayerView & { displayName: string }; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/players/${playerId}/history`),
+  marketPlayerHistory: (listingId: number, marketType: "TRANSFER" | "FREE_AGENT") => request<{ player: PlayerView & { displayName: string }; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/market/listings/${listingId}/player-history?marketType=${marketType}`),
+
+  // Notifications & push
+  listNotifications: (limit?: number, unread?: boolean) => request<{ notifications: { id: string; type: string; payload: unknown; createdAt: string; readAt: string | null }[] }>(`/api/notifications${limit ? `?limit=${limit}` : ""}${unread ? `${limit ? "&" : "?"}unread=1` : ""}`),
+  markNotificationRead: (id: string) => request<{ ok: boolean }>(`/api/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () => request<{ ok: boolean }>("/api/notifications/read-all", { method: "POST" }),
+  getVapidKey: () => request<{ publicKey: string }>("/api/push/vapid-public-key"),
+  pushSubscribe: (endpoint: string, p256dh: string, auth: string) => request<{ ok: boolean }>("/api/push/subscribe", { method: "POST", body: JSON.stringify({ endpoint, p256dh, auth }) }),
+  pushUnsubscribe: (endpoint: string) => request<{ ok: boolean }>("/api/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }) }),
+
+  // Warnings (own)
+  myWarnings: () => request<{ warnings: { id: number; reason: string; createdAt: string; acknowledgedAt: string | null }[] }>("/api/auth/warnings"),
+  ackWarning: (id: number) => request<{ ok: boolean }>(`/api/auth/warnings/${id}/acknowledge`, { method: "POST" }),
+
+  // Admin user management
+  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt: string | null; banReason: string | null; createdAt: string }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
+  adminSetPro: (userId: number, isPro: boolean) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ isPro }) }),
+  adminBanUser: (userId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/users/${userId}/ban`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminUnbanUser: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/unban`, { method: "POST" }),
+  adminWarnUser: (userId: number, reason: string) => request<{ ok: boolean; warningId: number }>(`/api/admin/users/${userId}/warn`, { method: "POST", body: JSON.stringify({ reason }) }),
+  adminListUserWarnings: (userId: number) => request<{ warnings: { id: number; reason: string; issuedByAdminUserId: number; createdAt: string; acknowledgedAt: string | null }[] }>(`/api/admin/users/${userId}/warnings`),
+  adminResetClubName: (clubId: number, name: string, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-club-name`, { method: "POST", body: JSON.stringify({ clubId, name, reason }) }),
+  adminResetStadiumName: (clubId: number, stadiumName: string, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-stadium-name`, { method: "POST", body: JSON.stringify({ clubId, stadiumName, reason }) }),
+  adminClearNickname: (playerId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/clear-nickname`, { method: "POST", body: JSON.stringify({ playerId, reason }) }),
+  adminRemoveLogo: (clubId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/remove-logo`, { method: "POST", body: JSON.stringify({ clubId, reason }) }),
 };

@@ -13,6 +13,9 @@ model User {
   passwordHash String
   timezone     String?
   isAdmin      Boolean  @default(false)
+  isPro        Boolean  @default(false)
+  bannedAt     DateTime?
+  banReason    String?
   createdAt    DateTime @default(now())
   sessions     Session[]
   saves        Save[]
@@ -20,6 +23,9 @@ model User {
   friendshipsA Friendship[] @relation("FriendshipA")
   friendshipsB Friendship[] @relation("FriendshipB")
   invitations  Invitation[]
+  warnings     Warning[]
+  notifications UserNotification[]
+  pushSubscriptions PushSubscription[]
 }
 
 model Session {
@@ -93,6 +99,7 @@ model Save {
   freeAgentListings FreeAgentListing[]
   marketReservations MarketReservation[]
   playerMarketTransactions PlayerMarketTransaction[]
+  playerSeasonHistories PlayerSeasonHistory[]
   gameClock       GameClock?
   scheduledEvents ScheduledEvent[]
   schedulerAudits AdminSchedulerAudit[]
@@ -221,6 +228,14 @@ model Club {
   // Kit Lab: JSON-encoded {home,away,gk} jersey designs (game/kits.ts).
   // Null = derive designs from the two identity colors.
   kitJson          String?
+  // Crest/logo customization: single SVG variant recolored from team colors
+  // for everyone; custom raster upload for Pro members.
+  logoVariant      Int      @default(0)
+  customLogoMime   String?
+  customLogoData   String?
+  customLogoStatus String   @default("ACTIVE")
+  // Automation presets (JSON array of presets, each tied to a formation).
+  automationPresetsJson String?
   coachName        String
   isHuman          Boolean
   captainId        Int?
@@ -276,7 +291,6 @@ model Player {
   tacPos          Int
   onSale          Boolean
   suspendedGames  Int
-  morale          Int
   loanId          Int?
   skillGol        Int
   skillVel        Int
@@ -285,6 +299,7 @@ model Player {
   skillDes        Int
   skillArm        Int
   skillFin        Int
+  nickname        String?
   skillAccJson    String
   declineStartAge Float?
   developmentRate Float?
@@ -463,6 +478,7 @@ model MatchEvent {
   ordinal   Int
 
   @@index([saveId, matchId])
+  @@index([saveId, playerId])
 }
 
 model NewsItem {
@@ -842,4 +858,67 @@ model DailyExecution {
 
   @@unique([saveId, seasonId, date, executionType])
   @@index([saveId, date])
+}
+
+// Pro & moderation (cumulative permissions: admins have pro + admin)
+model Warning {
+  id                 Int      @id @default(autoincrement())
+  userId             Int
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reason             String
+  issuedByAdminUserId Int
+  createdAt          DateTime @default(now())
+  acknowledgedAt     DateTime?
+
+  @@index([userId])
+  @@index([userId, acknowledgedAt])
+}
+
+model UserNotification {
+  id          String   @id @default(uuid())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String
+  payloadJson String   @default("{}")
+  createdAt   DateTime @default(now())
+  readAt      DateTime?
+
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+}
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  endpoint  String
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, endpoint])
+  @@index([userId])
+  @@index([endpoint])
+}
+
+model PlayerSeasonHistory {
+  id         Int      @id @default(autoincrement())
+  saveId     Int
+  save       Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  playerId   Int
+  seasonId   Int
+  seasonKey  String
+  clubId     Int
+  clubName   String
+  appearances Int
+  goals      Int
+  assists    Int
+  yellows    Int
+  reds       Int
+  minutes    Int
+  createdAt  DateTime @default(now())
+
+  @@unique([saveId, playerId, seasonId])
+  @@index([saveId, playerId])
+  @@index([saveId, seasonId])
 }
