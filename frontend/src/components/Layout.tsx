@@ -44,10 +44,17 @@ export function Layout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user) return;
     void api.myWarnings().then((res) => setWarnings(res.warnings.filter((w) => !w.acknowledgedAt) as never)).catch(() => {});
-    const poll = async () => { try { const res = await api.listNotifications(20); setNotifications(res.notifications as never); } catch {} };
-    void poll();
-    const iv = setInterval(poll, 30000);
-    return () => clearInterval(iv);
+    const loadNotifications = async () => {
+      try {
+        const res = await api.listNotifications(20);
+        setNotifications(res.notifications as never);
+      } catch {}
+    };
+    void loadNotifications();
+    const unsubscribe = api.cache.subscribe((scope) => {
+      if (scope === "notifications") void loadNotifications();
+    });
+    return unsubscribe;
   }, [user]);
 
   const logout = async () => {
@@ -161,7 +168,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <div style={{ marginTop: 10, color: "var(--text-3)", fontSize: "0.75rem" }}>Push notifications: enable browser notifications in Settings to receive pushes when the tab is closed (Pro goal pings require Pro).</div>
         </div>
       )}
-      <main className="content animate-in" key={location.pathname}>
+      <main className="content animate-in">
         {children}
       </main>
 

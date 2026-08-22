@@ -1,17 +1,21 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { History as HistoryIcon } from "lucide-react";
 import { api, type SeasonHistoryView } from "../api/client";
 
 export function History() {
   const [seasons, setSeasons] = useState<SeasonHistoryView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    setError(null);
+    return api.history().then((res) => setSeasons(res.seasons)).catch((e) => setError((e as Error).message));
+  }, []);
 
   useEffect(() => {
-    api
-      .history()
-      .then((res) => setSeasons(res.seasons))
-      .catch((e) => setError((e as Error).message));
-  }, []);
+    void load();
+    return api.cache.subscribe((scope) => {
+       if (scope === "mp" || scope === "history" || scope === "background:history") void load();
+    });
+  }, [load]);
 
   if (error) return <div className="empty-state" style={{ paddingTop: 80 }}>Could not load history: {error}</div>;
   if (!seasons) return <div className="empty-state" style={{ paddingTop: 80 }}>Loading…</div>;

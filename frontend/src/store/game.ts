@@ -52,11 +52,10 @@ export const useGame = create<GameState>((set) => ({
   },
 
   refresh: async () => {
+    api.cache.invalidate("club");
     try {
-      const status = await api.mpStatus();
-      set({ status });
-      const res = await api.myClub();
-      set({ snapshot: res.snapshot });
+      const [status, res] = await Promise.all([api.mpStatus(), api.myClub()]);
+      set({ status, snapshot: res.snapshot });
     } catch (e) {
       set({ error: (e as Error).message });
     }
@@ -77,3 +76,15 @@ export const useGame = create<GameState>((set) => ({
 
   clear: () => set({ status: null, snapshot: null, liveMatchId: null, error: null }),
 }));
+
+// Revalidation updates the cache without invalidating it again. Copy the fresh
+// read models into the mounted store so open screens do not wait for navigation.
+api.cache.subscribe((scope) => {
+  if (scope !== "background:club") return;
+  const status = api.cache.peek<MpStatus>("/api/mp/status");
+  const club = api.cache.peek<{ snapshot: Snapshot }>("/api/mp/club");
+  useGame.setState({
+    ...(status ? { status: status.data } : {}),
+    ...(club ? { snapshot: club.data.snapshot } : {}),
+  });
+});

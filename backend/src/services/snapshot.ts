@@ -1,6 +1,6 @@
-import type { Competition, World } from "../game/types";
+import type { World } from "../game/types";
 import { multiplayerDayLabel, weekdayName } from "../game/calendar";
-import { sortedStandings, getPosition } from "../game/league";
+import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
 import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { gameConfig } from "../config";
@@ -8,6 +8,8 @@ import { getCommitmentTotals, financialState, remainingSeasonFraction } from "..
 import { resolveClubKits } from "../game/kits";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { seasonKey } from "../game/clock";
+
+const snapshotCache = new WeakMap<World, Map<number, unknown>>();
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
   const nick = (p.nickname ?? "").trim();
@@ -47,26 +49,33 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     loanFromName: loan?.loanFromName ?? null,
   };
 }
-
 /** Loan context for a player relative to a club, or neutral defaults. */
-function loanInfo(world: World, p: World["players"][number], clubId: number) {
+function loanInfo(
+  world: World,
+  p: World["players"][number],
+  clubId: number,
+  loanById?: ReadonlyMap<number, World["loans"][number]>,
+  clubById?: ReadonlyMap<number, World["clubs"][number]>,
+) {
   if (p.loanId === null) {
     return { onLoan: false, onLoanOut: false, loanClubName: null as string | null, loanFromName: null as string | null };
   }
-  const loan = world.loans.find((l) => l.id === p.loanId);
+  const loan = loanById?.get(p.loanId) ?? world.loans.find((l) => l.id === p.loanId);
   if (!loan || loan.recalled || loan.toClubId === null) {
     return { onLoan: false, onLoanOut: false, loanClubName: null as string | null, loanFromName: null as string | null };
   }
   return {
     onLoan: p.clubId === clubId && loan.fromClubId !== clubId,
     onLoanOut: loan.fromClubId === clubId && p.clubId !== clubId,
-    loanClubName: world.clubs.find((c) => c.id === loan.toClubId)?.name ?? null,
-    loanFromName: world.clubs.find((c) => c.id === loan.fromClubId)?.name ?? null,
+    loanClubName: clubById?.get(loan.toClubId)?.name ?? world.clubs.find((c) => c.id === loan.toClubId)?.name ?? null,
+    loanFromName: clubById?.get(loan.fromClubId)?.name ?? world.clubs.find((c) => c.id === loan.fromClubId)?.name ?? null,
   };
 }
-
-export function buildSnapshot(world: World, clubId: number) {
-  const club = world.clubs.find((c) => c.id === clubId);
+export function buildSnapshot(world: World, clubId: number, includeMarket = true, compact = false) {
+  const clubById = new Map(world.clubs.map((item) => [item.id, item]));
+  const playerById = new Map(world.players.map((item) => [item.id, item]));
+  const loanById = new Map(world.loans.map((item) => [item.id, item]));
+  const club = clubById.get(clubId);
   const dayLabel = (day: number) => multiplayerDayLabel(day);
   const currentDateLabel = multiplayerDayLabel(world.dayIndex);
   const currentDayOfWeek = new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, world.dayIndex))).getUTCDay();
@@ -81,10 +90,12 @@ export function buildSnapshot(world: World, clubId: number) {
     .filter((f) => !f.played && currentSeasonDivisions.has(f.competitionId) && f.dayIndex >= world.dayIndex && (f.homeClubId === clubId || f.awayClubId === clubId))
     .sort((a, b) => a.dayIndex - b.dayIndex)[0];
 
+  const ratings = eloRatings(world);
   const competitions = world.competitions
     .filter((c) => c.kind !== "division" || c.seasonId === world.mp.seasonId)
+    .filter((c) => !compact || c.standings[clubId] !== undefined || c.groupStandings.some((group) => group.rows[clubId] !== undefined))
     .map((c) => {
-    const position = c.kind === "league" || c.kind === "division" ? getPosition(c, clubId, eloRatings(world)) : 0;
+    const position = c.kind === "league" || c.kind === "division" ? getPosition(c, clubId, ratings) : 0;
     return {
       id: c.id,
       kind: c.kind,
@@ -99,30 +110,43 @@ export function buildSnapshot(world: World, clubId: number) {
   const squad = world.players
     .filter((p) => p.clubId === clubId && !p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId)));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById)));
   const juniors = world.players
     .filter((p) => p.clubId === clubId && p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId)));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById)));
   // Players the club owns but that are away on loan, so the ceding club can
   // still see them in its roster.
+  const loanedOutIds = new Set(
+    world.loans
+      .filter((loan) => loan.fromClubId === clubId && loan.toClubId !== null && !loan.recalled)
+      .map((loan) => loan.id),
+  );
   const loanedOut = world.players
-    .filter((p) => p.clubId !== clubId && p.loanId !== null && world.loans.some((l) => l.id === p.loanId && l.fromClubId === clubId && l.toClubId !== null && !l.recalled))
+    .filter((p) => p.clubId !== clubId && p.loanId !== null && loanedOutIds.has(p.loanId))
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId)));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById)));
   // Loaned-out players appear in the senior roster (greyed out in the UI).
   const squadAll = [...squad, ...loanedOut].sort((a, b) => b.overall - a.overall);
 
   const news = world.news
-    .slice(-30)
+    .slice(-(compact ? 12 : 30))
     .reverse()
     .map((n) => ({ dayIndex: n.dayIndex, dayLabel: dayLabel(n.dayIndex), text: n.text, kind: n.kind }));
 
-  const auctions = world.transferAuctions
-    .filter((a) => a.status === "ACTIVE")
-    .map((a) => {
-      const p = world.players.find((x) => x.id === a.playerId);
-      const myBid = clubId !== null ? world.marketBids.find((b) => b.listingId === a.id && b.clubId === clubId) : undefined;
+  const auctions = includeMarket ? (() => {
+    const bidsByListing = new Map<number, typeof world.marketBids>();
+    for (const bid of world.marketBids) {
+      const bids = bidsByListing.get(bid.listingId) ?? [];
+      bids.push(bid);
+      bidsByListing.set(bid.listingId, bids);
+    }
+    return world.transferAuctions
+      .filter((a) => a.status === "ACTIVE")
+      .map((a) => {
+      const p = playerById.get(a.playerId);
+      const listingBids = bidsByListing.get(a.id) ?? [];
+      const myBid = clubId !== null ? listingBids.find((b) => b.clubId === clubId) : undefined;
       return {
         id: a.id,
         playerId: a.playerId,
@@ -136,26 +160,29 @@ export function buildSnapshot(world: World, clubId: number) {
         openingPrice: a.openingPrice,
         currentPrice: a.currentPrice,
         bidIncrement: a.bidIncrement,
-        bidderCount: world.marketBids.filter((b) => b.listingId === a.id).length,
+        bidderCount: listingBids.length,
         sellerClubId: a.sellerClubId,
-        sellerName: world.clubs.find((c) => c.id === a.sellerClubId)?.name ?? "",
+        sellerName: clubById.get(a.sellerClubId)?.name ?? "",
         deadline: a.deadline,
         status: a.status,
         myMaxBid: myBid?.maxBid ?? null,
         amILeading: a.leadingClubId === clubId,
       };
-    });
+      });
+  })() : [];
 
   // Free agents with an active market listing (Phase 7). Raw clubId === null
   // players without a listing are not market-visible yet.
-  const listedPlayerIds = new Set(
-    world.freeAgentListings.filter((l) => l.status === "ACTIVE").map((l) => l.playerId)
-  );
-  const freeAgents = world.players
-    .filter((p) => p.clubId === null && listedPlayerIds.has(p.id))
-    .sort((a, b) => b.overall - a.overall)
-    .slice(0, 30)
-    .map((p) => playerView(p));
+  const freeAgents = includeMarket
+    ? (() => {
+      const listedPlayerIds = new Set(world.freeAgentListings.filter((listing) => listing.status === "ACTIVE").map((listing) => listing.playerId));
+      return world.players
+        .filter((p) => p.clubId === null && listedPlayerIds.has(p.id))
+        .sort((a, b) => b.overall - a.overall)
+        .slice(0, 30)
+        .map((p) => playerView(p));
+    })()
+    : [];
 
   return {
     save: {
@@ -174,8 +201,8 @@ export function buildSnapshot(world: World, clubId: number) {
     },
     seasonSummary: world.seasonSummary
       ? {
-          leagueChampion: world.seasonSummary.leagueChampionId !== null ? world.clubs.find((c) => c.id === world.seasonSummary!.leagueChampionId)?.name ?? null : null,
-          leagueRunnerUp: world.seasonSummary.leagueRunnerUpId !== null ? world.clubs.find((c) => c.id === world.seasonSummary!.leagueRunnerUpId)?.name ?? null : null,
+          leagueChampion: world.seasonSummary.leagueChampionId !== null ? clubById.get(world.seasonSummary.leagueChampionId)?.name ?? null : null,
+          leagueRunnerUp: world.seasonSummary.leagueRunnerUpId !== null ? clubById.get(world.seasonSummary.leagueRunnerUpId)?.name ?? null : null,
         }
       : null,
     club: club
@@ -249,27 +276,20 @@ export function buildSnapshot(world: World, clubId: number) {
     auctions,
     freeAgents,
     records: world.records,
-    seasonAwards: world.seasonAwards.slice(-40).reverse(),
+    seasonAwards: world.seasonAwards.slice(-(compact ? 12 : 40)).reverse(),
   };
 }
 
-export function competitionTable(world: World, competition: Competition, myClubId: number | null = null) {
-  const rows = sortedStandings(competition, eloRatings(world));
-  return rows.map((r) => {
-    const club = world.clubs.find((c) => c.id === r.clubId);
-    const kits = club ? resolveClubKits(club) : null;
-    return {
-      ...r,
-      clubName: club?.name ?? "",
-      clubShort: club?.shortName ?? "",
-      colors: {
-        primary: club?.primaryColor ?? "",
-        secondary: club?.secondaryColor ?? "",
-      },
-      // Kit Lab: pattern + trim for jersey-style badges in tables (null when
-      // the club is missing, which cannot happen in practice).
-      kit: kits ? { primary: kits.home.primary, secondary: kits.home.secondary, accent: kits.home.accent, numberColor: kits.home.numberColor, pattern: kits.home.pattern } : null,
-      isHuman: r.clubId === myClubId,
-    };
-  });
+/** Reuse the expensive derived snapshot while the persisted world revision is unchanged. */
+export function buildCachedSnapshot(world: World, clubId: number, _revision: number) {
+  let byClub = snapshotCache.get(world);
+  if (!byClub) {
+    byClub = new Map<number, unknown>();
+    snapshotCache.set(world, byClub);
+  }
+  const cached = byClub.get(clubId);
+  if (cached) return cached;
+  const snapshot = buildSnapshot(world, clubId, false, true);
+  byClub.set(clubId, snapshot);
+  return snapshot;
 }

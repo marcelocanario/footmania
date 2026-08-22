@@ -74,10 +74,11 @@ export function Transfers() {
 
   useEffect(() => {
     loadAuctions();
-    // Poll every 30s so prices, deadlines, and leading/outbid state stay fresh.
-    const id = window.setInterval(() => void loadAuctions(), 30_000);
-    return () => window.clearInterval(id);
   }, [loadAuctions]);
+
+  useEffect(() => api.cache.subscribe((scope) => {
+    if (scope === "transfers" || scope === "background:transfers") void loadAuctions();
+  }), [loadAuctions]);
 
   useEffect(() => {
     if (freeAgentContractSeasons > maxContractSeasons) setFreeAgentContractSeasons(maxContractSeasons);

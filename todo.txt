@@ -4,7 +4,7 @@ Game engine
 		[DONE] make players start decaying in different ages. i think now they all decay in the same age. when a player is "born"/generated, we should randomly set a decay age (normal curve of probability around the current age of decay). what is the current age of decay? let's do like 30 years but -4 to +4 within the normal curve
 	[DONE] inter-seasons should be carefully calculated when defining the match schedule. ex: we have 8 teams per group, so it's 14 games or 28 days (considering games every other day). most Februarys have exactly 28 days, so we need to plan January and March so that the inter-season leaves at least 1-2 days between last Feb game and first Mar game or last Jan game and first Feb game. all months should be distributed in such a way that we have a little breathing room like that. should we consider making seasons longer, like 45 days and increase each group to 10? maybe keep as is but add a hard 7 days inter-season pause? so we are not following months exactly, we have our own calendar (37 days or so)
 	[DONE] create a pro type of account with some benefits (not pay-to-win)
-		[IN PROGRESS] admins have cumulative permissions (pro + admin)
+		[DONE] admins have cumulative permissions (pro + admin)
 	[PLANNED] plan a stamina system - players getting tired during the game and stamina changes have real effects in the match itself. maybe a logarithmic curve for stamina depletion per age?; stamina should recover as players do not play matches (off days or match days when they do not play, due to not being selected for the squad or being on the bench and not getting called into the pitch). i would like stamina regen to be a bit slower than expenditure, meaning a player that plays 3-4 full games in a row needs to sit out for a game to rest fully. if old player, maybe make this 2-3. if young, make this around. this needs to scale with season length
 	[PLANNED] how are the injuries happening? we need to think of a statistical model to model injuries
 		[PLANNED] how does training/improvement work? check. add very low chance of getting injured training. rare enough that we will have 1-2 players per season
@@ -21,7 +21,7 @@ Game engine
 	player stats and history (goals in the career, yellow and red cards, injuries, etc.)
 		only pro users can see history of other user's players
 		during auctions, everyone can see full history of the player in the auction
-	[IN PROGRESS] remove player morale
+	[DONE] remove player morale
 	[DONE] make sure that the random player generator for each team will generate players from diverse positions and we do not end up with a team that has too many or too few players from the same positions
 
 Multiplayer

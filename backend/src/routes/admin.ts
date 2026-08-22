@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorld, persistWorld, StaleWorldError } from "../services/saveService";
+import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { simulateThroughRound, divisionsInSeason, isFillerAI, timezoneCoordinate } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
@@ -12,6 +12,7 @@ import { gameConfig } from "../config";
 import { advanceGameDay, ensureGameClock } from "../services/gameClockService";
 import { cancelScheduledEvent, executeScheduledEvent, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
 import { calendarValues, seasonSchedulePreview } from "../services/seasonCalendar";
+import { publishUserWorldEvent } from "../services/worldEvents";
 
 const advanceSchema = z.object({
   // Target round to simulate through (1..14). Rounds already played are
@@ -43,7 +44,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
       const now = Date.now();
@@ -72,7 +73,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
       world.mp.manualRound = parsed.data.round;
@@ -87,7 +88,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/admin/clear-manual", async (req, reply) => {
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
       world.mp.manualRound = null;
@@ -98,20 +99,8 @@ export async function adminRoutes(app: FastifyInstance) {
     return res.value;
   });
 
-  // Compatibility endpoint for the durable rollover coordinator.
-  app.post("/admin/rollover", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
-    if (!loaded) return reply.code(404).send({ error: "World unavailable" });
-    const reason = ((req.body ?? {}) as { reason?: string }).reason ?? "Compatibility administrator rollover";
-    const before = { seasonId: loaded.world.mp.seasonId, seasonNumber: loaded.world.mp.seasonNumber, phase: loaded.world.mp.phase };
-    const season = await withGlobalLock(() => runRolloverCoordinatorInLock(app.prisma, { source: "ADMIN", ignoreDueTime: true, adminUserId: req.user!.id, reason, calendarBoundary: true }));
-    const after = await loadGlobalWorld(app.prisma);
-    await writeSchedulerAudit(app.prisma, loaded.save.id, req.user!.id, "SEASON_ROLLOVER_OVERRIDE", "SEASON", String(season.seasonId), before, after?.world.mp ?? season, reason);
-    return { ok: true, season };
-  });
-
   app.get("/admin/status", async (req) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return { world: null };
     const world = loaded.world;
     return {
@@ -168,7 +157,7 @@ export async function adminRoutes(app: FastifyInstance) {
     return withGlobalLock(async () => {
       const settings = await setLeagueSettings(app.prisma, parsed.data);
       const matchTiming = await configuredMatchTiming(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (loaded) {
         loaded.world.mp.inactivityThresholds = settings.inactivityThresholds;
         loaded.world.mp.matchTimeMode = matchTiming.mode;
@@ -186,7 +175,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // Operational metrics (plan §89).
   app.get("/admin/monitoring", async (req) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return { metrics: null };
     const world = loaded.world;
     const divisions = divisionsInSeason(world, world.mp.seasonId).filter((d) => d.status !== "ARCHIVED");
@@ -265,7 +254,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/admin/audit", async (req) => {
     const query = req.query as { limit?: string };
     const limit = Math.max(1, Math.min(500, Number(query.limit ?? 100) || 100));
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return { events: [] };
     return { events: loaded.world.mpAudits.slice(-limit).reverse() };
   });
@@ -276,7 +265,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
 
   app.get("/admin/scheduler/clock", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World unavailable" });
     const clock = await ensureGameClock(app.prisma, loaded.save.id, loaded.world);
     const calendar = calendarValues();
@@ -312,7 +301,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/admin/scheduler/events", async (req) => {
     const query = req.query as { status?: string; type?: string; timeBasis?: string; entityType?: string; entityId?: string; limit?: string };
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return { events: [] };
     const limit = Math.max(1, Math.min(500, Number(query.limit ?? 200) || 200));
     const events = await app.prisma.scheduledEvent.findMany({
@@ -391,7 +380,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/scan", async (req) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { executed: 0 };
     const { executeDueEvents } = await import("../services/scheduler");
     return { executed: await executeDueEvents(app.prisma, loaded.save.id) };
@@ -400,7 +389,7 @@ export async function adminRoutes(app: FastifyInstance) {
   app.post("/admin/scheduler/rollover", async (req, reply) => {
     const parsed = z.object({ reason: z.string().min(10) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "A reason of at least 10 characters is required" });
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World unavailable" });
     const before = { seasonId: loaded.world.mp.seasonId, seasonNumber: loaded.world.mp.seasonNumber, phase: loaded.world.mp.phase };
     const season = await withGlobalLock(() => runRolloverCoordinatorInLock(app.prisma, {
@@ -410,13 +399,13 @@ export async function adminRoutes(app: FastifyInstance) {
       reason: parsed.data.reason,
       calendarBoundary: true,
     }));
-    const after = await loadGlobalWorld(app.prisma);
+    const after = await loadGlobalWorldMutable(app.prisma);
     await writeSchedulerAudit(app.prisma, loaded.save.id, req.user!.id, "SEASON_ROLLOVER_OVERRIDE", "SEASON", String(season.seasonId), before, after?.world.mp ?? season, parsed.data.reason);
     return { season };
   });
 
   app.get("/admin/scheduler/matches", async () => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { matches: [] };
     const currentCompetitionIds = new Set(loaded.world.competitions.filter((competition) => competition.seasonId === loaded.world.mp.seasonId && competition.kind === "division").map((competition) => competition.id));
     const matches = await Promise.all(loaded.world.fixtures.filter((fixture) => currentCompetitionIds.has(fixture.competitionId)).map(async (fixture) => ({
@@ -435,7 +424,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/matches/:id/start", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World unavailable" });
     const fixtureId = (req.params as { id: string }).id;
     let event = await app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: fixtureId } });
@@ -451,7 +440,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/matches/:id/resolve", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World unavailable" });
     const fixtureId = (req.params as { id: string }).id;
     const fixture = loaded.world.fixtures.find((candidate) => candidate.id === Number(fixtureId));
@@ -472,7 +461,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/admin/scheduler/auctions", async () => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { auctions: [] };
     const auctions = await Promise.all(loaded.world.transferAuctions.map(async (auction) => ({
       id: auction.id,
@@ -490,7 +479,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/auctions/:id/end", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World unavailable" });
     const auctionId = (req.params as { id: string }).id;
     const auction = loaded.world.transferAuctions.find((candidate) => candidate.id === Number(auctionId));
@@ -506,7 +495,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "minutes must be positive" });
     const result = await withGlobalLock(async () => {
       return withGlobalLease(app.prisma, async () => {
-        const loaded = await loadGlobalWorld(app.prisma);
+        const loaded = await loadGlobalWorldMutable(app.prisma);
         if (!loaded) return { error: { code: 404, body: { error: "World unavailable" } } };
         const auctionId = Number((req.params as { id: string }).id);
         const auction = loaded.world.transferAuctions.find((candidate) => candidate.id === auctionId);
@@ -527,7 +516,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.get("/admin/scheduler/audit", async (req) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { audit: [] };
     const limit = Math.max(1, Math.min(500, Number((req.query as { limit?: string }).limit ?? 100) || 100));
     return { audit: await app.prisma.adminSchedulerAudit.findMany({ where: { saveId: loaded.save.id }, orderBy: { createdAt: "desc" }, take: limit }) };
@@ -551,6 +540,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const user = await app.prisma.user.findUnique({ where: { id } });
     if (!user) return reply.code(404).send({ error: "User not found" });
     await app.prisma.user.update({ where: { id }, data: { isPro: parsed.data.isPro } });
+    publishUserWorldEvent(id, { type: "permissionsChanged" });
     return { ok: true };
   });
 
@@ -600,7 +590,7 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const reason = parsed.data.reason;
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
       if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
@@ -626,7 +616,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const parsed = z.object({ clubId: z.number().int().min(1), stadiumName: z.string().trim().min(1).max(80), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
       if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
@@ -650,7 +640,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const parsed = z.object({ playerId: z.number().int().min(1), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const player = loaded.world.players.find((p) => p.id === parsed.data.playerId);
       if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
@@ -676,7 +666,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const parsed = z.object({ clubId: z.number().int().min(1), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
       if (!club) return { error: { code: 404, body: { error: "Club not found" } } };

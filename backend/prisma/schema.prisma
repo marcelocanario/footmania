@@ -168,8 +168,8 @@ model ScheduledEvent {
   executedByAdminUserId Int?
   version               Int      @default(0)
 
-  @@index([status, timeBasis, dueAbsoluteGameDay])
-  @@index([status, timeBasis, dueAt])
+  @@index([saveId, status, timeBasis, dueAbsoluteGameDay])
+  @@index([saveId, status, timeBasis, dueAt])
   @@index([entityType, entityId])
   @@index([type, status])
 }
@@ -339,6 +339,7 @@ model Loan {
   claimableAt BigInt
 
   @@id([saveId, id])
+  @@index([saveId, playerId])
 }
 
 model Competition {
@@ -488,6 +489,8 @@ model NewsItem {
   text     String
   kind     String
   clubId   Int?
+
+  @@index([saveId, id])
 }
 
 model LedgerEntry {
@@ -526,6 +529,8 @@ model SeasonAward {
   clubId              Int?
   playerNameSnapshot  String?
   detail              String?
+
+  @@index([saveId, season, id])
 }
 
 model CareerRecord {
@@ -535,6 +540,8 @@ model CareerRecord {
   category   String
   value      Int
   holderName String
+
+  @@index([saveId, category])
 }
 
 model LiveMatch {
@@ -543,9 +550,13 @@ model LiveMatch {
   // Multiplayer: multiple live matches can run concurrently. The runtime key
   // is the match's id (the engine's Match id for the live fixture).
   matchId   Int
+  homeClubId Int?
+  awayClubId Int?
   stateJson String
 
   @@id([saveId, matchId])
+  @@index([saveId, homeClubId])
+  @@index([saveId, awayClubId])
 }
 
 // ---------------------------------------------------------------------------

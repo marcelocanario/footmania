@@ -1,11 +1,12 @@
 import Fastify from "fastify";
+import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
 import prismaPlugin from "./plugins/prisma";
 import authPlugin from "./plugins/auth";
 import wsPlugin from "./plugins/ws";
 import { authRoutes } from "./routes/auth";
-import { savesRoutes } from "./routes/saves";
+import { multiplayerRoutes } from "./routes/multiplayer";
 import { gameRoutes } from "./routes/game";
 import { adminRoutes } from "./routes/admin";
 import { proFeaturesRoutes } from "./routes/proFeatures";
@@ -17,8 +18,22 @@ import bcrypt from "bcryptjs";
 
 export function buildServer() {
   const app = Fastify({
-    logger: true,
+    logger: process.env.NODE_ENV === "test"
+      ? false
+      : { level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === "production" ? "warn" : "info") },
     bodyLimit: 5 * 1024 * 1024,
+  });
+
+  void app.register(compress, { threshold: 1024 });
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (!reply.getHeader("Cache-Control")) {
+      if (req.url === "/api/mp/countries" || req.url === "/api/settings") {
+        reply.header("Cache-Control", "private, max-age=3600");
+      } else if (req.url.startsWith("/api/")) {
+        reply.header("Cache-Control", "private, no-store");
+      }
+    }
+    return payload;
   });
 
   void app.register(cors, {
@@ -30,7 +45,7 @@ export function buildServer() {
   void app.register(authPlugin);
   void app.register(wsPlugin);
   void app.register(authRoutes, { prefix: "/api" });
-  void app.register(savesRoutes, { prefix: "/api" });
+  void app.register(multiplayerRoutes, { prefix: "/api" });
   void app.register(gameRoutes, { prefix: "/api" });
   void app.register(adminRoutes, { prefix: "/api" });
   void app.register(proFeaturesRoutes, { prefix: "/api" });

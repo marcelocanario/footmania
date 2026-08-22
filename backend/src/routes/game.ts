@@ -1,10 +1,9 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorld, persistWorld, StaleWorldError } from "../services/saveService";
-import { competitionTable, playerView } from "../services/snapshot";
+import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
+import { playerView } from "../services/snapshot";
 import { liveStateView } from "../services/liveView";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
-import { multiplayerDayLabel } from "../game/calendar";
 import { releasePlayer } from "../game/transfers";
 import { applyMaxBid, auctionOpeningRange, cancelTransferAuction, createTransferAuction, playerHasActiveListing, recentTradeBaseValue, transferCooldownError, transferAuctionView } from "../game/market";
 import { applyFreeAgentBid, freeAgentListingView } from "../game/freeAgents";
@@ -13,7 +12,6 @@ import { getCommitmentTotals, getImmediateAvailableCash, financialState, remaini
 import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from "../game/economy";
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
-import { roundLabelFor, findCompetition } from "../game/world";
 import { recordActivity } from "../game/multiplayer";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
@@ -22,6 +20,7 @@ import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { World } from "../game/types";
 import { materializeSeasonEvents } from "../services/scheduler";
+import { publishUserWorldEvent } from "../services/worldEvents";
 
 const auctionCreateSchema = z.object({ playerId: z.number().int(), openingPrice: z.number().int().positive().optional() });
 const maxBidSchema = z.object({ maxBid: z.number().int().positive(), contractSeasons: z.number().int().min(1).max(gameConfig.maxContractSeasons) });
@@ -59,6 +58,10 @@ function userClub(world: World, userId: number) {
   return world.clubs.find((c) => c.ownerUserId === userId) ?? null;
 }
 
+function humanUserIds(world: World): number[] {
+  return world.clubs.flatMap((club) => club.ownerUserId === null ? [] : [club.ownerUserId]);
+}
+
 async function withWorld(
   app: FastifyInstance,
   userId: number,
@@ -67,7 +70,7 @@ async function withWorld(
 ) {
   return withGlobalLock(() => withGlobalLease(app.prisma, async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const loaded = await loadGlobalWorld(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 404, body: { error: "World not found" } } };
       const club = userClub(loaded.world, userId);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
@@ -77,6 +80,15 @@ async function withWorld(
       try {
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
         await materializeSeasonEvents(app.prisma, loaded.save.id, loaded.world);
+        const transferChanged = activity.startsWith("transfer_") || activity === "free_agent_bid" || activity.startsWith("loan_") || activity === "release_player";
+        if (transferChanged) {
+          for (const affectedUserId of humanUserIds(loaded.world)) {
+            publishUserWorldEvent(affectedUserId, { type: "invalidate", scope: "club" });
+            publishUserWorldEvent(affectedUserId, { type: "invalidate", scope: "transfers" });
+          }
+        } else {
+          publishUserWorldEvent(userId, { type: "invalidate", scope: "club" });
+        }
         return { value: res.value };
       } catch (error) {
         if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
@@ -91,51 +103,8 @@ export async function gameRoutes(app: FastifyInstance) {
     await app.authenticate(req, reply);
   });
 
-  app.get("/competitions/:id/table", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
-    if (!loaded) return reply.code(404).send({ error: "World not found" });
-    const compId = Number((req.params as { id: string }).id);
-    const comp = loaded.world.competitions.find((c) => c.id === compId);
-    if (!comp) return reply.code(404).send({ error: "Competition not found" });
-    const myClubId = userClub(loaded.world, req.user!.id)?.id ?? null;
-    return { competition: { id: comp.id, name: comp.name, kind: comp.kind, stage: comp.stage }, table: competitionTable(loaded.world, comp, myClubId) };
-  });
-
-  app.get("/competitions/:id/fixtures", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
-    if (!loaded) return reply.code(404).send({ error: "World not found" });
-    const compId = Number((req.params as { id: string }).id);
-    const comp = loaded.world.competitions.find((c) => c.id === compId);
-    if (!comp) return reply.code(404).send({ error: "Competition not found" });
-    const myClubId = userClub(loaded.world, req.user!.id)?.id ?? null;
-    const fixtures = loaded.world.fixtures
-      .filter((f) => f.competitionId === compId)
-      .sort((a, b) => a.round - b.round || (a.leg ?? 0) - (b.leg ?? 0) || a.dayIndex - b.dayIndex)
-      .map((f) => {
-        const home = loaded.world.clubs.find((c) => c.id === f.homeClubId);
-        const away = loaded.world.clubs.find((c) => c.id === f.awayClubId);
-        const m = loaded.world.matches.find((x) => x.fixtureId === f.id);
-        return {
-          id: f.id,
-          round: f.round,
-          roundLabel: roundLabelFor(comp, f.round),
-          leg: f.leg ?? 1,
-          home: home?.name ?? "",
-          away: away?.name ?? "",
-            dayLabel: multiplayerDayLabel(f.dayIndex),
-          dayIndex: f.dayIndex,
-          kickoffAt: f.kickoffAt ?? null,
-          played: f.played,
-          homeScore: m?.homeScore,
-          awayScore: m?.awayScore,
-          isHuman: myClubId !== null && (f.homeClubId === myClubId || f.awayClubId === myClubId),
-        };
-      });
-    return { competition: { id: comp.id, name: comp.name }, fixtures };
-  });
-
   app.get("/matches/:id/events", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const matchId = Number((req.params as { id: string }).id);
     const match = loaded.world.matches.find((m) => m.id === matchId);
@@ -166,7 +135,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/matches/:id/live", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const matchId = Number((req.params as { id: string }).id);
     const st = loaded.world.liveMatches.find((s) => s.matchId === matchId);
@@ -212,7 +181,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/club/lineup", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const club = userClub(loaded.world, req.user!.id);
     if (!club) return reply.code(400).send({ error: "You have no club" });
@@ -284,7 +253,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/transfers/auctions", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const myClubId = userClub(loaded.world, req.user!.id)?.id ?? null;
     return { auctions: loaded.world.transferAuctions.filter((a) => a.status === "ACTIVE").map((a) => transferAuctionView(loaded.world, a, myClubId)) };
@@ -312,7 +281,7 @@ export async function gameRoutes(app: FastifyInstance) {
 
   app.get("/transfers/auctions/preview", async (req, reply) => {
     const playerId = Number((req.query as { playerId?: string }).playerId);
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const player = loaded.world.players.find((candidate) => candidate.id === playerId);
     if (!player) return reply.code(404).send({ error: "Player not found" });
@@ -359,7 +328,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/transfers/free-agents", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const myClubId = userClub(loaded.world, req.user!.id)?.id ?? null;
     return { signings: loaded.world.freeAgentListings.filter((listing) => listing.status === "ACTIVE").map((listing) => freeAgentListingView(loaded.world, listing, myClubId)) };
@@ -409,7 +378,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/players/:id/contract", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     const player = loaded?.world.players.find((p) => p.id === Number((req.params as { id: string }).id));
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     if (!player) return reply.code(404).send({ error: "Player not found" });
@@ -481,7 +450,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/club/finances", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const club = userClub(loaded.world, req.user!.id);
     if (!club) return reply.code(400).send({ error: "You have no club" });
@@ -504,7 +473,7 @@ export async function gameRoutes(app: FastifyInstance) {
   });
 
   app.get("/club/finance-details", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const club = userClub(loaded.world, req.user!.id);
     if (!club) return reply.code(400).send({ error: "You have no club" });
@@ -514,14 +483,8 @@ export async function gameRoutes(app: FastifyInstance) {
     };
   });
 
-  app.get("/records", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
-    if (!loaded) return reply.code(404).send({ error: "World not found" });
-    return { records: loaded.world.records, awards: loaded.world.seasonAwards.slice().reverse() };
-  });
-
   app.get("/transfers/loans", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const myClubId = userClub(loaded.world, req.user!.id)?.id ?? null;
     const now = Date.now();

@@ -1,10 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import type { Match } from "../game/types";
 import { hasPro } from "./pro";
+import { publishUserWorldEvent } from "./worldEvents";
 
 export async function createNotification(prisma: PrismaClient, userId: number, type: string, payload: unknown): Promise<void> {
   try {
     await prisma.userNotification.create({ data: { userId, type, payloadJson: JSON.stringify(payload ?? {}) } });
+    publishUserWorldEvent(userId, { type: "invalidate", scope: "notifications" });
   } catch (err) {
     // Only swallow known transient/duplicate errors; log programming errors
     const msg = err instanceof Error ? err.message : String(err);

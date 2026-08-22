@@ -1,6 +1,6 @@
 @echo off
 setlocal
-title Footmania - Dev Runner
+title Footmania - Frontend
 cd /d "%~dp0"
 
 where node >nul 2>nul
@@ -10,24 +10,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "backend\node_modules" (
-  echo [WARN] Backend dependencies are missing. Run: cd backend ^&^& npm install
-)
 if not exist "frontend\node_modules" (
   echo [WARN] Frontend dependencies are missing. Run: cd frontend ^&^& npm install
 )
 
 echo ============================================================
-echo   Footmania - starting development servers
-echo   Backend : http://localhost:3001
+echo   Footmania - starting frontend
 echo   Frontend: http://localhost:5173
-echo   Stop the servers by closing their windows or pressing Ctrl+C.
+echo   Stop the server by closing this window or pressing Ctrl+C.
 echo ============================================================
 echo.
 
-start "Footmania Backend" /D "%~dp0backend" cmd /k "npm run db:upgrade && npm run db:seed-name-pools && npm run dev"
 start "Footmania Frontend" /D "%~dp0frontend" cmd /k "npm run dev"
 
-echo Both servers are launching in separate windows.
+echo Frontend is launching in a separate window.
 timeout /t 3 >nul
 endlocal

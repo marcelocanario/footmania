@@ -6,7 +6,7 @@ process.env.NODE_ENV = "test";
 import { PrismaClient } from "@prisma/client";
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
 import { createHumanClub } from "../src/game/worldgen";
-import { loadGlobalWorld, persistWorld, ensureGlobalSave, StaleWorldError } from "../src/services/saveService";
+import { loadGlobalWorld, persistLiveMatchState, persistWorld, ensureGlobalSave, StaleWorldError } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
 import { applyDevelopment } from "../src/game/player";
 import { initSeason, createDivision, ensureDivisionFull, generateDivisionFixtures, rebuildTierDivisions, highestRankedReplaceableAI, placeNewClub } from "../src/game/multiplayer";
@@ -138,6 +138,25 @@ describe("global multiplayer world persistence", () => {
     const onPitchId = st2!.homeOn[0];
     const p = reloaded!.world.players.find((x) => x.id === onPitchId)!;
     expect(p.recentMinutes.length).toBeGreaterThan(0);
+  });
+
+  it("persists ongoing live-match progress without rewriting the world tables", async () => {
+    const { saveId } = await freshGlobalWorld(31338);
+    const { world } = await withSeason(saveId);
+    const home = world.clubs[0];
+    const away = world.clubs[1];
+    const state = createLiveMatchState(world.rng, home, away, world.players, { matchId: 991001, competitionId: 1, fixtureId: 1 });
+    world.liveMatches.push(state);
+    await persistWorld(prisma, saveId, saveId, world);
+
+    state.minute = 12;
+    const saved = await prisma.save.findUnique({ where: { id: saveId }, select: { revision: true } });
+    await persistLiveMatchState(prisma, saveId, saveId, state, world.rng.state, saved!.revision);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded?.world.liveMatches[0].minute).toBe(12);
+    expect(reloaded?.world.players).toHaveLength(world.players.length);
+    expect(reloaded?.world.clubs).toHaveLength(world.clubs.length);
   });
 
   it("keeps the release clause in sync after development ticks and round-trips", async () => {

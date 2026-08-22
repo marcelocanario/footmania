@@ -1,7 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 import type { RolloverWorkflowStep } from "../game/types";
-import { acquireGlobalLease, releaseGlobalLease, withGlobalLease, withGlobalLock } from "./lock";
-import { loadGlobalWorld, persistWorld } from "./saveService";
+import { withGlobalLease, withGlobalLock } from "./lock";
+import { loadGlobalWorldMutable, persistWorld } from "./saveService";
+import { publishUserWorldEvent, type UserWorldEvent } from "./worldEvents";
 import { gameConfig } from "../config";
 import { calendarValues, payrollDayIndices } from "./seasonCalendar";
 import { MP_CONFIG } from "../config";
@@ -437,6 +438,15 @@ async function recoverStaleRunningEvents(prisma: PrismaClient, saveId: number, n
 
 interface DomainEventResult {
   persistWorld?: boolean;
+  userEvents?: { userId: number; event: UserWorldEvent }[];
+}
+
+type LoadedGlobalWorld = NonNullable<Awaited<ReturnType<typeof loadGlobalWorldMutable>>>;
+
+function invalidateHumanUsers(world: import("../game/types").World, scope: string): { userId: number; event: UserWorldEvent }[] {
+  return world.clubs
+    .filter((club) => club.ownerUserId !== null)
+    .map((club) => ({ userId: club.ownerUserId!, event: { type: "invalidate" as const, scope } }));
 }
 
 export interface RolloverCoordinatorOptions {
@@ -457,13 +467,13 @@ export async function executeScheduledEvent(prisma: PrismaClient, eventId: strin
   });
 }
 
-async function executeScheduledEventInLock(prisma: PrismaClient, eventId: string, context: EventExecutionContext = {}) {
+async function executeScheduledEventInLock(prisma: PrismaClient, eventId: string, context: EventExecutionContext = {}, loadedOverride?: LoadedGlobalWorld) {
     const event = await prisma.scheduledEvent.findUnique({ where: { id: eventId } });
     if (!event) throw new Error("Scheduled event not found");
     if (event.status === "COMPLETED") return event;
     if (event.status === "CANCELLED") throw new Error("Cancelled scheduled events cannot execute");
     const now = context.now ?? new Date();
-    const loaded = await loadGlobalWorld(prisma);
+    const loaded = loadedOverride ?? await loadGlobalWorldMutable(prisma);
     if (!loaded || loaded.save.id !== event.saveId) throw new Error("World unavailable");
     const absoluteGameDay = loaded.world.mp.absoluteGameDay ?? loaded.world.dayIndex;
     if (!context.ignoreDueTime && !eventDue(event, now, absoluteGameDay)) throw new Error("Scheduled event is not due");
@@ -483,9 +493,12 @@ async function executeScheduledEventInLock(prisma: PrismaClient, eventId: string
       await assertRolloverPrerequisites(prisma, event, payload);
       const result = await executeDomainEvent(prisma, loaded.save.id, loaded.world, event.type, event.entityId, payload, context, now);
       if (event.type === ScheduledEventType.GAME_DAY_ADVANCE || result?.persistWorld === false) {
+        for (const item of result?.userEvents ?? []) publishUserWorldEvent(item.userId, item.event);
         return prisma.scheduledEvent.update({ where: { id: eventId }, data: { status: "COMPLETED", completedAt: now, version: { increment: 1 } } });
       }
       await persistWorld(prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+      if (loadedOverride) loaded.save.revision += 1;
+      for (const item of result?.userEvents ?? []) publishUserWorldEvent(item.userId, item.event);
       return prisma.scheduledEvent.update({ where: { id: eventId }, data: { status: "COMPLETED", completedAt: now, version: { increment: 1 } } });
     } catch (error) {
       await prisma.scheduledEvent.update({ where: { id: eventId }, data: { status: "FAILED", lastError: error instanceof Error ? error.message : String(error), version: { increment: 1 } } });
@@ -515,7 +528,7 @@ const MANDATORY_ADVANCE_EVENTS = new Set<string>([
 ]);
 
 /** Drain mandatory events while the caller already owns WORLD_CLOCK. */
-export async function executeMandatoryEventsInLock(prisma: PrismaClient, saveId: number, absoluteGameDay: number, now = new Date()): Promise<void> {
+export async function executeMandatoryEventsInLock(prisma: PrismaClient, saveId: number, absoluteGameDay: number, now = new Date(), loadedOverride?: LoadedGlobalWorld): Promise<void> {
   await recoverStaleRunningEvents(prisma, saveId, now);
   const events = await prisma.scheduledEvent.findMany({
     where: {
@@ -527,21 +540,25 @@ export async function executeMandatoryEventsInLock(prisma: PrismaClient, saveId:
     },
     orderBy: [{ priority: "asc" }, { dueAbsoluteGameDay: "asc" }],
   });
+  let loaded = loadedOverride;
   for (const event of events) {
-    await executeScheduledEventInLock(prisma, event.id, { now, leaseHeld: true });
+    if (!loaded) loaded = await loadGlobalWorldMutable(prisma) ?? undefined;
+    await executeScheduledEventInLock(prisma, event.id, { now, leaseHeld: true }, loaded);
   }
 }
 
 /** Execute every event materialized for one game day while already locked. */
-export async function executeGameDayEventsInLock(prisma: PrismaClient, saveId: number, absoluteGameDay: number, now = new Date(), phase?: ScheduledEventPhase, leaseHeld = false): Promise<void> {
+export async function executeGameDayEventsInLock(prisma: PrismaClient, saveId: number, absoluteGameDay: number, now = new Date(), phase?: ScheduledEventPhase, leaseHeld = false, loadedOverride?: LoadedGlobalWorld): Promise<void> {
   const execute = async () => {
     await recoverStaleRunningEvents(prisma, saveId, now);
     const events = await prisma.scheduledEvent.findMany({
       where: { saveId, status: { in: ["PENDING", "FAILED"] }, timeBasis: "GAME_DAY", dueAbsoluteGameDay: absoluteGameDay, ...(phase ? { phase } : {}) },
       orderBy: [{ priority: "asc" }, { id: "asc" }],
     });
+    let loaded = loadedOverride;
     for (const event of events) {
-      await executeScheduledEventInLock(prisma, event.id, { now, leaseHeld: true });
+      if (!loaded) loaded = await loadGlobalWorldMutable(prisma) ?? undefined;
+      await executeScheduledEventInLock(prisma, event.id, { now, leaseHeld: true }, loaded);
     }
   };
   if (leaseHeld) return execute();
@@ -555,9 +572,11 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
       if (!fixture || fixture.played) return;
       const live = world.liveMatches.find((match) => match.fixtureId === fixtureId);
-      if (!live && !startLiveMatch(world, fixture)) throw new Error("Match participants are unavailable");
-      const completionAt = (fixture.kickoffAt ?? now.getTime()) + MP_CONFIG.matchDurationMinutes * 60 * 1000;
-      await scheduleEvent(prisma, {
+       if (!live && !startLiveMatch(world, fixture)) throw new Error("Match participants are unavailable");
+       const completionAt = (fixture.kickoffAt ?? now.getTime()) + MP_CONFIG.matchDurationMinutes * 60 * 1000;
+       const home = world.clubs.find((club) => club.id === fixture.homeClubId);
+       const away = world.clubs.find((club) => club.id === fixture.awayClubId);
+       await scheduleEvent(prisma, {
         saveId,
         type: ScheduledEventType.MATCH_COMPLETE,
         timeBasis: "REAL_TIME",
@@ -569,19 +588,33 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         idempotencyKey: `MATCH_COMPLETE:${fixtureId}`,
       });
       // Inbox notification for both participants (best-effort, non-fatal)
-      try { await notifyMatchStarted(prisma, world, fixtureId); } catch {}
-      return;
+       try { await notifyMatchStarted(prisma, world, fixtureId); } catch {}
+       const started = world.liveMatches.find((match) => match.fixtureId === fixtureId);
+       const participants = [home?.ownerUserId, away?.ownerUserId].filter((id): id is number => id !== null && id !== undefined);
+       return {
+         userEvents: started
+           ? participants.map((userId) => ({ userId, event: { type: "liveMatchStarted" as const, matchId: started.matchId } }))
+           : [],
+       };
     }
     case ScheduledEventType.MATCH_COMPLETE: {
       const completionAt = Number(payload.completionAt ?? now.getTime());
       const fixtureId = Number(payload.fixtureId ?? entityId);
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
       if (fixture && !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixtureId)) startLiveMatch(world, fixture);
-      const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
-      for (const m of finished) {
-        try { await notifyMatchFinished(prisma, world, m); } catch {}
-      }
-      return;
+       const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
+       for (const m of finished) {
+         try { await notifyMatchFinished(prisma, world, m); } catch {}
+       }
+       const userEvents: { userId: number; event: UserWorldEvent }[] = [];
+       for (const m of finished) {
+         const home = world.clubs.find((club) => club.id === m.homeClubId);
+         const away = world.clubs.find((club) => club.id === m.awayClubId);
+         for (const userId of [home?.ownerUserId, away?.ownerUserId]) {
+           if (userId !== null && userId !== undefined) userEvents.push({ userId, event: { type: "liveMatchEnded", matchId: m.id } });
+         }
+       }
+       return { userEvents };
     }
     case ScheduledEventType.AUCTION_END: {
       if (payload.marketType === "FREE_AGENT") {
@@ -596,7 +629,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
             releaseAllReservations(world, listing.id, "FREE_AGENT");
             listing.status = "CANCELLED";
             listing.completedAt = settleAt;
-            return;
+            return { userEvents: invalidateHumanUsers(world, "transfers") };
           }
           throw new Error(result.error);
         }
@@ -627,7 +660,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
             data: { status: "CANCELLED", version: { increment: 1 } },
           });
         }
-        return;
+        return { userEvents: invalidateHumanUsers(world, "transfers") };
       }
       const listing = world.transferAuctions.find((candidate) => candidate.id === Number(payload.auctionId ?? entityId));
       if (!listing || listing.status !== "ACTIVE") return;
@@ -639,11 +672,11 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         // succeed on retry: fail closed instead of exhausting attempts.
         if (result.terminal) {
           cancelUnsettleableAuction(world, listing, settleAt, result.error);
-          return;
+          return { userEvents: invalidateHumanUsers(world, "transfers") };
         }
         throw new Error(result.error);
       }
-      return;
+       return { userEvents: invalidateHumanUsers(world, "transfers") };
     }
     case ScheduledEventType.LOAN_END: {
       const loan = world.loans.find((candidate) => candidate.id === Number(payload.loanId ?? entityId));
@@ -651,7 +684,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const dueAbsolute = world.mp.loanEndAbsoluteGameDays?.[String(loan.id)] ?? loan.endDay;
       if (!context.ignoreDueTime && dueAbsolute > (world.mp.absoluteGameDay ?? world.dayIndex)) throw new Error("Loan is not due");
       endLoan(world, loan);
-      return;
+      return { userEvents: invalidateHumanUsers(world, "transfers") };
     }
     case ScheduledEventType.CONTRACT_WARNING: {
       const player = world.players.find((candidate) => candidate.id === Number(payload.playerId ?? entityId));
@@ -706,10 +739,10 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
     case ScheduledEventType.NEXT_SEASON_STRUCTURE_VALIDATE:
     case ScheduledEventType.NEXT_SEASON_PREPARATION_OPEN:
     case ScheduledEventType.SEASON_RESULTS_FINALIZE:
-    case ScheduledEventType.CONTRACT_END_PROCESSING:
-    case ScheduledEventType.SEASON_ROLLOVER_COMMIT:
-      await executeRolloverStep(prisma, world, type as RolloverWorkflowStep, { calendarBoundary: context.calendarBoundary, now: now.getTime() });
-      return;
+      case ScheduledEventType.CONTRACT_END_PROCESSING:
+      case ScheduledEventType.SEASON_ROLLOVER_COMMIT:
+        await executeRolloverStep(prisma, world, type as RolloverWorkflowStep, { calendarBoundary: context.calendarBoundary, now: now.getTime() });
+        return { userEvents: invalidateHumanUsers(world, "mp") };
     case ScheduledEventType.SEASON_ROLLOVER:
       await runRolloverCoordinatorInLock(prisma, {
         source: context.source,
@@ -720,7 +753,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
          calendarBoundary: context.calendarBoundary,
         now,
       });
-      return { persistWorld: false };
+      return { persistWorld: false, userEvents: invalidateHumanUsers(world, "mp") };
     default:
       void saveId;
       throw new Error(`No scheduled event handler for ${type}`);
@@ -731,7 +764,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
 export async function runRolloverCoordinatorInLock(prisma: PrismaClient, options: RolloverCoordinatorOptions = {}) {
   const now = options.now ?? new Date();
   const run = async () => {
-    let loaded = await loadGlobalWorld(prisma);
+    let loaded = await loadGlobalWorldMutable(prisma);
     if (!loaded) throw new Error("Global world unavailable");
     const saveId = loaded.save.id;
     const sourceSeasonId = loaded.world.mp.seasonId;
@@ -751,7 +784,7 @@ export async function runRolloverCoordinatorInLock(prisma: PrismaClient, options
       });
     }
 
-    loaded = await loadGlobalWorld(prisma);
+    loaded = await loadGlobalWorldMutable(prisma);
     if (!loaded) throw new Error("World unavailable after rollover");
     const season = await prisma.mpSeason.findUnique({ where: { id: loaded.world.mp.seasonId } });
     if (!season) throw new Error("Rollover completed without a season row");
@@ -761,29 +794,38 @@ export async function runRolloverCoordinatorInLock(prisma: PrismaClient, options
   return withGlobalLease(prisma, run, now);
 }
 
-export async function executeDueEvents(prisma: PrismaClient, saveId: number, now = new Date(), options: { excludeTypes?: ReadonlySet<string> } = {}): Promise<number> {
-  const loaded = await loadGlobalWorld(prisma);
-  if (!loaded || loaded.save.id !== saveId) return 0;
-  const recoveryLease = await acquireGlobalLease(prisma, now);
-  try {
+export async function executeDueEventsInLock(prisma: PrismaClient, saveId: number, now = new Date(), options: { excludeTypes?: ReadonlySet<string> } = {}): Promise<number> {
+    let loaded = await loadGlobalWorldMutable(prisma);
+    if (!loaded || loaded.save.id !== saveId) return 0;
     await recoverStaleRunningEvents(prisma, saveId, now);
-  } finally {
-    await releaseGlobalLease(prisma, recoveryLease);
-  }
-  const events = await prisma.scheduledEvent.findMany({
-    where: { saveId, status: { in: ["PENDING", "FAILED"] }, timeBasis: "REAL_TIME", dueAt: { lte: now }, ...(options.excludeTypes && options.excludeTypes.size > 0 ? { type: { notIn: [...options.excludeTypes] } } : {}) },
-    orderBy: [{ priority: "asc" }, { dueAt: "asc" }, { dueAbsoluteGameDay: "asc" }],
-  });
-  let completed = 0;
-  for (const event of events) {
-    try {
-      const result = await executeScheduledEvent(prisma, event.id, { now });
-      if (result.status === "COMPLETED") completed++;
-    } catch {
-      // Failed events remain visible for retry and admin diagnosis.
+    const events = await prisma.scheduledEvent.findMany({
+      where: { saveId, status: { in: ["PENDING", "FAILED"] }, timeBasis: "REAL_TIME", dueAt: { lte: now }, ...(options.excludeTypes && options.excludeTypes.size > 0 ? { type: { notIn: [...options.excludeTypes] } } : {}) },
+      orderBy: [{ priority: "asc" }, { dueAt: "asc" }, { dueAbsoluteGameDay: "asc" }],
+    });
+    let completed = 0;
+    for (const event of events) {
+      if (!loaded) break;
+      try {
+        const reusableWorld = event.type === ScheduledEventType.GAME_DAY_ADVANCE || event.type === ScheduledEventType.SEASON_ROLLOVER ? undefined : loaded;
+        const result = await executeScheduledEventInLock(prisma, event.id, { now, leaseHeld: true }, reusableWorld);
+        if (result.status === "COMPLETED") completed++;
+        if (!reusableWorld) {
+          loaded = await loadGlobalWorldMutable(prisma);
+          if (!loaded) break;
+        }
+      } catch {
+        // Failed events remain visible for retry and admin diagnosis. Reload so
+        // a domain handler that failed after mutating its working copy cannot
+        // contaminate the next event in this batch.
+        loaded = await loadGlobalWorldMutable(prisma);
+        if (!loaded) break;
+      }
     }
-  }
-  return completed;
+    return completed;
+}
+
+export async function executeDueEvents(prisma: PrismaClient, saveId: number, now = new Date(), options: { excludeTypes?: ReadonlySet<string> } = {}): Promise<number> {
+  return withGlobalLock(() => withGlobalLease(prisma, () => executeDueEventsInLock(prisma, saveId, now, options), now));
 }
 
 export async function cancelScheduledEvent(prisma: PrismaClient, eventId: string) {

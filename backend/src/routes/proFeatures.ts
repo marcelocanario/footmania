@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorld, persistWorld } from "../services/saveService";
+import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld } from "../services/saveService";
 import { withGlobalLock } from "../services/lock";
 import { hasPro } from "../services/pro";
 import { AUTOMATION_CONFIG, LOGO_CONFIG } from "../config";
@@ -10,6 +10,7 @@ import { validateLogoVariant, validateCustomLogo } from "../game/logo";
 import { logoVariantSchema } from "../game/logo";
 import { displayName } from "../game/displayName";
 import { StaleWorldError } from "../services/saveService";
+import { publishUserWorldEvent } from "../services/worldEvents";
 
 const nicknameBodySchema = z.object({
   nickname: z.string().nullable().optional(),
@@ -38,7 +39,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const err = validateLogoVariant(parsed.data.variant);
     if (err) return reply.code(400).send({ error: err });
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
@@ -50,9 +51,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         throw e;
       }
       return { value: { ok: true, logoVariant: club.logoVariant } };
-    });
-    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-    return res.value;
+     });
+     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+     publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+     return res.value;
   });
 
   // Custom logo upload (Pro only)
@@ -66,7 +68,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const err = validateCustomLogo(parsed.data);
     if (err) return reply.code(400).send({ error: err });
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
@@ -78,16 +80,17 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         throw e;
       }
       return { value: { ok: true } };
-    });
-    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-    return res.value;
+     });
+     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+     publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+     return res.value;
   });
 
   app.delete("/mp/club/logo", async (req, reply) => {
     await app.authenticate(req, reply);
     if (!req.user) return;
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
@@ -100,9 +103,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         throw e;
       }
       return { value: { ok: true, removed: true } };
-    });
-    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-    return res.value;
+     });
+     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+     publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+     return res.value;
   });
 
   // Serve custom logo bytes (public, long cache)
@@ -134,7 +138,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     // Allow clearing with null/empty
     if (raw === null || raw === undefined || raw.trim() === "") {
       const res = await withGlobalLock(async () => {
-        const loaded = await loadGlobalWorld(app.prisma);
+         const loaded = await loadGlobalWorldMutable(app.prisma);
         if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
         const player = loaded.world.players.find((p) => p.id === playerId);
         if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
@@ -148,9 +152,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
           throw e;
         }
         return { value: { ok: true, nickname: null, displayName: player.name } };
-      });
-      if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-      return res.value;
+       });
+       if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+       publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+       return res.value;
     }
     const normalized = normalizeNickname(raw);
     const err = validateNickname(normalized);
@@ -158,7 +163,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user.id } });
     if (!sessionUser || !hasPro(sessionUser)) return reply.code(403).send({ error: "Pro required to nickname players" });
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+         const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const player = loaded.world.players.find((p) => p.id === playerId);
       if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
@@ -173,9 +178,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         throw e;
       }
       return { value: { ok: true, nickname: player.nickname, displayName: displayName(player) } };
-    });
-    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-    return res.value;
+     });
+     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+     publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+     return res.value;
   });
 
   // ---- Player history -------------------------------------------------------
@@ -186,7 +192,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     if (!Number.isFinite(playerId)) return reply.code(400).send({ error: "Invalid player id" });
     const globalSave = await app.prisma.save.findFirst({ where: { isGlobal: true } });
     if (!globalSave) return reply.code(500).send({ error: "World unavailable" });
-    const worldLoaded = await loadGlobalWorld(app.prisma);
+     const worldLoaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!worldLoaded) return reply.code(500).send({ error: "World unavailable" });
     const player = worldLoaded.world.players.find((p) => p.id === playerId);
     if (!player) return reply.code(404).send({ error: "Player not found" });
@@ -276,7 +282,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     }
     if (playerId === null) return reply.code(404).send({ error: "Player not found" });
     // Reuse logic: fetch history without pro gate
-    const worldLoaded = await loadGlobalWorld(app.prisma);
+     const worldLoaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!worldLoaded) return reply.code(500).send({ error: "World unavailable" });
     const player = worldLoaded.world.players.find((p) => p.id === playerId);
     if (!player) return reply.code(404).send({ error: "Player not found" });
@@ -302,7 +308,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
   app.get("/mp/automation", async (req, reply) => {
     await app.authenticate(req, reply);
     if (!req.user) return;
-    const loaded = await loadGlobalWorld(app.prisma);
+     const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(500).send({ error: "World unavailable" });
     const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
     if (!club) return reply.code(404).send({ error: "No club" });
@@ -328,7 +334,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     if (quotaErr) return reply.code(403).send({ error: quotaErr });
 
     const res = await withGlobalLock(async () => {
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 404, body: { error: "No club" } } };
@@ -350,9 +356,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         throw e;
       }
       return { value: { ok: true, presets: club.automationPresets } };
-    });
-    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-    return res.value;
+     });
+     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+     publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+     return res.value;
   });
 
   // ---- Notifications (in-app inbox) -------------------------------------

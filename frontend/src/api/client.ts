@@ -579,7 +579,109 @@ export interface Settings {
   maxContractSeasons?: number;
 }
 
-async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+// --- In-flight dedupe + TTL cache for GET requests ---
+// Prevents redundant network round-trips when multiple components mount concurrently
+// (e.g. navigating between tabs) and avoids a fresh fetch per render cycle.
+// Auth, live-match, and mutation responses are never cached.
+
+type CacheEntry = {
+  data: unknown;
+  expiresAt: number;
+  staleUntil: number;
+};
+
+const CACHE_TTL_MS = 30_000;
+const CACHE_STALE_WINDOW_MS = 120_000;
+const responseCache = new Map<string, CacheEntry>();
+const inFlight = new Map<string, Promise<unknown>>();
+let cacheGeneration = 0;
+type CacheListener = (scope?: string) => void;
+const cacheListeners = new Set<CacheListener>();
+
+// Auth endpoints, live match info, match live state, and settings are never cached.
+const NEVER_CACHE = /^api\/(auth|mp\/live-match$|matches\/.*\/(live|events|sub|halftime|ws)|settings)/;
+
+function shouldCache(url: string): boolean {
+  const path = url.split("?", 1)[0].replace(/^\//, "");
+  return !NEVER_CACHE.test(path);
+}
+
+function notifyCacheListeners(scope?: string): void {
+  for (const listener of cacheListeners) listener(scope);
+}
+
+function cacheScopeForUrl(url: string): string {
+  const path = url.split("?", 1)[0];
+  if (path.startsWith("/api/transfers")) return "transfers";
+  if (path.startsWith("/api/mp/club") || path.startsWith("/api/mp/status") || path.startsWith("/api/club/")) return "club";
+  if (path.startsWith("/api/history")) return "history";
+  if (path.startsWith("/api/notifications")) return "notifications";
+  return "mp";
+}
+
+export const cache = {
+  /** Drop all cached GET responses so subsequent requests hit the network. */
+  clear: () => {
+    cacheGeneration++;
+    responseCache.clear();
+    inFlight.clear();
+    notifyCacheListeners();
+  },
+  /** Drop only cached entries whose key starts with `scope` (e.g. "/api/mp/club"). */
+  invalidate: (scope?: string) => {
+    if (!scope) {
+      cacheGeneration++;
+      responseCache.clear();
+      inFlight.clear();
+      notifyCacheListeners();
+      return;
+    }
+    cacheGeneration++;
+    const prefixes = scope.startsWith("/")
+      ? [scope]
+      : scope === "club"
+        ? ["/api/mp/club", "/api/mp/status", "/api/club/"]
+        : [`/api/${scope}`];
+    for (const key of responseCache.keys()) {
+      if (prefixes.some((prefix) => key.startsWith(prefix))) responseCache.delete(key);
+    }
+    for (const key of inFlight.keys()) {
+      if (prefixes.some((prefix) => key.startsWith(prefix))) inFlight.delete(key);
+    }
+    notifyCacheListeners(scope);
+  },
+  subscribe: (listener: CacheListener) => {
+    cacheListeners.add(listener);
+    return () => {
+      cacheListeners.delete(listener);
+    };
+  },
+  get<T>(key: string): T | undefined {
+    const entry = responseCache.get(key);
+    if (!entry || Date.now() >= entry.staleUntil) {
+      responseCache.delete(key);
+      return undefined;
+    }
+    return entry.data as T;
+  },
+  peek<T>(key: string): { data: T; fresh: boolean } | undefined {
+    const entry = responseCache.get(key);
+    if (!entry) return undefined;
+    const now = Date.now();
+    if (now >= entry.staleUntil) {
+      responseCache.delete(key);
+      return undefined;
+    }
+    return { data: entry.data as T, fresh: now < entry.expiresAt };
+  },
+  set(key: string, data: unknown, ttlMs = CACHE_TTL_MS, notifyScope?: string): void {
+    const now = Date.now();
+    responseCache.set(key, { data, expiresAt: now + ttlMs, staleUntil: now + ttlMs + CACHE_STALE_WINDOW_MS });
+    if (notifyScope) notifyCacheListeners(notifyScope);
+  },
+};
+
+async function rawFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
   const hasBody = options.body !== undefined;
   const res = await fetch(url, {
     ...options,
@@ -602,8 +704,84 @@ async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+async function request<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const method = (options.method ?? "GET").toUpperCase();
+  const isGet = method === "GET";
+
+  // Mutations bypass cache and invalidate only affected read models. The server
+  // WebSocket may issue a more precise follow-up invalidation after the write.
+  if (!isGet) {
+    const result = await rawFetch<T>(url, options);
+    const path = url.split("?", 1)[0];
+    if (path.startsWith("/api/transfers")) {
+      cache.invalidate("transfers");
+      cache.invalidate("club");
+    } else if (path.startsWith("/api/mp")) {
+      cache.invalidate("mp");
+      cache.invalidate("club");
+    } else if (path.startsWith("/api/club") || path.startsWith("/api/players")) {
+      cache.invalidate("club");
+    } else if (path.startsWith("/api/notifications")) {
+      cache.invalidate("notifications");
+    } else if (path.startsWith("/api/admin")) {
+      cache.invalidate("admin");
+    }
+    return result;
+  }
+
+  // GET requests that should never be cached (auth, live, etc.):
+  if (!shouldCache(url)) {
+    return rawFetch<T>(url, options);
+  }
+
+  const key = url;
+
+  // 1. Return cached data immediately. Stale entries are revalidated in the
+  // background so navigation never waits for a refresh.
+  const cached = cache.peek<T>(key);
+  if (cached) {
+    if (!cached.fresh && !inFlight.has(key)) {
+      const generation = cacheGeneration;
+      const refresh = rawFetch<T>(url, options);
+      inFlight.set(key, refresh);
+      void refresh
+        .then((data) => {
+           if (generation === cacheGeneration) cache.set(key, data, CACHE_TTL_MS, `background:${cacheScopeForUrl(key)}`);
+        })
+        .catch(() => undefined)
+        .finally(() => inFlight.delete(key));
+    }
+    return cached.data;
+  }
+
+  // 2. Dedupe: if an identical GET is already in-flight, reuse its promise.
+  const existing = inFlight.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+
+  // 3. Otherwise start a new request and track it for dedupe.
+  const promise = rawFetch<T>(url, options);
+  const generation = cacheGeneration;
+  inFlight.set(key, promise);
+  try {
+    const data = await promise;
+    if (generation === cacheGeneration) cache.set(key, data);
+    return data;
+  } catch (e) {
+    // Don't cache errors; let the next caller retry.
+    throw e;
+  } finally {
+    inFlight.delete(key);
+  }
+}
+
 export const api = {
-  me: () => request<User>("/api/auth/me"),
+  cache,
+  rawFetch,
+  mpWsUrl: () =>
+    `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/mp/ws`,
+  me: () => request<{ user: User }>("/api/auth/me"),
   register: (username: string, password: string) =>
     request<{ user: User }>("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password }) }),
   login: (username: string, password: string) =>
@@ -642,17 +820,17 @@ export const api = {
     request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/halftime/ready`, { method: "POST" }),
   liveWsUrl: (matchId: number) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws`,
-  getLineup: (auto?: boolean, formation?: number) =>
-    request<LineupView>(`/api/club/lineup${auto ? "?auto=1" : ""}${formation !== undefined ? `&formation=${formation}` : ""}`),
+  getLineup: (auto?: boolean, formation?: number) => {
+    const params = new URLSearchParams();
+    if (auto) params.set("auto", "1");
+    if (formation !== undefined) params.set("formation", String(formation));
+    const query = params.toString();
+    return request<LineupView>(`/api/club/lineup${query ? `?${query}` : ""}`);
+  },
   setLineup: (lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
     request<{ ok: boolean }>("/api/club/lineup", { method: "POST", body: JSON.stringify(lineup) }),
   matchLineup: (matchId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
     request<{ ok: boolean; state?: LiveState }>(`/api/matches/${matchId}/lineup`, { method: "POST", body: JSON.stringify(lineup) }),
-  competitionTable: (compId: number) =>
-    request<{ competition: { id: number; name: string; kind: string; stage: string }; table: StandingsRow[] }>(`/api/competitions/${compId}/table`),
-  competitionFixtures: (compId: number) =>
-    request<{ competition: { id: number; name: string }; fixtures: { id: number; round: number; roundLabel: string; leg: number; home: string; away: string; dayLabel: string; dayIndex: number; played: boolean; homeScore?: number; awayScore?: number; isHuman: boolean }[] }>(`/api/competitions/${compId}/fixtures`),
-
   sellPlayer: (playerId: number, openingPrice?: number) =>
     request<{ ok: boolean; listingId?: number; openingPrice?: number }>("/api/transfers/auctions", { method: "POST", body: JSON.stringify({ playerId, openingPrice }) }),
   listAuctions: () => request<{ auctions: AuctionView[] }>("/api/transfers/auctions"),
@@ -697,8 +875,6 @@ export const api = {
     request<{ ok: boolean; cost: number }>(`/api/players/${playerId}/release`, { method: "POST" }),
   contractDemand: (playerId: number) =>
     request<{ demand: number; demandsBySeason: Record<number, number>; salary: number; contractDays: number }>(`/api/players/${playerId}/contract`),
-  records: () => request<{ records: CareerRecord[]; awards: SeasonAward[] }>("/api/records"),
-
   settings: () => request<Settings>("/api/settings"),
   updateTimezone: (timezone: string) =>
     request<{ ok: boolean; timezone: string }>("/api/account/timezone", { method: "PUT", body: JSON.stringify({ timezone }) }),
@@ -712,8 +888,6 @@ export const api = {
     request<{ ok: boolean; manualRound: number }>("/api/admin/set-round", { method: "POST", body: JSON.stringify({ round }) }),
   adminClearManual: () =>
     request<{ ok: boolean }>("/api/admin/clear-manual", { method: "POST" }),
-  adminRollover: (reason?: string) =>
-    request<{ ok: boolean; season: { seasonId: number; year: number; month: number } }>("/api/admin/rollover", { method: "POST", body: JSON.stringify({ reason }) }),
   adminSchedulerClock: () =>
     request<{ clock: SchedulerClockView }>("/api/admin/scheduler/clock"),
   adminSchedulerEvents: () =>

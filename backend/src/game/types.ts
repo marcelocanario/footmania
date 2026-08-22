@@ -519,6 +519,7 @@ export interface LiveMatchState {
 }
 
 export interface NewsItem {
+  id?: number;
   dayIndex: number;
   text: string;
   kind: string;
@@ -679,6 +680,7 @@ export interface Loan {
 }
 
 export interface SeasonAward {
+  id?: number;
   season: number;
   category: string;
   competitionId: number | null;
@@ -689,6 +691,7 @@ export interface SeasonAward {
 }
 
 export interface CareerRecord {
+  id?: number;
   category: string;
   value: number;
   holderName: string;

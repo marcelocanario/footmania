@@ -1,6 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
 import { schedulerProcessor } from "./jobs/schedulerProcessor";
-import { loadGlobalWorld } from "./saveService";
 
 /**
  * Server-authoritative clock worker orchestrator (worker plan §1).
@@ -21,7 +20,7 @@ export interface WorkerOptions {
 }
 
 export function startWorker(prisma: PrismaClient, intervalMs: number, opts: WorkerOptions = {}) {
-  const schedulerInterval = opts.schedulerIntervalMs ?? 10_000;
+  const schedulerInterval = opts.schedulerIntervalMs ?? intervalMs;
 
   const timers: ReturnType<typeof setInterval>[] = [];
 
@@ -42,9 +41,7 @@ export function startWorker(prisma: PrismaClient, intervalMs: number, opts: Work
   };
 
   const runScheduler = async () => {
-    const loaded = await loadGlobalWorld(prisma);
-    if (!loaded) return { changed: false };
-    return schedulerProcessor({ prisma, saveId: loaded.save.id, revision: loaded.save.revision, world: loaded.world });
+    return schedulerProcessor({ prisma });
   };
   const stopScheduler = schedule("scheduler", schedulerInterval, runScheduler);
 

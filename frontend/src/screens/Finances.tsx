@@ -25,11 +25,11 @@ export function Finances() {
 
   useEffect(() => {
     void (async () => {
-      const res = await api.finances();
+      const [res, financeDetails] = await Promise.all([api.finances(), api.financeDetails()]);
       setIncome(res.income);
       setExpense(res.expense);
       setFinance(res.finance);
-      setDetails(await api.financeDetails());
+      setDetails(financeDetails);
     })();
   }, [snapshot?.club?.cash]);
 

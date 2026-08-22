@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { withGlobalLock } from "../lock";
-import { loadGlobalWorld, persistWorld, StaleWorldError } from "../saveService";
+import { loadGlobalWorldMutable, persistWorld, StaleWorldError } from "../saveService";
 import type { World } from "../../game/types";
 
 /**
@@ -50,7 +50,7 @@ export async function runJob(
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await withGlobalLock(async () => {
-        const loaded = await loadGlobalWorld(prisma);
+         const loaded = await loadGlobalWorldMutable(prisma);
         if (!loaded) return { changed: false };
         const ctx: JobContext = { prisma, saveId: loaded.save.id, revision: loaded.save.revision, world: loaded.world };
         const result = await mutate(ctx);

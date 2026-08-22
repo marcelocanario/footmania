@@ -4,14 +4,23 @@ import type {
   Club,
   ClubEloEvent,
   Competition,
+  Fixture,
   FreeAgentListing,
   GroupStandings,
+  Loan,
   LiveMatchState,
+  MarketBid,
+  MarketReservation,
   Match,
   MatchStats,
   MpFriendshipEntry,
   Player,
+  PlayerMarketTransaction,
+  CareerRecord,
+  NewsItem,
+  SeasonAward,
   StandingsRow,
+  TransferAuction,
   World,
 } from "../game/types";
 import { generateWorld } from "../game/worldgen";
@@ -26,6 +35,85 @@ import { phaseForSeasonDayIndex } from "./seasonCalendar";
 import { ensureNamePools } from "./namePoolService";
 
 type Tx = Prisma.TransactionClient;
+
+interface CachedWorld {
+  revision: number;
+  world: World;
+}
+
+// Save.revision is the cross-process invalidation signal. Callers receive a
+// clone so a mutation cannot expose partially changed state to a read route.
+const worldCaches = new WeakMap<PrismaClient, Map<number, CachedWorld>>();
+const mutationBaselines = new WeakMap<PrismaClient, Map<number, CachedWorld>>();
+
+function cloneWorld(world: World): World {
+  return structuredClone(world);
+}
+
+function rememberWorld(prisma: PrismaClient, saveId: number, revision: number, world: World): void {
+  let cache = worldCaches.get(prisma);
+  if (!cache) {
+    cache = new Map<number, CachedWorld>();
+    worldCaches.set(prisma, cache);
+  }
+  cache.set(saveId, { revision, world: cloneWorld(world) });
+}
+
+function changedWorldCollections(previous: World | undefined, world: World): Set<string> {
+  if (!previous) return new Set(TABLE_NAMES);
+  const changed = <K extends keyof World>(key: K): boolean => JSON.stringify(previous[key]) !== JSON.stringify(world[key]);
+  const clubCore = (club: Club) => {
+    const { ledger: _ledger, trophies: _trophies, ...core } = club;
+    return core;
+  };
+  const clubsCoreChanged = JSON.stringify(previous.clubs.map(clubCore)) !== JSON.stringify(world.clubs.map(clubCore));
+  const ledgersChanged = previous.clubs.some((club, index) => JSON.stringify(club.ledger) !== JSON.stringify(world.clubs[index]?.ledger));
+  const trophiesChanged = previous.clubs.some((club, index) => JSON.stringify(club.trophies) !== JSON.stringify(world.clubs[index]?.trophies));
+  const tables = new Set<string>();
+  if (clubsCoreChanged) tables.add("club");
+  if (ledgersChanged) {
+    tables.add("ledgerEntry");
+  }
+  if (trophiesChanged) {
+    tables.add("trophy");
+  }
+  if (changed("clubs")) {
+    tables.add("club");
+  }
+  if (changed("players")) tables.add("player");
+  if (changed("loans")) tables.add("loan");
+  if (changed("competitions")) {
+    tables.add("competition");
+    tables.add("standingsRow");
+  }
+  if (changed("fixtures")) tables.add("fixture");
+  if (changed("matches")) {
+    tables.add("match");
+    tables.add("matchStat");
+    tables.add("matchEvent");
+  }
+  if (changed("clubEloEvents")) tables.add("clubEloEvent");
+  if (changed("news")) tables.add("newsItem");
+  if (changed("transferAuctions")) tables.add("transferAuction");
+  if (changed("marketBids")) tables.add("marketBid");
+  if (changed("freeAgentListings")) tables.add("freeAgentListing");
+  if (changed("marketReservations")) tables.add("marketReservation");
+  if (changed("playerMarketHistory")) tables.add("playerMarketTransaction");
+  if (changed("seasonAwards")) tables.add("seasonAward");
+  if (changed("records")) tables.add("careerRecord");
+  if (changed("liveMatches")) tables.add("liveMatch");
+  return tables;
+}
+
+export function invalidateWorldCache(prisma: PrismaClient, saveId?: number): void {
+  if (saveId === undefined) {
+    worldCaches.delete(prisma);
+    mutationBaselines.delete(prisma);
+  } else {
+    worldCaches.get(prisma)?.delete(saveId);
+    mutationBaselines.get(prisma)?.delete(saveId);
+  }
+}
 
 /** Thrown when a persist targets a stale revision (another process wrote first). */
 export class StaleWorldError extends Error {
@@ -110,142 +198,6 @@ function normalizePlayer(player: Player, club: Club | undefined): void {
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
 }
 
-/** Normalize a save written by the old single-column worldJson format. */
-export function deserializeWorld(json: string): World {
-  const world = JSON.parse(json) as World;
-  const legacyLiveMatch = (world as World & { liveMatch?: LiveMatchState | null }).liveMatch;
-  world.seed ??= 0;
-  world.year ??= 1;
-  world.dayIndex ??= 0;
-  world.dayOfWeek ??= ((world.dayIndex % 7) + 7) % 7;
-  world.nextId ??= 1;
-   world.clubs ??= [];
-   world.players ??= [];
-   world.competitions ??= [];
-   world.fixtures ??= [];
-   world.matches ??= [];
-   world.news ??= [];
-   world.loans ??= [];
-   world.seasonAwards ??= [];
-   world.records ??= [];
-   world.humanClubId ??= null;
-   world.seasonSummary ??= null;
-   world.rng ??= createRng(world.seed);
-   world.mp ??= {
-     seasonId: 0,
-     seasonYear: world.year,
-     seasonMonth: 1,
-     seasonStatus: "PREPARATION",
-     completedRounds: 0,
-     joinLockRound: 7,
-     joinState: "OPEN",
-     joinThresholdPercent: 0.5,
-     inactivityThresholds: { 1: 42, 2: 35, default: 28 },
-     matchTimeMode: "DIVISION_LOCAL_KICKOFF",
-     matchKickoffHour: 20,
-      lastProcessedGameDay: 0,
-     lastDailyTickDay: 0,
-     lastDailyTickDate: null,
-     manualRound: null,
-      rolloverPhase: null,
-      absoluteGameDay: 0,
-      seasonNumber: 1,
-      seasonDayIndex: 0,
-      phase: "ACTIVE",
-       lastAdvancedAt: null,
-       clockVersion: 0,
-        startAbsoluteGameDay: 0,
-       seasonStartAt: null,
-       rolloverContext: null,
-         calendarMigrationVersion: 0,
-         contractMarketMigrationVersion: 0,
-       loanEndAbsoluteGameDays: {},
-     };
-   world.marketBids ??= [];
-   world.transferAuctions ??= [];
-   world.freeAgentListings ??= [];
-   // Legacy free-agent listings carried listing-wide demanded terms; the
-   // contract-market model uses the frozen per-listing baseline instead. Map
-   // once on load so old saves keep their terms (field is no longer persisted).
-   for (const listing of world.freeAgentListings) {
-     const legacy = listing as FreeAgentListing & { demandedSalary?: number; demandedContractDays?: number };
-     if (listing.salaryBaselineAtListing === undefined && legacy.demandedSalary !== undefined) {
-       listing.salaryBaselineAtListing = legacy.demandedSalary;
-     }
-     delete (legacy as unknown as Record<string, unknown>).demandedSalary;
-     delete (legacy as unknown as Record<string, unknown>).demandedContractDays;
-   }
-   world.marketReservations ??= [];
-   world.playerMarketHistory ??= [];
-   world.financialInterventions ??= [];
-   world.mpQueue ??= [];
-   world.liveMatches ??= legacyLiveMatch ? [legacyLiveMatch] : [];
-   world.seasonAllocations ??= [];
-   world.mpMemberships ??= [];
-   world.mpClubSeasons ??= [];
-   world.mpActivities ??= [];
-   world.mpAudits ??= [];
-   world.seasonHistory ??= [];
-    world.generationEvents ??= [];
-
-   // Calendar migration: old saves keep their month metadata, but all new
-   // timing derives from this monotonic game clock.
-   world.mp.absoluteGameDay ??= Math.max(0, world.dayIndex);
-   world.mp.seasonNumber ??= Math.max(1, world.year);
-   world.mp.seasonDayIndex ??= Math.max(0, Math.min(gameConfig.seasonDays - 1, world.dayIndex));
-    world.mp.phase = phaseForSeasonDayIndex(world.mp.seasonDayIndex, gameConfig);
-   world.mp.lastAdvancedAt ??= null;
-    world.mp.clockVersion ??= 0;
-     world.mp.startAbsoluteGameDay ??= world.mp.absoluteGameDay - world.mp.seasonDayIndex;
-     world.mp.seasonStartAt ??= world.mp.lastAdvancedAt ?? null;
-       world.mp.rolloverContext ??= null;
-       world.mp.loanEndAbsoluteGameDays ??= {};
-       for (const loan of world.loans) {
-         world.mp.loanEndAbsoluteGameDays[String(loan.id)] ??= (world.mp.absoluteGameDay ?? world.dayIndex) + Math.max(0, loan.endDay - loan.startDay);
-       }
-
-  for (const club of world.clubs) {
-    club.ledger ??= { income: [], expense: [] };
-    club.trophies ??= {};
-    club.trainingFocus ??= "assistant";
-    club.country ??= "BRA"; // defensive: pre-country legacy rows would otherwise violate the NOT NULL column
-    club.ownerUserId ??= null;
-    club.timezone ??= null;
-    club.preferredHours ??= null;
-    club.competitionState ??= "ACTIVE";
-    club.lastMeaningfulActivityAt ??= null;
-    club.abandonmentEligibleAt ??= null;
-    club.liveMatchAt ??= null;
-    club.eloRating ??= ELO_CONFIG.initial;
-    club.eloRatedMatches ??= 0;
-  }
-  for (const player of world.players) {
-    const legacy = player as Player & { suspended?: boolean };
-    player.skillAcc ??= [0, 0, 0, 0, 0, 0, 0];
-    player.suspendedGames ??= legacy.suspended ? 1 : 0;
-    player.loanId ??= null;
-    if (!player.developmentProfile) {
-      player.developmentProfile = backfillDevelopmentProfile(world.seed, player.id);
-    }
-    player.recentMinutes ??= [];
-    normalizePlayer(player, world.clubs.find((club) => club.id === player.clubId));
-  }
-  for (const match of world.matches) {
-    match.events ??= [];
-    match.minuteEvents ??= [];
-    match.stats = normalizeMatchStats(match.stats);
-    match.extraTime ??= false;
-    match.homeWasHuman ??= world.clubs.find((club) => club.id === match.homeClubId)?.ownerUserId !== null;
-    match.awayWasHuman ??= world.clubs.find((club) => club.id === match.awayClubId)?.ownerUserId !== null;
-    match.eloProcessed ??= false;
-  }
-  world.clubEloEvents ??= [];
-  if (world.liveMatches) {
-    for (const st of world.liveMatches) hydrateLiveMatchState(st, world);
-  }
-  return world;
-}
-
 /** Coerce a persisted/legacy stats object into the new nested MatchStats shape. */
 function normalizeMatchStats(stats: unknown): MatchStats {
   if (!stats || typeof stats !== "object") return emptyMatchStats();
@@ -290,28 +242,6 @@ function normalizeMatchStats(stats: unknown): MatchStats {
   };
 }
 
-export async function createSaveRecord(
-  prisma: PrismaClient,
-  userId: number,
-  name: string,
-  seed?: number
-): Promise<{ id: number }> {
-  const world = generateWorld(seed ?? Math.floor(Math.random() * 0x7fffffff));
-  const save = await prisma.save.create({
-    data: {
-      userId,
-      name,
-      year: world.year,
-      dayIndex: world.dayIndex,
-      humanClubId: world.humanClubId,
-      seed: world.seed,
-      rngState: BigInt(world.rng.state),
-    },
-  });
-  await persistWorld(prisma, save.id, userId, world);
-  return { id: save.id };
-}
-
 /** The single global multiplayer Save row (isGlobal = true). */
 export async function ensureGlobalSave(prisma: PrismaClient): Promise<{ id: number; name: string }> {
   const existing = await prisma.save.findFirst({ where: { isGlobal: true } });
@@ -342,11 +272,52 @@ export async function ensureGlobalSave(prisma: PrismaClient): Promise<{ id: numb
   return { id: save.id, name: save.name };
 }
 
-export async function loadGlobalWorld(prisma: PrismaClient): Promise<{ save: { id: number; name: string; revision: number }; world: World } | null> {
+type LoadedWorld = { save: { id: number; name: string; revision: number }; world: World };
+
+async function loadGlobalWorldInternal(prisma: PrismaClient, cloneCached: boolean): Promise<LoadedWorld | null> {
   const save = await prisma.save.findFirst({ where: { isGlobal: true } });
   if (!save) return null;
+  if (process.env.NODE_ENV !== "test") {
+    const cached = worldCaches.get(prisma)?.get(save.id);
+    if (cached?.revision === save.revision) {
+      return { save: { id: save.id, name: save.name, revision: save.revision }, world: cloneCached ? cloneWorld(cached.world) : cached.world };
+    }
+  }
   const world = await rebuildWorld(prisma, save);
+  if (process.env.NODE_ENV !== "test") rememberWorld(prisma, save.id, save.revision, world);
   return { save: { id: save.id, name: save.name, revision: save.revision }, world };
+}
+
+export function loadGlobalWorld(prisma: PrismaClient): Promise<LoadedWorld | null> {
+  return loadGlobalWorldInternal(prisma, true);
+}
+
+/** Read-only routes may share the cached immutable world and avoid cloning it. */
+export function loadGlobalWorldReadOnly(prisma: PrismaClient): Promise<LoadedWorld | null> {
+  return loadGlobalWorldInternal(prisma, false);
+}
+
+/**
+ * Detach the cached world for an in-lock mutation. Readers keep using the last
+ * committed cache while the caller mutates this detached instance; persistWorld
+ * installs a fresh protected cache after the transaction succeeds.
+ */
+export async function loadGlobalWorldMutable(prisma: PrismaClient): Promise<LoadedWorld | null> {
+  const loaded = await loadGlobalWorldInternal(prisma, false);
+  if (loaded) {
+    const cache = worldCaches.get(prisma);
+    const cached = cache?.get(loaded.save.id);
+    if (cached?.revision === loaded.save.revision) {
+      let baselines = mutationBaselines.get(prisma);
+      if (!baselines) {
+        baselines = new Map<number, CachedWorld>();
+        mutationBaselines.set(prisma, baselines);
+      }
+      baselines.set(loaded.save.id, cached);
+    }
+    cache?.delete(loaded.save.id);
+  }
+  return loaded;
 }
 
 /**
@@ -365,7 +336,7 @@ export async function mutateGlobalWorld<T>(
 ): Promise<{ result: T; saveId: number }> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const loaded = await loadGlobalWorld(prisma);
+    const loaded = await loadGlobalWorldMutable(prisma);
     if (!loaded) throw new Error("Global world unavailable");
     const { save, world } = loaded;
     const result = await mutate(world);
@@ -391,6 +362,13 @@ export async function persistWorld(
   expectedRevision?: number,
   opts?: { dailyExecutions?: { seasonId: number; date: string; executionType: string }[] }
 ): Promise<void> {
+  const cached = expectedRevision === undefined
+    ? undefined
+    : worldCaches.get(prisma)?.get(saveId) ?? mutationBaselines.get(prisma)?.get(saveId);
+  const previous = cached !== undefined && cached.revision === expectedRevision ? cached.world : undefined;
+  const rewriteTables = changedWorldCollections(previous, world);
+  const previousClubById = new Map((previous?.clubs ?? []).map((club) => [club.id, club]));
+  const previousPlayerById = new Map((previous?.players ?? []).map((player) => [player.id, player]));
   await prisma.$transaction(async (tx) => {
     const target = await tx.save.findUnique({ where: { id: saveId }, select: { userId: true, isGlobal: true } });
     if (!target || (!target.isGlobal && target.userId !== userId)) {
@@ -445,20 +423,147 @@ export async function persistWorld(
         },
       });
     }
-    for (const t of TABLE_NAMES) {
+    const stableDeltaTables = new Set<string>();
+    if (previous) {
+      if (rewriteTables.has("loan")) {
+        await syncStableEntities(tx, "loan", saveId, previous.loans, world.loans, (entity) => loanRow(entity, saveId));
+        stableDeltaTables.add("loan");
+      }
+      if (rewriteTables.has("competition")) {
+        await syncStableEntities(tx, "competition", saveId, previous.competitions, world.competitions, (entity) => competitionRow(entity, saveId));
+        stableDeltaTables.add("competition");
+        const previousById = new Map(previous.competitions.map((competition) => [competition.id, competition]));
+        const currentById = new Map(world.competitions.map((competition) => [competition.id, competition]));
+        const standingsCompetitionIds = new Set<number>();
+        for (const competition of previous.competitions) {
+          const next = currentById.get(competition.id);
+          if (!next || JSON.stringify(competition.standings) !== JSON.stringify(next.standings) || JSON.stringify(competition.groupStandings) !== JSON.stringify(next.groupStandings)) standingsCompetitionIds.add(competition.id);
+        }
+        for (const competition of world.competitions) {
+          const old = previousById.get(competition.id);
+          if (!old || JSON.stringify(old.standings) !== JSON.stringify(competition.standings) || JSON.stringify(old.groupStandings) !== JSON.stringify(competition.groupStandings)) standingsCompetitionIds.add(competition.id);
+        }
+        if (standingsCompetitionIds.size > 0) {
+          await tx.standingsRow.deleteMany({ where: { saveId, competitionId: { in: [...standingsCompetitionIds] } } });
+          const rows = world.competitions.filter((competition) => standingsCompetitionIds.has(competition.id)).flatMap((competition) => standingsRowsForCompetition(competition, saveId));
+          if (rows.length > 0) await tx.standingsRow.createMany({ data: rows });
+        }
+        stableDeltaTables.add("standingsRow");
+      }
+      if (rewriteTables.has("fixture")) {
+        await syncStableEntities(tx, "fixture", saveId, previous.fixtures, world.fixtures, (entity) => fixtureRow(entity, saveId));
+        stableDeltaTables.add("fixture");
+      }
+      if (rewriteTables.has("match")) {
+        await syncStableEntities(tx, "match", saveId, previous.matches, world.matches, (entity) => matchRow(entity, saveId));
+        stableDeltaTables.add("match");
+      }
+      if (rewriteTables.has("matchStat")) {
+        await syncStableEntities(tx, "matchStat", saveId, previous.matches, world.matches, (entity) => statRow(entity, saveId), "matchId", (idSaveId, id) => ({ saveId_matchId: { saveId: idSaveId, matchId: id } }));
+        stableDeltaTables.add("matchStat");
+      }
+      if (rewriteTables.has("matchEvent")) {
+        await syncMatchEvents(tx, saveId, previous.matches, world.matches);
+        stableDeltaTables.add("matchEvent");
+      }
+      if (rewriteTables.has("clubEloEvent")) {
+        await syncStableEntities(tx, "clubEloEvent", saveId, previous.clubEloEvents ?? [], world.clubEloEvents ?? [], (entity) => clubEloEventRow(entity, saveId), "id", (_saveId, id) => ({ id }));
+        stableDeltaTables.add("clubEloEvent");
+      }
+      if (rewriteTables.has("transferAuction")) {
+        await syncStableEntities(tx, "transferAuction", saveId, previous.transferAuctions, world.transferAuctions, (entity) => transferAuctionRow(entity, saveId));
+        stableDeltaTables.add("transferAuction");
+      }
+      if (rewriteTables.has("marketBid")) {
+        await syncStableEntities(tx, "marketBid", saveId, previous.marketBids, world.marketBids, (entity) => marketBidRow(entity, saveId), "id", (_saveId, id) => ({ id }));
+        stableDeltaTables.add("marketBid");
+      }
+      if (rewriteTables.has("freeAgentListing")) {
+        await syncStableEntities(tx, "freeAgentListing", saveId, previous.freeAgentListings, world.freeAgentListings, (entity) => freeAgentListingRow(entity, saveId));
+        stableDeltaTables.add("freeAgentListing");
+      }
+      if (rewriteTables.has("marketReservation")) {
+        await syncStableEntities(tx, "marketReservation", saveId, previous.marketReservations, world.marketReservations, (entity) => marketReservationRow(entity, saveId), "id", (_saveId, id) => ({ id }));
+        stableDeltaTables.add("marketReservation");
+      }
+      if (rewriteTables.has("playerMarketTransaction")) {
+        await syncStableEntities(tx, "playerMarketTransaction", saveId, previous.playerMarketHistory, world.playerMarketHistory, (entity) => playerMarketTransactionRow(entity, saveId), "id", (_saveId, id) => ({ id }));
+        stableDeltaTables.add("playerMarketTransaction");
+      }
+      if (rewriteTables.has("newsItem")) {
+        await syncAutoEntities(tx, "newsItem", saveId, previous.news, world.news, (entity) => newsRow(entity, saveId));
+        stableDeltaTables.add("newsItem");
+      }
+      if (rewriteTables.has("seasonAward")) {
+        await syncAutoEntities(tx, "seasonAward", saveId, previous.seasonAwards, world.seasonAwards, (entity) => seasonAwardRow(entity, saveId));
+        stableDeltaTables.add("seasonAward");
+      }
+      if (rewriteTables.has("careerRecord")) {
+        await syncAutoEntities(tx, "careerRecord", saveId, previous.records, world.records, (entity) => careerRecordRow(entity, saveId));
+        stableDeltaTables.add("careerRecord");
+      }
+      if (rewriteTables.has("ledgerEntry")) {
+        const ids = changedClubIds(previous.clubs, world.clubs, "ledger");
+        if (ids.size > 0) {
+          await tx.ledgerEntry.deleteMany({ where: { saveId, clubId: { in: [...ids] } } });
+          const rows = world.clubs.filter((club) => ids.has(club.id)).flatMap((club) => ledgerRowsForClub(club, saveId));
+          if (rows.length > 0) await tx.ledgerEntry.createMany({ data: rows });
+        }
+        stableDeltaTables.add("ledgerEntry");
+      }
+      if (rewriteTables.has("trophy")) {
+        const ids = changedClubIds(previous.clubs, world.clubs, "trophies");
+        if (ids.size > 0) {
+          await tx.trophy.deleteMany({ where: { saveId, clubId: { in: [...ids] } } });
+          const rows = world.clubs.filter((club) => ids.has(club.id)).flatMap((club) => trophyRowsForClub(club, saveId));
+          if (rows.length > 0) await tx.trophy.createMany({ data: rows });
+        }
+        stableDeltaTables.add("trophy");
+      }
+      if (rewriteTables.has("club")) {
+        const currentIds = world.clubs.map((club) => club.id);
+        if (currentIds.length > 0) await tx.club.deleteMany({ where: { saveId, id: { notIn: currentIds } } });
+        else await tx.club.deleteMany({ where: { saveId } });
+        const creates: ReturnType<typeof clubRow>[] = [];
+        for (const club of world.clubs) {
+          const old = previousClubById.get(club.id);
+          if (!old) creates.push(clubRow(club, saveId));
+          else if (JSON.stringify(old) !== JSON.stringify(club)) {
+            await tx.club.update({ where: { saveId_id: { saveId, id: club.id } }, data: clubRow(club, saveId) });
+          }
+        }
+        if (creates.length > 0) await tx.club.createMany({ data: creates });
+      }
+      if (rewriteTables.has("player")) {
+        const currentIds = world.players.map((player) => player.id);
+        if (currentIds.length > 0) await tx.player.deleteMany({ where: { saveId, id: { notIn: currentIds } } });
+        else await tx.player.deleteMany({ where: { saveId } });
+        const creates: ReturnType<typeof playerRow>[] = [];
+        for (const player of world.players) {
+          const old = previousPlayerById.get(player.id);
+          if (!old) creates.push(playerRow(player, saveId));
+          else if (JSON.stringify(old) !== JSON.stringify(player)) {
+            await tx.player.update({ where: { saveId_id: { saveId, id: player.id } }, data: playerRow(player, saveId) });
+          }
+        }
+        if (creates.length > 0) await tx.player.createMany({ data: creates });
+      }
+    }
+    for (const t of rewriteTables) {
+      if (previous && (t === "club" || t === "player" || stableDeltaTables.has(t))) continue;
       await (tx as unknown as Record<string, { deleteMany: (args: { where: { saveId: number } }) => Promise<unknown> }>)[t].deleteMany({ where: { saveId } });
     }
-    if (world.clubs.length > 0) {
+    if (rewriteTables.has("club") && !previous && world.clubs.length > 0) {
       await tx.club.createMany({ data: world.clubs.map((c) => clubRow(c, saveId)) });
     }
-    if (world.players.length > 0) {
+    if (rewriteTables.has("player") && !previous && world.players.length > 0) {
       await tx.player.createMany({ data: world.players.map((p) => playerRow(p, saveId)) });
     }
-     if (world.loans.length > 0) {
+      if (rewriteTables.has("loan") && world.loans.length > 0 && (!previous || !stableDeltaTables.has("loan"))) {
        await tx.loan.createMany({ data: world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: Math.max(0, Math.round(l.feeAmount ?? 0)), listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })) });
-     }
-    if (world.competitions.length > 0) {
-      await tx.competition.createMany({ data: world.competitions.map((c) => competitionRow(c, saveId)) });
+      }
+    if (rewriteTables.has("competition") && world.competitions.length > 0) {
+      if (!previous || !stableDeltaTables.has("competition")) await tx.competition.createMany({ data: world.competitions.map((c) => competitionRow(c, saveId)) });
       const rows: { saveId: number; competitionId: number; clubId: number; played: number; wins: number; draws: number; losses: number; goalsFor: number; goalsAgainst: number; points: number; groupName: string | null }[] = [];
       for (const comp of world.competitions) {
         for (const row of Object.values(comp.standings)) {
@@ -470,26 +575,26 @@ export async function persistWorld(
           }
         }
       }
-      await tx.standingsRow.createMany({ data: rows });
+       if (rewriteTables.has("standingsRow") && (!previous || !stableDeltaTables.has("standingsRow"))) await tx.standingsRow.createMany({ data: rows });
     }
-    if (world.fixtures.length > 0) {
+    if (rewriteTables.has("fixture") && world.fixtures.length > 0 && (!previous || !stableDeltaTables.has("fixture"))) {
       await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, scheduledSeasonDayIndex: f.scheduledSeasonDayIndex ?? null })) });
     }
-    if (world.matches.length > 0) {
-       await tx.match.createMany({ data: world.matches.map((m) => ({ id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null, homeWasHuman: m.homeWasHuman ?? false, awayWasHuman: m.awayWasHuman ?? false, eloProcessed: m.eloProcessed ?? false })) });
-       await tx.matchStat.createMany({ data: world.matches.map((m) => statRow(m, saveId)) });
+    if (rewriteTables.has("match") && world.matches.length > 0) {
+       if (!previous || !stableDeltaTables.has("match")) await tx.match.createMany({ data: world.matches.map((m) => matchRow(m, saveId)) });
+         if (rewriteTables.has("matchStat") && (!previous || !stableDeltaTables.has("matchStat"))) await tx.matchStat.createMany({ data: world.matches.map((m) => statRow(m, saveId)) });
       const evRows: { saveId: number; matchId: number; minute: number; half: number; type: number; subtype: number; clubId: number; playerId: number | null; player2Id: number | null; goalType: number; ordinal: number }[] = [];
       for (const m of world.matches) {
         m.events.forEach((e, i) => {
           evRows.push({ saveId, matchId: m.id, minute: e.minute, half: e.half, type: e.type, subtype: e.subtype, clubId: e.clubId, playerId: e.playerId, player2Id: e.player2Id, goalType: e.goalType, ordinal: i });
         });
       }
-       if (evRows.length > 0) await tx.matchEvent.createMany({ data: evRows });
-     }
-      if ((world.clubEloEvents ?? []).length > 0) {
+         if (rewriteTables.has("matchEvent") && (!previous || !stableDeltaTables.has("matchEvent")) && evRows.length > 0) await tx.matchEvent.createMany({ data: evRows });
+      }
+       if (rewriteTables.has("clubEloEvent") && (world.clubEloEvents ?? []).length > 0 && (!previous || !stableDeltaTables.has("clubEloEvent"))) {
         await tx.clubEloEvent.createMany({ data: (world.clubEloEvents ?? []).map((event) => ({ id: event.id, saveId, matchId: event.matchId, clubId: event.clubId, opponentClubId: event.opponentClubId, ratingBefore: event.ratingBefore, ratingAfter: event.ratingAfter, delta: event.delta, expectedScore: event.expectedScore, actualScore: event.actualScore, createdAt: new Date(event.createdAt) })) });
       }
-    if (world.news.length > 0) {
+    if (rewriteTables.has("newsItem") && world.news.length > 0 && (!previous || !stableDeltaTables.has("newsItem"))) {
       await tx.newsItem.createMany({ data: world.news.map((n) => ({ saveId, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? null })) });
     }
     const ledgerRows: { saveId: number; clubId: number; direction: string; code: number; amount: number; day: number; label: string }[] = [];
@@ -497,27 +602,27 @@ export async function persistWorld(
       for (const e of club.ledger.income) ledgerRows.push({ saveId, clubId: club.id, direction: "income", code: e.code, amount: e.amount, day: e.day, label: e.label });
       for (const e of club.ledger.expense) ledgerRows.push({ saveId, clubId: club.id, direction: "expense", code: e.code, amount: e.amount, day: e.day, label: e.label });
     }
-     if (ledgerRows.length > 0) await tx.ledgerEntry.createMany({ data: ledgerRows });
+      if (rewriteTables.has("ledgerEntry") && ledgerRows.length > 0 && (!previous || !stableDeltaTables.has("ledgerEntry"))) await tx.ledgerEntry.createMany({ data: ledgerRows });
      const trophyRows: { saveId: number; clubId: number; competitionName: string; count: number }[] = [];
      for (const club of world.clubs) {
        for (const [name, count] of Object.entries(club.trophies)) {
          trophyRows.push({ saveId, clubId: club.id, competitionName: name, count });
        }
      }
-     if (trophyRows.length > 0) await tx.trophy.createMany({ data: trophyRows });
-     if (world.seasonAwards.length > 0) {
+       if (rewriteTables.has("trophy") && trophyRows.length > 0 && (!previous || !stableDeltaTables.has("trophy"))) await tx.trophy.createMany({ data: trophyRows });
+       if (rewriteTables.has("seasonAward") && world.seasonAwards.length > 0 && (!previous || !stableDeltaTables.has("seasonAward"))) {
        await tx.seasonAward.createMany({ data: world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })) });
      }
-     if (world.records.length > 0) {
+       if (rewriteTables.has("careerRecord") && world.records.length > 0 && (!previous || !stableDeltaTables.has("careerRecord"))) {
        await tx.careerRecord.createMany({ data: world.records.map((r) => ({ saveId, category: r.category, value: r.value, holderName: r.holderName })) });
     }
-     if (world.liveMatches.length > 0) {
-       await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, stateJson: JSON.stringify(st) })) });
+      if (rewriteTables.has("liveMatch") && world.liveMatches.length > 0) {
+        await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, homeClubId: st.homeClubId, awayClubId: st.awayClubId, stateJson: JSON.stringify(st) })) });
      }
-     // Normalized multiplayer transfer market (plan §55). Full rewrite each
-     // persist: the in-memory World is the source of truth for active
-     // listings/bids; resolved/cancelled rows are simply no longer present.
-     if (world.transferAuctions.length > 0) {
+      // Normalized multiplayer transfer market (plan §55). Stable listing and
+      // bid ids are synchronized above; resolved/cancelled rows are removed
+      // when they disappear from the in-memory source of truth.
+       if (rewriteTables.has("transferAuction") && world.transferAuctions.length > 0 && (!previous || !stableDeltaTables.has("transferAuction"))) {
        await tx.transferAuction.createMany({
          data: world.transferAuctions.map((a) => ({
            id: a.id,
@@ -547,7 +652,7 @@ export async function persistWorld(
           })),
         });
       }
-     if (world.marketBids.length > 0) {
+       if (rewriteTables.has("marketBid") && world.marketBids.length > 0 && (!previous || !stableDeltaTables.has("marketBid"))) {
        await tx.marketBid.createMany({
          data: world.marketBids.map((b) => ({
            id: b.id,
@@ -568,7 +673,7 @@ export async function persistWorld(
          })),
        });
      }
-     if (world.freeAgentListings.length > 0) {
+       if (rewriteTables.has("freeAgentListing") && world.freeAgentListings.length > 0 && (!previous || !stableDeltaTables.has("freeAgentListing"))) {
        await tx.freeAgentListing.createMany({
          data: world.freeAgentListings.map((l) => ({
            id: l.id,
@@ -594,7 +699,7 @@ export async function persistWorld(
            })),
         });
       }
-      if (world.marketReservations.length > 0) {
+       if (rewriteTables.has("marketReservation") && world.marketReservations.length > 0 && (!previous || !stableDeltaTables.has("marketReservation"))) {
        await tx.marketReservation.createMany({
          data: world.marketReservations.map((r) => ({
            id: r.id,
@@ -608,7 +713,7 @@ export async function persistWorld(
          })),
        });
      }
-      if (world.playerMarketHistory.length > 0) {
+       if (rewriteTables.has("playerMarketTransaction") && world.playerMarketHistory.length > 0 && (!previous || !stableDeltaTables.has("playerMarketTransaction"))) {
         await tx.playerMarketTransaction.createMany({
           data: world.playerMarketHistory.map((t) => ({
             id: t.id,
@@ -629,7 +734,7 @@ export async function persistWorld(
           })),
         });
       }
-      if (world.mp.seasonId !== 0) {
+      if (world.mp.seasonId !== 0 && (!previous || JSON.stringify(previous.mp) !== JSON.stringify(world.mp))) {
        await tx.mpSeason.updateMany({
         where: { id: world.mp.seasonId },
         data: {
@@ -641,23 +746,29 @@ export async function persistWorld(
         },
       });
     }
+    const mpQueueChanged = !previous || JSON.stringify(previous.mpQueue) !== JSON.stringify(world.mpQueue);
+    const allocationsChanged = !previous || JSON.stringify(previous.seasonAllocations) !== JSON.stringify(world.seasonAllocations);
+    const membershipsChanged = !previous || JSON.stringify(previous.mpMemberships) !== JSON.stringify(world.mpMemberships);
+    const clubSeasonsChanged = !previous || JSON.stringify(previous.mpClubSeasons) !== JSON.stringify(world.mpClubSeasons);
+    const activitiesChanged = !previous || JSON.stringify(previous.mpActivities) !== JSON.stringify(world.mpActivities);
+
     // Multiplayer queue + allocations (idempotent unique constraints).
-    await tx.mpQueue.deleteMany({});
-    await tx.mpAllocation.deleteMany({});
-    if (world.mpQueue.length > 0) {
+    if (mpQueueChanged) await tx.mpQueue.deleteMany({});
+    if (allocationsChanged) await tx.mpAllocation.deleteMany({});
+    if (mpQueueChanged && world.mpQueue.length > 0) {
       await tx.mpQueue.createMany({
         data: world.mpQueue.map((q) => ({ clubId: q.clubId, source: q.source, queuedAt: new Date(q.queuedAt), preferredSeasonId: q.preferredSeasonId })),
       });
     }
-    if (world.seasonAllocations.length > 0) {
+    if (allocationsChanged && world.seasonAllocations.length > 0) {
       await tx.mpAllocation.createMany({
         data: world.seasonAllocations.map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type, amount: a.amount, issuedAt: new Date(a.issuedAt) })),
       });
     }
     // Normalized multiplayer records (plan §55). Memberships/season records are
     // disposable between seasons and fully rewritten each persist.
-    await tx.mpMembership.deleteMany({});
-    if (world.mpMemberships.length > 0) {
+    if (membershipsChanged) await tx.mpMembership.deleteMany({});
+    if (membershipsChanged && world.mpMemberships.length > 0) {
       await tx.mpMembership.createMany({
         data: world.mpMemberships.map((m) => ({
           divisionId: m.divisionId,
@@ -669,8 +780,8 @@ export async function persistWorld(
         })),
       });
     }
-    await tx.mpClubSeason.deleteMany({});
-    if (world.mpClubSeasons.length > 0) {
+    if (clubSeasonsChanged) await tx.mpClubSeason.deleteMany({});
+    if (clubSeasonsChanged && world.mpClubSeasons.length > 0) {
       await tx.mpClubSeason.createMany({
         data: world.mpClubSeasons.map((cs) => ({
           clubId: cs.clubId,
@@ -689,8 +800,8 @@ export async function persistWorld(
         })),
       });
     }
-    await tx.mpActivity.deleteMany({});
-    if (world.mpActivities.length > 0) {
+    if (activitiesChanged) await tx.mpActivity.deleteMany({});
+    if (activitiesChanged && world.mpActivities.length > 0) {
       await tx.mpActivity.createMany({
         data: world.mpActivities.map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: new Date(a.occurredAt), metadata: a.metadata })),
       });
@@ -703,6 +814,61 @@ export async function persistWorld(
       });
     }
   });
+  if (process.env.NODE_ENV !== "test" && expectedRevision !== undefined) {
+    rememberWorld(prisma, saveId, expectedRevision + 1, world);
+    mutationBaselines.get(prisma)?.delete(saveId);
+  } else {
+    invalidateWorldCache(prisma, saveId);
+    mutationBaselines.get(prisma)?.delete(saveId);
+  }
+}
+
+/** Persist transient live-match progress without rewriting the whole world. */
+export async function persistLiveMatchState(
+  prisma: PrismaClient,
+  saveId: number,
+  userId: number,
+  state: LiveMatchState,
+  rngState: number,
+  expectedRevision?: number,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const target = await tx.save.findUnique({ where: { id: saveId }, select: { userId: true, isGlobal: true } });
+    if (!target || (!target.isGlobal && target.userId !== userId)) throw new Error("Save not found");
+
+    if (expectedRevision !== undefined) {
+      const result = await tx.save.updateMany({
+        where: { id: saveId, revision: expectedRevision },
+        data: { rngState: BigInt(rngState), revision: { increment: 1 } },
+      });
+      if (result.count !== 1) {
+        const fresh = await tx.save.findUnique({ where: { id: saveId }, select: { revision: true } });
+        throw new StaleWorldError(saveId, expectedRevision, fresh?.revision ?? -1);
+      }
+    } else {
+      await tx.save.update({ where: { id: saveId }, data: { rngState: BigInt(rngState), revision: { increment: 1 } } });
+    }
+
+    await tx.liveMatch.upsert({
+      where: { saveId_matchId: { saveId, matchId: state.matchId } },
+      update: { homeClubId: state.homeClubId, awayClubId: state.awayClubId, stateJson: JSON.stringify(state) },
+      create: { saveId, matchId: state.matchId, homeClubId: state.homeClubId, awayClubId: state.awayClubId, stateJson: JSON.stringify(state) },
+    });
+  });
+  if (process.env.NODE_ENV !== "test" && expectedRevision !== undefined) {
+    const cached = worldCaches.get(prisma)?.get(saveId) ?? mutationBaselines.get(prisma)?.get(saveId);
+    if (cached?.revision === expectedRevision) {
+      const next = cloneWorld(cached.world);
+      next.rng.state = rngState;
+      const index = next.liveMatches.findIndex((match) => match.matchId === state.matchId);
+      if (index >= 0) next.liveMatches[index] = structuredClone(state);
+      else next.liveMatches.push(structuredClone(state));
+      rememberWorld(prisma, saveId, expectedRevision + 1, next);
+      mutationBaselines.get(prisma)?.delete(saveId);
+    }
+  } else {
+    invalidateWorldCache(prisma, saveId);
+  }
 }
 
 function clubRow(c: Club, saveId: number) {
@@ -821,6 +987,173 @@ function competitionRow(c: Competition, saveId: number) {
     knockoutsJson: JSON.stringify(c.knockouts),
     groupStandingsJson: JSON.stringify(c.groupStandings),
   };
+}
+
+function loanRow(l: Loan, saveId: number) {
+  return { id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: Math.max(0, Math.round(l.feeAmount ?? 0)), listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) };
+}
+
+function fixtureRow(f: Fixture, saveId: number) {
+  return { id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, scheduledSeasonDayIndex: f.scheduledSeasonDayIndex ?? null };
+}
+
+function matchRow(m: Match, saveId: number) {
+  return { id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null, homeWasHuman: m.homeWasHuman ?? false, awayWasHuman: m.awayWasHuman ?? false, eloProcessed: m.eloProcessed ?? false };
+}
+
+function clubEloEventRow(event: ClubEloEvent, saveId: number) {
+  return { id: event.id, saveId, matchId: event.matchId, clubId: event.clubId, opponentClubId: event.opponentClubId, ratingBefore: event.ratingBefore, ratingAfter: event.ratingAfter, delta: event.delta, expectedScore: event.expectedScore, actualScore: event.actualScore, createdAt: new Date(event.createdAt) };
+}
+
+function transferAuctionRow(a: TransferAuction, saveId: number) {
+  return { id: a.id, saveId, playerId: a.playerId, sellerClubId: a.sellerClubId, playerValueAtListing: a.playerValueAtListing, openingPrice: a.openingPrice, bidIncrement: a.bidIncrement, sellerDivisionAtListing: a.sellerDivisionAtListing, totalDivisionsAtListing: a.totalDivisionsAtListing, salaryBaselineAtListing: a.salaryBaselineAtListing ?? null, playerOverallAtListing: a.playerOverallAtListing ?? null, playerAgeAtListing: a.playerAgeAtListing ?? null, currentPrice: a.currentPrice, leadingClubId: a.leadingClubId, createdAt: BigInt(a.createdAt), deadline: BigInt(a.deadline), originalDeadline: BigInt(a.originalDeadline), status: a.status, completedAt: a.completedAt !== null ? BigInt(a.completedAt) : null, winningClubId: a.winningClubId, finalPrice: a.finalPrice, cancelledAt: a.cancelledAt !== null ? BigInt(a.cancelledAt) : null, softClosed: a.softClosed, deadlineVersion: a.deadlineVersion ?? 0 };
+}
+
+function marketBidRow(b: MarketBid, saveId: number) {
+  return { id: b.id, saveId, marketType: b.marketType, listingId: b.listingId, clubId: b.clubId, maxBid: b.maxBid, capMultiplierAtSubmission: b.capMultiplierAtSubmission ?? null, maximumAllowedByRuleAtSubmission: b.maximumAllowedByRuleAtSubmission ?? null, buyerDivisionAtSubmission: b.buyerDivisionAtSubmission ?? null, contractSeasons: b.contractSeasons ?? null, contractSalary: b.contractSalary ?? null, contractDemandAtSubmission: b.contractDemandAtSubmission ?? null, createdAt: BigInt(b.createdAt), updatedAt: BigInt(b.updatedAt), initialPriorityAt: BigInt(b.initialPriorityAt) };
+}
+
+function freeAgentListingRow(l: FreeAgentListing, saveId: number) {
+  return { id: l.id, saveId, playerId: l.playerId, playerValueAtListing: l.playerValueAtListing, openingPrice: l.openingPrice, bidIncrement: l.bidIncrement, salaryBaselineAtListing: l.salaryBaselineAtListing ?? null, currentPrice: l.currentPrice, leadingClubId: l.leadingClubId, relistStage: l.relistStage, createdAt: BigInt(l.createdAt), deadline: BigInt(l.deadline), status: l.status, completedAt: l.completedAt !== null ? BigInt(l.completedAt) : null, winningClubId: l.winningClubId, finalPrice: l.finalPrice, previousListingId: l.previousListingId, blockedClubId: l.blockedClubId, unclaimedSince: l.unclaimedSince !== undefined ? BigInt(l.unclaimedSince) : null, softClosed: l.softClosed };
+}
+
+function marketReservationRow(r: MarketReservation, saveId: number) {
+  return { id: r.id, saveId, clubId: r.clubId, listingId: r.listingId, marketType: r.marketType, amount: r.amount, createdAt: BigInt(r.createdAt), releasedAt: r.releasedAt !== null ? BigInt(r.releasedAt) : null };
+}
+
+function playerMarketTransactionRow(t: PlayerMarketTransaction, saveId: number) {
+  return { id: t.id, saveId, playerId: t.playerId, listingId: t.listingId, type: t.type, fromClubId: t.fromClubId, toClubId: t.toClubId, price: t.price, seasonId: t.seasonId, seasonKey: t.seasonKey, seasonDayIndex: t.seasonDayIndex ?? (t as unknown as { matchday?: number }).matchday ?? 0, completedRounds: t.completedRounds ?? null, contractSeasons: t.contractSeasons ?? null, contractSalary: t.contractSalary ?? null, timestamp: BigInt(t.timestamp) };
+}
+
+type StableEntity = { id: number };
+type StableModel = {
+  deleteMany: (args: unknown) => Promise<unknown>;
+  update: (args: unknown) => Promise<unknown>;
+  createMany: (args: unknown) => Promise<unknown>;
+};
+
+function newsRow(item: NewsItem, saveId: number) {
+  return { ...(item.id !== undefined ? { id: item.id } : {}), saveId, dayIndex: item.dayIndex, text: item.text, kind: item.kind, clubId: item.clubId ?? null };
+}
+
+function seasonAwardRow(item: SeasonAward, saveId: number) {
+  return { ...(item.id !== undefined ? { id: item.id } : {}), saveId, season: item.season, category: item.category, competitionId: item.competitionId, playerId: item.playerId, clubId: item.clubId, playerNameSnapshot: item.playerNameSnapshot, detail: item.detail };
+}
+
+function careerRecordRow(item: CareerRecord, saveId: number) {
+  return { ...(item.id !== undefined ? { id: item.id } : {}), saveId, category: item.category, value: item.value, holderName: item.holderName };
+}
+
+function ledgerRowsForClub(club: Club, saveId: number) {
+  return [
+    ...club.ledger.income.map((entry) => ({ saveId, clubId: club.id, direction: "income", code: entry.code, amount: entry.amount, day: entry.day, label: entry.label })),
+    ...club.ledger.expense.map((entry) => ({ saveId, clubId: club.id, direction: "expense", code: entry.code, amount: entry.amount, day: entry.day, label: entry.label })),
+  ];
+}
+
+function trophyRowsForClub(club: Club, saveId: number) {
+  return Object.entries(club.trophies).map(([competitionName, count]) => ({ saveId, clubId: club.id, competitionName, count }));
+}
+
+function changedClubIds(previous: Club[], current: Club[], field: "ledger" | "trophies") {
+  const previousById = new Map(previous.map((club) => [club.id, club]));
+  const currentById = new Map(current.map((club) => [club.id, club]));
+  const ids = new Set<number>();
+  for (const club of previous) {
+    const next = currentById.get(club.id);
+    if (!next || JSON.stringify(club[field]) !== JSON.stringify(next[field])) ids.add(club.id);
+  }
+  for (const club of current) {
+    const old = previousById.get(club.id);
+    if (!old || JSON.stringify(old[field]) !== JSON.stringify(club[field])) ids.add(club.id);
+  }
+  return ids;
+}
+
+function standingsRowsForCompetition(competition: Competition, saveId: number) {
+  const rows: { saveId: number; competitionId: number; clubId: number; played: number; wins: number; draws: number; losses: number; goalsFor: number; goalsAgainst: number; points: number; groupName: string | null }[] = [];
+  for (const row of Object.values(competition.standings)) rows.push({ saveId, competitionId: competition.id, clubId: row.clubId, played: row.played, wins: row.wins, draws: row.draws, losses: row.losses, goalsFor: row.goalsFor, goalsAgainst: row.goalsAgainst, points: row.points, groupName: null });
+  for (const group of competition.groupStandings) for (const row of Object.values(group.rows)) rows.push({ saveId, competitionId: competition.id, clubId: row.clubId, played: row.played, wins: row.wins, draws: row.draws, losses: row.losses, goalsFor: row.goalsFor, goalsAgainst: row.goalsAgainst, points: row.points, groupName: group.groupName });
+  return rows;
+}
+
+type AutoEntity = { id?: number };
+
+async function syncAutoEntities<T extends AutoEntity>(
+  tx: Tx,
+  table: string,
+  saveId: number,
+  previous: T[] | undefined,
+  current: T[],
+  rowFor: (entity: T) => Record<string, unknown>,
+): Promise<void> {
+  if (!previous) return;
+  const model = (tx as unknown as Record<string, StableModel>)[table];
+  const currentIds = current.flatMap((entity) => entity.id === undefined ? [] : [entity.id]);
+  await model.deleteMany({ where: currentIds.length > 0 ? { saveId, id: { notIn: currentIds } } : { saveId } });
+  const previousById = new Map(previous.flatMap((entity) => entity.id === undefined ? [] : [[entity.id, entity] as const]));
+  const unmatchedPrevious = new Set(previousById.keys());
+  const creates: Record<string, unknown>[] = [];
+  for (const entity of current) {
+    let old = entity.id === undefined ? undefined : previousById.get(entity.id);
+    if (!old && entity.id === undefined) {
+      old = previous.find((candidate) => unmatchedPrevious.has(candidate.id!) && JSON.stringify(candidate) === JSON.stringify(entity));
+      if (old?.id !== undefined) entity.id = old.id;
+    }
+    if (!old) creates.push(rowFor(entity));
+    else {
+      unmatchedPrevious.delete(old.id!);
+      if (JSON.stringify(old) !== JSON.stringify(entity)) await model.update({ where: { id: old.id }, data: rowFor(entity) });
+    }
+  }
+  if (creates.length > 0) await model.createMany({ data: creates });
+}
+
+async function syncStableEntities<T extends StableEntity>(
+  tx: Tx,
+  table: string,
+  saveId: number,
+  previous: T[] | undefined,
+  current: T[],
+  rowFor: (entity: T) => Record<string, unknown>,
+  keyField = "id",
+  updateWhere: (idSaveId: number, id: number) => Record<string, unknown> = (idSaveId, id) => ({ saveId_id: { saveId: idSaveId, id } }),
+): Promise<void> {
+  if (!previous) return;
+  const model = (tx as unknown as Record<string, StableModel>)[table];
+  const currentIds = current.map((entity) => entity.id);
+  await model.deleteMany({ where: currentIds.length > 0 ? { saveId, [keyField]: { notIn: currentIds } } : { saveId } });
+  const previousById = new Map(previous.map((entity) => [entity.id, entity]));
+  const creates: Record<string, unknown>[] = [];
+  for (const entity of current) {
+    const old = previousById.get(entity.id);
+    if (!old) creates.push(rowFor(entity));
+    else if (JSON.stringify(old) !== JSON.stringify(entity)) await model.update({ where: updateWhere(saveId, entity.id), data: rowFor(entity) });
+  }
+  if (creates.length > 0) await model.createMany({ data: creates });
+}
+
+async function syncMatchEvents(tx: Tx, saveId: number, previous: Match[] | undefined, current: Match[]): Promise<void> {
+  if (!previous) return;
+  const previousById = new Map(previous.map((match) => [match.id, match]));
+  const currentById = new Map(current.map((match) => [match.id, match]));
+  const affectedIds = new Set<number>();
+  for (const old of previous) {
+    const next = currentById.get(old.id);
+    if (!next || JSON.stringify(old.events) !== JSON.stringify(next.events)) affectedIds.add(old.id);
+  }
+  for (const next of current) {
+    if (!previousById.has(next.id)) affectedIds.add(next.id);
+  }
+  if (affectedIds.size === 0) return;
+  const ids = [...affectedIds];
+  await tx.matchEvent.deleteMany({ where: { saveId, matchId: { in: ids } } });
+  const rows: { saveId: number; matchId: number; minute: number; half: number; type: number; subtype: number; clubId: number; playerId: number | null; player2Id: number | null; goalType: number; ordinal: number }[] = [];
+  for (const match of current) {
+    if (!affectedIds.has(match.id)) continue;
+    match.events.forEach((event, ordinal) => rows.push({ saveId, matchId: match.id, minute: event.minute, half: event.half, type: event.type, subtype: event.subtype, clubId: event.clubId, playerId: event.playerId, player2Id: event.player2Id, goalType: event.goalType, ordinal }));
+  }
+  if (rows.length > 0) await tx.matchEvent.createMany({ data: rows });
 }
 
 function emptyTeamStats(): MatchStats["home"] {
@@ -951,7 +1284,7 @@ async function rebuildWorld(
        prisma.friendship.findMany({ orderBy: { id: "asc" } }),
    ]);
 
-   const clubs: Club[] = clubRows.map((r) => {
+    const clubs: Club[] = clubRows.map((r) => {
      const r2 = r as unknown as {
        ownerUserId: number | null;
        timezone: string | null;
@@ -1006,8 +1339,9 @@ async function rebuildWorld(
        isHuman: r.isHuman,
        ledger: { income: [], expense: [] },
        trophies: {},
-     };
-   });
+      };
+    });
+    const clubById = new Map(clubs.map((club) => [club.id, club]));
 
    const players: Player[] = playerRows.map((r) => {
      const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
@@ -1073,11 +1407,11 @@ async function rebuildWorld(
       } as Player;
    });
 
-  for (const player of players) {
-    normalizePlayer(player, clubs.find((club) => club.id === player.clubId));
-  }
+   for (const player of players) {
+     normalizePlayer(player, player.clubId === null ? undefined : clubById.get(player.clubId));
+   }
 
-  const competitions: Competition[] = competitionRows.map((r) => {
+    const competitions: Competition[] = competitionRows.map((r) => {
     const r2 = r as unknown as { seasonId: number | null; tier: number; groupIndex: number; status: string };
     return {
       id: r.id,
@@ -1094,11 +1428,12 @@ async function rebuildWorld(
       knockouts: jsonOr(r.knockoutsJson, []),
       groupStandings: jsonOr<GroupStandings[]>(r.groupStandingsJson, []),
       standings: {},
-    };
-  });
+      };
+    });
+    const competitionById = new Map(competitions.map((competition) => [competition.id, competition]));
 
-  for (const r of standingsRows) {
-    const comp = competitions.find((c) => c.id === r.competitionId);
+   for (const r of standingsRows) {
+     const comp = competitionById.get(r.competitionId);
     if (!comp) continue;
     const row: StandingsRow = { clubId: r.clubId, played: r.played, wins: r.wins, draws: r.draws, losses: r.losses, goalsFor: r.goalsFor, goalsAgainst: r.goalsAgainst, points: r.points };
     if (r.groupName !== null && r.groupName !== undefined) {
@@ -1165,20 +1500,27 @@ async function rebuildWorld(
     };
   });
 
-  for (const l of ledgerRows) {
-    const club = clubs.find((c) => c.id === l.clubId);
+   for (const l of ledgerRows) {
+     const club = clubById.get(l.clubId);
     if (!club) continue;
     const entry = { code: l.code, amount: l.amount, day: l.day, label: l.label };
     if (l.direction === "income") club.ledger.income.push(entry);
     else club.ledger.expense.push(entry);
   }
 
-  for (const t of trophyRows) {
-    const club = clubs.find((c) => c.id === t.clubId);
+   for (const t of trophyRows) {
+     const club = clubById.get(t.clubId);
     if (club) club.trophies[t.competitionName] = t.count;
   }
 
-   const auctions = transferAuctionRows.map((a) => ({
+    const bidsByListing = new Map<string, typeof marketBidRows>();
+    for (const bid of marketBidRows) {
+      const key = `${bid.marketType}:${bid.listingId}`;
+      const bids = bidsByListing.get(key) ?? [];
+      bids.push(bid);
+      bidsByListing.set(key, bids);
+    }
+    const auctions = transferAuctionRows.map((a) => ({
      id: a.id,
      playerId: a.playerId,
      sellerClubId: a.sellerClubId,
@@ -1192,7 +1534,7 @@ async function rebuildWorld(
       playerAgeAtListing: a.playerAgeAtListing ?? undefined,
       currentPrice: a.currentPrice,
      leadingClubId: a.leadingClubId,
-      bids: marketBidRows.filter((b) => b.listingId === a.id && b.marketType === "TRANSFER").map((b) => ({
+       bids: (bidsByListing.get(`TRANSFER:${a.id}`) ?? []).map((b) => ({
         clubId: b.clubId,
         maxBid: b.maxBid,
         contractSeasons: b.contractSeasons ?? undefined,
@@ -1223,7 +1565,7 @@ async function rebuildWorld(
      currentPrice: l.currentPrice,
      leadingClubId: l.leadingClubId,
      relistStage: l.relistStage,
-      bids: marketBidRows.filter((b) => b.listingId === l.id && b.marketType === "FREE_AGENT").map((b) => ({
+       bids: (bidsByListing.get(`FREE_AGENT:${l.id}`) ?? []).map((b) => ({
         clubId: b.clubId,
         maxBid: b.maxBid,
         contractSeasons: b.contractSeasons ?? undefined,
@@ -1298,15 +1640,15 @@ async function rebuildWorld(
     fixtures,
       matches,
       clubEloEvents: [],
-    news: newsRows.map((n) => ({ dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? undefined })),
+     news: newsRows.map((n) => ({ id: n.id, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? undefined })),
      transferAuctions: auctions,
      marketBids: marketBidsList,
      freeAgentListings,
      marketReservations,
      playerMarketHistory,
      loans: loanRows.map((l) => ({ id: l.id, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: (l as unknown as { feeAmount?: number | null }).feeAmount ?? 0, listedAt: Number(l.listedAt), claimableAt: Number(l.claimableAt) })),
-     seasonAwards: awardRows.map((a) => ({ season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })),
-     records: recordRows.map((r) => ({ category: r.category, value: r.value, holderName: r.holderName })),
+      seasonAwards: awardRows.map((a) => ({ id: a.id, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })),
+      records: recordRows.map((r) => ({ id: r.id, category: r.category, value: r.value, holderName: r.holderName })),
      humanClubId: saveRow.humanClubId,
      seasonSummary: jsonOr(saveRow.seasonSummaryJson, null),
      rng: createRng(saveRow.seed),

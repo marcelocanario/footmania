@@ -1,58 +1,120 @@
-import { useEffect, useState } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { Suspense, lazy, useEffect, useState } from "react";
+import type { ComponentType } from "react";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "./api/client";
 import { useGame } from "./store/game";
 import { useSettings } from "./store/settings";
 import { Layout } from "./components/Layout";
-import { Login } from "./screens/Login";
-import { Join } from "./screens/Join";
-import { Dashboard } from "./screens/Dashboard";
-import { Squad } from "./screens/Squad";
-import { Competitions } from "./screens/Competitions";
-import { Matchday } from "./screens/Matchday";
-import { LiveMatch } from "./screens/LiveMatch";
-import { Transfers } from "./screens/Transfers";
-import { Finances } from "./screens/Finances";
-import { SeasonEnd } from "./screens/SeasonEnd";
-import { Records } from "./screens/Records";
-import { History } from "./screens/History";
-import { SettingsScreen } from "./screens/Settings";
-import { MyClub } from "./screens/MyClub";
-import { Automation } from "./screens/Automation";
-import { Admin } from "./screens/Admin";
 import { PageLoading } from "./components/PageLoading";
 
+// Route-level code-splitting: each screen is lazily loaded so only the
+// critical auth gate + layout ship as the initial bundle.
+function lazyNamed(load: () => Promise<Record<string, unknown>>, name: string) {
+  return lazy(async () => ({ default: (await load())[name] as ComponentType }));
+}
+
+const Login = lazyNamed(() => import("./screens/Login"), "Login");
+const Join = lazyNamed(() => import("./screens/Join"), "Join");
+const Dashboard = lazyNamed(() => import("./screens/Dashboard"), "Dashboard");
+const Squad = lazyNamed(() => import("./screens/Squad"), "Squad");
+const Competitions = lazyNamed(() => import("./screens/Competitions"), "Competitions");
+const Matchday = lazyNamed(() => import("./screens/Matchday"), "Matchday");
+const LiveMatch = lazyNamed(() => import("./screens/LiveMatch"), "LiveMatch");
+const Transfers = lazyNamed(() => import("./screens/Transfers"), "Transfers");
+const Finances = lazyNamed(() => import("./screens/Finances"), "Finances");
+const SeasonEnd = lazyNamed(() => import("./screens/SeasonEnd"), "SeasonEnd");
+const Records = lazyNamed(() => import("./screens/Records"), "Records");
+const History = lazyNamed(() => import("./screens/History"), "History");
+const SettingsScreen = lazyNamed(() => import("./screens/Settings"), "SettingsScreen");
+const MyClub = lazyNamed(() => import("./screens/MyClub"), "MyClub");
+const Automation = lazyNamed(() => import("./screens/Automation"), "Automation");
+const Admin = lazyNamed(() => import("./screens/Admin"), "Admin");
+
 function Gate({ children }: { children: React.ReactNode }) {
-  const { user, setUser } = useGame();
+  const { user, setUser, status, snapshot, loadStatus, loadClub } = useGame();
   const loadSettings = useSettings((s) => s.load);
   const navigate = useNavigate();
+  const location = useLocation();
+  const [clubDataReady, setClubDataReady] = useState(false);
 
   useEffect(() => {
     if (user) return;
     api
       .me()
-      .then((res) => setUser(res))
+       .then((res) => setUser(res.user))
       .catch(() => navigate("/login"));
   }, [user, setUser, navigate]);
+
+  useEffect(() => {
+    if (!user) return;
+    let lastCheckedAt = 0;
+    let refreshing = false;
+    const refreshUser = () => {
+      const now = Date.now();
+      if (refreshing || now - lastCheckedAt < 30_000) return;
+      lastCheckedAt = now;
+      refreshing = true;
+      void api
+        .me()
+        .then((res) => setUser(res.user))
+        .catch(() => undefined)
+        .finally(() => {
+          refreshing = false;
+        });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshUser();
+    };
+    window.addEventListener("focus", refreshUser);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      window.removeEventListener("focus", refreshUser);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [user?.id, setUser]);
 
   useEffect(() => {
     if (user) void loadSettings();
   }, [user, loadSettings]);
 
+  useEffect(() => {
+    if (!user || location.pathname === "/join" || location.pathname === "/admin") {
+      setClubDataReady(true);
+      return;
+    }
+    if (status?.club && snapshot) {
+      setClubDataReady(true);
+      return;
+    }
+    let alive = true;
+    void (async () => {
+      const currentStatus = status ?? await loadStatus();
+      if (!alive) return;
+      if (currentStatus?.club && !snapshot) await loadClub();
+      if (alive) setClubDataReady(true);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [user, location.pathname, status, snapshot, loadStatus, loadClub]);
+
   if (!user) return <PageLoading message="Signing you in" />;
+  if (!clubDataReady && location.pathname !== "/join" && location.pathname !== "/admin") return <PageLoading />;
   return <>{children}</>;
 }
 
 function ClubGuard({ children }: { children: React.ReactNode }) {
-  const { loadStatus, snapshot, loadClub } = useGame();
+  const { loadStatus, snapshot, loadClub, status } = useGame();
   const navigate = useNavigate();
-  const [checked, setChecked] = useState(false);
-  const [hasClub, setHasClub] = useState(false);
+  const [checked, setChecked] = useState(() => status !== null && (!status.club || snapshot !== null));
+  const [hasClub, setHasClub] = useState(() => !!status?.club);
 
   useEffect(() => {
     let alive = true;
     void (async () => {
-      const st = await loadStatus();
+      // Only hit the network for mp status if we don't already have it.
+      // The GET cache also dedupes concurrent calls during fast navigation.
+      const st = status ?? await loadStatus();
       if (!alive) return;
       const owns = !!st?.club;
       setHasClub(owns);
@@ -60,7 +122,7 @@ function ClubGuard({ children }: { children: React.ReactNode }) {
         const ok = await loadClub();
         if (!alive) return;
         if (!ok) {
-          navigate("/saves");
+          navigate("/join");
           return;
         }
       }
@@ -69,11 +131,11 @@ function ClubGuard({ children }: { children: React.ReactNode }) {
     return () => {
       alive = false;
     };
-  }, [loadStatus, loadClub, snapshot, navigate]);
+  }, [loadStatus, loadClub, status, snapshot, navigate]);
 
   if (!checked) return <PageLoading />;
   if (!hasClub) {
-    return <Navigate to="/saves" replace />;
+    return <Navigate to="/join" replace />;
   }
   return <>{children}</>;
 }
@@ -81,7 +143,7 @@ function ClubGuard({ children }: { children: React.ReactNode }) {
 function AppRoutes() {
   return (
     <Routes>
-      <Route path="/saves" element={<Join />} />
+      <Route path="/join" element={<Join />} />
       <Route path="/my-club" element={<ClubGuard><MyClub /></ClubGuard>} />
       <Route path="/automation" element={<ClubGuard><Automation /></ClubGuard>} />
       <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
@@ -104,19 +166,21 @@ function AppRoutes() {
 export default function App() {
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/*"
-          element={
-            <Gate>
-              <Layout>
-                <AppRoutes />
-              </Layout>
-            </Gate>
-          }
-        />
-      </Routes>
+      <Suspense fallback={<PageLoading message="Loading..." />}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/*"
+            element={
+              <Gate>
+                <Layout>
+                  <AppRoutes />
+                </Layout>
+              </Gate>
+            }
+          />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

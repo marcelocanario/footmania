@@ -34,7 +34,7 @@ async function setupClub(app: FastifyInstance, username: string, seed = 4242) {
   });
   expect(join.statusCode).toBe(200);
   const body = join.json();
-  return { cookie, clubId: body.clubId as number };
+  return { cookie, clubId: body.clubId as number, userId: register.json().user.id as number };
 }
 
 /** Create a live match deterministically for a given club. */
@@ -47,7 +47,11 @@ async function makeLiveMatch(app: FastifyInstance, cookie: string, clubId: numbe
   const club = world.clubs.find((c) => c.id === clubId)!;
   // Reset any stale live/finished state for this club's upcoming fixture so
   // each test starts from a clean pregame (tests share the global world).
-  const fixture = world.fixtures.find((f) => !f.played && (f.homeClubId === club.id || f.awayClubId === club.id));
+  const fixture = world.fixtures.find((f) => {
+    if (f.played || (f.homeClubId !== club.id && f.awayClubId !== club.id)) return false;
+    const opponentId = f.homeClubId === club.id ? f.awayClubId : f.homeClubId;
+    return world.clubs.find((candidate) => candidate.id === opponentId)?.ownerUserId === null;
+  }) ?? world.fixtures.find((f) => !f.played && (f.homeClubId === club.id || f.awayClubId === club.id));
   if (!fixture) throw new Error("no upcoming fixture");
   const played = world.matches.filter((m) => m.fixtureId === fixture.id);
   for (const m of played) world.matches = world.matches.filter((x) => x.id !== m.id);
@@ -65,7 +69,7 @@ async function makeLiveMatch(app: FastifyInstance, cookie: string, clubId: numbe
   return { matchId: st.matchId, fixtureId: fixture.id };
 }
 
-async function ageLiveMatch(app: FastifyInstance, matchId: number, minutes: number): Promise<void> {
+async function ageLiveMatch(app: FastifyInstance, matchId: number, minutes: number, readyForHalftime = false): Promise<void> {
   const { loadGlobalWorld, persistWorld } = await import("../src/services/saveService");
   const { MP_CONFIG } = await import("../src/config");
   const loaded = await loadGlobalWorld(app.prisma);
@@ -74,6 +78,7 @@ async function ageLiveMatch(app: FastifyInstance, matchId: number, minutes: numb
   if (!st) throw new Error("no live match");
   const elapsed = (MP_CONFIG.matchDurationMinutes * 60 * 1000 * minutes) / 90;
   st.lastAdvancedAt = Date.now() - elapsed;
+  if (readyForHalftime) st.halftimeReady = [true, true];
   await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
 }
 
@@ -117,7 +122,7 @@ describe("live match over REST", () => {
     expect(s0.homeBench.length).toBeGreaterThan(0);
 
     // Age the match past full time and run the worker's own advance path.
-    await ageLiveMatch(app, matchId, 110);
+    await ageLiveMatch(app, matchId, 110, true);
     const { loadGlobalWorld, persistWorld } = await import("../src/services/saveService");
     const { advanceLiveMatches } = await import("../src/game/world");
     let state = s0;
@@ -259,7 +264,7 @@ describe("live match over WebSocket", () => {
     const port = await app.listen({ port: 0, host: "127.0.0.1" });
     const { cookie, clubId } = await setupClub(app, "wsplayer");
     const { matchId } = await makeLiveMatch(app, cookie, clubId);
-    await ageLiveMatch(app, matchId, 110);
+    await ageLiveMatch(app, matchId, 110, true);
     const url = `ws://127.0.0.1:${new URL(port).port}/api/matches/${matchId}/ws`;
 
     const ws = new WebSocket(url, { headers: { cookie } });
@@ -293,12 +298,75 @@ describe("live match over WebSocket", () => {
 
     // The elapsed-time catch-up tick advances the server-paced match; when it
     // reaches full time the server broadcasts "finished" to every viewer.
-    ws.send(JSON.stringify({ type: "tick", minutes: 4, resume: true }));
+    for (let i = 0; i < 3; i++) ws.send(JSON.stringify({ type: "tick", minutes: 4, resume: true }));
     await waitFor("finished", 20000);
 
     ws.close();
     await app.close();
   }, 90_000);
+});
+
+describe("multiplayer world WebSocket", () => {
+  it("authenticates the user channel and reports the current live match", async () => {
+    const app = buildServer();
+    await app.ready();
+    const port = await app.listen({ port: 0, host: "127.0.0.1" });
+    const { cookie, clubId, userId } = await setupClub(app, "worldsocket");
+    const { matchId } = await makeLiveMatch(app, cookie, clubId);
+    const ws = new WebSocket(`ws://127.0.0.1:${new URL(port).port}/api/mp/ws`, { headers: { cookie } });
+    const messages: Record<string, unknown>[] = [];
+    ws.on("message", (raw) => messages.push(JSON.parse(raw.toString())));
+    await new Promise<void>((resolve, reject) => {
+      ws.on("open", () => resolve());
+      ws.on("error", reject);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const started = Date.now();
+      const iv = setInterval(() => {
+        if (messages.some((message) => message.type === "liveMatchStarted")) {
+          clearInterval(iv);
+          resolve();
+        } else if (Date.now() - started > 8000) {
+          clearInterval(iv);
+          reject(new Error("timeout waiting for liveMatchStarted"));
+        }
+      }, 40);
+    });
+    expect(messages.find((message) => message.type === "liveMatchStarted")?.matchId).toBe(matchId);
+
+    ws.send(JSON.stringify({ type: "ping" }));
+    await new Promise<void>((resolve, reject) => {
+      const started = Date.now();
+      const iv = setInterval(() => {
+        if (messages.some((message) => message.type === "pong")) {
+          clearInterval(iv);
+          resolve();
+        } else if (Date.now() - started > 8000) {
+          clearInterval(iv);
+          reject(new Error("timeout waiting for pong"));
+        }
+      }, 40);
+    });
+
+    const { publishUserWorldEvent } = await import("../src/services/worldEvents");
+    publishUserWorldEvent(userId, { type: "invalidate", scope: "transfers" });
+    await new Promise<void>((resolve, reject) => {
+      const started = Date.now();
+      const iv = setInterval(() => {
+        if (messages.some((message) => message.type === "invalidate" && message.scope === "transfers")) {
+          clearInterval(iv);
+          resolve();
+        } else if (Date.now() - started > 8000) {
+          clearInterval(iv);
+          reject(new Error("timeout waiting for invalidate"));
+        }
+      }, 40);
+    });
+
+    ws.close();
+    await app.close();
+  });
 });
 
 describe("live match real-time pacing", () => {

@@ -251,8 +251,8 @@ export function Join() {
         <Toast ref={toast} position="bottom-right" />
         <div className="page-head">
           <div>
-            <div className="kicker">{strings.saves.startNew}</div>
-            <h1>{strings.saves.title}</h1>
+            <div className="kicker">{strings.join.startNew}</div>
+            <h1>{strings.join.title}</h1>
           </div>
         </div>
 
@@ -385,7 +385,7 @@ export function Join() {
         <div className="jm-hero-inner">
           <div>
             <div className="kicker" style={{ color: "var(--gold-2)" }}>
-              <Sparkles size={13} /> {strings.saves.startNew}
+               <Sparkles size={13} /> {strings.join.startNew}
             </div>
             <h1 className="jm-title">
               Create your team
@@ -472,7 +472,7 @@ export function Join() {
 
                   <div className="jm-field">
                     <label className="jm-label">
-                      <Flag size={13} /> {strings.saves.teamName}
+                       <Flag size={13} /> {strings.join.teamName}
                       <FieldHelp text="Enter 3–30 characters. This is the name the crowd sees in tables and match results." />
                       <span className="jm-req">*</span>
                     </label>
@@ -497,7 +497,7 @@ export function Join() {
 
                   <div className="jm-field">
                     <label className="jm-label">
-                      <Home size={13} /> {strings.saves.stadium}
+                       <Home size={13} /> {strings.join.stadium}
                       <FieldHelp text="Name your home ground. It is where your club welcomes opponents on matchday." />
                       <span className="jm-req">*</span>
                     </label>
@@ -547,7 +547,7 @@ export function Join() {
 
                   <div className="jm-field">
                     <label className="jm-label">
-                      <Globe2 size={13} /> {strings.saves.country}
+                       <Globe2 size={13} /> {strings.join.country}
                       <FieldHelp text="Choose the nation your club represents. It shapes the names of players and academy recruits you meet." />
                       <span className="jm-req">*</span>
                     </label>
@@ -562,7 +562,7 @@ export function Join() {
                       showClear
                       placeholder="Select your football association"
                       style={{ width: "100%" }}
-                      aria-label={strings.saves.country}
+                       aria-label={strings.join.country}
                       panelClassName="jm-dropdown-panel"
                     />
                     {selectedCountryObj ? (

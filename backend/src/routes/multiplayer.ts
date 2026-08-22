@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorld, persistWorld, StaleWorldError } from "../services/saveService";
-import { buildSnapshot } from "../services/snapshot";
+import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
+import { buildCachedSnapshot } from "../services/snapshot";
 import { createHumanClub } from "../game/worldgen";
 import { withGlobalLock } from "../services/lock";
 import { seasonKey } from "../game/clock";
@@ -13,8 +13,9 @@ import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../servic
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
 import { standingsTiebreak } from "../game/league";
-import { calendarValues, phaseForSeasonDayIndex } from "../services/seasonCalendar";
 import { hasPro } from "../services/pro";
+import { readMpStatus, readSeasonHistory, readUserLiveMatch } from "../services/readService";
+import { publishUserWorldEvent } from "../services/worldEvents";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -30,15 +31,22 @@ const joinSchema = z.object({
   preferredHours: z.array(z.number()).optional(),
 });
 
-async function withWorld(app: FastifyInstance, fn: (world: World) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>) {
+function publishToHumanUsers(world: World, event: Parameters<typeof publishUserWorldEvent>[1]): void {
+  for (const club of world.clubs) {
+    if (club.ownerUserId !== null) publishUserWorldEvent(club.ownerUserId, event);
+  }
+}
+
+async function withWorld(app: FastifyInstance, userId: number, fn: (world: World) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>) {
   return withGlobalLock(async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const loaded = await loadGlobalWorld(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 404, body: { error: "World not found" } } };
       const res = await fn(loaded.world);
       if (res.error) return res;
       try {
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+        publishUserWorldEvent(userId, { type: "invalidate", scope: "club" });
         return { value: res.value };
       } catch (error) {
         if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
@@ -48,7 +56,7 @@ async function withWorld(app: FastifyInstance, fn: (world: World) => Promise<{ e
   });
 }
 
-export async function savesRoutes(app: FastifyInstance) {
+export async function multiplayerRoutes(app: FastifyInstance) {
   app.addHook("preHandler", async (req, reply) => {
     const path = req.routeOptions?.url ?? req.url;
     if (path.includes("/mp") || path.includes("/settings")) {
@@ -58,55 +66,7 @@ export async function savesRoutes(app: FastifyInstance) {
 
   // --- Multiplayer status -------------------------------------------------
   app.get("/mp/status", async (req) => {
-    return withGlobalLock(async () => {
-      await ensureCurrentSeason(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
-      if (!loaded) {
-        return { ready: false as const, saveId: null };
-      }
-      const world = loaded.world;
-      const calendar = calendarValues();
-      const seasonDayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
-      const user = req.user!;
-      const club = world.clubs.find((c) => c.ownerUserId === user.id) ?? null;
-      return {
-        ready: true as const,
-        saveId: loaded.save.id,
-        season: {
-          seasonNumber: world.mp.seasonNumber ?? 1,
-          key: seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth }),
-          year: world.mp.seasonYear,
-          month: world.mp.seasonMonth,
-          status: world.mp.seasonStatus,
-          completedRounds: world.mp.completedRounds,
-          joinLockRound: world.mp.joinLockRound,
-          joinState: world.mp.joinState,
-          seasonDayIndex,
-          seasonDay: seasonDayIndex + 1,
-          seasonDays: calendar.seasonDays,
-          phase: world.mp.phase ?? phaseForSeasonDayIndex(seasonDayIndex),
-          interseasonAfterMatchDays: calendar.interseasonAfterMatchDays,
-          interseasonBeforeNextSeasonDays: calendar.interseasonBeforeNextSeasonDays,
-          lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
-          interseasonStartIndex: calendar.interseasonStartIndex,
-          preparationStartIndex: calendar.preparationStartIndex,
-        },
-        userClubId: club?.id ?? null,
-        club: club
-          ? {
-              id: club.id,
-              name: club.name,
-              shortName: club.shortName,
-              country: club.country,
-              highestDivision: club.highestDivision,
-              cash: club.cash,
-              competitionState: club.competitionState,
-              timezone: club.timezone,
-              preferredHours: club.preferredHours ?? null,
-            }
-          : null,
-      };
-    });
+    return readMpStatus(app.prisma, req.user!.id);
   });
 
   // --- Join / create club -------------------------------------------------
@@ -119,7 +79,7 @@ export async function savesRoutes(app: FastifyInstance) {
     const user = req.user!;
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
       const existing = world.clubs.find((c) => c.ownerUserId === user.id);
@@ -161,6 +121,8 @@ export async function savesRoutes(app: FastifyInstance) {
       syncMemberships(loaded.world, seasonId);
       syncClubSeasons(loaded.world, seasonId);
       await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
+      publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
       return { value: { ok: true, clubId: club.id, result } };
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
@@ -172,7 +134,7 @@ export async function savesRoutes(app: FastifyInstance) {
     const user = req.user!;
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-      const loaded = await loadGlobalWorld(app.prisma);
+       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
       const existing = world.clubs.find((c) => c.ownerUserId === user.id);
@@ -190,6 +152,8 @@ export async function savesRoutes(app: FastifyInstance) {
       syncMemberships(world, seasonId);
       syncClubSeasons(world, seasonId);
       await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
+      publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
       return { value: { ok: true, result } };
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
@@ -199,7 +163,7 @@ export async function savesRoutes(app: FastifyInstance) {
   // --- Practice match (provisional clubs) ---------------------------------
   app.post("/mp/practice", async (req, reply) => {
     const user = req.user!;
-    const res = await withWorld(app, async (world) => {
+     const res = await withWorld(app, user.id, async (world) => {
       const club = world.clubs.find((c) => c.ownerUserId === user.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
       if (club.competitionState !== "PROVISIONAL") {
@@ -215,25 +179,26 @@ export async function savesRoutes(app: FastifyInstance) {
   });
 
   app.get("/mp/club", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const world = loaded.world;
     const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
     if (!club) return reply.code(404).send({ error: "You have no club yet" });
-    return { snapshot: buildSnapshot(world, club.id) };
+    return { snapshot: buildCachedSnapshot(world, club.id, loaded.save.revision) };
   });
 
   // --- Pyramid ------------------------------------------------------------
   app.get("/mp/pyramid", async (req) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     const world = loaded?.world;
     if (!world) return { seasonKey: null, tiers: [] };
     const divisions = divisionsInSeason(world, world.mp.seasonId);
+    const clubById = new Map(world.clubs.map((club) => [club.id, club]));
     const byTier = new Map<number, { id: number; name: string; tier: number; groupIndex: number; humanCount: number; aiCount: number }[]>();
     for (const d of divisions) {
       const t = tierOf(d);
       const members = Object.values(d.standings);
-      const humans = members.filter((r) => world.clubs.find((c) => c.id === r.clubId)?.ownerUserId !== null).length;
+       const humans = members.filter((r) => clubById.get(r.clubId)?.ownerUserId !== null).length;
       if (!byTier.has(t)) byTier.set(t, []);
       byTier.get(t)!.push({ id: d.id, name: compDivisionName(d), tier: t, groupIndex: groupIndexOf(d), humanCount: humans, aiCount: members.length - humans });
     }
@@ -241,17 +206,27 @@ export async function savesRoutes(app: FastifyInstance) {
     return { seasonKey: seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth }), tiers };
   });
 
+  app.get("/mp/history", async (req, reply) => {
+    const requested = Number((req.query as { limit?: string }).limit ?? 20);
+    const limit = Number.isFinite(requested) ? Math.max(1, Math.min(50, Math.trunc(requested))) : 20;
+    const result = await readSeasonHistory(app.prisma, req.user!.id, limit);
+    if (!result) return reply.code(404).send({ error: "World not found" });
+    return result;
+  });
+
   // --- Division standings / fixtures --------------------------------------
   app.get("/mp/divisions/:id/standings", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const world = loaded.world;
     const comp = world.competitions.find((c) => c.id === Number((req.params as { id: string }).id));
     if (!comp) return reply.code(404).send({ error: "Division not found" });
+    const clubById = new Map(world.clubs.map((club) => [club.id, club]));
+    const seasonByClubId = new Map(world.mpClubSeasons.filter((entry) => entry.seasonId === world.mp.seasonId && entry.divisionId === comp.id).map((entry) => [entry.clubId, entry]));
     const rows = standingsTiebreak(Object.values(comp.standings))
       .map((row) => {
-        const club = world.clubs.find((c) => c.id === row.clubId);
-        const seasonEntry = world.mpClubSeasons.find((entry) => entry.clubId === row.clubId && entry.seasonId === world.mp.seasonId && entry.divisionId === comp.id);
+        const club = clubById.get(row.clubId);
+        const seasonEntry = seasonByClubId.get(row.clubId);
         return {
           ...row,
           clubId: row.clubId,
@@ -269,19 +244,21 @@ export async function savesRoutes(app: FastifyInstance) {
   });
 
   app.get("/mp/divisions/:id/fixtures", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const world = loaded.world;
     const comp = world.competitions.find((c) => c.id === Number((req.params as { id: string }).id));
     if (!comp) return reply.code(404).send({ error: "Division not found" });
+    const clubById = new Map(world.clubs.map((club) => [club.id, club]));
+    const matchByFixtureId = new Map(world.matches.map((match) => [match.fixtureId, match]));
     const myClubId = world.clubs.find((c) => c.ownerUserId === req.user!.id)?.id ?? null;
     const fixtures = world.fixtures
       .filter((f) => f.competitionId === comp.id)
       .sort((a, b) => a.round - b.round)
       .map((f) => {
-        const home = world.clubs.find((c) => c.id === f.homeClubId);
-        const away = world.clubs.find((c) => c.id === f.awayClubId);
-        const m = world.matches.find((x) => x.fixtureId === f.id);
+        const home = clubById.get(f.homeClubId);
+        const away = clubById.get(f.awayClubId);
+        const m = matchByFixtureId.get(f.id);
         return {
           id: f.id,
           round: f.round,
@@ -301,22 +278,9 @@ export async function savesRoutes(app: FastifyInstance) {
 
   // --- My live match ------------------------------------------------------
   app.get("/mp/live-match", async (req, reply) => {
-    const loaded = await loadGlobalWorld(app.prisma);
-    if (!loaded) return reply.code(404).send({ error: "World not found" });
-    const world = loaded.world;
-    const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
-    if (!club) return { match: null };
-    const st = world.liveMatches.find((s) => s.homeClubId === club.id || s.awayClubId === club.id);
-    if (!st) return { match: null };
-    const home = world.clubs.find((c) => c.id === st.homeClubId);
-    const away = world.clubs.find((c) => c.id === st.awayClubId);
-    return {
-      match: {
-        id: st.matchId,
-        home: home?.name ?? "",
-        away: away?.name ?? "",
-      },
-    };
+    const result = await readUserLiveMatch(app.prisma, req.user!.id);
+    if (!result) return reply.code(404).send({ error: "World not found" });
+    return result;
   });
 
   // --- Preferred match times ----------------------------------------------
@@ -325,7 +289,7 @@ export async function savesRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const preferredHours = validatePreferredHours(parsed.data.preferredHours);
     if (preferredHours === null) return reply.code(400).send({ error: `Select at least ${MP_CONFIG.minPreferredSlots / 2} hours of preferred match times` });
-    const res = await withWorld(app, async (world) => {
+     const res = await withWorld(app, req.user!.id, async (world) => {
       const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
       // Preferences only affect the next fixture generation; existing fixtures
@@ -343,7 +307,7 @@ export async function savesRoutes(app: FastifyInstance) {
     const parsed = z.object({ kits: clubKitsSchema }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid kit design" });
     const kits = parsed.data.kits;
-    const res = await withWorld(app, async (world) => {
+     const res = await withWorld(app, req.user!.id, async (world) => {
       const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
       club.kits = kits;
@@ -369,7 +333,7 @@ export async function savesRoutes(app: FastifyInstance) {
       .refine((d) => d.clubName !== undefined || d.stadiumName !== undefined || d.coachName !== undefined, { message: "Nothing to update" })
       .safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
-    const res = await withWorld(app, async (world) => {
+     const res = await withWorld(app, req.user!.id, async (world) => {
       const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
       // Country is intentionally immutable here: it drives player-name pools

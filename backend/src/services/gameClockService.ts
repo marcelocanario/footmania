@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { gameConfig, configuredUtcHour } from "../config";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { withGlobalLease, withGlobalLock } from "./lock";
-import { loadGlobalWorld, persistWorld } from "./saveService";
+import { loadGlobalWorldMutable, persistWorld } from "./saveService";
 import { executeGameDayEventsInLock, executeMandatoryEventsInLock, materializeSeasonEvents, scheduleEvent, ScheduledEventType } from "./scheduler";
 import { rollover } from "./mpService";
 
@@ -45,7 +45,7 @@ function normalizeWorldClock(world: import("../game/types").World): void {
 }
 
 export async function ensureGameClock(prisma: PrismaClient, saveId: number, world?: import("../game/types").World): Promise<GameClockView> {
-  const loaded = world ? { world } : await loadGlobalWorld(prisma);
+  const loaded = world ? { world } : await loadGlobalWorldMutable(prisma);
   if (!loaded) throw new Error("Global world unavailable");
   normalizeWorldClock(loaded.world);
   const now = loaded.world.mp.lastAdvancedAt ? new Date(loaded.world.mp.lastAdvancedAt) : new Date();
@@ -115,7 +115,7 @@ export async function advanceGameDayInLock(prisma: PrismaClient, options: Advanc
 }
 
 async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGameDayOptions = {}): Promise<GameClockView> {
-    let loaded = await loadGlobalWorld(prisma);
+    let loaded = await loadGlobalWorldMutable(prisma);
     if (!loaded) throw new Error("Global world unavailable");
     let world = loaded.world;
     normalizeWorldClock(world);
@@ -130,10 +130,7 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
       if (unresolved) throw new Error("Cannot advance while a scheduled match is unresolved");
     }
 
-    await executeMandatoryEventsInLock(prisma, loaded.save.id, currentAbsolute, options.now ?? new Date());
-    const afterMandatory = await loadGlobalWorld(prisma);
-    if (!afterMandatory) throw new Error("World unavailable after mandatory scheduler events");
-    loaded = afterMandatory;
+    await executeMandatoryEventsInLock(prisma, loaded.save.id, currentAbsolute, options.now ?? new Date(), loaded);
     world = loaded.world;
     normalizeWorldClock(world);
 
@@ -146,7 +143,7 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
       if (world.mp.seasonId === seasonBeforeMandatory) {
        await rollover(prisma, { calendarBoundary: true, leaseHeld: true });
       }
-      const fresh = await loadGlobalWorld(prisma);
+      const fresh = await loadGlobalWorldMutable(prisma);
       if (!fresh) throw new Error("World disappeared during season rollover");
       normalizeWorldClock(fresh.world);
       fresh.world.mp.absoluteGameDay = nextAbsolute;
@@ -155,15 +152,14 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
        fresh.world.mp.startAbsoluteGameDay = nextAbsolute;
        fresh.world.mp.seasonStartAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
       fresh.world.mp.phase = "ACTIVE";
-      fresh.world.mp.lastAdvancedAt = now.getTime();
-       fresh.world.mp.clockVersion = (world.mp.clockVersion ?? 0) + 1;
-      await persistWorld(prisma, fresh.save.id, fresh.save.id, fresh.world, fresh.save.revision);
-      await materializeSeasonEvents(prisma, fresh.save.id, fresh.world);
-       await executeGameDayEventsInLock(prisma, fresh.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true);
-      const afterBegin = await loadGlobalWorld(prisma);
-      if (!afterBegin) throw new Error("World unavailable after beginning the new season");
-      await scheduleNextAutomaticAdvance(prisma, fresh.save.id, nextAbsolute, now);
-      const row = await ensureGameClock(prisma, afterBegin.save.id, afterBegin.world);
+       fresh.world.mp.lastAdvancedAt = now.getTime();
+        fresh.world.mp.clockVersion = (world.mp.clockVersion ?? 0) + 1;
+       await persistWorld(prisma, fresh.save.id, fresh.save.id, fresh.world, fresh.save.revision);
+       fresh.save.revision += 1;
+       await materializeSeasonEvents(prisma, fresh.save.id, fresh.world);
+       await executeGameDayEventsInLock(prisma, fresh.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true, fresh);
+       await scheduleNextAutomaticAdvance(prisma, fresh.save.id, nextAbsolute, now);
+       const row = await ensureGameClock(prisma, fresh.save.id, fresh.world);
       await writeAdminAudit(prisma, fresh.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
       return row;
     }
@@ -174,12 +170,11 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
     world.mp.lastAdvancedAt = now.getTime();
     world.mp.clockVersion = (world.mp.clockVersion ?? 0) + 1;
     await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+    loaded.save.revision += 1;
     await materializeSeasonEvents(prisma, loaded.save.id, world);
-    await executeGameDayEventsInLock(prisma, loaded.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true);
-    const afterBegin = await loadGlobalWorld(prisma);
-    if (!afterBegin) throw new Error("World unavailable after beginning the new game day");
+    await executeGameDayEventsInLock(prisma, loaded.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true, loaded);
     await scheduleNextAutomaticAdvance(prisma, loaded.save.id, nextAbsolute, now);
-    const row = await ensureGameClock(prisma, afterBegin.save.id, afterBegin.world);
+    const row = await ensureGameClock(prisma, loaded.save.id, loaded.world);
     await writeAdminAudit(prisma, loaded.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
     return row;
 }
