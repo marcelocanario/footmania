@@ -3081,11 +3081,21 @@
         "shotSetPieceMaxAgeSeconds": 15
       },
       "timing": {
-        "tempoScale": 0.928,
+        "tempoScale": 0.84,
         "regulationSeconds": 5400,
         "firstHalfEndSeconds": 2700,
         "deadBallSecondsPerRestart": 25.84916263374729,
         "instantActionSeconds": 0.17533731670946573,
+        "stoppage": {
+          "firstHalfBaseSeconds": 30,
+          "secondHalfBaseSeconds": 75,
+          "secondsPerGoal": 45,
+          "secondsPerSubstitution": 30,
+          "secondsPerInjury": 40,
+          "secondsPerCard": 20,
+          "minMinutesPerHalf": 1,
+          "maxMinutesPerHalf": 12
+        },
         "durationGamma": {
           "ACTION": {
             "PASS": {

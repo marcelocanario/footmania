@@ -98,9 +98,9 @@ describe("game config validation", () => {
     renewalAgeCurve: { 20: 1.3, 28: 1 },
     releaseClauseRemainingValuePct: 0.5,
     playerGeneration: {
-      playerQualitySpreadFraction: 0.06,
-      divisionSpanSigmas: 3.0,
-      academyPedigreeSigmas: 0.3,
+      playerQualitySpreadOverall: 6,
+      divisionOverallSpan: 18,
+      academyPedigreeOverallBoost: 1.8,
     },
     playerGenerationRules: {
       initialSeniorSquadSize: 28,
@@ -129,6 +129,26 @@ describe("game config validation", () => {
       ...economyFields,
     });
     expect(cfg.league.teams).toBe(8);
+  });
+
+  it("migrates legacy fraction and sigma-span quality settings into OVR units", () => {
+    const legacyPlayerGeneration = {
+      playerQualitySpreadFraction: 0.06,
+      divisionSpanSigmas: 3,
+      academyPedigreeSigmas: 0.3,
+    };
+    const cfg = parseGameConfig({
+      seasonDays: 30,
+      league: { teams: 8, turns: 2, startDay: 1, matchIntervalDays: 2 },
+      payrollIntervalDays: 7,
+      weeklyIntervalDays: 7,
+      contractWarningSeasons: 2,
+      ...economyFields,
+      playerGeneration: legacyPlayerGeneration,
+    });
+    expect(cfg.playerGeneration.playerQualitySpreadOverall).toBeCloseTo(5.94, 10);
+    expect(cfg.playerGeneration.divisionOverallSpan).toBeCloseTo(17.82, 10);
+    expect(cfg.playerGeneration.academyPedigreeOverallBoost).toBeCloseTo(1.782, 10);
   });
 
   it("rejects a calendar where lastMatchDay >= seasonDays", () => {
@@ -207,5 +227,18 @@ describe("country name pools", () => {
       expect(nameMatchesPool(p.name, names, surnames), `${p.name}`).toBe(true);
     }
     expect(buildLineup(club, world.players)?.starters.length).toBe(11);
+  });
+
+  it("uses the manager name supplied during human club creation", () => {
+    const world = generateWorld(556);
+    const club = createHumanClub(world, {
+      userId: 2,
+      clubName: "Named FC",
+      country: "BRA",
+      timezone: "America/Sao_Paulo",
+      coachName: "Rafa Silva",
+    });
+    expect(club.coachName).toBe("Rafa Silva");
+    expect(club.coachNameChangedSeasonKey).toBeNull();
   });
 });

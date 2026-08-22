@@ -20,9 +20,22 @@
   "interseasonAfterMatchDays": 2,
   "interseasonBeforeNextSeasonDays": 5,
 
+  // --- Scheduler (wall-clock) ---
   "scheduler": {
+    // UTC time at which one game-day ends and the next begins. All day-based
+    // cadences (payroll, weekly sim, rest days, season boundaries) advance
+    // when this instant is crossed.
+    // (e.g. "00:00" = a new game-day starts at midnight UTC.)
     "gameDayRolloverUtc": "00:00",
+    // Kickoff time for scheduled league fixtures on their match day.
+    // Fixture timestamps are persisted in UTC; changing this affects only
+    // newly generated schedules.
+    // (e.g. "19:00" = rounds kick off at 19:00 UTC.)
     "leagueMatchStartUtc": "19:00",
+    // Lease duration in real seconds for the global mutation lock and due-event
+    // claims. A crashed holder's lease expires after this window so work can be
+    // retried; stale entries are reclaimed after twice this duration.
+    // (e.g. 30 = a held lock expires 30 seconds after its last heartbeat.)
     "leaseSeconds": 30
   },
 
@@ -168,33 +181,43 @@
   //
   // Division-driven player quality model. New senior squads draw from
   //   OVR = mu(division) + sigma * Z,  Z ~ TruncatedNormal(0,1,-3,3)
-  // and youth from the same model with an academy-pedigree mean shift. Only
-  // these three knobs tune the balance; everything else (top/bottom division
-  // means, age baselines, potential) is mathematically derived.
+  // and youth from the same model with an academy-pedigree mean shift.
   "playerGeneration": {
-    // Individual quality spread as a fraction of the global OVR range.
-    // sigma = playerQualitySpreadFraction * (OVR_MAX - OVR_MIN).
-    // (e.g. 0.06 = sigma ~5.94 OVR on a 1-100 scale.)
-    "playerQualitySpreadFraction": 0.06,
-    // Distance in sigmas from the lowest division mean to the top-division mean.
-    // (e.g. 3.0 = ~18 OVR spread across the full pyramid on a 1-100 scale.)
-    "divisionSpanSigmas": 3.0,
-    // Academy pedigree strength in sigmas: the strongest possible pedigree
-    // shifts the youth mean by this many sigmas.
-    // (e.g. 0.30 = ~1.8 OVR for a current-and-historical Division 1 academy.)
-    "academyPedigreeSigmas": 0.30
+    // Mean OVR of all generated senior players in Division 1. Because the best
+    // players are selected for the lineup, 73.5 produces an automatic starting
+    // XI close to 78 OVR with the spread configured below.
+    "topDivisionMeanOverall": 73.5,
+    // Standard deviation of individual player quality, directly in OVR points.
+    // (e.g. 6 = most players fall within roughly ±6 OVR of their environment.)
+    "playerQualitySpreadOverall": 6,
+    // Total mean OVR difference from Division 1 to the current bottom division.
+    // This remains 18 as divisions are added; the division curve automatically
+    // redistributes the intermediate means across the larger pyramid.
+    "divisionOverallSpan": 18,
+    // Maximum generation-mean advantage, in OVR points, of a D1/D1 academy
+    // over the weakest academy at the same player age. Lower pedigrees receive
+    // a proportional share (currently about 16.1 in D2, 9.4 in D3, 4.2 in D4,
+    // and 0 in D5 for a five-division pyramid). This does not guarantee a
+    // player's future OVR: with regular starter minutes the calibrated average
+    // career peaks are roughly 78/69/62/57/53 from D1 to D5, while less-active
+    // players develop less. Only the D1 peak is directly calibration-tested.
+    "academyPedigreeOverallBoost": 25.5
   },
 
   // --- Structural academy/squad rules (plans/4. player-generation.md §42) ---
   "playerGenerationRules": {
     // Fixed senior squad size for a newly created club.
-    "initialSeniorSquadSize": 28,
+    "initialSeniorSquadSize": 30,
     // Youth players generated for a newly created club.
-    "initialAcademySize": 8,
+    "initialAcademySize": 11,
     // Maximum youth roster size; unused seasonal intake slots are lost.
-    "academyRosterLimit": 12,
-    // New youth recruits per season at the season-intake point.
-    "seasonalAcademyIntake": 2,
+    "academyRosterLimit": 15,
+    // "auto" calculates the population-stable mean from the initial senior and
+    // academy sizes, intake ages, promotion age, position mix, and live
+    // retirement probabilities. A non-negative number can override it.
+    // The resolved fractional mean uses deterministic stochastic rounding per
+    // club/season, so retries cannot reroll the quota.
+    "seasonalAcademyIntake": "auto",
     // Youth age range for generation.
     "academyMinAge": 16,
     "academyMaxAge": 19,
@@ -215,5 +238,14 @@
       "tactics": 0.35,
       "luck": 0.25
     }
+  },
+
+  // --- Live match pacing (wall-clock) ---
+  // Real minutes a live league match takes to play out (authoritative server
+  // pacing; clients derive tick delay from this). Halftime pause is real time
+  // shown only when a human team is involved; AI vs AI and instant sims skip it.
+  "liveMatch": {
+    "matchDurationMinutes": 30,
+    "halftimePauseMinutes": 5
   }
 }

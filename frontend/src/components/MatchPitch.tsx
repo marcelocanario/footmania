@@ -17,6 +17,7 @@ export interface MatchPitchProps {
   events: LiveEvent[];
   phase: string;
   minute: number;
+  addedTime?: number | null;
   reducedMotion?: boolean;
 }
 
@@ -80,7 +81,7 @@ function CueOverlay({ cue, reducedMotion }: { cue: PitchCue; reducedMotion: bool
   );
 }
 
-export function MatchPitch({ home, away, events, phase, minute, reducedMotion = false }: MatchPitchProps) {
+export function MatchPitch({ home, away, events, phase, minute, addedTime, reducedMotion = false }: MatchPitchProps) {
   const [activeEvent, setActiveEvent] = useState<LiveEvent | null>(null);
   const [queue, setQueue] = useState<LiveEvent[]>([]);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
@@ -141,7 +142,8 @@ export function MatchPitch({ home, away, events, phase, minute, reducedMotion = 
   const awayHighlighted = cue?.actorSide === "away" ? cue.event.playerId : null;
   const homeSecondaryHighlighted = cue?.actorSide === "home" ? cue.event.player2Id : null;
   const awaySecondaryHighlighted = cue?.actorSide === "away" ? cue.event.player2Id : null;
-  const status = cue ? `${EVENT_COPY[cue.kind]} · ${cue.event.minute}'` : phase === "pregame" ? "Lineups" : `${minute}'`;
+  const fmtMinute = (m: number, a?: number | null) => (a ? `${m}+${a}'` : `${m}'`);
+  const status = cue ? `${EVENT_COPY[cue.kind]} · ${fmtMinute(cue.event.minute, cue.event.addedTime)}` : phase === "pregame" ? "Lineups" : fmtMinute(minute, addedTime);
 
   return (
     <section className="match-pitch-card" aria-label="Live match pitch">

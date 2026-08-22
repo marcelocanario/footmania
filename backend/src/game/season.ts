@@ -347,10 +347,10 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         world.news.push({ dayIndex: world.dayIndex, text: `${j.name} reached 21 but could not be promoted because the professional squad is full`, kind: "academy", clubId: club.id });
       }
     }
-    // Fixed seasonal academy intake (player-generation §42-§45): after aging
-    // and promotion, generate the fixed intake subject only to academy roster
-    // slots. Unused intake slots are lost — never banked, and releasing youth
-    // cannot increase the quota. Idempotent per club/season.
+    // Seasonal academy intake (player-generation §42-§45): after aging and
+    // promotion, generate the resolved deterministic quota subject only to
+    // academy roster slots. Unused intake slots are lost — never banked, and
+    // releasing youth cannot increase the quota. Idempotent per club/season.
     const seasonId = world.mp.seasonId;
     if (seasonId !== 0 && !academyIntakeDone(world, club.id, seasonId)) {
       generateSeasonalAcademyIntake({

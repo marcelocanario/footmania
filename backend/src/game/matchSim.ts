@@ -1,6 +1,6 @@
 import type { Club, LiveCardState, LiveInjuryState, LiveMatchState, LiveSubstitutionState, LiveTactics, MatchEvent, MatchSimulationDiagnostics, Player, RngState, TeamMatchStats, World } from "./types";
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
-import { nextDouble, gamma } from "./rng";
+import { nextDouble, nextInt, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
 import { injuryDays as injuryDaysDuration } from "./player";
 
@@ -1220,7 +1220,7 @@ function selectFouler(eng: Engine, def: Side): LivePlayerState {
   return pool.find((l) => String(l.ps.id) === chosen)?.ps ?? pool[0].ps;
 }
 
-function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: number): void {
+function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: number, addedTime?: number): void {
   const { pYellow, pRed } = cardRates();
   const shift = cardLogitShift(eng, fouler, def);
   const redU = logit(pRed) + shift;
@@ -1233,11 +1233,13 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
   const isYellow = !isRed && nextDouble(eng.rng) < yellowP;
 
   const club = def.club;
+  const evExtra = addedTime !== undefined ? { addedTime } : {};
   if (isRed) {
     eng.cards.push({ playerId: fouler.id, kind: "RED", minute });
     eng.stats[def.idx === 0 ? "home" : "away"].reds++;
     eng.events.push({
       minute, half: eng.period, type: EVENT_CODES.RED, subtype: 0, clubId: club.id, playerId: fouler.id, player2Id: null, goalType: 0,
+      ...evExtra,
     });
     removeFromPitch(eng, def, fouler.id);
   } else if (isYellow) {
@@ -1248,6 +1250,7 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
       eng.stats[def.idx === 0 ? "home" : "away"].reds++;
       eng.events.push({
         minute, half: eng.period, type: EVENT_CODES.YELLOW_RED, subtype: 0, clubId: club.id, playerId: fouler.id, player2Id: null, goalType: 0,
+        ...evExtra,
       });
       removeFromPitch(eng, def, fouler.id);
     } else {
@@ -1255,6 +1258,7 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
       eng.stats[def.idx === 0 ? "home" : "away"].yellows++;
       eng.events.push({
         minute, half: eng.period, type: EVENT_CODES.YELLOW, subtype: 0, clubId: club.id, playerId: fouler.id, player2Id: null, goalType: 0,
+        ...evExtra,
       });
     }
   }
@@ -1270,7 +1274,7 @@ function removeFromPitch(eng: Engine, side: Side, playerId: number): void {
  *  simulations average `injuries.targetPerMatch`. A single RNG draw per action
  *  keeps the stream chunk-independent (determinism between instant and
  *  streamed simulation). */
-function resolveInjuryHazard(eng: Engine, side: Side, minute: number): void {
+function resolveInjuryHazard(eng: Engine, side: Side, minute: number, addedTime?: number): void {
   const expectedActionsPerMatch = 2 * (MS.validation.reference["TEAM_MATCH.modeledActions"]?.mean ?? 956);
   const baseHazardPerAction = MS.injuries.targetPerMatch / Math.max(1, expectedActionsPerMatch);
   const involved = involvedPlayers(side, eng.zone);
@@ -1317,6 +1321,7 @@ function resolveInjuryHazard(eng: Engine, side: Side, minute: number): void {
       eng.stats[side.idx === 0 ? "home" : "away"].injuries++;
       eng.events.push({
         minute, half: eng.period, type: EVENT_CODES.INJURY, subtype: 0, clubId: side.club.id, playerId: ps.id, player2Id: null, goalType: days,
+        ...(addedTime !== undefined ? { addedTime } : {}),
       });
       ps.onPitch = false;
       removeFromPitch(eng, side, ps.id);
@@ -1419,6 +1424,92 @@ function updateOrganisation(eng: Engine, dtSeconds: number): void {
     side.organisation = clamp(baseline - side.organisationDisruption, 0, 1);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Stoppage time (event-driven added time per half)
+// ---------------------------------------------------------------------------
+
+function computeAddedMinutesForHalf(eng: Engine, half: 1 | 2): number {
+  const cfg = MS.timing.stoppage;
+  if (!cfg) return 0;
+  const base = half === 1 ? cfg.firstHalfBaseSeconds : cfg.secondHalfBaseSeconds;
+  let goals = 0;
+  let subs = 0;
+  let injuries = 0;
+  let cards = 0;
+  for (const e of eng.events) {
+    if (e.type === EVENT_CODES.GOAL && e.half === half) goals++;
+  }
+  for (const s of eng.substitutions) {
+    const m = s.minute;
+    if (half === 1 ? m <= 45 : m > 45) subs++;
+  }
+  for (const c of eng.cards) {
+    const m = c.minute;
+    if (half === 1 ? m <= 45 : m > 45) cards++;
+  }
+  for (const inj of eng.injuries) {
+    const m = inj.minute;
+    if (half === 1 ? m <= 45 : m > 45) injuries++;
+  }
+  const totalSeconds =
+    base +
+    goals * cfg.secondsPerGoal +
+    subs * cfg.secondsPerSubstitution +
+    injuries * cfg.secondsPerInjury +
+    cards * cfg.secondsPerCard;
+  const minSec = cfg.minMinutesPerHalf * 60;
+  const maxSec = cfg.maxMinutesPerHalf * 60;
+  const clamped = Math.max(minSec, Math.min(maxSec, totalSeconds));
+  return Math.ceil(clamped / 60);
+}
+
+function ensureStoppageComputed(eng: Engine): void {
+  // First half added time is frozen the first time the clock reaches the raw boundary.
+  if (eng.clockSeconds >= MS.timing.firstHalfEndSeconds && (eng.st.firstHalfAddedMinutes ?? 0) === 0) {
+    // Do not recompute if already set to a non-zero value; 0 is sentinel for "not yet computed"
+    // (minMinutesPerHalf is 1 so a valid computed value is never 0).
+    eng.st.firstHalfAddedMinutes = computeAddedMinutesForHalf(eng, 1);
+  }
+  const firstAdded = eng.st.firstHalfAddedMinutes ?? 0;
+  const secondThreshold = MS.timing.regulationSeconds + firstAdded * 60;
+  if (eng.clockSeconds >= secondThreshold && (eng.st.secondHalfAddedMinutes ?? 0) === 0) {
+    eng.st.secondHalfAddedMinutes = computeAddedMinutesForHalf(eng, 2);
+  }
+}
+
+function stoppageInfoForClock(eng: Engine, clockSeconds: number): { inStoppage: boolean; baseMinute: number; addedTime?: number } | null {
+  const firstAdded = eng.st.firstHalfAddedMinutes ?? 0;
+  const secondAdded = eng.st.secondHalfAddedMinutes ?? 0;
+  const firstRaw = MS.timing.firstHalfEndSeconds;
+  const regRaw = MS.timing.regulationSeconds;
+  const secondStart = firstRaw + firstAdded * 60;
+  const secondEnd = regRaw + firstAdded * 60;
+  if (firstAdded > 0 && clockSeconds >= firstRaw && clockSeconds < firstRaw + firstAdded * 60 && eng.period === 1) {
+    const elapsed = Math.floor((clockSeconds - firstRaw) / 60) + 1;
+    return { inStoppage: true, baseMinute: 45, addedTime: Math.min(elapsed, firstAdded) };
+  }
+  if (secondAdded > 0 && clockSeconds >= secondEnd && clockSeconds < secondEnd + secondAdded * 60 && eng.period === 2) {
+    const elapsed = Math.floor((clockSeconds - secondEnd) / 60) + 1;
+    return { inStoppage: true, baseMinute: 90, addedTime: Math.min(elapsed, secondAdded) };
+  }
+  // Clock in stoppage but added not yet computed (should not happen — ensureStoppageComputed handles)
+  return null;
+}
+
+function displayMinuteForClock(eng: Engine, clockSeconds: number): { minute: number; addedTime?: number; half: number } {
+  const info = stoppageInfoForClock(eng, clockSeconds);
+  if (info) return { minute: info.baseMinute, addedTime: info.addedTime, half: eng.period };
+  const firstAdded = eng.st.firstHalfAddedMinutes ?? 0;
+  // Second-half minutes must be offset by first-half added time (clock is continuous,
+  // but the displayed minute should be 46 at the start of the second half).
+  const effectiveClock = eng.period === 2 && clockSeconds >= MS.timing.firstHalfEndSeconds + firstAdded * 60
+    ? clockSeconds - firstAdded * 60
+    : clockSeconds;
+  const minute = Math.floor(effectiveClock / 60) + 1;
+  return { minute, half: eng.period };
+}
+
 // ---------------------------------------------------------------------------
 // Counter activation (§25)
 // ---------------------------------------------------------------------------
@@ -1556,8 +1647,19 @@ function stepPossession(eng: Engine): void {
     eng.playerMinutes[ps.id] = (eng.playerMinutes[ps.id] ?? 0) + dt / 60;
   }
 
-  const displayMinute = Math.floor(eng.clockSeconds / 60) + 1;
-  resolveInjuryHazard(eng, attSide === 0 ? eng.home : eng.away, displayMinute);
+  // Ensure stoppage is frozen as soon as we enter it so the very first
+  // stoppage event is stamped with 45+ / 90+ correctly.
+  if (eng.clockSeconds >= MS.timing.firstHalfEndSeconds && (eng.st.firstHalfAddedMinutes ?? 0) === 0) {
+    ensureStoppageComputed(eng);
+  }
+  if (eng.clockSeconds >= MS.timing.regulationSeconds && (eng.st.secondHalfAddedMinutes ?? 0) === 0) {
+    ensureStoppageComputed(eng);
+  }
+  const clockInfo = displayMinuteForClock(eng, eng.clockSeconds);
+  const displayMinute = clockInfo.minute;
+  const displayAddedTime = clockInfo.addedTime;
+  const eventHalf = eng.period as number;
+  resolveInjuryHazard(eng, attSide === 0 ? eng.home : eng.away, displayMinute, displayAddedTime);
 
   // SHOT resolution
   if (action === "SHOT") {
@@ -1570,8 +1672,9 @@ function stepPossession(eng: Engine): void {
       const club = sideOf(eng, attSide).club;
       eng.scores[attSide]++;
       eng.events.push({
-        minute: displayMinute, half: eng.period, type: EVENT_CODES.GOAL, subtype: GOAL_SUBTYPES.NORMAL,
+        minute: displayMinute, half: eventHalf, type: EVENT_CODES.GOAL, subtype: GOAL_SUBTYPES.NORMAL,
         clubId: club.id, playerId: result.shooter?.id ?? null, player2Id: null, goalType: GOAL_SUBTYPES.NORMAL,
+        ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
       });
       if (result.shooter) {
         const p = eng.onPitchBySide[attSide].find((p) => p.id === result.shooter?.id);
@@ -1666,7 +1769,7 @@ function stepPossession(eng: Engine): void {
     const def = opp(eng, attSide);
     stats.fouls++;
     const fouler = selectFouler(eng, def);
-    resolveCards(eng, fouler, def, displayMinute);
+    resolveCards(eng, fouler, def, displayMinute, displayAddedTime);
     // Same team keeps possession; restart.
     if (eng.zone === "BOX") {
       // Defending foul in BOX → penalty restart (penalty shot resolves via the
@@ -1707,17 +1810,37 @@ function stepPossession(eng: Engine): void {
 // ---------------------------------------------------------------------------
 
 function periodEndSeconds(eng: Engine): number {
-  return eng.period === 1 ? MS.timing.firstHalfEndSeconds : MS.timing.regulationSeconds;
+  if (eng.period === 1) {
+    const added = eng.st.firstHalfAddedMinutes ?? 0;
+    return MS.timing.firstHalfEndSeconds + added * 60;
+  }
+  const firstAdded = eng.st.firstHalfAddedMinutes ?? 0;
+  const secondAdded = eng.st.secondHalfAddedMinutes ?? 0;
+  return MS.timing.regulationSeconds + (firstAdded + secondAdded) * 60;
 }
 
-function runMatch(eng: Engine, targetClockSeconds?: number): void {
-  const target = targetClockSeconds ?? MS.timing.regulationSeconds;
+function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalftime?: boolean }): void {
+  // console.log(`[runMatch start] clock ${eng.clockSeconds} target ${targetClockSeconds} firstAdded ${eng.st.firstHalfAddedMinutes} secondAdded ${eng.st.secondHalfAddedMinutes} period ${eng.period} pause ${opts?.pauseAtHalftime}`);
   let guard = 0;
-  while (!eng.ended && eng.clockSeconds < target && guard++ < 500000) {
+  while (!eng.ended && guard++ < 500000) {
+    // Freeze stoppage as soon as we reach the raw boundary so the added window is known before stepping into it.
+    ensureStoppageComputed(eng);
     const boundary = periodEndSeconds(eng);
+    // Respect explicit target (live tick) — stop when we have reached it.
+    if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
     if (eng.clockSeconds >= boundary) {
       if (eng.period === 1) {
+        if (opts?.pauseAtHalftime) {
+          // Pause at halftime (first half + its added time) — do not flip period yet.
+          // console.log(`[runMatch pause] clock ${eng.clockSeconds} boundary ${boundary}`);
+          break;
+        }
+        // Switch possession to the coin-toss loser for the second half kickoff (winner chose first half).
         eng.period = 2;
+        const winner = (eng.st.coinTossWinner ?? 0) as 0 | 1;
+        eng.possessionSide = winner === 0 ? 1 : 0;
+        eng.st.withBall = eng.possessionSide;
+        beginPossession(eng, "KICK_OFF");
         continue;
       }
       if (eng.st.decider && eng.st.scores[0] === eng.st.scores[1] && !eng.extraTimePlayed) {
@@ -1727,9 +1850,13 @@ function runMatch(eng: Engine, targetClockSeconds?: number): void {
       eng.ended = true;
       break;
     }
+    // If we have an explicit target and the next step would overshoot it, let stepPossession
+    // handle the clock increment and then the next loop will break on the target check above.
+    if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
     stepPossession(eng);
   }
-  if (eng.clockSeconds >= MS.timing.regulationSeconds && !eng.ended) {
+  const totalEnd = MS.timing.regulationSeconds + (eng.st.firstHalfAddedMinutes ?? 0) * 60 + (eng.st.secondHalfAddedMinutes ?? 0) * 60;
+  if (!eng.ended && eng.clockSeconds >= totalEnd) {
     if (eng.st.decider && eng.scores[0] === eng.scores[1] && !eng.extraTimePlayed) {
       eng.extraTimePlayed = true;
       doShootout(eng);
@@ -1824,7 +1951,7 @@ function buildEngine(
     side.expectedSupportTotal = ZONES.reduce((s, z) => s + (side.expectedSupport[z] ?? 0), 0) || 7;
     computeSupport(side);
   }
-  const hasPersistedOrganisation = st.matchClockSeconds > 0 || st.events.length > 0;
+  const hasPersistedOrganisation = st.matchClockSeconds > 0 || st.events.some((e) => e.type !== EVENT_CODES.COIN_TOSS);
   homeSide.baselineOrganisation = hasPersistedOrganisation && st.homeBaselineOrganisation > 0
     ? st.homeBaselineOrganisation
     : homeSide.cachedBaselineOrganisation;
@@ -1958,12 +2085,16 @@ export function advancePossessionMatch(
   players: Player[],
   st: LiveMatchState,
   matchMinutes: number,
-  centers: AttributeCenters
+  centers: AttributeCenters,
+  opts?: { pauseAtHalftime?: boolean }
 ): void {
   const eng = buildEngine(rng, home, away, players, st, centers);
   const startClock = eng.clockSeconds;
-  const target = Math.min(MS.timing.regulationSeconds, startClock + matchMinutes * 60);
-  runMatch(eng, target);
+  const firstAdded = st.firstHalfAddedMinutes ?? 0;
+  const secondAdded = st.secondHalfAddedMinutes ?? 0;
+  const dynamicEnd = MS.timing.regulationSeconds + (firstAdded + secondAdded) * 60;
+  const target = Math.min(dynamicEnd, startClock + matchMinutes * 60);
+  runMatch(eng, target, opts);
   writeBack(eng, st);
 }
 
@@ -2022,9 +2153,18 @@ function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimula
   st.scores = eng.scores;
   st.withBall = eng.possessionSide;
   st.possessionFirstAction = eng.pendingFirstAction;
-  // Display minute from match clock.
-  const atHalfTime = !eng.ended && !eng.extraTimePlayed && eng.clockSeconds >= MS.timing.firstHalfEndSeconds && eng.period === 1;
-  st.minute = atHalfTime ? 0 : Math.min(120, Math.floor(eng.clockSeconds / 60));
+  // Persist added-time values (they are computed lazily inside the engine).
+  st.firstHalfAddedMinutes = eng.st.firstHalfAddedMinutes ?? 0;
+  st.secondHalfAddedMinutes = eng.st.secondHalfAddedMinutes ?? 0;
+  // Display minute from match clock, with 45+/90+ stoppage handling.
+  const firstEnd = MS.timing.firstHalfEndSeconds + (st.firstHalfAddedMinutes ?? 0) * 60;
+  const atHalfTime = !eng.ended && !eng.extraTimePlayed && eng.clockSeconds >= firstEnd && eng.period === 1;
+  if (atHalfTime) {
+    st.minute = 0;
+  } else {
+    const disp = displayMinuteForClock(eng, eng.clockSeconds);
+    st.minute = Math.min(120, disp.minute);
+  }
   st.half = atHalfTime || eng.period === 2 ? 1 : 0;
 }
 

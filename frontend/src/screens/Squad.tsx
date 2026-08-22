@@ -13,7 +13,7 @@ import { PlayerName } from "../components/PlayerName";
 import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
-import { LineupPicker } from "../components/LineupPicker";
+import { TacticsBoard } from "../components/TacticsBoard";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
@@ -270,7 +270,7 @@ export function Squad() {
         <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)", alignItems: "start", gap: 16 }}>
           <div className="card">
             <h2 className="card-title"><ShieldCheck size={17} /> {strings.squad.tactics}</h2>
-            <LineupPicker mode="club" />
+            <TacticsBoard mode="club" />
           </div>
           <div className="card">
             <h2 className="card-title"><Clapperboard size={17} /> Match Strategy</h2>

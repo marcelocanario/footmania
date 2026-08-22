@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRng } from "../src/game/rng";
 import {
   academyPedigree,
-  academyAdjustedZ,
+  academyPedigreeOverallOffset,
   bottomDivisionMean,
   divisionMean,
   divisionStrength,
@@ -15,6 +15,7 @@ import {
   overallRange,
   qualitySigma,
   remainingNaturalGrowth,
+  SENIOR_POSITION_WEIGHTS,
   seniorRosterTemplate,
   tierFromZ,
   topDivisionMean,
@@ -27,6 +28,9 @@ import {
 } from "../src/game/playerGeneration";
 import { overallFromSkills } from "../src/game/rating";
 import { gameConfig } from "../src/config";
+import { buildLineup } from "../src/game/club";
+import { aging, applyDevelopment, potentialGrowth } from "../src/game/player";
+import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
 import type { Position } from "../src/game/types";
 import { calibrationDescribe } from "./calibration";
@@ -103,15 +107,14 @@ describe("derived means (spec §6/§8/§9)", () => {
     const R = overallRange();
     expect(R).toBe(OVR_MAX - OVR_MIN);
     const sigma = qualitySigma();
-    expect(sigma).toBeCloseTo(0.06 * R, 10);
-    expect(topDivisionMean()).toBeCloseTo(OVR_MAX - 4 * sigma, 10);
-    expect(bottomDivisionMean()).toBeCloseTo(topDivisionMean() - 3 * sigma, 10);
+    expect(sigma).toBe(gameConfig.playerGeneration.playerQualitySpreadOverall);
+    expect(topDivisionMean()).toBe(gameConfig.playerGeneration.topDivisionMeanOverall);
+    expect(bottomDivisionMean()).toBeCloseTo(topDivisionMean() - gameConfig.playerGeneration.divisionOverallSpan, 10);
   });
 
-  it("division means follow mu(D) = mu_bottom + 3σ·S(D)", () => {
-    const sigma = qualitySigma();
+  it("division means follow mu(D) = mu_bottom + divisionOverallSpan·S(D)", () => {
     for (let d = 1; d <= 5; d++) {
-      const expected = bottomDivisionMean() + 3 * sigma * divisionStrength(d, 5);
+      const expected = bottomDivisionMean() + gameConfig.playerGeneration.divisionOverallSpan * divisionStrength(d, 5);
       expect(divisionMean(d, 5)).toBeCloseTo(expected, 8);
     }
   });
@@ -122,11 +125,17 @@ describe("derived means (spec §6/§8/§9)", () => {
     }
   });
 
+  it("keeps the configured top-to-bottom OVR span as the pyramid grows", () => {
+    for (const totalDivisions of [2, 5, 10, 25]) {
+      expect(divisionMean(1, totalDivisions) - divisionMean(totalDivisions, totalDivisions))
+        .toBeCloseTo(gameConfig.playerGeneration.divisionOverallSpan, 10);
+    }
+  });
+
   it("reproduces the spec's 1-100 reference values", () => {
-    // On a 1-100 scale sigma ≈ 5.94, mu_top ≈ 76.24, mu_bottom ≈ 58.42.
-    expect(qualitySigma()).toBeCloseTo(5.94, 2);
-    expect(topDivisionMean()).toBeCloseTo(76.24, 2);
-    expect(bottomDivisionMean()).toBeCloseTo(58.42, 2);
+    expect(qualitySigma()).toBeCloseTo(6, 2);
+    expect(topDivisionMean()).toBeCloseTo(73.5, 2);
+    expect(bottomDivisionMean()).toBeCloseTo(55.5, 2);
   });
 });
 
@@ -144,10 +153,9 @@ describe("academy pedigree (spec §22-§24)", () => {
     expect(d4d1).toBeLessThan(d1d1);
   });
 
-  it("maximum pedigree shift is academyPedigreeSigmas·1 = ~1.78 OVR", () => {
+  it("maximum pedigree shift follows the configured academy calibration", () => {
     const pedigree = academyPedigree(1, 1, 5);
-    const shift = academyAdjustedZ(0, pedigree);
-    expect(shift * qualitySigma()).toBeCloseTo(0.3 * qualitySigma(), 10);
+    expect(academyPedigreeOverallOffset(pedigree)).toBeCloseTo(gameConfig.playerGeneration.academyPedigreeOverallBoost, 10);
   });
 });
 
@@ -282,6 +290,27 @@ calibrationDescribe("senior generation (spec §70)", () => {
     expect(Math.abs(means[4] - divisionMean(5, 5))).toBeLessThan(1.5);
   });
 
+  it("calibrates the automatic Division 1 starting XI close to 78 OVR", () => {
+    const clubCount = 1_000;
+    let total = 0;
+    for (let seed = 1; seed <= clubCount; seed++) {
+      const club = makeClub({ id: 100_000 + seed, highestDivision: 1 });
+      const squad = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+        generateSeniorPlayer(seniorCtx({
+          id: slot + 1,
+          clubId: club.id,
+          position,
+          seed,
+          slot,
+        })),
+      );
+      const lineup = buildLineup(club, squad);
+      expect(lineup).not.toBeNull();
+      total += lineup!.starters.reduce((sum, player) => sum + player.overall, 0) / 11;
+    }
+    expect(Math.abs(total / clubCount - 78)).toBeLessThan(0.5);
+  });
+
   it("is deterministic for the same seed/slot and differs across slots", () => {
     const a = generateSeniorPlayer(seniorCtx());
     const b = generateSeniorPlayer(seniorCtx());
@@ -320,9 +349,8 @@ calibrationDescribe("youth generation (spec §71)", () => {
     const age16 = sumOf(generateYouthPlayer, youthCtx({ age: 16, slot: n }), n) / n;
     const age19 = sumOf(generateYouthPlayer, youthCtx({ age: 19, slot: n }), n) / n;
     expect(age19).toBeGreaterThan(age16);
-    // Weakest-academy 16-year-old mean is μ_bottom − G(16,21) ≈ 46.3; the +3σ
-    // tail reaches ≈ 46.3 + 3×5.94 ≈ 64. A top-pedigree academy (D1/D1) shifts
-    // that up further, so a rare elite exceeds the weakest-academy bound.
+    // A top-pedigree academy shifts the weakest-academy distribution upward;
+    // the common ±3σ birth-quality range still produces meaningful outliers.
     const best = (() => {
       let m = 0;
       for (let i = 0; i < n; i++) {
@@ -343,21 +371,56 @@ calibrationDescribe("youth generation (spec §71)", () => {
     expect(topPedigreeBest).toBeGreaterThanOrEqual(best);
     expect(topPedigreeBest).toBeGreaterThan(64);
   });
+
+  it("calibrates a regularly playing Division 1 academy cohort to peak close to 78 OVR", () => {
+    const sampleSize = 1_000;
+    let peakSum = 0;
+    for (let i = 0; i < sampleSize; i++) {
+      const club = makeClub({ id: 200_000 + i, highestDivision: 1 });
+      const player = generateYouthPlayer(youthCtx({
+        id: i + 1,
+        clubId: club.id,
+        position: (i % 5) as Position,
+        age: 16 + (i % 4),
+        seed: 10_000 + i,
+        slot: i,
+      }));
+      player.recentMinutes = [90, 90, 90, 90, 90];
+      let peak = player.overall;
+      for (let season = 0; season < 24 && player.age < 40; season++) {
+        const rng = createRng((i + 1) * 1_000 + season);
+        for (let day = 1; day <= DAYS_PER_YEAR; day++) {
+          applyDevelopment(rng, player, club, day);
+          if (day % 7 === 0) potentialGrowth(rng, player);
+        }
+        aging(rng, player, club);
+        peak = Math.max(peak, player.overall);
+      }
+      peakSum += peak;
+    }
+    expect(Math.abs(peakSum / sampleSize - 78)).toBeLessThan(0.75);
+  });
 });
 
 describe("senior roster template (spec §17)", () => {
-  it("allocates 28 slots as 3 GK / 9 DEF / 9 MID / 7 ATT", () => {
+  it("allocates all five positions for a balanced 28-player roster", () => {
     const template = seniorRosterTemplate(28);
     expect(template).toHaveLength(28);
-    const counts = [0, 0, 0, 0];
+    const counts = [0, 0, 0, 0, 0];
     for (const pos of template) counts[pos]++;
-    expect(counts).toEqual([3, 9, 9, 7]);
+    expect(counts).toEqual([3, 4, 5, 9, 7]);
   });
 
-  it("always sums to the requested size (largest remainder)", () => {
-    for (const size of [20, 28, 30]) {
+  it("keeps every position within one player of its target share", () => {
+    for (const size of [11, 20, 28, 30, 35]) {
       const template = seniorRosterTemplate(size);
       expect(template).toHaveLength(size);
+      const counts = [0, 0, 0, 0, 0];
+      for (const position of template) counts[position]++;
+      expect(counts.every((count) => count > 0)).toBe(true);
+      for (let position = 0; position < counts.length; position++) {
+        expect(Math.abs(counts[position] - SENIOR_POSITION_WEIGHTS[position] * size)).toBeLessThanOrEqual(1);
+      }
     }
   });
 });

@@ -98,6 +98,10 @@ describe("free-agent contract terms (§46)", () => {
 
     // An empty world produces the identical baseline.
     const lonely = freePlayer(rng, 5, { value: 10_000_000, age: 27 });
+    // Different stable generation ids legitimately produce different OVRs;
+    // hold the public salary inputs constant to isolate world composition.
+    lonely.overall = fa.overall;
+    lonely.age = fa.age;
     const emptyWorld = makeWorld([makeClubFn(2)], [lonely]);
     expect(marketSalaryForPlayer(lonely)).toBe(s1);
   });

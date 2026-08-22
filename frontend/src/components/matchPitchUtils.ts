@@ -124,6 +124,15 @@ function spreadY(n: number, i: number): number {
   return Math.round(SPREAD_TOP + (i * (SPREAD_BOTTOM - SPREAD_TOP)) / (n - 1));
 }
 
+const TACTICS_SPREAD_LEFT = 18;
+const TACTICS_SPREAD_RIGHT = 82;
+
+function spreadX(n: number, i: number): number {
+  if (n === 1) return 50;
+  if (n === 2) return 35 + i * 30;
+  return Math.round(TACTICS_SPREAD_LEFT + (i * (TACTICS_SPREAD_RIGHT - TACTICS_SPREAD_LEFT)) / (n - 1));
+}
+
 /**
  * Computes the on-pitch point for every player of one team. Players are placed
  * according to the active formation's layout (variant-aware) and spread evenly
@@ -169,9 +178,70 @@ export function teamPitchPoints(players: LivePlayer[], side: PitchSide, formatio
   return points;
 }
 
+/**
+ * Vertical pitch slot points for the tactics editor. Reuses the same
+ * FORMATION_LAYOUTS but maps horizontal depth (x) to vertical depth (y =
+ * 100 - x) so GK sits at the bottom and attackers at the top, and spreads
+ * each line horizontally. Returns points in the same order as slotTacPos.
+ */
+export function slotPointsForFormation(formationId: number, slotTacPos: number[]): PitchPoint[] {
+  const layout = FORMATION_LAYOUTS[formationId];
+  const out: (PitchPoint | null)[] = new Array(slotTacPos.length).fill(null);
+  const posToIndices = new Map<number, number[]>();
+  slotTacPos.forEach((pos, idx) => {
+    const arr = posToIndices.get(pos) ?? [];
+    arr.push(idx);
+    posToIndices.set(pos, arr);
+  });
+  const handledPos = new Set<number>();
+
+  const placeLine = (tacPoss: number[], y: number) => {
+    const entries: { idx: number; pos: number }[] = [];
+    for (const pos of tacPoss) {
+      const indices = posToIndices.get(pos);
+      if (!indices) continue;
+      for (const idx of indices) {
+        if (out[idx] !== null) continue;
+        entries.push({ idx, pos });
+      }
+    }
+    entries.sort((a, b) => a.pos - b.pos);
+    const n = entries.length;
+    entries.forEach((e, i) => {
+      out[e.idx] = { x: spreadX(n, i), y };
+      handledPos.add(e.pos);
+    });
+  };
+
+  if (layout) {
+    for (const line of layout) {
+      const y = 100 - line.x;
+      placeLine(line.slots, y);
+    }
+  }
+
+  const fallbackGroups = new Map<number, { idx: number; pos: number }[]>();
+  slotTacPos.forEach((pos, idx) => {
+    if (out[idx] !== null) return;
+    if (handledPos.has(pos)) return;
+    const fx = FALLBACK_COLUMN_X[pos] ?? 50;
+    const y = 100 - fx;
+    const arr = fallbackGroups.get(y) ?? [];
+    arr.push({ idx, pos });
+    fallbackGroups.set(y, arr);
+  });
+  for (const [y, arr] of fallbackGroups) {
+    arr.sort((a, b) => a.pos - b.pos);
+    arr.forEach((e, i) => {
+      out[e.idx] = { x: spreadX(arr.length, i), y };
+    });
+  }
+  return out.map((p) => p ?? { x: 50, y: 50 });
+}
+
 export function eventKey(event: LiveEvent): string {
   if (event.sequence !== undefined) return String(event.sequence);
-  return [event.minute, event.half, event.type, event.subtype, event.clubId, event.playerId ?? event.player, event.player2Id ?? event.player2].join(":");
+  return [event.minute, event.addedTime ?? "", event.half, event.type, event.subtype, event.clubId, event.playerId ?? event.player, event.player2Id ?? event.player2].join(":");
 }
 
 function cueKind(event: LiveEvent): PitchCueKind {

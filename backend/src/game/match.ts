@@ -117,6 +117,20 @@ export function createLiveMatchState(
     direction: engineDirection(club.tactics.direction),
     familiarity: 50,
   });
+  // Coin toss: winner kicks off first half, loser kicks off second half. Use the
+  // seeded RNG so the result is deterministic and survives reloads via rngState.
+  const coinTossWinner = (nextInt(rng, 2) as 0 | 1);
+  const withBall = coinTossWinner;
+  const coinTossEvent: MatchEvent = {
+    minute: 0,
+    half: 0,
+    type: EVENT_CODES.COIN_TOSS,
+    subtype: 0,
+    clubId: withBall === 0 ? home.id : away.id,
+    playerId: null,
+    player2Id: null,
+    goalType: 0,
+  };
   return {
     matchId: opts.matchId,
     fixtureId: opts.fixtureId,
@@ -137,13 +151,18 @@ export function createLiveMatchState(
     subbedIn: [[], []],
     scores: [0, 0],
     stats: emptyStats(),
-    events: [],
+    events: [coinTossEvent],
     half: 0,
     minute: 0,
     firstHalfLen: MS.timing.firstHalfEndSeconds / 60,
     secondHalfLen: (MS.timing.regulationSeconds - MS.timing.firstHalfEndSeconds) / 60,
     extraTimePlayed: false,
-    withBall: 0,
+    withBall,
+    coinTossWinner,
+    firstHalfAddedMinutes: 0,
+    secondHalfAddedMinutes: 0,
+    halftimeStartedAt: null,
+    halftimeReady: [false, false],
     possessionCounts: [0, 0],
     playerYellows: {},
     subSlots: { gn: [[-1, -1, -1], [-1, -1, -1]], gm: [[-1, -1, -1, -1], [-1, -1, -1, -1]] },
@@ -206,12 +225,17 @@ function centersFor(players: Player[]): AttributeCenters {
 
 /** True when the match is paused at half-time (no clock running). */
 export function isHalftime(st: LiveMatchState): boolean {
-  return !st.ended && !st.extraTimePlayed && st.matchClockSeconds >= MS.timing.firstHalfEndSeconds &&
-    (st.period === 1 || (st.period === 2 && st.matchClockSeconds === MS.timing.firstHalfEndSeconds));
+  const firstEnd = MS.timing.firstHalfEndSeconds + (st.firstHalfAddedMinutes ?? 0) * 60;
+  // Before added time is computed the raw 2700 still acts as halftime boundary;
+  // once added is frozen the interval extends.
+  const atFirstHalfEnd = st.matchClockSeconds >= firstEnd;
+  return !st.ended && !st.extraTimePlayed && atFirstHalfEnd &&
+    (st.period === 1 || (st.period === 2 && st.matchClockSeconds === firstEnd));
 }
 
 export function isPregame(st: LiveMatchState): boolean {
-  return !st.ended && !st.extraTimePlayed && st.period === 1 && st.matchClockSeconds === 0 && st.events.length === 0;
+  // Coin toss adds an event at 0' so we cannot rely on events.length.
+  return !st.ended && !st.extraTimePlayed && st.period === 1 && st.matchClockSeconds === 0;
 }
 
 function halfTimeReached(st: LiveMatchState): boolean {
@@ -227,6 +251,35 @@ export function livePhase(st: LiveMatchState): string {
   return st.minute === 0 && st.matchClockSeconds > 0 ? "halftime" : "second";
 }
 
+/** Resolve whether a side is controlled by a human (ownerUserId set). */
+function isHumanSide(world: { clubs: Club[] }, clubId: number): boolean {
+  const club = world.clubs.find((c) => c.id === clubId);
+  return !!club?.ownerUserId;
+}
+
+/** Whether this live match involves at least one human team. */
+export function involvesHuman(world: World, st: LiveMatchState): boolean {
+  return isHumanSide(world, st.homeClubId) || isHumanSide(world, st.awayClubId);
+}
+
+/** Mark a human side ready to resume after halftime. Returns true if the match should now resume. */
+export function markHalftimeReady(world: World, st: LiveMatchState, side: 0 | 1): boolean {
+  if (!isHalftime(st)) return false;
+  if (!involvesHuman(world, st)) return true;
+  st.halftimeReady ??= [false, false];
+  st.halftimeReady[side] = true;
+  const needsHome = isHumanSide(world, st.homeClubId);
+  const needsAway = isHumanSide(world, st.awayClubId);
+  const homeReady = !needsHome || st.halftimeReady[0];
+  const awayReady = !needsAway || st.halftimeReady[1];
+  return homeReady && awayReady;
+}
+
+export function clearHalftimeState(st: LiveMatchState): void {
+  st.halftimeStartedAt = null;
+  st.halftimeReady = [false, false];
+}
+
 export function tickLiveMatch(
   rng: RngState,
   home: Club,
@@ -240,23 +293,29 @@ export function tickLiveMatch(
   const centers = centersFor(allPlayers);
   // Pause at half-time for human viewers unless resuming.
   if (!opts?.ignoreHalfTime && !opts?.resume && halfTimeReached(st)) {
+    // Initialize wall-clock halftime anchor for human matches (world.ts is authoritative,
+    // but a direct tick via routes/ws should also stamp it so the countdown is visible).
+    if (st.halftimeStartedAt == null) st.halftimeStartedAt = Date.now();
     return { events: [], finished: false, atHalfTime: true };
   }
-  // Cap: a regular match cannot be advanced past full time.
-  const regSeconds = MS.timing.regulationSeconds;
+  // If resuming, clear the halftime wall-clock state.
+  if (opts?.resume && isHalftime(st)) {
+    clearHalftimeState(st);
+  }
   const atPeriod1 = st.period === 1;
   const startClock = st.matchClockSeconds ?? 0;
-  const target = Math.min(regSeconds, startClock + minutes * 60);
-  // Pause exactly at the first-half boundary unless told to pass it.
-  const firstHalfSeconds = MS.timing.firstHalfEndSeconds;
-  let effectiveTarget = target;
-  if (atPeriod1 && startClock < firstHalfSeconds && target >= firstHalfSeconds && !opts?.ignoreHalfTime && !opts?.resume) {
-    effectiveTarget = firstHalfSeconds;
-  }
-  advancePossessionMatch(rng, home, away, allPlayers, st, Math.max(0, (effectiveTarget - startClock) / 60), centers);
+  // Total regulation end including any already-frozen added time (first + second).
+  const totalRegSeconds = MS.timing.regulationSeconds + (st.firstHalfAddedMinutes ?? 0) * 60 + (st.secondHalfAddedMinutes ?? 0) * 60;
+  const target = Math.min(totalRegSeconds, startClock + minutes * 60);
+  const rawFirst = MS.timing.firstHalfEndSeconds;
+  const pauseAtHalftime = atPeriod1 && !opts?.ignoreHalfTime && !opts?.resume && target >= rawFirst;
+
+  advancePossessionMatch(rng, home, away, allPlayers, st, Math.max(0, (target - startClock) / 60), centers, { pauseAtHalftime });
   const newEvents = st.events.slice(beforeEvents);
   const finished = st.ended;
   const atHalfTime = isHalftime(st);
+  // Stamp halftime wall-clock on entry so the UI can show a countdown even before the worker ticks again.
+  if (atHalfTime && st.halftimeStartedAt == null) st.halftimeStartedAt = Date.now();
   return { events: newEvents, finished, atHalfTime };
 }
 

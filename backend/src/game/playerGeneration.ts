@@ -16,8 +16,8 @@ import { gameConfig } from "../config";
  * same canonical generator is reused by every creation path (new human club,
  * AI filler, replacement, league expansion).
  *
- * The three tuning knobs live in gameConfig.playerGeneration; every other
- * constant below is a Version 1 fixed statistical constant from the spec.
+ * The tuning knobs live in gameConfig.playerGeneration; every other constant
+ * below is a fixed statistical constant from the spec.
  */
 
 // ---------------------------------------------------------------------------
@@ -26,7 +26,6 @@ import { gameConfig } from "../config";
 
 export const PLAYER_Z_MIN = -3.0;
 export const PLAYER_Z_MAX = 3.0;
-export const TOP_DIVISION_HEADROOM_SIGMAS = 4.0;
 export const DIVISION_CURVE_K = 0.5;
 export const ACADEMY_CURRENT_WEIGHT = 0.65;
 export const ACADEMY_HISTORY_WEIGHT = 0.35;
@@ -43,19 +42,19 @@ export function overallRange(): number {
   return OVR_MAX - OVR_MIN;
 }
 
-/** Individual quality spread: sigma = spreadFraction * R (spec §6/§77). */
+/** Individual quality standard deviation expressed directly in OVR points. */
 export function qualitySigma(): number {
-  return gameConfig.playerGeneration.playerQualitySpreadFraction * overallRange();
+  return gameConfig.playerGeneration.playerQualitySpreadOverall;
 }
 
-/** Top-division senior mean: OVR_MAX - 4σ (spec §8). */
+/** Designer-controlled top-division senior mean (spec §8). */
 export function topDivisionMean(): number {
-  return OVR_MAX - TOP_DIVISION_HEADROOM_SIGMAS * qualitySigma();
+  return gameConfig.playerGeneration.topDivisionMeanOverall;
 }
 
-/** Bottom-division senior mean: μ_top - 3σ (spec §9). */
+/** Bottom-division senior mean: top mean minus the configured OVR span. */
 export function bottomDivisionMean(): number {
-  return topDivisionMean() - gameConfig.playerGeneration.divisionSpanSigmas * qualitySigma();
+  return topDivisionMean() - gameConfig.playerGeneration.divisionOverallSpan;
 }
 
 /**
@@ -72,9 +71,9 @@ export function divisionStrength(division: number, totalDivisions: number): numb
   return Math.max(0, Math.min(1, s));
 }
 
-/** Division mean μ(D) = μ_bottom + 3σ·S(D) (spec §11). */
+/** Division mean μ(D) = μ_bottom + divisionOverallSpan·S(D) (spec §11). */
 export function divisionMean(division: number, totalDivisions: number): number {
-  return bottomDivisionMean() + gameConfig.playerGeneration.divisionSpanSigmas * qualitySigma() * divisionStrength(division, totalDivisions);
+  return bottomDivisionMean() + gameConfig.playerGeneration.divisionOverallSpan * divisionStrength(division, totalDivisions);
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +89,9 @@ export function academyPedigree(currentDivision: number, highestDivisionReached:
   return Math.max(0, Math.min(1, ACADEMY_CURRENT_WEIGHT * sCurrent + ACADEMY_HISTORY_WEIGHT * sHistory));
 }
 
-/** Academy-adjusted quality score ZA = Z + academyPedigreeSigmas·PA (spec §23). */
-export function academyAdjustedZ(rawZ: number, pedigree: number): number {
-  return rawZ + gameConfig.playerGeneration.academyPedigreeSigmas * pedigree;
+/** Direct OVR mean offset supplied by academy pedigree (spec §23). */
+export function academyPedigreeOverallOffset(pedigree: number): number {
+  return gameConfig.playerGeneration.academyPedigreeOverallBoost * pedigree;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,8 +161,9 @@ export function initialPotential(overall: number, age: number, declineStartAge: 
 
 /**
  * Map a raw (unshifted) birth-quality Z to a hidden growth tier 1..5 using
- * exact standard normal percentile thresholds. Raw Z — not ZA — keeps academy
- * pedigree from indirectly modifying future development. The tier is a server-
+ * exact standard normal percentile thresholds. Raw Z — without the academy
+ * pedigree OVR offset — keeps pedigree from indirectly modifying future
+ * development. The tier is a server-
  * private development input only: it is never stored on the player and never
  * exposed through any API view.
  */
@@ -407,7 +407,7 @@ export function generateSkillsForTarget(rng: RngState, position: Position, targe
 // ---------------------------------------------------------------------------
 
 /** Deterministic largest-remainder allocation of `total` slots across weights. */
-export function allocateSlots(weights: number[], total: number): number[] {
+export function allocateSlots(weights: readonly number[], total: number): number[] {
   const weightSum = weights.reduce((a, b) => a + b, 0);
   const exact = weights.map((w) => (w / weightSum) * total);
   const allocated = exact.map((x) => Math.floor(x));
@@ -420,9 +420,9 @@ export function allocateSlots(weights: number[], total: number): number[] {
   return allocated;
 }
 
-/** Canonical senior position weights: GK 10% / DEF 32% / MID 32% / ATT 26%. */
-export const SENIOR_POSITION_WEIGHTS = [0.1, 0.32, 0.32, 0.26];
-const POSITION_GROUPS: Position[] = [0, 1, 2, 3, 4];
+/** Canonical senior weights: GK 10% / FB 14% / CB 18% / MF 32% / FW 26%. */
+export const SENIOR_POSITION_WEIGHTS = [0.1, 0.14, 0.18, 0.32, 0.26] as const;
+const POSITION_GROUPS: readonly Position[] = [0, 1, 2, 3, 4];
 
 /**
  * Build the senior roster position template using the canonical weights via the
@@ -431,6 +431,9 @@ const POSITION_GROUPS: Position[] = [0, 1, 2, 3, 4];
  */
 export function seniorRosterTemplate(total: number): Position[] {
   const counts = allocateSlots(SENIOR_POSITION_WEIGHTS, total);
+  if (counts.length !== POSITION_GROUPS.length) {
+    throw new Error("Senior position weights must cover every position group");
+  }
   const roster: Position[] = [];
   for (let i = 0; i < counts.length; i++) {
     for (let j = 0; j < counts[i]; j++) roster.push(POSITION_GROUPS[i]);
@@ -594,9 +597,8 @@ export function generateYouthPlayer(ctx: GeneratePlayerContext): Player {
   const rawZ = drawRawZ(rng);
   const age = ctx.age ?? drawYouthAge(rng);
   const pedigree = academyPedigree(ctx.currentDivision, ctx.highestDivisionReached, ctx.totalDivisions);
-  const zA = academyAdjustedZ(rawZ, pedigree);
   const muAge = youthDivisionMeanForAge(age);
-  const target = muAge + qualitySigma() * zA;
+  const target = muAge + qualitySigma() * rawZ + academyPedigreeOverallOffset(pedigree);
   const { skills, c1, c2 } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
   const actualOverall = overallFromSkills(ctx.position, skills);
   const profile = generateDevelopmentProfile(rng);

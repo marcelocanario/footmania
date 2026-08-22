@@ -6,7 +6,7 @@ import type {
   Match,
   World,
 } from "./types";
-import { createLiveMatchState, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch } from "./match";
+import { createLiveMatchState, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, isHalftime } from "./match";
 import { updateStandings } from "./league";
 import { MP_CONFIG } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
@@ -120,6 +120,36 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
     const home = findClub(world, st.homeClubId);
     const away = findClub(world, st.awayClubId);
     if (!home || !away) continue;
+
+    // -----------------------------------------------------------------------
+    // Halftime wall-clock pause (human-involving only, skippable via both-ready)
+    // -----------------------------------------------------------------------
+    if (isHalftime(st)) {
+      const involvesHuman = !!home.ownerUserId || !!away.ownerUserId;
+      if (involvesHuman) {
+        st.halftimeStartedAt ??= now;
+        st.halftimeReady ??= [false, false];
+        st.lastAdvancedAt ??= now;
+        const pauseMs = MP_CONFIG.halftimePauseMinutes * 60 * 1000;
+        const homeReady = !home.ownerUserId || !!st.halftimeReady[0];
+        const awayReady = !away.ownerUserId || !!st.halftimeReady[1];
+        const bothReady = homeReady && awayReady;
+        const wallElapsed = now - (st.halftimeStartedAt ?? now) >= pauseMs;
+        if (!bothReady && !wallElapsed) {
+          // Keep pacing frozen so the 5-min wall interval is not counted as match minutes.
+          st.lastAdvancedAt = st.halftimeStartedAt ?? now;
+          continue;
+        }
+        // Resume: both ready or wall time elapsed.
+        tickLiveMatch(world.rng, home, away, world.players, st, 1, { resume: true });
+        st.lastAdvancedAt = now;
+        st.halftimeStartedAt = null;
+        st.halftimeReady = [false, false];
+        // Second half starts on the next worker tick to keep pacing exact.
+        continue;
+      }
+    }
+
     const last = st.lastAdvancedAt ?? now;
     const elapsedMs = Math.max(0, now - last);
     const wholeMinutes = Math.floor(elapsedMs / realMsPerMatchMinute);
@@ -128,17 +158,31 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
     const clockSeconds = typeof st.matchClockSeconds === "number"
       ? st.matchClockSeconds
       : ((st.half === 1 ? st.firstHalfLen : 0) + st.minute) * 60;
-    const remainingMinutes = Math.max(0, (MS.timing.regulationSeconds - clockSeconds) / 60);
+    const totalRegulation = MS.timing.regulationSeconds + (st.firstHalfAddedMinutes ?? 0) * 60 + (st.secondHalfAddedMinutes ?? 0) * 60;
+    const remainingMinutes = Math.max(0, (totalRegulation - clockSeconds) / 60);
     const minutes = Math.min(wholeMinutes, Math.max(1, Math.ceil(remainingMinutes)));
     // Advance one match-minute at a time so per-minute automation triggers fire correctly
     // even when catching up after downtime (otherwise a 10-minute catch-up would skip 9 minutes of rules).
     for (let iter = 0; iter < minutes; iter++) {
       if (st.ended) break;
+      // During halftime we already handled the pause above; for normal play we
+      // auto-play through the halftime boundary only for AI vs AI (human pause
+      // is handled explicitly). Using ignoreHalfTime lets the engine cross the
+      // boundary and flip period; the wall-clock gate above decides whether to
+      // allow that crossing.
+      const atHalftimeNow = isHalftime(st);
+      const ignore = atHalftimeNow ? (!home.ownerUserId && !away.ownerUserId) : true;
       const beforeLen = st.events.length;
-      tickLiveMatch(world.rng, home, away, world.players, st, 1, { ignoreHalfTime: true });
+      tickLiveMatch(world.rng, home, away, world.players, st, 1, { ignoreHalfTime: ignore });
       const newEvents = st.events.slice(beforeLen);
       // Automation is human-only and retry-safe via st.automationFiredRuleIds.
       processAutomation(world, st, newEvents);
+      // If we just entered halftime via this tick, stamp the wall-clock and pause.
+      if (isHalftime(st) && st.halftimeStartedAt == null) {
+        st.halftimeStartedAt = Date.now();
+        st.lastAdvancedAt = Date.now();
+        break;
+      }
     }
     // The match is now fully simulated up to the real time that `minutes`
     // match-minutes represent. Any sub-minute fraction of the elapsed window

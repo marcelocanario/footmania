@@ -12,7 +12,7 @@ import { cancelLoanListing, claimLoan, claimableInSeconds, offerPlayerForLoan } 
 import { getCommitmentTotals, getImmediateAvailableCash, financialState, remainingSeasonFraction } from "../game/finance";
 import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from "../game/economy";
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
-import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
+import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { roundLabelFor, findCompetition } from "../game/world";
 import { recordActivity } from "../game/multiplayer";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
@@ -150,6 +150,7 @@ export async function gameRoutes(app: FastifyInstance) {
       clubId: e.clubId,
       player: e.playerId ? loaded.world.players.find((p) => p.id === e.playerId)?.name ?? "" : "",
       player2: e.player2Id ? loaded.world.players.find((p) => p.id === e.player2Id)?.name ?? "" : "",
+      addedTime: (e as { addedTime?: number }).addedTime ?? null,
     }));
     return {
       match: {
@@ -194,6 +195,22 @@ export async function gameRoutes(app: FastifyInstance) {
     return replyFrom(res, reply);
   });
 
+  app.post("/matches/:id/halftime/ready", async (req, reply) => {
+    const matchId = Number((req.params as { id: string }).id);
+    const res = await withWorld(app, req.user!.id, "halftime_ready", async (world, clubId) => {
+      const st = world.liveMatches.find((s) => s.matchId === matchId);
+      if (!st) return { error: { code: 404, body: { error: "No live match in progress" } } };
+      if (!isHalftime(st)) return { error: { code: 400, body: { error: "Match is not at halftime" } } };
+      if (st.homeClubId !== clubId && st.awayClubId !== clubId) {
+        return { error: { code: 403, body: { error: "You are not a participant in this match" } } };
+      }
+      const side = st.homeClubId === clubId ? 0 : 1;
+      markHalftimeReady(world, st, side as 0 | 1);
+      return { value: { ok: true, state: liveStateView(world, st, req.user!.id) } };
+    });
+    return replyFrom(res, reply);
+  });
+
   app.get("/club/lineup", async (req, reply) => {
     const loaded = await loadGlobalWorld(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });
@@ -232,7 +249,7 @@ export async function gameRoutes(app: FastifyInstance) {
       slots: FORMATION_POSITIONS[formation] ?? FORMATION_POSITIONS[4],
       squad: players
         .sort((a, b) => b.overall - a.overall)
-        .map((p) => ({ id: p.id, name: p.name, position: p.position, overall: p.overall, tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "", injuryDays: p.injuryDays, suspended: p.suspendedGames > 0 })),
+        .map((p) => ({ id: p.id, name: p.name, position: p.position, overall: p.overall, energy: p.energy, tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "", injuryDays: p.injuryDays, suspended: p.suspendedGames > 0 })),
     };
   });
 

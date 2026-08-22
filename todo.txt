@@ -49,6 +49,7 @@ UI:
 		in the live match UI, use the appropriate jerseys instead of the circles
 	modify the tactics screen. I want something that looks like this: https://league-builder.app/lineup-creator
 	give the ability to hold shift and select multiple time slots at once in the "Matchday schedule" screen
+	add a nationality flag for players (not users, actual players)
 
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
@@ -79,6 +80,7 @@ Multiplayer:
 Technical/housekeeping:
 	create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.
 		implement full visibility to admin of what is scheduled to happen in each "tick". allow admin to trigger any scheduled event ahead of time (immediately), for testing purposes
+		create analytics, such as average player quality per division (real) vs projected (using our back-end formula). think of other relevant metrics like that
 	[DONE] remove stadium
 	remove fan support level
 	migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)

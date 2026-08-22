@@ -237,6 +237,7 @@ model Club {
   // Automation presets (JSON array of presets, each tied to a formation).
   automationPresetsJson String?
   coachName        String
+  coachNameChangedSeasonKey String?
   isHuman          Boolean
   captainId        Int?
   penaltyTakerId   Int?

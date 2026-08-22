@@ -210,22 +210,32 @@ export function refreshPlayerDerived(club: Club, player: Player): void {
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
 }
 
+function retirementRollThreshold(age: number, position: Position): number {
+  if (age <= 32) return 100;
+  const retirementAge = position === 0 ? age - 3 : age;
+  if (retirementAge < 32) return 100;
+  if (retirementAge === 32) return 99;
+  if (retirementAge <= 34) return 90;
+  if (retirementAge <= 35) return 55;
+  if (retirementAge <= 36) return 30;
+  if (retirementAge <= 38) return 15;
+  if (retirementAge <= 39) return 5;
+  if (retirementAge <= 40) return 3;
+  if (retirementAge <= 42) return 2;
+  if (retirementAge <= 48) return 1;
+  return 0;
+}
+
+/** Exact season-end retirement probability used by simulation and intake planning. */
+export function retirementProbability(age: number, position: Position): number {
+  return (100 - retirementRollThreshold(age, position)) / 100;
+}
+
 export function shouldRetire(rng: RngState, player: Player): boolean {
+  // Preserve the historical RNG stream: players aged 32 or younger never draw.
   if (player.age <= 32) return false;
-  let age = player.age;
-  if (player.position === 0) age -= 3;
   const roll = nextInt(rng, 100) + 1;
-  if (age < 32) return false;
-  if (age === 32) return roll > 99;
-  if (age <= 34) return roll > 90;
-  if (age <= 35) return roll > 55;
-  if (age <= 36) return roll > 30;
-  if (age <= 38) return roll > 15;
-  if (age <= 39) return roll > 5;
-  if (age <= 40) return roll > 3;
-  if (age <= 42) return roll > 2;
-  if (age <= 48) return roll > 1;
-  return true;
+  return roll > retirementRollThreshold(player.age, player.position);
 }
 
 export function injuryDays(rng: RngState, player: Player): number {

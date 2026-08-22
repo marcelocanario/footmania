@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowDownRight, ArrowUpRight, Wallet, Building2, TrendingDown } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, Clock3, Wallet } from "lucide-react";
 import { api, type FinanceDetails, type FinanceSnapshot, type LedgerEntry } from "../api/client";
+import { Segmented } from "../components/Segmented";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { money } from "../format";
@@ -8,8 +9,11 @@ import { money } from "../format";
 const STATUS_LABEL: Record<FinanceSnapshot["status"], string> = {
   SAFE: "SAFE",
   AT_RISK: "AT RISK",
-  NEGATIVE_CASH: "FINANCIAL EMERGENCY",
+  NEGATIVE_CASH: "EMERGENCY",
 };
+
+type ActivityFilter = "all" | "income" | "expense";
+type Activity = LedgerEntry & { direction: Exclude<ActivityFilter, "all"> };
 
 export function Finances() {
   const { snapshot } = useGame();
@@ -17,6 +21,7 @@ export function Finances() {
   const [expense, setExpense] = useState<LedgerEntry[]>([]);
   const [details, setDetails] = useState<FinanceDetails | null>(null);
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("all");
 
   useEffect(() => {
     void (async () => {
@@ -29,137 +34,147 @@ export function Finances() {
   }, [snapshot?.club?.cash]);
 
   const club = snapshot?.club;
+  const activity = useMemo(() => {
+    const entries: Activity[] = [
+      ...income.map((entry) => ({ ...entry, direction: "income" as const })),
+      ...expense.map((entry) => ({ ...entry, direction: "expense" as const })),
+    ];
+    return entries
+      .filter((entry) => activityFilter === "all" || entry.direction === activityFilter)
+      .sort((a, b) => b.day - a.day || b.amount - a.amount);
+  }, [activityFilter, expense, income]);
 
-  const ledgerRow = (e: LedgerEntry, positive: boolean) => (
-    <div key={`${e.day}-${e.label}-${e.amount}`} className="news-item">
-      <span className="day">Day {e.day}</span>
-      <span style={{ flex: 1 }}>{e.label}</span>
-      <b style={{ color: positive ? "var(--grass-2)" : "var(--red-2)", fontFamily: "var(--font-display)", letterSpacing: "0.03em" }}>
-        {positive ? "+" : "−"}{money(e.amount)}
-      </b>
-    </div>
-  );
+  const status = finance?.status ?? "SAFE";
+  const statusTone = status === "SAFE" ? "good" : status === "AT_RISK" ? "mid" : "bad";
 
   return (
-    <div>
-      <div className="page-head">
+    <div className="finances-page">
+      <div className="page-head fin-page-head">
         <div>
-          <div className="kicker">{strings.finances.title}</div>
+          <div className="kicker">Club office</div>
           <h1>{strings.finances.title}</h1>
         </div>
-      </div>
-
-      <div className="stats-row stagger">
-        <div className="card" style={{ flex: 1 }}>
-          <div className="label" style={{ color: "var(--text-3)", fontSize: "0.76rem", textTransform: "uppercase", letterSpacing: "0.11em", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Wallet size={12} /> {strings.dashboard.cash}
-          </div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "2.3rem", fontWeight: 800, marginTop: 6, color: (club?.cash ?? 0) >= 0 ? "var(--grass-2)" : "var(--red-2)" }}>
-            {money(club?.cash ?? 0)}
-          </div>
-          <div className="hint">{club?.stadiumName}</div>
-        </div>
-
-        <div className="card" style={{ flex: 1 }}>
-          <div className="label" style={{ color: "var(--text-3)", fontSize: "0.76rem", textTransform: "uppercase", letterSpacing: "0.11em", display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Building2 size={12} /> Stadium
-          </div>
-          <div style={{ fontFamily: "var(--font-display)", fontSize: "1.4rem", fontWeight: 800, marginTop: 6 }}>{club?.stadiumName}</div>
-        </div>
-      </div>
-
-      <div className="card stagger" style={{ marginTop: 16 }}>
-        <div className="kicker" style={{ marginBottom: 8 }}>Financial cushion</div>
-        <div className="grid cols-2" style={{ gap: 6, maxWidth: 560 }}>
-          <span className="hint">Reserved bids</span>
-          <b style={{ textAlign: "right", color: "var(--gold-2)" }}>{money(finance?.activeBidCommitments ?? 0)}</b>
-          <span className="hint">Remaining season salaries</span>
-          <b style={{ textAlign: "right", color: "var(--gold-2)" }}>{money(finance?.remainingSalaryCommitments ?? 0)}</b>
-          {finance && finance.contingentSalary > 0 && (
-            <>
-              <span className="hint">Contingent (leading bids)</span>
-              <b style={{ textAlign: "right", color: "var(--gold-2)" }}>{money(finance.contingentSalary)}</b>
-            </>
-          )}
-          <span className="hint" style={{ borderTop: "1px solid var(--line, #333)", paddingTop: 6 }}>Financial cushion</span>
-          <b
-            style={{
-              textAlign: "right",
-              borderTop: "1px solid var(--line, #333)",
-              paddingTop: 6,
-              fontFamily: "var(--font-display)",
-              fontSize: "1.15rem",
-              color: (finance?.financialCushion ?? 0) >= 0 ? "var(--grass-2)" : "var(--red-2)",
-            }}
-          >
-            {money(finance?.financialCushion ?? 0)}
-          </b>
-        </div>
         {finance && (
-          <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span className={`chip ${finance.status === "SAFE" ? "" : ""}`} style={statusChipStyle(finance.status)}>
-              Status: {STATUS_LABEL[finance.status]}
+          <div className="fin-head-meta">
+            <span className={`chip fin-status ${statusTone}`}>
+              <i className="dot" /> {STATUS_LABEL[status]}
             </span>
             {finance.nextPayroll !== null && (
-              <span className="hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                <TrendingDown size={13} /> Next payroll: {formatPayroll(finance.nextPayroll)}
+              <span className="chip">
+                <Clock3 size={13} /> Payroll in {formatPayroll(finance.nextPayroll)}
               </span>
             )}
           </div>
         )}
+      </div>
+
+      <div className="fin-stat-grid stagger">
+        <div className="stat fin-stat fin-stat-primary">
+          <div className="label"><Wallet size={13} /> Cash</div>
+          <div className={`value ${club?.cash !== undefined && club.cash < 0 ? "negative" : "positive"}`}>{money(club?.cash ?? 0)}</div>
+          <div className="hint">Current club balance</div>
+        </div>
+        <div className="stat fin-stat">
+          <div className="label">Available now</div>
+          <div className={`value ${(finance?.immediateAvailableCash ?? 0) < 0 ? "negative" : "positive"}`}>{money(finance?.immediateAvailableCash ?? 0)}</div>
+          <div className="hint">After reserved bids</div>
+        </div>
+        <div className="stat fin-stat">
+          <div className="label">Reserved bids</div>
+          <div className="value gold">{money(finance?.activeBidCommitments ?? 0)}</div>
+          <div className="hint">Held for active offers</div>
+        </div>
+        <div className="stat fin-stat">
+          <div className="label">Season salaries</div>
+          <div className="value gold">{money(finance?.remainingSalaryCommitments ?? 0)}</div>
+          <div className="hint">Remaining commitment</div>
+        </div>
+      </div>
+
+      <section className="card fin-commitments stagger" aria-labelledby="commitments-title">
+        <div className="fin-section-head">
+          <div>
+            <div className="kicker">Financial control</div>
+            <h2 id="commitments-title">Commitments</h2>
+          </div>
+          <span className={`fin-cushion-badge ${statusTone}`}>{STATUS_LABEL[status]}</span>
+        </div>
+
+        <div className="fin-breakdown">
+          <div className="fin-row">
+            <span>Reserved bids</span>
+            <b className="gold">{money(finance?.activeBidCommitments ?? 0)}</b>
+          </div>
+          <div className="fin-row">
+            <span>Remaining season salaries</span>
+            <b className="gold">{money(finance?.remainingSalaryCommitments ?? 0)}</b>
+          </div>
+          {!!finance?.contingentSalary && (
+            <div className="fin-row">
+              <span>Contingent salaries</span>
+              <b className="gold">{money(finance.contingentSalary)}</b>
+            </div>
+          )}
+          <div className="fin-row fin-total">
+            <span>Financial cushion</span>
+            <b className={finance?.financialCushion !== undefined && finance.financialCushion < 0 ? "negative" : "positive"}>
+              {money(finance?.financialCushion ?? 0)}
+            </b>
+          </div>
+        </div>
+
         {finance && finance.status !== "SAFE" && (
-          <div className="card" style={{ marginTop: 12, padding: 12, fontSize: "0.9rem", color: "var(--red-2)", background: "var(--red-1, #2a1515)" }}>
-            <AlertTriangle size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
-            {club?.competitionState === "PROVISIONAL"
-              ? `Your funded upcoming-season salary commitments currently exceed available funds. Salaries are frozen while the club is provisional; the warning will be recalculated when the club activates.`
-              : finance.status === "NEGATIVE_CASH"
-              ? `Current cash: ${money(club?.cash ?? 0)}. If the club is still in a negative cash position when the next payroll cycle is processed, a financial intervention may force players to leave.`
-              : `Your current cash does not cover your existing bids and remaining salary commitments through season end. Future income may improve this position, but if your cash balance becomes negative and remains negative until a later payroll cycle, players may be forced to leave the club.`}
+          <div className={`fin-callout ${statusTone}`}>
+            <AlertTriangle size={16} />
+            <span>{warningCopy(finance.status, club?.competitionState, club?.cash ?? 0)}</span>
           </div>
         )}
-      </div>
+      </section>
 
-      <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
-        <div className="card">
-          <h2 className="card-title">Club operations</h2>
-          <div className="hint" style={{ marginTop: 12 }}>Coach: {club?.coachName}</div>
-          {details && details.records.length > 0 && (
-            <div className="hint" style={{ marginTop: 12 }}>{details.records.length} club records on file</div>
-          )}
-        </div>
-        <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-3)" }}>
-          <span className="hint">More club facilities are planned for a future season.</span>
-        </div>
-      </div>
-
-      <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
-        <div className="card">
-          <h2 className="card-title" style={{ color: "var(--grass-2)" }}>
-            <ArrowUpRight size={17} /> {strings.finances.income}
-          </h2>
-          <div className="news-list">
-            {income.length === 0 && <div className="empty-state" style={{ padding: "24px 10px" }}>No income yet</div>}
-            {income.map((e) => ledgerRow(e, true))}
+      <section className="card fin-activity stagger" aria-labelledby="activity-title">
+        <div className="fin-section-head fin-activity-head">
+          <div>
+            <div className="kicker">Club ledger</div>
+            <h2 id="activity-title">Recent activity</h2>
           </div>
+          <Segmented
+            value={activityFilter}
+            onChange={setActivityFilter}
+            items={[
+              { value: "all", label: "All", count: income.length + expense.length },
+              { value: "income", label: "Income", icon: <ArrowUpRight size={13} />, count: income.length },
+              { value: "expense", label: "Expenses", icon: <ArrowDownRight size={13} />, count: expense.length },
+            ]}
+          />
         </div>
-        <div className="card">
-          <h2 className="card-title" style={{ color: "var(--red-2)" }}>
-            <ArrowDownRight size={17} /> {strings.finances.expense}
-          </h2>
-          <div className="news-list">
-            {expense.length === 0 && <div className="empty-state" style={{ padding: "24px 10px" }}>No expenses yet</div>}
-            {expense.map((e) => ledgerRow(e, false))}
-          </div>
+        <div className="fin-ledger-list">
+          {activity.length === 0 && <div className="empty-state fin-empty">No activity in this view</div>}
+          {activity.map((entry, index) => (
+            <div key={`${entry.day}-${entry.code}-${entry.label}-${index}`} className="news-item fin-ledger-row">
+              <span className="day">Day {entry.day}</span>
+              <span className="fin-ledger-label">{entry.label}</span>
+              <b className={entry.direction === "income" ? "positive" : "negative"}>
+                {entry.direction === "income" ? "+" : "−"}{money(entry.amount)}
+              </b>
+            </div>
+          ))}
         </div>
-      </div>
+        {details && details.records.length > 0 && (
+          <div className="fin-ledger-foot">{details.records.length} club records archived separately</div>
+        )}
+      </section>
     </div>
   );
 }
 
-function statusChipStyle(status: FinanceSnapshot["status"]): React.CSSProperties {
-  if (status === "NEGATIVE_CASH") return { color: "var(--red-2)", borderColor: "var(--red-2)" };
-  if (status === "AT_RISK") return { color: "var(--gold-2)", borderColor: "var(--gold-2)" };
-  return { color: "var(--grass-2)", borderColor: "var(--grass-2)" };
+function warningCopy(status: FinanceSnapshot["status"], competitionState: string | undefined, cash: number): string {
+  if (competitionState === "PROVISIONAL") {
+    return "Upcoming-season salary commitments exceed available funds. Salaries are frozen while the club is provisional; this warning will be recalculated when the club activates.";
+  }
+  if (status === "NEGATIVE_CASH") {
+    return `Current cash: ${money(cash)}. If the balance is still negative at the next payroll, a financial intervention may force players to leave.`;
+  }
+  return "Current cash does not cover existing bids and remaining salary commitments through season end. Keep an eye on your balance before making new commitments.";
 }
 
 function formatPayroll(ts: number): string {

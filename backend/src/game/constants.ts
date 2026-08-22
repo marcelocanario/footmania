@@ -87,6 +87,7 @@ export const EVENT_CODES = {
   SUB: 6,
   MISSED_PENALTY: 7,
   ASSIST: 8,
+  COIN_TOSS: 9,
 };
 
 export const GOAL_SUBTYPES = {

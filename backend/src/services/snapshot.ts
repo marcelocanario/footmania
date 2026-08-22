@@ -7,6 +7,7 @@ import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 import { resolveClubKits } from "../game/kits";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
+import { seasonKey } from "../game/clock";
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
   const nick = (p.nickname ?? "").trim();
@@ -194,6 +195,9 @@ export function buildSnapshot(world: World, clubId: number) {
           logoVariant: club.logoVariant ?? 0,
           hasCustomLogo: Boolean(club.customLogo && club.customLogo.status === "ACTIVE"),
           coachName: club.coachName,
+          coachEditAllowed:
+            !club.coachNameChangedSeasonKey ||
+            club.coachNameChangedSeasonKey !== seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth }),
           trainingFocus: club.trainingFocus,
           competitionState: club.competitionState,
           // Financial snapshot (financial-control §55): the derived cushion and

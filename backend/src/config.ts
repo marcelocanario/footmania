@@ -67,15 +67,16 @@ const gameConfigSchema = z
   renewalAgeCurve: ageCurveSchema,
     releaseClauseRemainingValuePct: nonNegativeNumber,
     playerGeneration: z.object({
-      playerQualitySpreadFraction: nonNegativeNumber,
-      divisionSpanSigmas: nonNegativeNumber,
-      academyPedigreeSigmas: nonNegativeNumber,
+      topDivisionMeanOverall: z.number().min(1).max(100).default(76.24),
+      playerQualitySpreadOverall: z.number().min(0).max(99).default(6),
+      divisionOverallSpan: z.number().min(0).max(99).default(18),
+      academyPedigreeOverallBoost: z.number().min(0).max(99).default(25.5),
     }),
     playerGenerationRules: z.object({
-      initialSeniorSquadSize: z.number().int().min(1),
-      initialAcademySize: z.number().int().min(1),
+      initialSeniorSquadSize: z.number().int().min(11),
+      initialAcademySize: z.number().int().min(5),
       academyRosterLimit: z.number().int().min(1),
-      seasonalAcademyIntake: z.number().int().min(0),
+      seasonalAcademyIntake: z.union([nonNegativeNumber, z.literal("auto")]),
       academyMinAge: z.number().int().min(1),
       academyMaxAge: z.number().int().min(1),
       academyPromotionAge: z.number().int().min(1),
@@ -102,6 +103,15 @@ const gameConfigSchema = z
           }),
       })
       .optional(),
+    // Live match pacing (wall-clock). Promoted from MP_CONFIG so designers can
+    // tune without code changes. Optional with defaults for backward compat.
+    liveMatch: z
+      .object({
+        matchDurationMinutes: z.number().int().min(1).max(60),
+        halftimePauseMinutes: z.number().int().min(0).max(30),
+      })
+      .partial()
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
@@ -123,6 +133,20 @@ const gameConfigSchema = z
         code: z.ZodIssueCode.custom,
         message: `league.teams (${cfg.league.teams}) must be even`,
         path: ["league", "teams"],
+      });
+    }
+    if (cfg.playerGenerationRules.academyPromotionAge <= cfg.playerGenerationRules.academyMaxAge) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `academyPromotionAge (${cfg.playerGenerationRules.academyPromotionAge}) must be > academyMaxAge (${cfg.playerGenerationRules.academyMaxAge})`,
+        path: ["playerGenerationRules"],
+      });
+    }
+    if (cfg.playerGeneration.divisionOverallSpan > cfg.playerGeneration.topDivisionMeanOverall - 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `divisionOverallSpan (${cfg.playerGeneration.divisionOverallSpan}) must keep the bottom-division mean at or above 1`,
+        path: ["playerGeneration", "divisionOverallSpan"],
       });
     }
     const roundsPerSeason = cfg.league.turns * (cfg.league.teams - 1);
@@ -334,6 +358,9 @@ const gameConfigSchema = z
 
   // Multiplayer settings, all tunable without code changes. Kept out of the
   // strict game.config schema because they may not exist in older config files.
+  // `matchDurationMinutes` / `halftimePauseMinutes` are promoted into
+  // game.config.jsonc `liveMatch` and read lazily via getters so the value is
+  // available even during early module initialization (gameConfig not yet loaded).
 export const MP_CONFIG = {
   // Fraction of rounds after which no new humans may join the current season.
   joinThresholdPercent: 0.5,
@@ -352,7 +379,16 @@ export const MP_CONFIG = {
   matchTimeMode: "DIVISION_LOCAL_KICKOFF" as "GLOBAL_FIXED_KICKOFF" | "DIVISION_LOCAL_KICKOFF",
   // Real minutes a scheduled live league match takes to play out. This paces
   // how quickly the worker advances in-progress live matches.
-  matchDurationMinutes: 10,
+  get matchDurationMinutes(): number {
+    const raw = (gameConfig as unknown as { liveMatch?: { matchDurationMinutes?: number } })?.liveMatch;
+    return raw?.matchDurationMinutes ?? 30;
+  },
+  // Real minutes the halftime interval lasts for human-involving live matches.
+  // AI vs AI and instant simulations skip this pause.
+  get halftimePauseMinutes(): number {
+    const raw = (gameConfig as unknown as { liveMatch?: { halftimePauseMinutes?: number } })?.liveMatch;
+    return raw?.halftimePauseMinutes ?? 5;
+  },
   // How often (ms) the worker loop wakes up.
   workerIntervalMs: 5000,
   // How many match-minutes to advance per worker tick for an in-progress match.
@@ -564,19 +600,20 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     33: 0.75, 34: 0.7, 35: 0.65, 36: 0.6, 37: 0.55, 38: 0.5, 39: 0.45, 40: 0.4,
   },
   releaseClauseRemainingValuePct: 0.5,
-  // Division-driven player quality (plans/4. player-generation.md §68). These
-  // are the only three designer-facing quality-balance knobs; the top/bottom
-  // division means and all age baselines are derived mathematically from them.
+  // Division-driven player quality (plans/4. player-generation.md §68).
+  // Absolute D1 quality is independent from within-division spread so designers
+  // can move the whole pyramid without also changing player variance.
   playerGeneration: {
-    playerQualitySpreadFraction: 0.06,
-    divisionSpanSigmas: 3.0,
-    academyPedigreeSigmas: 0.3,
+    topDivisionMeanOverall: 76.24,
+    playerQualitySpreadOverall: 6,
+    divisionOverallSpan: 18,
+    academyPedigreeOverallBoost: 25.5,
   },
   playerGenerationRules: {
     initialSeniorSquadSize: 28,
     initialAcademySize: 8,
     academyRosterLimit: 12,
-    seasonalAcademyIntake: 2,
+    seasonalAcademyIntake: "auto",
     academyMinAge: 16,
     academyMaxAge: 19,
     academyPromotionAge: 21,
@@ -584,6 +621,10 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   },
   matchSimulator: {
     influence: { team: 0.4, tactics: 0.35, luck: 0.25 },
+  },
+  liveMatch: {
+    matchDurationMinutes: 30,
+    halftimePauseMinutes: 5,
   },
   roundsPerSeason: 14,
   matchSpacingDays: 2,
@@ -638,6 +679,34 @@ export function parseGameConfig(raw: unknown): GameConfig {
         delete normalized.seasonDays;
         delete (normalized.league as Record<string, unknown>).matchIntervalDays;
       }
+    }
+  }
+  // Migrate the former normalized quality knobs into direct OVR units. New
+  // fields win when both shapes are present, so custom configs can transition
+  // without an all-at-once migration.
+  if (normalized && typeof normalized === "object") {
+    const rawGeneration = normalized.playerGeneration;
+    if (rawGeneration && typeof rawGeneration === "object") {
+      const generation = { ...(rawGeneration as Record<string, unknown>) };
+      if (!("playerQualitySpreadOverall" in generation)) {
+        const legacyFraction = Number(generation.playerQualitySpreadFraction);
+        if (Number.isFinite(legacyFraction)) generation.playerQualitySpreadOverall = legacyFraction * 99;
+      }
+      if (!("divisionOverallSpan" in generation)) {
+        const legacySpanSigmas = Number(generation.divisionSpanSigmas);
+        const spreadOverall = Number(generation.playerQualitySpreadOverall);
+        if (Number.isFinite(legacySpanSigmas) && Number.isFinite(spreadOverall)) {
+          generation.divisionOverallSpan = legacySpanSigmas * spreadOverall;
+        }
+      }
+      if (!("academyPedigreeOverallBoost" in generation)) {
+        const legacyPedigreeSigmas = Number(generation.academyPedigreeSigmas);
+        const spreadOverall = Number(generation.playerQualitySpreadOverall);
+        if (Number.isFinite(legacyPedigreeSigmas) && Number.isFinite(spreadOverall)) {
+          generation.academyPedigreeOverallBoost = legacyPedigreeSigmas * spreadOverall;
+        }
+      }
+      normalized = { ...normalized, playerGeneration: generation };
     }
   }
   const parsed = gameConfigSchema.safeParse(normalized);

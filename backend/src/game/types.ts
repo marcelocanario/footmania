@@ -183,6 +183,8 @@ export interface Club {
   /** Automation presets (JSON; one per formation for Pro, one total for regular). */
   automationPresets?: AutomationPreset[] | null;
   coachName: string;
+  /** Season key in which the human manager last changed the coach name. */
+  coachNameChangedSeasonKey?: string | null;
   tactics: Tactics;
   trainingFocus: "assistant" | "primary" | "secondary";
   captainId: number | null;
@@ -294,6 +296,8 @@ export interface MatchEvent {
   playerId: number | null;
   player2Id: number | null;
   goalType: number;
+  /** Stoppage-time minute offset when the event occurred during added time (e.g. 90+2). */
+  addedTime?: number;
 }
 
 /** Per-team aggregate statistics produced by the possession-state engine
@@ -449,6 +453,15 @@ export interface LiveMatchState {
   // pace live matches at the configured real-world duration regardless of
   // worker tick rate and across server downtime.
   lastAdvancedAt: number;
+  /** Coin-toss winner: 0 = home kicks off first half, 1 = away. Frozen at creation. */
+  coinTossWinner?: 0 | 1;
+  /** Announced added minutes per half, frozen when the half's regulation clock is first reached. */
+  firstHalfAddedMinutes?: number;
+  secondHalfAddedMinutes?: number;
+  /** Wall-clock instant halftime started (first half + its added time finished). Null outside halftime. */
+  halftimeStartedAt?: number | null;
+  /** Per-side ready flags to skip the wall-clock halftime early (both humans must be ready in human vs human). */
+  halftimeReady?: [boolean, boolean];
 
   // -------------------------------------------------------------------------
   // Possession-state engine runtime (plans/6. match-simulator-overhaul.md §2).

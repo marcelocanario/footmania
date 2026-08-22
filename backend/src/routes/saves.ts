@@ -14,6 +14,7 @@ import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
 import { standingsTiebreak } from "../game/league";
 import { calendarValues, phaseForSeasonDayIndex } from "../services/seasonCalendar";
+import { hasPro } from "../services/pro";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -25,6 +26,7 @@ const joinSchema = z.object({
   // clients; when present the home shell becomes the club identity colors.
   kits: clubKitsSchema.nullable().optional(),
   stadiumName: z.string().trim().min(1).max(80),
+  coachName: z.string().trim().min(2).max(40),
   preferredHours: z.array(z.number()).optional(),
 });
 
@@ -132,6 +134,7 @@ export async function savesRoutes(app: FastifyInstance) {
         secondaryColor: parsed.data.secondaryColor,
         kits: parsed.data.kits ?? null,
         stadiumName: parsed.data.stadiumName,
+        coachName: parsed.data.coachName,
         preferredHours,
       });
 
@@ -357,8 +360,9 @@ export async function savesRoutes(app: FastifyInstance) {
       .object({
         clubName: z.string().trim().min(1).max(60).optional(),
         stadiumName: z.string().trim().min(1).max(80).optional(),
+        coachName: z.string().trim().min(2).max(40).optional(),
       })
-      .refine((d) => d.clubName !== undefined || d.stadiumName !== undefined, { message: "Nothing to update" })
+      .refine((d) => d.clubName !== undefined || d.stadiumName !== undefined || d.coachName !== undefined, { message: "Nothing to update" })
       .safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, async (world) => {
@@ -372,8 +376,17 @@ export async function savesRoutes(app: FastifyInstance) {
         club.shortName = parsed.data.clubName;
       }
       if (parsed.data.stadiumName !== undefined) club.stadiumName = parsed.data.stadiumName;
+      if (parsed.data.coachName !== undefined) {
+        if (!hasPro(req.user)) return { error: { code: 403, body: { error: "Coach name editing is a Pro feature" } } };
+        const currentSeasonKey = seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth });
+        if (club.coachNameChangedSeasonKey === currentSeasonKey) {
+          return { error: { code: 400, body: { error: "Coach name can only be changed once per season" } } };
+        }
+        club.coachName = parsed.data.coachName;
+        club.coachNameChangedSeasonKey = currentSeasonKey;
+      }
       recordActivity(world, req.user!.id, club.id, "profile");
-      return { value: { ok: true, name: club.name, stadiumName: club.stadiumName } };
+      return { value: { ok: true, name: club.name, stadiumName: club.stadiumName, coachName: club.coachName } };
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;

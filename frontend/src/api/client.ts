@@ -92,6 +92,7 @@ export interface ClubView {
   logoVariant?: number;
   hasCustomLogo?: boolean;
   coachName: string;
+  coachEditAllowed?: boolean;
   trainingFocus: "assistant" | "primary" | "secondary";
   competitionState?: string;
   tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string } | null;
@@ -460,6 +461,7 @@ export interface LiveEvent {
   player2Id?: number | null;
   player: string;
   player2: string;
+  addedTime?: number | null;
 }
 
 export interface TeamMatchStats {
@@ -528,6 +530,16 @@ export interface LiveState {
   awayFormationId: number;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
+  progressPct: number;
+  coinTossWinner: 0 | 1;
+  firstHalfAddedMinutes: number;
+  secondHalfAddedMinutes: number;
+  halftimeStartedAt: number | null;
+  halftimeReady: [boolean, boolean];
+  halftimePauseMinutes: number;
+  currentAddedTime?: number | null;
+  homeIsHuman: boolean;
+  awayIsHuman: boolean;
 }
 
 export interface LineupPlayer {
@@ -547,7 +559,7 @@ export interface LineupView {
   penaltyTakerId: number | null;
   freeKickTakerId: number | null;
   slots: number[];
-  squad: { id: number; name: string; position: number; overall: number; tacPosName: string; injuryDays: number; suspended: boolean }[];
+  squad: { id: number; name: string; position: number; overall: number; energy: number; tacPosName: string; injuryDays: number; suspended: boolean }[];
 }
 
 export interface MatchEvents {
@@ -600,12 +612,12 @@ export const api = {
 
   // Multiplayer
   mpStatus: () => request<MpStatus>("/api/mp/status"),
-  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; kits?: ClubKits; stadiumName: string; preferredHours?: number[] }) =>
+  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; kits?: ClubKits; stadiumName: string; coachName: string; preferredHours?: number[] }) =>
     request<{ ok: boolean; clubId: number }>("/api/mp/join", { method: "POST", body: JSON.stringify(payload) }),
   updateClubKit: (kits: ClubKits) =>
     request<{ ok: boolean; kits: ClubKits }>("/api/mp/club/kit", { method: "PUT", body: JSON.stringify({ kits }) }),
-  updateClubProfile: (payload: { clubName?: string; stadiumName?: string }) =>
-    request<{ ok: boolean; name: string; stadiumName: string }>("/api/mp/club/profile", { method: "PUT", body: JSON.stringify(payload) }),
+  updateClubProfile: (payload: { clubName?: string; stadiumName?: string; coachName?: string }) =>
+    request<{ ok: boolean; name: string; stadiumName: string; coachName: string }>("/api/mp/club/profile", { method: "PUT", body: JSON.stringify(payload) }),
   updatePreferredHours: (preferredHours: number[]) =>
     request<{ ok: boolean; preferredHours: number[] }>("/api/mp/preferred-hours", { method: "PUT", body: JSON.stringify({ preferredHours }) }),
   returnClub: () =>
@@ -626,6 +638,8 @@ export const api = {
   liveState: (matchId: number) => request<{ state: LiveState }>(`/api/matches/${matchId}/live`),
   liveSub: (matchId: number, outId: number, inId: number) =>
     request<{ event: LiveEvent | null; state: LiveState }>(`/api/matches/${matchId}/sub`, { method: "POST", body: JSON.stringify({ outId, inId }) }),
+  halftimeReady: (matchId: number) =>
+    request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/halftime/ready`, { method: "POST" }),
   liveWsUrl: (matchId: number) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws`,
   getLineup: (auto?: boolean, formation?: number) =>

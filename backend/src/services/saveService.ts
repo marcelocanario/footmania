@@ -729,8 +729,9 @@ function clubRow(c: Club, saveId: number) {
        customLogoMime: c.customLogo?.mime ?? null,
        customLogoData: c.customLogo?.data ?? null,
        customLogoStatus: c.customLogo?.status ?? "ACTIVE",
-       automationPresetsJson: c.automationPresets ? JSON.stringify(c.automationPresets) : null,
-       coachName: c.coachName,
+        automationPresetsJson: c.automationPresets ? JSON.stringify(c.automationPresets) : null,
+        coachName: c.coachName,
+        coachNameChangedSeasonKey: c.coachNameChangedSeasonKey ?? null,
       isHuman: c.isHuman,
       captainId: c.captainId,
       penaltyTakerId: c.penaltyTakerId,
@@ -997,7 +998,8 @@ async function rebuildWorld(
        logoVariant: r2.logoVariant ?? 0,
        customLogo,
        automationPresets: jsonOr<Club["automationPresets"]>(r2.automationPresetsJson, null),
-       coachName: r.coachName,
+        coachName: r.coachName,
+        coachNameChangedSeasonKey: (r2 as unknown as { coachNameChangedSeasonKey?: string | null }).coachNameChangedSeasonKey ?? null,
        tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
        trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
        captainId: r.captainId,
@@ -1456,6 +1458,16 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
   st.automationFiredRuleIds ??= [];
   st.automationDisabled ??= [false, false];
   st.withBall ??= 0;
+  st.coinTossWinner ??= (st.withBall as 0 | 1) ?? 0;
+  st.firstHalfAddedMinutes ??= 0;
+  st.secondHalfAddedMinutes ??= 0;
+  st.halftimeStartedAt ??= null;
+  st.halftimeReady ??= [false, false];
+  // Backfill coin-toss event for old saves that predate it (minute 0, half 0).
+  if (!st.events.some((e) => e.type === 9)) {
+    const winnerId = st.coinTossWinner === 0 ? st.homeClubId : st.awayClubId;
+    st.events.unshift({ minute: 0, half: 0, type: 9, subtype: 0, clubId: winnerId, playerId: null, player2Id: null, goalType: 0 });
+  }
   st.playerEnergy ??= {};
   const playerIds = new Set([...st.homeXI, ...st.awayXI, ...st.homeSubs, ...st.awaySubs, ...st.homeOn, ...st.awayOn]);
   for (const id of playerIds) {

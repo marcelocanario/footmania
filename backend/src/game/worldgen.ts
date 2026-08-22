@@ -92,6 +92,8 @@ export interface HumanClubOptions {
    * home shell becomes the club identity colors. */
   kits?: import("./kits").ClubKits | null;
   stadiumName?: string;
+  /** Human-entered manager name. Omitted only for internal legacy callers. */
+  coachName?: string;
   /** Validated half-hour preferred-match slots (see game/scheduling.ts). */
   preferredHours?: number[] | null;
 }
@@ -131,7 +133,8 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     kits: opts.kits ?? null,
     primaryColor: opts.kits?.home.primary ?? opts.primaryColor ?? "#d40000",
     secondaryColor: opts.kits?.home.secondary ?? opts.secondaryColor ?? "#ffffff",
-    coachName: generateName(rng, opts.country),
+    coachName: opts.coachName?.trim() || generateName(rng, opts.country),
+    coachNameChangedSeasonKey: null,
     tactics: tacticsForClub(rng),
     trainingFocus: "assistant",
     captainId: null,

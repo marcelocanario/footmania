@@ -25,6 +25,7 @@ import {
   Users,
   AlertTriangle,
   ArrowRight,
+  UserRound,
 } from "lucide-react";
 import { api, type CountryOption, type MpStatus } from "../api/client";
 import { AvailabilityPicker, PRESET_EVENINGS, MIN_SLOTS } from "../components/AvailabilityPicker";
@@ -101,6 +102,7 @@ export function Join() {
     applyTeamColorPreset(deriveKitDefaults(DEFAULT_PRIMARY, DEFAULT_SECONDARY), DEFAULT_PRIMARY, DEFAULT_SECONDARY),
   );
   const [stadiumName, setStadiumName] = useState("");
+  const [coachName, setCoachName] = useState("");
   const [preferredHours, setPreferredHours] = useState<number[]>(PRESET_EVENINGS);
   const [joining, setJoining] = useState(false);
   const [countries, setCountries] = useState<CountryOption[]>([]);
@@ -111,6 +113,8 @@ export function Join() {
   const nameLen = nameTrim.length;
   const nameValid = nameLen >= 3 && nameLen <= 30;
   const stadiumValid = stadiumName.trim().length > 0;
+  const coachNameTrim = coachName.trim();
+  const coachNameValid = coachNameTrim.length >= 2 && coachNameTrim.length <= 40;
   const stadiumPreviewName = stadiumName.trim() || "Name your stadium";
 
   /** Team colors seed all three kits as a preset; kits stay editable. */
@@ -199,11 +203,11 @@ export function Join() {
   };
 
   const join = async () => {
-    if (!selectedCountry || !nameValid || !stadiumValid) {
+    if (!selectedCountry || !nameValid || !stadiumValid || !coachNameValid) {
       toast.current?.show({
         severity: "warn",
         summary: "Complete your club",
-        detail: !selectedCountry ? "Choose a country." : !nameValid ? "Club name must be 3–30 characters." : "Name your home ground.",
+        detail: !selectedCountry ? "Choose a country." : !nameValid ? "Club name must be 3–30 characters." : !stadiumValid ? "Name your home ground." : "Manager name must be 2–40 characters.",
       });
       setActiveTab("identity");
       return;
@@ -223,6 +227,7 @@ export function Join() {
         secondaryColor: teamSecondary,
         kits,
         stadiumName: stadiumName.trim(),
+        coachName: coachNameTrim,
         preferredHours,
       });
       setLiveMatch(null);
@@ -339,7 +344,7 @@ export function Join() {
 
   const season = status?.season;
   const joinOpen = season?.joinState === "OPEN";
-  const identityValid = !!selectedCountry && nameValid && stadiumValid;
+  const identityValid = !!selectedCountry && nameValid && stadiumValid && coachNameValid;
   const scheduleValid = preferredHours.length >= MIN_SLOTS;
   const allValid = identityValid && scheduleValid;
 
@@ -351,7 +356,7 @@ export function Join() {
             toast.current?.show({
               severity: "warn",
               summary: "Complete your club",
-              detail: !selectedCountry ? "Choose a national association." : !nameValid ? "Club name must be 3–30 characters." : "Name your home ground.",
+              detail: !selectedCountry ? "Choose a national association." : !nameValid ? "Club name must be 3–30 characters." : !stadiumValid ? "Name your home ground." : "Manager name must be 2–40 characters.",
             });
         return;
       }
@@ -506,6 +511,32 @@ export function Join() {
                       <span className={`jm-hint ${stadiumName.length > 0 && !stadiumValid ? "bad" : ""}`}>
                         {stadiumName.length > 0 && !stadiumValid ? "Name your home ground" : ""}
                       </span>
+                    </div>
+                  </div>
+
+                  <div className="jm-field">
+                    <label className="jm-label" htmlFor="join-coach">
+                      <UserRound size={13} /> Manager
+                      <FieldHelp text="Choose the name shown as your manager in match coverage and club identity." />
+                      <span className="jm-req">*</span>
+                    </label>
+                    <span className="p-input-icon-left jm-input-wrap">
+                      <UserRound size={15} />
+                      <InputText
+                        id="join-coach"
+                        value={coachName}
+                        onChange={(e) => setCoachName(e.target.value)}
+                        placeholder="e.g. Alex Morgan"
+                        maxLength={40}
+                        className={coachName.length > 0 && !coachNameValid ? "jm-invalid" : ""}
+                        style={{ width: "100%" }}
+                      />
+                    </span>
+                    <div className="jm-hint-row">
+                      <span className={`jm-hint ${coachName.length > 0 && !coachNameValid ? "bad" : ""}`}>
+                        {coachName.length > 0 && !coachNameValid ? (coachNameTrim.length < 2 ? "Minimum 2 characters" : "Maximum 40 characters") : ""}
+                      </span>
+                      <span className="jm-count">{coachNameTrim.length}/40</span>
                     </div>
                   </div>
 
@@ -701,6 +732,10 @@ export function Join() {
                     <div className="jm-preview-row">
                       <span className="jm-preview-k">Home</span>
                       <span className="jm-preview-v">{stadiumPreviewName}</span>
+                    </div>
+                    <div className="jm-preview-row">
+                      <span className="jm-preview-k">Manager</span>
+                      <span className="jm-preview-v">{coachNameTrim || "Name your manager"}</span>
                     </div>
                     <div className="jm-preview-row">
                       <span className="jm-preview-k">Timezone</span>

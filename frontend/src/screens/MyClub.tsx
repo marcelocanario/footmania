@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
-import { BadgeCheck, Flag, Globe2, Home, Save as SaveIcon, Shirt, Image as ImageIcon, Upload } from "lucide-react";
+import { BadgeCheck, Flag, Globe2, Home, Save as SaveIcon, Shirt, Image as ImageIcon, Upload, UserRound } from "lucide-react";
 import { api } from "../api/client";
 import { KitDesigner } from "../components/kit/KitDesigner";
 import { deriveKitDefaults } from "../components/kit/defaults";
@@ -21,6 +21,7 @@ export function MyClub() {
   const [loadedId, setLoadedId] = useState<number | null>(null);
   const [clubName, setClubName] = useState("");
   const [stadiumName, setStadiumName] = useState("");
+  const [coachName, setCoachName] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileDirty, setProfileDirty] = useState(false);
   const [kits, setKits] = useState<ClubKits>(() => deriveKitDefaults("#d40000", "#ffffff"));
@@ -36,6 +37,7 @@ export function MyClub() {
     setLoadedId(club.id);
     setClubName(club.name);
     setStadiumName(club.stadiumName);
+    setCoachName(club.coachName);
     setKits(club.kits ?? deriveKitDefaults(club.primaryColor, club.secondaryColor));
     setLogoVariant((club as unknown as { logoVariant?: number }).logoVariant ?? 0);
     setKitsDirty(false);
@@ -52,15 +54,18 @@ export function MyClub() {
 
   const nameValid = clubName.trim().length >= 3 && clubName.trim().length <= 30;
   const stadiumValid = stadiumName.trim().length > 0;
+  const coachNameValid = coachName.trim().length >= 2 && coachName.trim().length <= 40;
 
   const saveProfile = async () => {
-    if (!nameValid || !stadiumValid) {
-      toast.current?.show({ severity: "warn", summary: "Check your club", detail: !nameValid ? "Club name must be 3–30 characters." : "Name your home ground." });
+    if (!club) return;
+    if (!nameValid || !stadiumValid || !coachNameValid) {
+      toast.current?.show({ severity: "warn", summary: "Check your club", detail: !nameValid ? "Club name must be 3–30 characters." : !stadiumValid ? "Name your home ground." : "Manager name must be 2–40 characters." });
       return;
     }
     setSavingProfile(true);
     try {
-      await api.updateClubProfile({ clubName: clubName.trim(), stadiumName: stadiumName.trim() });
+      const coachChanged = coachName.trim() !== club.coachName;
+      await api.updateClubProfile({ clubName: clubName.trim(), stadiumName: stadiumName.trim(), ...(coachChanged ? { coachName: coachName.trim() } : {}) });
       await Promise.all([loadStatus(), loadClub()]);
       setProfileDirty(false);
       toast.current?.show({ severity: "success", summary: "Saved", detail: "Club identity updated.", life: 2000 });
@@ -183,6 +188,25 @@ export function MyClub() {
           />
         </div>
         <div className="form-group">
+          <label className="jm-label" htmlFor="myclub-coach">
+            <UserRound size={13} /> Manager
+          </label>
+          <InputText
+            id="myclub-coach"
+            value={coachName}
+            onChange={(e) => {
+              setCoachName(e.target.value);
+              setProfileDirty(true);
+            }}
+            maxLength={40}
+            disabled={!club.coachEditAllowed}
+            style={{ width: "100%" }}
+          />
+          <div className="jm-hint">
+            {!club.coachEditAllowed ? "Pro feature: manager names can be changed once per season." : "Your manager name can be changed once per season."}
+          </div>
+        </div>
+        <div className="form-group">
           <label className="jm-label">
             <Globe2 size={13} /> Nation
           </label>
@@ -193,7 +217,7 @@ export function MyClub() {
           className="btn gold"
           style={{ marginTop: 8 }}
           onClick={() => void saveProfile()}
-          disabled={savingProfile || !profileDirty || !nameValid || !stadiumValid}
+          disabled={savingProfile || !profileDirty || !nameValid || !stadiumValid || !coachNameValid}
         >
           <SaveIcon size={15} /> {savingProfile ? "Saving…" : "Save identity"}
         </button>

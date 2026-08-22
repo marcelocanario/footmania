@@ -2,7 +2,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorld, persistWorld } from "../services/saveService";
 import { liveStateView } from "../services/liveView";
-import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup } from "../game/match";
+import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { advanceLiveMatches } from "../game/world";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
@@ -119,7 +119,7 @@ async function handleMessage(
     send(ws, { type: "pong" });
     return;
   }
-  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "automation") {
+  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "automation" && msg.type !== "halftimeReady") {
     send(ws, { type: "error", message: "Unknown message type" });
     return;
   }
@@ -248,6 +248,22 @@ async function handleMessage(
         st.automationDisabled[side] = !enabled;
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "automation", enabled, state: liveStateView(world, st, meta.userId) });
+        broadcastState(world);
+        return;
+      }
+      if (msg.type === "halftimeReady") {
+        if (!isHalftime(st)) {
+          send(ws, { type: "error", message: "Match is not at halftime" });
+          return;
+        }
+        if (!humanClub || (st.homeClubId !== humanClub.id && st.awayClubId !== humanClub.id)) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
+          return;
+        }
+        const side = st.homeClubId === humanClub.id ? 0 : 1;
+        markHalftimeReady(world, st, side as 0 | 1);
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        send(ws, { type: "halftimeReady", state: liveStateView(world, st, meta.userId) });
         broadcastState(world);
         return;
       }

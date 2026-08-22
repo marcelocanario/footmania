@@ -4,6 +4,8 @@ import { multiplayerDayLabel } from "../game/calendar";
 import { FORMATION_NAMES } from "../game/constants";
 import { resolveClubKits } from "../game/kits";
 import { displayName } from "../game/displayName";
+import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
+import { MP_CONFIG } from "../config";
 
 export interface LiveEventView {
   sequence: number;
@@ -16,6 +18,7 @@ export interface LiveEventView {
   player2Id: number | null;
   player: string;
   player2: string;
+  addedTime?: number;
 }
 
 export interface LivePlayerView {
@@ -67,6 +70,17 @@ export interface LiveStateView {
   awayFormationId: number;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
+  // New: match progress + halftime + added time
+  progressPct: number;
+  coinTossWinner: 0 | 1;
+  firstHalfAddedMinutes: number;
+  secondHalfAddedMinutes: number;
+  halftimeStartedAt: number | null;
+  halftimeReady: [boolean, boolean];
+  halftimePauseMinutes: number;
+  currentAddedTime?: number | null;
+  homeIsHuman: boolean;
+  awayIsHuman: boolean;
 }
 
 export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: number | null): LiveStateView {
@@ -103,7 +117,25 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     player2Id: e.player2Id,
     player: e.playerId ? (byId.get(e.playerId) ? displayName(byId.get(e.playerId)!) : "") : "",
     player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
+    ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
   }));
+  const firstAdded = st.firstHalfAddedMinutes ?? 0;
+  const secondAdded = st.secondHalfAddedMinutes ?? 0;
+  const clock = st.matchClockSeconds ?? 0;
+  const effectiveClock = st.period === 2 && clock >= MS.timing.firstHalfEndSeconds + firstAdded * 60
+    ? clock - firstAdded * 60
+    : clock;
+  const progressPct = Math.min(100, Math.max(0, effectiveClock / MS.timing.regulationSeconds * 100));
+  let currentAddedTime: number | null = null;
+  {
+    const firstEnd = MS.timing.firstHalfEndSeconds;
+    const secondEnd = MS.timing.regulationSeconds + firstAdded * 60;
+    if (firstAdded > 0 && clock >= firstEnd && clock < firstEnd + firstAdded * 60 && st.period === 1) {
+      currentAddedTime = Math.floor((clock - firstEnd) / 60) + 1;
+    } else if (secondAdded > 0 && clock >= secondEnd && clock < secondEnd + secondAdded * 60 && st.period === 2) {
+      currentAddedTime = Math.floor((clock - secondEnd) / 60) + 1;
+    }
+  }
   // Determine which side the viewer controls (if any).
   const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
   const humanClubId = viewerClub?.id ?? null;
@@ -164,6 +196,16 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayFormationId: away?.tactics?.formation ?? 4,
     automationDisabled: st.automationDisabled ?? [false, false],
     automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
+    progressPct,
+    coinTossWinner: (st.coinTossWinner ?? 0) as 0 | 1,
+    firstHalfAddedMinutes: st.firstHalfAddedMinutes ?? 0,
+    secondHalfAddedMinutes: st.secondHalfAddedMinutes ?? 0,
+    halftimeStartedAt: st.halftimeStartedAt ?? null,
+    halftimeReady: st.halftimeReady ?? [false, false],
+    halftimePauseMinutes: MP_CONFIG.halftimePauseMinutes,
+    currentAddedTime,
+    homeIsHuman: !!home?.ownerUserId,
+    awayIsHuman: !!away?.ownerUserId,
   };
 }
 

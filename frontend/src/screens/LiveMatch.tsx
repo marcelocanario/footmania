@@ -5,7 +5,7 @@ import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/cli
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { tickDelayMs } from "../matchPace";
-import { LineupPicker } from "../components/LineupPicker";
+import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
 
 const EVENT_LABELS: Record<number, string> = {
@@ -16,7 +16,13 @@ const EVENT_LABELS: Record<number, string> = {
   6: "Substitution",
   7: "Missed penalty",
   8: "Assist",
+  9: "Coin toss",
 };
+
+function formatMinute(e: LiveEvent): string {
+  if (e.addedTime) return `${e.minute}+${e.addedTime}'`;
+  return `${e.minute}'`;
+}
 
 const PHASE_LABEL: Record<string, string> = {
   pregame: "Lineups",
@@ -38,6 +44,7 @@ function EventIcon({ type, subtype }: { type: number; subtype: number }) {
   else if (type === 5) { cls = "event-ico event-inj"; glyph = "🩹"; }
   else if (type === 6) { cls = "event-ico event-sub"; glyph = "🔄"; }
   else if (type === 7) { cls = "event-ico event-miss"; glyph = "❌"; }
+  else if (type === 9) { cls = "event-ico event-miss"; glyph = "🪙"; }
   return <span className={cls}>{glyph}</span>;
 }
 
@@ -67,6 +74,8 @@ export function LiveMatch() {
   const [noLive, setNoLive] = useState(false);
   const [liveId, setLiveId] = useState<number | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
+  const [halftimeBusy, setHalftimeBusy] = useState(false);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef<LiveState | null>(null);
 
@@ -161,6 +170,9 @@ export function LiveMatch() {
       } else if (msg.type === "automation" && msg.state) {
         applyState(msg.state);
         setAutoBusy(false);
+      } else if (msg.type === "halftimeReady" && msg.state) {
+        applyState(msg.state);
+        setHalftimeBusy(false);
       } else if (msg.type === "finished") {
         setNoLive(true);
       } else if (msg.type === "error") {
@@ -232,6 +244,27 @@ export function LiveMatch() {
     }
   }, [wsMode, reconnecting, connectWs]);
 
+  // Halftime countdown ticker
+  useEffect(() => {
+    if (!state || state.phase !== "halftime") return;
+    const iv = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [state?.phase]);
+
+  const doHalftimeReady = async () => {
+    if (!matchId || halftimeBusy) return;
+    setHalftimeBusy(true);
+    try {
+      if (send({ type: "halftimeReady" })) return;
+      const res = await api.halftimeReady(matchId);
+      applyState(res.state);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setHalftimeBusy(false);
+    }
+  };
+
   const doSub = async () => {
     if (!matchId || !subOut || !subIn || subBusy) return;
     setSubBusy(true);
@@ -259,7 +292,7 @@ export function LiveMatch() {
     if (!state) return [];
     return state.events
       .slice()
-      .sort((a, b) => a.minute - b.minute || a.type - b.type)
+      .sort((a, b) => a.minute - b.minute || (a.addedTime ?? 0) - (b.addedTime ?? 0) || a.type - b.type)
       .filter((e) => e.type !== 8);
   }, [state?.events]);
 
@@ -334,7 +367,7 @@ export function LiveMatch() {
               <RefreshCw size={17} /> Refresh
             </button>
           </div>
-          <LineupPicker mode="match" matchId={state.matchId} liveState={state} />
+          <TacticsBoard mode="match" matchId={state.matchId} liveState={state} />
         </div>
         <MatchPitch
           home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn, formationId: state.homeFormationId }}
@@ -342,6 +375,7 @@ export function LiveMatch() {
           events={state.events}
           phase={state.phase}
           minute={state.minute}
+          addedTime={state.currentAddedTime ?? null}
         />
       </div>
     );
@@ -363,7 +397,8 @@ export function LiveMatch() {
         ) : (
           <span className="live-tag">
             <span className="pulse-dot" /> {phaseLabel}
-            {state.phase !== "halftime" && ` · ${state.minute}'`}
+            {state.phase !== "halftime" && ` · ${state.currentAddedTime ? `${state.minute}+${state.currentAddedTime}'` : `${state.minute}'`}`}
+            {state.phase === "halftime" && state.firstHalfAddedMinutes > 0 && ` · 45+${state.firstHalfAddedMinutes}'`}
           </span>
         )}
 
@@ -390,44 +425,74 @@ export function LiveMatch() {
         </div>
       </div>
 
+      {/* Match progress 0–90 (clamped, not stretched by added time) */}
+      <div className="match-progress" aria-label={`Match progress ${Math.round(state.progressPct)}%`} style={{ marginBottom: 16, height: 6, background: "rgba(255,255,255,0.12)", borderRadius: 999, overflow: "hidden" }}>
+        <div className="match-progress-fill" style={{ width: `${Math.min(100, state.progressPct)}%`, height: "100%", background: "linear-gradient(90deg, var(--grass), var(--grass-2))", transition: "width 0.6s ease" }} />
+      </div>
+
       <MatchPitch
         home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn, formationId: state.homeFormationId }}
         away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn, formationId: state.awayFormationId }}
         events={state.events}
         phase={state.phase}
         minute={state.minute}
+        addedTime={state.currentAddedTime ?? null}
       />
 
-      {state.phase === "halftime" && (
-        <div className="card" style={{ borderColor: "rgba(240,180,41,0.4)", marginBottom: 16, textAlign: "center", padding: "18px 14px" }}>
-          <h2 style={{ fontSize: "1.3rem", marginBottom: 6 }}>Interval</h2>
-          <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
-            You may change your formation or make substitutions ({subsLeft} left).
-          </div>
-          <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-            <button className="btn" onClick={() => setShowLineup((v) => !v)}>
-              <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
-            </button>
-            <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
-              <Subscript size={15} /> Substitutions
-            </button>
-            <button className="btn gold" onClick={() => void tick()}>Refresh</button>
-          </div>
-          {showLineup && (
-            <div style={{ textAlign: "left", marginTop: 16 }}>
-              <LineupPicker
-                mode="match"
-                matchId={state.matchId}
-                liveState={state}
-                onSaved={(s) => {
-                  setShowLineup(false);
-                  if (s) applyState(s);
-                }}
-              />
+      {state.phase === "halftime" && (() => {
+        const pauseSec = (state.halftimePauseMinutes ?? 5) * 60;
+        const elapsedSec = state.halftimeStartedAt ? Math.floor((nowTick - state.halftimeStartedAt) / 1000) : 0;
+        const remainingSec = Math.max(0, pauseSec - elapsedSec);
+        const mm = String(Math.floor(remainingSec / 60)).padStart(2, "0");
+        const ss = String(remainingSec % 60).padStart(2, "0");
+        const myReady = state.halftimeReady?.[humanSide] ?? false;
+        const homeReady = state.homeIsHuman ? (state.halftimeReady?.[0] ?? false) : true;
+        const awayReady = state.awayIsHuman ? (state.halftimeReady?.[1] ?? false) : true;
+        const bothHumans = state.homeIsHuman && state.awayIsHuman;
+        const canReady = (state.homeIsHuman && humanSide === 0) || (state.awayIsHuman && humanSide === 1);
+        return (
+          <div className="card" style={{ borderColor: "rgba(240,180,41,0.4)", marginBottom: 16, textAlign: "center", padding: "18px 14px" }}>
+            <h2 style={{ fontSize: "1.3rem", marginBottom: 6 }}>Interval — {mm}:{ss}</h2>
+            <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 6 }}>
+              You may change your formation or make substitutions ({subsLeft} left).
             </div>
-          )}
-        </div>
-      )}
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 12 }}>
+              {bothHumans ? (
+                <span>Home {homeReady ? "✓ Ready" : "⏳ Waiting"} · Away {awayReady ? "✓ Ready" : "⏳ Waiting"} {bothHumans && homeReady && awayReady ? "— Resuming..." : ""}</span>
+              ) : (
+                <span>Second half resumes when ready or after {state.halftimePauseMinutes} min — {remainingSec > 0 ? `${mm}:${ss} left` : "Resuming..."}</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+              <button className="btn" onClick={() => setShowLineup((v) => !v)}>
+                <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
+              </button>
+              <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
+                <Subscript size={15} /> Substitutions
+              </button>
+              {canReady && (
+                <button className={`btn ${myReady ? "ghost" : "gold"}`} onClick={() => void doHalftimeReady()} disabled={halftimeBusy || myReady}>
+                  {myReady ? "✓ Ready" : "I'm Ready — Resume"}
+                </button>
+              )}
+              <button className="btn ghost" onClick={() => void tick()}><RefreshCw size={15} /> Refresh</button>
+            </div>
+            {showLineup && (
+              <div style={{ textAlign: "left", marginTop: 16 }}>
+                <TacticsBoard
+                  mode="match"
+                  matchId={state.matchId}
+                  liveState={state}
+                  onSaved={(s) => {
+                    setShowLineup(false);
+                    if (s) applyState(s);
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="card" style={{ marginBottom: 16 }}>
         <h2 className="card-title">
@@ -442,30 +507,38 @@ export function LiveMatch() {
               {isDone ? "No goals, cards or injuries to report." : "The match is about to start..."}
             </div>
           )}
-          {visibleEvents.map((e, i) => (
-            <div className="event-row" key={i}>
-              <span className="min">{e.minute}'</span>
-              <EventIcon type={e.type} subtype={e.subtype} />
-              {e.type === 1 && e.subtype !== 2 && e.player2 ? (
-                <>
-                  <span className="ev-label">{EVENT_LABELS[e.type]}</span>
-                  <span className="ev-name">{e.player}</span>
-                  <span className="ev-label">assist {e.player2}</span>
-                </>
-              ) : e.type === 6 ? (
-                <>
-                  <span className="ev-label">{EVENT_LABELS[e.type]}</span>
-                  <span className="ev-name">{e.player}</span>
-                  <span className="ev-label">↔ {e.player2}</span>
-                </>
-              ) : (
-                <>
-                  <span className="ev-label">{EVENT_LABELS[e.type] ?? "Event"}</span>
-                  <span className="ev-name">{e.player}</span>
-                </>
-              )}
-            </div>
-          ))}
+          {visibleEvents.map((e, i) => {
+            const coinWinner = e.type === 9 ? (e.clubId === state?.homeClubId ? state?.home : state?.away) : "";
+            return (
+              <div className="event-row" key={i}>
+                <span className="min">{formatMinute(e)}</span>
+                <EventIcon type={e.type} subtype={e.subtype} />
+                {e.type === 9 ? (
+                  <>
+                    <span className="ev-label">{EVENT_LABELS[e.type]}</span>
+                    <span className="ev-name">{coinWinner} won toss — kicks off</span>
+                  </>
+                ) : e.type === 1 && e.subtype !== 2 && e.player2 ? (
+                  <>
+                    <span className="ev-label">{EVENT_LABELS[e.type]}</span>
+                    <span className="ev-name">{e.player}</span>
+                    <span className="ev-label">assist {e.player2}</span>
+                  </>
+                ) : e.type === 6 ? (
+                  <>
+                    <span className="ev-label">{EVENT_LABELS[e.type]}</span>
+                    <span className="ev-name">{e.player}</span>
+                    <span className="ev-label">↔ {e.player2}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="ev-label">{EVENT_LABELS[e.type] ?? "Event"}</span>
+                    <span className="ev-name">{e.player}</span>
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
 

@@ -30,12 +30,33 @@ const phaseWindowSchema = z.object({
   shotSetPieceMaxAgeSeconds: positiveNumber,
 });
 
+const stoppageSchema = z.object({
+  firstHalfBaseSeconds: nonNegativeNumber,
+  secondHalfBaseSeconds: nonNegativeNumber,
+  secondsPerGoal: nonNegativeNumber,
+  secondsPerSubstitution: nonNegativeNumber,
+  secondsPerInjury: nonNegativeNumber,
+  secondsPerCard: nonNegativeNumber,
+  minMinutesPerHalf: z.number().int().min(0),
+  maxMinutesPerHalf: z.number().int().min(0),
+});
+
 const timingSchema = z.object({
   tempoScale: positiveNumber,
   regulationSeconds: positiveNumber,
   firstHalfEndSeconds: positiveNumber,
   deadBallSecondsPerRestart: positiveNumber,
   instantActionSeconds: positiveNumber,
+  stoppage: stoppageSchema.optional().default({
+    firstHalfBaseSeconds: 30,
+    secondHalfBaseSeconds: 75,
+    secondsPerGoal: 45,
+    secondsPerSubstitution: 30,
+    secondsPerInjury: 40,
+    secondsPerCard: 20,
+    minMinutesPerHalf: 1,
+    maxMinutesPerHalf: 12,
+  }),
   durationGamma: z.object({
     ACTION: z.record(z.string(), gammaParamsSchema),
     ACTION_PHASE: z.record(z.string(), gammaParamsSchema),

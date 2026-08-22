@@ -27,7 +27,7 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Marcelo FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Marcelo Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "Marcelo FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Marcelo Stadium", coachName: "Marcelo Coach", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join.statusCode).toBe(200);
     const joinBody = join.json();
@@ -41,6 +41,7 @@ describe("API flow", () => {
     const club = await app.inject({ method: "GET", url: "/api/mp/club", headers: { cookie } });
     expect(club.statusCode).toBe(200);
     expect(club.json().snapshot.club.name).toBe("Marcelo FC");
+    expect(club.json().snapshot.club.coachName).toBe("Marcelo Coach");
     expect(club.json().snapshot.squad.length).toBeGreaterThan(20);
 
     const pyramid = await app.inject({ method: "GET", url: "/api/mp/pyramid", headers: { cookie } });
@@ -64,9 +65,82 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Stadium FC", country: "BRA", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "Stadium FC", country: "BRA", coachName: "Stadium Coach", timezone: "America/Sao_Paulo", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("requires a coach name when joining", async () => {
+    const app = buildServer();
+    await app.ready();
+    const register = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "coachrequired", password: "secret123" },
+    });
+    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie },
+      payload: { clubName: "Coach FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Coach Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+    });
+    expect(join.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("limits Pro coach name changes to once per season", async () => {
+    const app = buildServer();
+    await app.ready();
+    const register = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "coachpro", password: "secret123" },
+    });
+    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    await app.prisma.user.update({ where: { id: register.json().user.id }, data: { isPro: true } });
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie },
+      payload: { clubName: "Coach Pro FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Coach Pro Stadium", coachName: "First Manager", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+    });
+    expect(join.statusCode).toBe(200);
+
+    const first = await app.inject({ method: "PUT", url: "/api/mp/club/profile", headers: { cookie }, payload: { coachName: "Second Manager" } });
+    expect(first.statusCode).toBe(200);
+    const second = await app.inject({ method: "PUT", url: "/api/mp/club/profile", headers: { cookie }, payload: { coachName: "Third Manager" } });
+    expect(second.statusCode).toBe(400);
+
+    const loaded = await (await import("../src/services/saveService")).loadGlobalWorld(app.prisma);
+    if (!loaded) throw new Error("world unavailable");
+    loaded.world.mp.seasonMonth = loaded.world.mp.seasonMonth === 12 ? 1 : loaded.world.mp.seasonMonth + 1;
+    if (loaded.world.mp.seasonMonth === 1) loaded.world.mp.seasonYear += 1;
+    await (await import("../src/services/saveService")).persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+    const nextSeason = await app.inject({ method: "PUT", url: "/api/mp/club/profile", headers: { cookie }, payload: { coachName: "Third Manager" } });
+    expect(nextSeason.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rejects coach name changes from non-Pro users", async () => {
+    const app = buildServer();
+    await app.ready();
+    const register = await app.inject({
+      method: "POST",
+      url: "/api/auth/register",
+      payload: { username: "coachregular", password: "secret123" },
+    });
+    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie },
+      payload: { clubName: "Regular FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Regular Stadium", coachName: "Original Manager", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+    });
+    expect(join.statusCode).toBe(200);
+    const edit = await app.inject({ method: "PUT", url: "/api/mp/club/profile", headers: { cookie }, payload: { coachName: "Attempted Manager" } });
+    expect(edit.statusCode).toBe(403);
     await app.close();
   });
 
@@ -95,14 +169,14 @@ describe("API flow", () => {
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "First FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "First Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "First FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "First Stadium", coachName: "First Coach", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join1.statusCode).toBe(200);
     const join2 = await app.inject({
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
-      payload: { clubName: "Second FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Second Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+      payload: { clubName: "Second FC", country: "BRA", timezone: "America/Sao_Paulo", stadiumName: "Second Stadium", coachName: "Second Coach", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(join2.statusCode).toBe(409);
     await app.close();
