@@ -14,6 +14,7 @@ import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { recordActivity } from "../game/multiplayer";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
+import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
@@ -209,6 +210,7 @@ export async function gameRoutes(app: FastifyInstance) {
       loaded.world.players
     );
     const players = loaded.world.players.filter((p) => p.clubId === club.id);
+    const gameDay = loaded.world.mp.absoluteGameDay ?? loaded.world.dayIndex;
     const view = (id: number) => {
       const p = players.find((x) => x.id === id);
       return p
@@ -218,7 +220,11 @@ export async function gameRoutes(app: FastifyInstance) {
             position: p.position,
             overall: p.overall,
             energy: p.energy,
-            injuryDays: p.injuryDays,
+            injuryDays: injuryDaysRemaining(p, gameDay),
+            injuryDaysRemaining: injuryDaysRemaining(p, gameDay),
+            injuryCause: p.injuryCause ?? null,
+            injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+            conditionLabel: conditionLabel(p, gameDay),
             suspended: p.suspendedGames > 0,
           }
         : null;
@@ -232,7 +238,20 @@ export async function gameRoutes(app: FastifyInstance) {
       slots: FORMATION_POSITIONS[formation] ?? FORMATION_POSITIONS[4],
       squad: players
         .sort((a, b) => b.overall - a.overall)
-        .map((p) => ({ id: p.id, name: p.name, position: p.position, overall: p.overall, energy: p.energy, tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "", injuryDays: p.injuryDays, suspended: p.suspendedGames > 0 })),
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          position: p.position,
+          overall: p.overall,
+          energy: p.energy,
+          tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
+          injuryDays: injuryDaysRemaining(p, gameDay),
+          injuryDaysRemaining: injuryDaysRemaining(p, gameDay),
+          injuryCause: p.injuryCause ?? null,
+          injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+          conditionLabel: conditionLabel(p, gameDay),
+          suspended: p.suspendedGames > 0,
+        })),
     };
   });
 
@@ -542,11 +561,19 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!loaded) return reply.code(404).send({ error: "World not found" });
     const myClubId = userClub(loaded.world, req.user!.id)?.id ?? null;
     const now = Date.now();
+    const gameDay = loaded.world.mp.absoluteGameDay ?? loaded.world.dayIndex;
     const loans = loaded.world.loans.filter((l) => !l.recalled).map((loan) => {
       const player = loaded.world.players.find((p) => p.id === loan.playerId);
       const from = loaded.world.clubs.find((c) => c.id === loan.fromClubId);
       const to = loan.toClubId === null ? null : loaded.world.clubs.find((c) => c.id === loan.toClubId);
-      return { ...loan, player: player ? playerView(player) : null, fromClub: from?.name ?? "", toClub: to?.name ?? null, available: loan.toClubId === null && loan.fromClubId !== myClubId, claimableIn: claimableInSeconds(loan, now) };
+      return {
+        ...loan,
+        player: player ? playerView(player, undefined, gameDay) : null,
+        fromClub: from?.name ?? "",
+        toClub: to?.name ?? null,
+        available: loan.toClubId === null && loan.fromClubId !== myClubId,
+        claimableIn: claimableInSeconds(loan, now),
+      };
     });
     return { loans };
   });

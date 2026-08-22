@@ -1,6 +1,8 @@
 import type { Club, Player, RngState } from "./types";
 import { nextInt, shuffle } from "./rng";
 import { tacticalSkillRating } from "./rating";
+import { energyLoss, loadIncrement, physicalSkill, readiness, recoverEnergy } from "./energyInjury";
+import { gameConfig } from "../config";
 import {
   BENCH_ORDER,
   FORMATION_POSITIONS,
@@ -35,17 +37,28 @@ export function eligible(players: Player[]): Player[] {
   return players.filter((p) => !p.clubId || p.injuryDays === 0);
 }
 
-export function pickForTacPos(players: Player[], tacPos: number, excluded: Set<number>, sideVariant: boolean): Player | null {
+/** AI selection context: rotation projection inputs (plan 9 §21). */
+interface AiSelectionOptions {
+  /** Team pressing on the engine's 0–100 scale. */
+  pressing: number;
+  /** Whether another league fixture follows in the current season (§21.4). */
+  futureFixtures: boolean;
+}
+
+const DEFAULT_AI_SELECTION: AiSelectionOptions = { pressing: 50, futureFixtures: true };
+
+export function pickForTacPos(players: Player[], tacPos: number, excluded: Set<number>, sideVariant: boolean, aiOptions: AiSelectionOptions = DEFAULT_AI_SELECTION): Player | null {
   const position = tacPosToBasePosition(tacPos);
   const candidates = players.filter(
     (p) => p.injuryDays === 0 && p.suspendedGames === 0 && p.position === position && !excluded.has(p.id) && !(tacPos === 1 && p.position !== 0)
   );
   if (candidates.length === 0) return null;
+  const useFutureCost = aiOptions.futureFixtures;
   if (sideVariant) {
     const bySide = candidates.filter((p) => p.tacPos >= 0);
     const pool = bySide.length > 0 ? bySide : candidates;
     const sorted = [...pool].sort((a, b) => {
-      const tacticalDifference = tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos);
+      const tacticalDifference = selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions);
       if (tacticalDifference !== 0) return tacticalDifference;
       if (a.overall !== b.overall) return b.overall - a.overall;
       return b.energy - a.energy;
@@ -53,10 +66,14 @@ export function pickForTacPos(players: Player[], tacPos: number, excluded: Set<n
     return sorted[0];
   }
   const sorted = [...candidates].sort((a, b) => {
-    const tacticalDifference = tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos);
+    const tacticalDifference = selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions);
     return tacticalDifference || b.overall - a.overall || b.energy - a.energy;
   });
   return sorted[0];
+}
+
+function selectionValue(player: Player, tacPos: number, aiOptions: AiSelectionOptions): number {
+  return aiOptions.futureFixtures ? aiSelectionValue(player, tacPos, aiOptions.pressing) : tacticalSkillRating(player.skills, tacPos);
 }
 
 export function tacPosToBasePosition(tacPos: number): number {
@@ -105,7 +122,7 @@ export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
 // fill gaps). All lineup paths must agree (buildLineup, lineupValid,
 // applySavedLineup, /club/lineup picker): benched youth are eligible
 // 0-minute squad members for activity tracking (spec section 15).
-export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
+export function buildLineup(club: Club, allPlayers: Player[], options: { futureFixtures?: boolean } = {}): Lineup | null {
   const roster = allPlayers.filter((p) => p.clubId === club.id && !p.onSale);
   for (const player of allPlayers) {
     if (player.clubId === club.id) player.starter = false;
@@ -114,11 +131,19 @@ export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
   const excluded = new Set<number>();
   const starters: Player[] = [];
+  // AI rotation pressure uses the team's actual pressing and whether another
+  // league fixture follows this season; humans pick their own lineups.
+  const aiOptions: AiSelectionOptions | null = club.isHuman
+    ? null
+    : {
+        pressing: enginePressingScale(club.tactics.pressing),
+        futureFixtures: options.futureFixtures ?? true,
+      };
   for (const tacPos of formation) {
     // A randomly assigned formation can ask for more players in a position
     // than a generated squad has. Fill the tactical slot from the best
     // remaining eligible player rather than returning an empty match lineup.
-    const p = pickForTacPos(available, tacPos, excluded, true) ?? pickFallbackForTacPos(available, tacPos, excluded);
+    const p = pickForTacPos(available, tacPos, excluded, true, aiOptions ?? undefined) ?? pickFallbackForTacPos(available, tacPos, excluded, aiOptions ?? undefined);
     if (p) {
       p.tacPos = tacPos;
       p.starter = true;
@@ -129,7 +154,7 @@ export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const subs: Player[] = [];
   const benchPool = available.filter((p) => !excluded.has(p.id)).sort((a, b) => b.overall - a.overall);
   for (const slot of BENCH_ORDER) {
-    const p = pickForTacPos(benchPool, slot, excluded, true);
+    const p = pickForTacPos(benchPool, slot, excluded, true, aiOptions ?? undefined);
     if (p) {
       p.tacPos = slot;
       p.starter = false;
@@ -141,10 +166,43 @@ export function buildLineup(club: Club, allPlayers: Player[]): Lineup | null {
   return { starters, subs, formation: club.tactics.formation, positions: formation };
 }
 
-function pickFallbackForTacPos(players: Player[], tacPos: number, excluded: Set<number>): Player | null {
+/**
+ * Club.tactics.pressing is a 0–2 scale (Light/Heavy/Very Heavy); the Energy
+ * model expects the engine's 0–100 scale (same mapping as `enginePressing`).
+ */
+function enginePressingScale(pressing: number): number {
+  return Math.max(0, Math.min(2, pressing)) / 2 * 100;
+}
+
+/** Current effectiveness minus the deterministic next-match cost of overplaying. */
+export function aiSelectionValue(player: Player, tacPos: number, pressing = 50): number {
+  const base = tacticalSkillRating(player.skills, tacPos);
+  const current = base * readiness(player.energy);
+  const spacing = gameConfig.matchSpacingDays;
+  const project = (played: boolean): number => {
+    let energy = player.energy;
+    let load = player.recentLoad ?? 0;
+    if (played) {
+      energy = Math.max(0, energy - energyLoss({ energy, age: player.age, physicalSkill: physicalSkill(player), position: player.position, pressing, involvement: 0.5, minutes: 90 }));
+      load = Math.min(6, load + loadIncrement({ position: player.position, pressing, involvement: 0.5, minutes: 90 }));
+    }
+    for (let day = 0; day < spacing; day++) {
+      load *= Math.pow(2, -1 / spacing);
+      energy = recoverEnergy({ ...player, energy, recentLoad: load }, load, spacing);
+    }
+    return energy;
+  };
+  const playedNext = project(true);
+  const restedNext = project(false);
+  // Fixed Version 1 decision-horizon coefficient from plan 9 §21.4.
+  const futureCost = base * (readiness(restedNext) - readiness(playedNext));
+  return current - 0.45 * futureCost;
+}
+
+function pickFallbackForTacPos(players: Player[], tacPos: number, excluded: Set<number>, aiOptions: AiSelectionOptions = DEFAULT_AI_SELECTION): Player | null {
   return players
     .filter((p) => p.injuryDays === 0 && p.suspendedGames === 0 && !excluded.has(p.id))
-    .sort((a, b) => tacticalSkillRating(b.skills, tacPos) - tacticalSkillRating(a.skills, tacPos) || b.overall - a.overall || b.energy - a.energy)[0] ?? null;
+    .sort((a, b) => selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions) || b.overall - a.overall || b.energy - a.energy)[0] ?? null;
 }
 
 export interface SavedLineupInput {
@@ -205,7 +263,7 @@ function lineupValid(club: Club, saved: NonNullable<Club["savedLineup"]>, allPla
   return true;
 }
 
-export function lineupForMatch(club: Club, allPlayers: Player[]): Lineup | null {
+export function lineupForMatch(club: Club, allPlayers: Player[], options: { futureFixtures?: boolean } = {}): Lineup | null {
   for (const player of allPlayers) {
     if (player.clubId === club.id) player.starter = false;
   }
@@ -232,7 +290,7 @@ export function lineupForMatch(club: Club, allPlayers: Player[]): Lineup | null 
     }
     if (starters.length === 11) return { starters, subs, formation: club.tactics.formation, positions: formation };
   }
-  return buildLineup(club, allPlayers);
+  return buildLineup(club, allPlayers, options);
 }
 
 /**

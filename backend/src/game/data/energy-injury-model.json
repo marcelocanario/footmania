@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "energy": {
+    "referenceFullMatchLoss": 18.0,
+    "roleLoad": { "GK": 0.2, "DEF": 0.75, "MID": 1.0, "ATT": 0.9 },
+    "pressLogRange": 0.18,
+    "physicalFatigueLogRange": 0.18,
+    "ageFatigueStartAge": 27,
+    "ageFatigueCoefficient": 0.0035,
+    "ageFatigueExponent": 1.6,
+    "lowEnergyAccelerationCoefficient": 0.25,
+    "lowEnergyAccelerationExponent": 1.5,
+    "involvementBase": 0.8,
+    "involvementRange": 0.4,
+    "readinessMaxPenalty": 0.28,
+    "readinessExponent": 1.35,
+    "workloadHalfLifeMatchSpacingMultiplier": 1.0,
+    "workloadPersistenceMax": 6.0,
+    "dailyRecoveryBase": 11.0,
+    "dailyRecoveryDeficitCoefficient": 0.02,
+    "physicalRecoveryLogRange": 0.10,
+    "ageRecoveryStartAge": 27,
+    "ageRecoveryCoefficient": 0.0025,
+    "ageRecoveryExponent": 1.6,
+    "workloadRecoveryCoefficient": 0.80,
+    "workloadRecoveryExponent": 2.0
+  },
+  "injuryRisk": {
+    "acuteRiskAtEnergy50": 1.60,
+    "acuteRiskExponent": 2.0,
+    "acuteRiskScoreCap": 2.0,
+    "recentLoadRiskAtOneUnit": 1.25,
+    "recentLoadRiskInputCap": 2.0,
+    "ageReference": 26,
+    "ageObservedReferenceYoung": 21,
+    "ageObservedPeak": 29.5,
+    "ageObservedHazardRatio": 1.44,
+    "ageResidualShare": 0.50,
+    "ageRiskMin": 0.85,
+    "ageRiskMax": 1.45,
+    "referenceEnergy": 92.0,
+    "referenceRecentLoad": 0.75,
+    "actionRiskRaw": {
+      "PASS": 0.75, "CROSS": 0.90, "CARRY": 0.85, "DRIBBLE": 1.15,
+      "SHOT": 1.0, "CLEARANCE": 1.10, "MISCONTROL": 1.0,
+      "DISPOSSESSED": 1.25, "FOUL": 1.60
+    }
+  },
+  "trainingInjuries": { "referenceRecentLoad": 0.50, "includeAcademyPlayers": true },
+  "severity": {
+    "minorProbability": 0.42, "moderateProbability": 0.56, "severeProbability": 0.02,
+    "minorMinRealDays": 1.0, "minorMaxRealDays": 7.0, "minorBetaAlpha": 2.0, "minorBetaBeta": 2.0,
+    "moderateMinRealDays": 8.0, "moderateMaxRealDays": 28.0, "moderateBetaAlpha": 2.0, "moderateBetaBeta": 2.0,
+    "severeMedianRealDays": 60.0, "severeLogSigma": 0.75, "severeMinRealDays": 29.0, "severeMaxRealDays": 365.0,
+    "ageSeverityReference": 27, "ageSeverityLogPerYear": 0.008, "ageSeverityMin": 0.92, "ageSeverityMax": 1.12,
+    "referenceProMatchesPerSeason": 60.0, "referenceProMatchSpacingDays": 5.0
+  },
+  "returnToFitness": { "freshReturnEnergy": 97.0, "maxReturnEnergyPenalty": 17.0, "severityScaleMatchIntervals": 3.0 },
+  "lastingSetback": {
+    "minimumEquivalentRealDays": 14.0, "probabilityMaximum": 0.20, "probabilityScaleDays": 45.0, "probabilityExponent": 1.6,
+    "magnitudeBase": 0.50, "magnitudeScale": 2.50, "magnitudeBetaAlpha": 2.0, "magnitudeBetaBeta": 3.0,
+    "magnitudeSeverityScaleDays": 60.0,
+    "outfieldWeights": { "pace": 0.45, "physical": 0.45, "technical": 0.10 },
+    "goalkeeperWeights": { "pace": 0.20, "physical": 0.50, "goalkeeping": 0.30 },
+    "potentialLossShare": 0.50
+  }
+}

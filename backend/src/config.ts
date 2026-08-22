@@ -112,6 +112,15 @@ const gameConfigSchema = z
       })
       .partial()
       .optional(),
+    energy: z.object({
+      matchLossScale: z.number().positive(),
+      recoveryScale: z.number().positive(),
+    }).default({ matchLossScale: 1, recoveryScale: 1 }),
+    injuries: z.object({
+      matchTargetPerMatch: z.number().positive(),
+      trainingTargetPerClubSeason: z.number().positive(),
+      severityScale: z.number().positive(),
+    }).default({ matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 }),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
@@ -629,6 +638,8 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     matchDurationMinutes: 30,
     halftimePauseMinutes: 5,
   },
+  energy: { matchLossScale: 1, recoveryScale: 1 },
+  injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 },
   roundsPerSeason: 14,
   matchSpacingDays: 2,
   lastLeagueMatchDayIndex: 27,

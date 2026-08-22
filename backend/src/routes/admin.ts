@@ -13,6 +13,7 @@ import { advanceGameDay, ensureGameClock } from "../services/gameClockService";
 import { cancelScheduledEvent, executeScheduledEvent, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
 import { calendarValues, seasonSchedulePreview } from "../services/seasonCalendar";
 import { publishUserWorldEvent } from "../services/worldEvents";
+import { EVENT_CODES } from "../game/constants";
 
 const advanceSchema = z.object({
   // Target round to simulate through (1..14). Rounds already played are
@@ -257,6 +258,64 @@ export async function adminRoutes(app: FastifyInstance) {
     const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return { events: [] };
     return { events: loaded.world.mpAudits.slice(-limit).reverse() };
+  });
+
+  // Energy/injury balance telemetry (plan 9 §32). Diagnostic only — never fed
+  // back into the model. Reports what is derivable from persisted state; the
+  // kickoff/full-time Energy split and setback frequency would need dedicated
+  // event bookkeeping and are intentionally omitted until required.
+  app.get("/admin/energy-telemetry", async (req) => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!loaded) return { telemetry: null };
+    const world = loaded.world;
+    const squad = world.players.filter((p) => p.clubId !== null);
+    const energies = squad.map((p) => p.energy).sort((a, b) => a - b);
+    const loads = squad.map((p) => p.recentLoad ?? 0);
+    const percentile = (sorted: number[], q: number): number =>
+      sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))] ?? 0;
+    const mean = (values: number[]): number => (values.length === 0 ? 0 : values.reduce((sum, v) => sum + v, 0) / values.length);
+    const currentSeasonMatchIds = new Set(
+      world.fixtures.filter((f) => f.played && world.competitions.some((c) => c.id === f.competitionId && c.seasonId === world.mp.seasonId)).map((f) => {
+        const match = world.matches.find((m) => m.fixtureId === f.id);
+        return match?.id ?? -f.id;
+      }),
+    );
+    const seasonMatches = world.matches.filter((m) => currentSeasonMatchIds.has(m.id));
+    const matchInjuries = seasonMatches.reduce((sum, m) => sum + m.events.filter((e) => e.type === EVENT_CODES.INJURY).length, 0);
+    // Training injuries surface as news items; approximate the season count
+    // from the injury-news ledger (no dedicated audit row exists yet).
+    const trainingInjuries = world.news.filter((n) => n.kind === "injury" && n.dayIndex <= world.dayIndex).length;
+    const injuredDays = squad
+      .filter((p) => (p.injuryUntilAbsoluteGameDay ?? null) !== null)
+      .map((p) => p.injuryInitialGameDays ?? 0)
+      .sort((a, b) => a - b);
+    return {
+      telemetry: {
+        players: squad.length,
+        energy: {
+          mean: Number(mean(energies).toFixed(2)),
+          p10: percentile(energies, 0.1),
+          p25: percentile(energies, 0.25),
+          p50: percentile(energies, 0.5),
+          p75: percentile(energies, 0.75),
+          p90: percentile(energies, 0.9),
+          shareBelow75: squad.length === 0 ? 0 : Number((squad.filter((p) => p.energy < 75).length / squad.length).toFixed(4)),
+        },
+        recentLoad: {
+          mean: Number(mean(loads).toFixed(3)),
+          shareAbove15: squad.length === 0 ? 0 : Number((loads.filter((l) => l >= 1.5).length / squad.length).toFixed(4)),
+        },
+        injuries: {
+          matchInjuriesPerMatch: seasonMatches.length === 0 ? 0 : Number((matchInjuries / seasonMatches.length).toFixed(4)),
+          trainingInjuriesThisSeason: trainingInjuries,
+          activeByCause: {
+            MATCH: squad.filter((p) => p.injuryCause === "MATCH").length,
+            TRAINING: squad.filter((p) => p.injuryCause === "TRAINING").length,
+          },
+          initialGameDays: { p50: percentile(injuredDays, 0.5), p75: percentile(injuredDays, 0.75), p90: percentile(injuredDays, 0.9), p95: percentile(injuredDays, 0.95), p99: percentile(injuredDays, 0.99) },
+        },
+      },
+    };
   });
 
   // -------------------------------------------------------------------------

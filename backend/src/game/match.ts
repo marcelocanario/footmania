@@ -38,9 +38,9 @@ export interface MatchSetup {
   positions: number[];
 }
 
-export function setupMatch(home: Club, away: Club, allPlayers: Player[]): MatchSetup {
-  const hl = lineupForMatch(home, allPlayers);
-  const al = lineupForMatch(away, allPlayers);
+export function setupMatch(home: Club, away: Club, allPlayers: Player[], options: { homeFutureFixtures?: boolean; awayFutureFixtures?: boolean } = {}): MatchSetup {
+  const hl = lineupForMatch(home, allPlayers, { futureFixtures: options.homeFutureFixtures });
+  const al = lineupForMatch(away, allPlayers, { futureFixtures: options.awayFutureFixtures });
   const empty = { starters: [], subs: [] as Player[] };
   const homeXI = hl ? hl.starters : empty.starters;
   const awayXI = al ? al.starters : empty.starters;
@@ -88,6 +88,12 @@ export interface LiveCreateOpts {
   decider?: boolean;
   compKind?: "league" | "cup" | "state" | "division";
   year?: number;
+  absoluteGameDay?: number;
+  roundsPerSeason?: number;
+  matchSpacingDays?: number;
+  /** Whether another league fixture follows this season for each side (plan 9 §21.4). */
+  homeFutureFixtures?: boolean;
+  awayFutureFixtures?: boolean;
 }
 
 export function createLiveMatchState(
@@ -97,15 +103,21 @@ export function createLiveMatchState(
   allPlayers: Player[],
   opts: LiveCreateOpts
 ): LiveMatchState {
-  const setup = setupMatch(home, away, allPlayers);
+  const setup = setupMatch(home, away, allPlayers, { homeFutureFixtures: opts.homeFutureFixtures, awayFutureFixtures: opts.awayFutureFixtures });
   const homeXI = setup.homeXI.length === 11 ? setup.homeXI : setup.homeSubs.slice(0, 11).concat(setup.homeXI).slice(0, 11);
   const awayXI = setup.awayXI.length === 11 ? setup.awayXI : setup.awaySubs.slice(0, 11).concat(setup.awayXI).slice(0, 11);
   const squad = [...homeXI, ...awayXI, ...setup.homeSubs, ...setup.awaySubs];
   const playerMinutes: Record<number, number> = {};
   const playerEnergy: Record<number, number> = {};
+  const playerRecentLoad: Record<number, number> = {};
+  const playerMatchLoad: Record<number, number> = {};
+  const playerPreMatchLoad: Record<number, number> = {};
   for (const p of squad) {
     playerMinutes[p.id] = 0;
     playerEnergy[p.id] = p.energy;
+    playerRecentLoad[p.id] = p.recentLoad ?? 0;
+    playerPreMatchLoad[p.id] = p.recentLoad ?? 0;
+    playerMatchLoad[p.id] = 0;
   }
   const suspensionClears = allPlayers
     .filter((p) => (p.clubId === home.id || p.clubId === away.id) && p.suspendedGames > 0)
@@ -169,6 +181,12 @@ export function createLiveMatchState(
     suspensionClears,
     playerMinutes,
     playerEnergy,
+    playerRecentLoad,
+    playerMatchLoad,
+    playerPreMatchLoad,
+    absoluteGameDay: opts.absoluteGameDay,
+    roundsPerSeason: opts.roundsPerSeason,
+    matchSpacingDays: opts.matchSpacingDays,
     ended: false,
     lastAdvancedAt: Date.now(),
 
@@ -324,7 +342,7 @@ export function simulateMatch(
   home: Club,
   away: Club,
   allPlayers: Player[],
-  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; collectDiagnostics?: boolean }
+  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; collectDiagnostics?: boolean; absoluteGameDay?: number; roundsPerSeason?: number; matchSpacingDays?: number }
 ) {
   const st = createLiveMatchState(rng, home, away, allPlayers, {
     matchId: opts.fixtureId,
@@ -334,6 +352,13 @@ export function simulateMatch(
     decider: opts.decider,
     compKind: opts.compKind,
     year: opts.year,
+    // Injury durations are anchored to the absolute game day. Callers that
+    // simulate real fixtures instantly (admin round advance, division
+    // history) MUST pass this; without it injuries would be anchored to day 0
+    // and expire immediately.
+    absoluteGameDay: opts.absoluteGameDay,
+    roundsPerSeason: opts.roundsPerSeason,
+    matchSpacingDays: opts.matchSpacingDays,
   });
   const centers = centersFor(allPlayers);
   const simulationDiagnostics = opts.collectDiagnostics ? {
@@ -363,6 +388,13 @@ export function applyLiveMatchEnergy(st: LiveMatchState, allPlayers: Player[]): 
   for (const [id, energy] of Object.entries(st.playerEnergy ?? {})) {
     const player = byId.get(Number(id));
     if (player && Number.isFinite(energy)) player.energy = Math.max(1, Math.min(100, Math.round(energy)));
+  }
+  const pre = st.playerPreMatchLoad ?? {};
+  const loads = st.playerMatchLoad ?? {};
+  for (const [id, matchLoad] of Object.entries(loads)) {
+    const player = byId.get(Number(id));
+    if (!player || !Number.isFinite(matchLoad)) continue;
+    player.recentLoad = Math.min(6, (pre[Number(id)] ?? player.recentLoad ?? 0) + matchLoad);
   }
 }
 
@@ -433,6 +465,15 @@ export function performLiveSub(
   bench.splice(bIdx, 1);
   st.usedSubs[side]++;
   st.subbedIn[side].push(inId);
+  // Seed the fatigue/workload maps for the incoming player so full-time commit
+  // is explicit and idempotent: energy starts from his persisted value and the
+  // match-load counter starts at zero (plan §26 substitution rules).
+  st.playerEnergy ??= {};
+  st.playerEnergy[inId] = inPlayer.energy;
+  st.playerPreMatchLoad ??= {};
+  st.playerPreMatchLoad[inId] = inPlayer.recentLoad ?? 0;
+  st.playerMatchLoad ??= {};
+  st.playerMatchLoad[inId] = 0;
   const clubId = side === 0 ? home.id : away.id;
   const ev: MatchEvent = { minute: st.minute, half: st.period, type: EVENT_CODES.SUB, subtype: 0, clubId, playerId: outId, player2Id: inId, goalType: 0 };
   st.events.push(ev);

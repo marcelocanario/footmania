@@ -58,6 +58,10 @@ export interface PlayerView {
   salary: number;
   contractDays: number;
   injuryDays: number;
+  injuryDaysRemaining?: number;
+  injuryCause?: "MATCH" | "TRAINING" | null;
+  injuryUntilAbsoluteGameDay?: number | null;
+  conditionLabel?: string;
   isYouth: boolean;
   seasonGoals: number;
   seasonAssists: number;
@@ -186,6 +190,12 @@ export interface ScheduledEventView {
   attempts: number;
   lastError: string | null;
   executionSource: string;
+  payloadJson?: string;
+  idempotencyKey?: string;
+  maxAttempts?: number;
+  createdAt?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 export interface SchedulerMatchView {
@@ -456,6 +466,10 @@ export interface LivePlayer {
   overall: number;
   energy: number;
   injuryDays: number;
+  injuryDaysRemaining?: number;
+  injuryCause?: "MATCH" | "TRAINING" | null;
+  injuryUntilAbsoluteGameDay?: number | null;
+  conditionLabel?: string;
   suspended: boolean;
 }
 
@@ -925,8 +939,19 @@ export const api = {
     request<{ ok: boolean }>("/api/admin/clear-manual", { method: "POST" }),
   adminSchedulerClock: () =>
     request<{ clock: SchedulerClockView }>("/api/admin/scheduler/clock"),
-  adminSchedulerEvents: () =>
-    request<{ events: ScheduledEventView[] }>("/api/admin/scheduler/events?limit=200"),
+  adminSchedulerEvents: (filters?: { status?: string; type?: string; timeBasis?: string; entityType?: string; entityId?: string; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (filters?.status) params.set("status", filters.status);
+    if (filters?.type) params.set("type", filters.type);
+    if (filters?.timeBasis) params.set("timeBasis", filters.timeBasis);
+    if (filters?.entityType) params.set("entityType", filters.entityType);
+    if (filters?.entityId) params.set("entityId", filters.entityId);
+    if (filters?.limit) params.set("limit", String(filters.limit));
+    const query = params.toString();
+    return request<{ events: ScheduledEventView[] }>(`/api/admin/scheduler/events${query ? `?${query}` : ""}`);
+  },
+  adminSchedulerEvent: (eventId: string) =>
+    request<{ event: ScheduledEventView }>(`/api/admin/scheduler/events/${eventId}`),
   adminSchedulerAdvanceDay: (reason?: string) =>
     request<{ clock: SchedulerClockView }>("/api/admin/scheduler/day/advance", { method: "POST", body: JSON.stringify({ reason }) }),
   adminSchedulerAdvanceMany: (days: number, reason?: string) =>

@@ -6,6 +6,7 @@ import { resolveClubKits } from "../game/kits";
 import { displayName } from "../game/displayName";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { MP_CONFIG } from "../config";
+import { injuryDaysRemaining, conditionLabel } from "../game/energyInjury";
 
 export interface LiveEventView {
   sequence: number;
@@ -31,6 +32,10 @@ export interface LivePlayerView {
   overall: number;
   energy: number;
   injuryDays: number;
+  injuryDaysRemaining: number;
+  injuryCause: "MATCH" | "TRAINING" | null;
+  injuryUntilAbsoluteGameDay: number | null;
+  conditionLabel: string;
   suspended: boolean;
 }
 
@@ -124,8 +129,12 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
       position: p.position,
       tacPos: p.tacPos,
       overall: p.overall,
-      energy: p.energy,
-      injuryDays: p.injuryDays,
+       energy: st.playerEnergy?.[p.id] ?? p.energy,
+       injuryDays: injuryDaysRemaining(p, world.mp.absoluteGameDay ?? world.dayIndex),
+       injuryDaysRemaining: injuryDaysRemaining(p, world.mp.absoluteGameDay ?? world.dayIndex),
+       injuryCause: p.injuryCause ?? null,
+       injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+       conditionLabel: conditionLabel(p, world.mp.absoluteGameDay ?? world.dayIndex),
       suspended: p.suspendedGames > 0,
     };
   };

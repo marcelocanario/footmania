@@ -82,8 +82,6 @@ export function dismissYouthPlayer(world: World, player: Player): { ok: boolean;
 
 export function weeklyUpdate(rng: World["rng"], world: World) {
   for (const player of world.players) {
-    if (player.injuryDays > 0) player.injuryDays--;
-    if (player.energy < 100) player.energy += nextInt(rng, 6);
     potentialGrowth(rng, player);
   }
 }
@@ -412,7 +410,6 @@ export function commitSeasonRollover(world: World): void {
     player.seasonAssists = 0;
     player.yellows = 0;
     player.reds = 0;
-    player.energy = 100;
     player.onSale = world.transferAuctions.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id)
       || world.freeAgentListings.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id);
   }

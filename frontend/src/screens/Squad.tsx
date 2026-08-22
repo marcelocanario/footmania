@@ -395,6 +395,7 @@ export function Squad() {
                 <Column field="overall" header={strings.squad.overall} body={ratingBody} sortable style={{ width: "8%" }} />
                 <Column field="age" header={strings.squad.age} sortable style={{ width: "7%" }} />
                 <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} color={energyColor(p.energy)} />} sortable style={{ width: "14%" }} />
+                <Column field="conditionLabel" header={strings.squad.condition} body={(p) => <span style={{ color: p.conditionLabel === "Needs rest" || p.conditionLabel === "Injured" ? "var(--red-2)" : "var(--text-2)" }}>{p.conditionLabel ?? "Normal workload"}{p.injuryDaysRemaining > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}</span>} style={{ width: "16%" }} />
                 {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} sortable style={{ width: "11%" }} />}
                 {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => money(p.salary)} sortable style={{ width: "11%" }} />}
                 <Column field="contractSeasons" header={strings.squad.contract} body={contractBody} sortable style={{ width: isMobile ? 105 : "16%" }} />
@@ -415,6 +416,11 @@ export function Squad() {
                       {selectedCountryName}
                     </span>
                     {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
+                    {!!selectedPlayer.injuryDaysRemaining && selectedPlayer.injuryDaysRemaining > 0 && (
+                      <span className="flag-chip" style={{ marginLeft: 6 }} title={`${strings.squad.injuryCause}: ${selectedPlayer.injuryCause ?? "—"}`}>
+                        Injured · {strings.squad.injuredReturn.replace("{{day}}", String((selectedPlayer.injuryUntilAbsoluteGameDay ?? 0) + 1))}
+                      </span>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
                     <InputText value={nicknameInput} onChange={(e) => setNicknameInput(e.target.value)} placeholder="Nickname (Pro)" maxLength={24} style={{ flex: 1, minWidth: 0 }} disabled={!user?.isPro} />

@@ -12,9 +12,12 @@ node_modules/
 backend/dist/
 frontend/dist/
 
-# Databases (SQLite)
+# Databases (SQLite) — including WAL/SHM sidecars; tracking them corrupts
+# freshly pushed test databases when stale images get restored.
 backend/prisma/*.db
 backend/prisma/*.db-journal
+backend/prisma/*.db-shm
+backend/prisma/*.db-wal
 
 # Env
 backend/.env

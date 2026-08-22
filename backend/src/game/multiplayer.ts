@@ -2,7 +2,7 @@ import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRo
 import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, updateStandings, validateDoubleRoundRobinFixtures } from "./league";
 import { simulateMatch } from "./match";
 import { seasonKey, joinLockRound } from "./clock";
-import { roundDayIndex } from "../services/seasonCalendar";
+import { calendarValues, roundDayIndex } from "../services/seasonCalendar";
 import { pickFixtureKickoff, pickSynchronizedKickoff, type PreferenceInput } from "./scheduling";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
@@ -413,6 +413,11 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
       decider: false,
       compKind: "division",
       year: world.mp.seasonYear,
+      // Real fixtures simulated instantly must anchor injuries to the current
+      // absolute game day; without this they would expire immediately.
+      absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex,
+      roundsPerSeason: calendarValues().roundsPerSeason,
+      matchSpacingDays: calendarValues().matchSpacingDays,
     });
     f.played = true;
     world.matches.push({

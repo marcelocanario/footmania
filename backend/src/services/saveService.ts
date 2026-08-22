@@ -31,7 +31,7 @@ import { deserializeClubKits, serializeClubKits } from "../game/kits";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
 import { ELO_CONFIG, gameConfig } from "../config";
-import { phaseForSeasonDayIndex } from "./seasonCalendar";
+import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { ensureNamePools } from "./namePoolService";
 
 type Tx = Prisma.TransactionClient;
@@ -926,6 +926,7 @@ function playerRow(p: Player, saveId: number) {
     overall: p.overall,
     potential: p.potential,
     energy: p.energy,
+    recentLoad: p.recentLoad ?? 0,
     salary: p.salary,
     payrollPaidThroughDay: p.payrollPaidThroughDay,
     payrollPaidAmount: p.payrollPaidAmount,
@@ -933,6 +934,10 @@ function playerRow(p: Player, saveId: number) {
     value: p.value,
     releaseClause: p.releaseClause,
     injuryDays: p.injuryDays,
+    injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+    injuryInitialGameDays: p.injuryInitialGameDays ?? null,
+    injuryEquivalentRealDays: p.injuryEquivalentRealDays ?? null,
+    injuryCause: p.injuryCause ?? null,
     contractDays: p.contractDays,
     isYouth: p.isYouth,
     starter: p.starter,
@@ -1343,22 +1348,26 @@ async function rebuildWorld(
     });
     const clubById = new Map(clubs.map((club) => [club.id, club]));
 
-   const players: Player[] = playerRows.map((r) => {
-     const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
-     // Backfill deterministically unless the whole profile is present and sane;
-     // never silently substitute arbitrary defaults for a partial profile.
-     const profileValid =
-       saved.declineStartAge !== null && saved.declineStartAge !== undefined &&
-       saved.developmentRate !== null && saved.developmentRate !== undefined &&
-       saved.developmentVolatility !== null && saved.developmentVolatility !== undefined &&
-       Number.isFinite(saved.declineStartAge) && Number.isFinite(saved.developmentRate) && Number.isFinite(saved.developmentVolatility);
-     const profile = profileValid
-       ? {
-           declineStartAge: saved.declineStartAge as number,
-           developmentRate: saved.developmentRate as number,
-           developmentVolatility: saved.developmentVolatility as number,
-         }
-       : backfillDevelopmentProfile(saveRow.seed, r.id);
+    const migrationAbsoluteGameDay = jsonOr<Partial<World["mp"]>>(saveRow.mpStateJson ?? null, {}).absoluteGameDay ?? saveRow.dayIndex;
+    const players: Player[] = playerRows.map((r) => {
+      const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
+      // Backfill deterministically unless the whole profile is present and sane;
+      // never silently substitute arbitrary defaults for a partial profile.
+      const profileValid =
+        saved.declineStartAge !== null && saved.declineStartAge !== undefined &&
+        saved.developmentRate !== null && saved.developmentRate !== undefined &&
+        saved.developmentVolatility !== null && saved.developmentVolatility !== undefined &&
+        Number.isFinite(saved.declineStartAge) && Number.isFinite(saved.developmentRate) && Number.isFinite(saved.developmentVolatility);
+      const profile = profileValid
+        ? {
+            declineStartAge: saved.declineStartAge as number,
+            developmentRate: saved.developmentRate as number,
+            developmentVolatility: saved.developmentVolatility as number,
+          }
+        : backfillDevelopmentProfile(saveRow.seed, r.id);
+      const persistedUntil = (r as typeof r & { injuryUntilAbsoluteGameDay?: number | null }).injuryUntilAbsoluteGameDay;
+      const legacyInjuryDays = r.injuryDays ?? 0;
+      const injuryUntil = persistedUntil ?? (legacyInjuryDays > 0 ? migrationAbsoluteGameDay + Math.max(1, legacyInjuryDays) : null);
       return {
         id: r.id,
         name: r.name,
@@ -1367,10 +1376,10 @@ async function rebuildWorld(
         age: r.age,
         position: r.position as Player["position"],
         side: r.side,
-         skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
-         overall: r.overall,
-         potential: r.potential,
-         energy: r.energy,
+        skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
+        overall: r.overall,
+        potential: r.potential,
+        energy: r.energy,
         salary: r.salary,
         payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
         payrollPaidAmount: (r as typeof r & { payrollPaidAmount?: number }).payrollPaidAmount ?? 0,
@@ -1378,6 +1387,11 @@ async function rebuildWorld(
         value: r.value,
         releaseClause: r.releaseClause,
         injuryDays: r.injuryDays,
+        recentLoad: (r as typeof r & { recentLoad?: number }).recentLoad ?? 0,
+        injuryUntilAbsoluteGameDay: injuryUntil,
+        injuryInitialGameDays: (r as typeof r & { injuryInitialGameDays?: number | null }).injuryInitialGameDays ?? (legacyInjuryDays > 0 ? Math.max(1, legacyInjuryDays) : null),
+        injuryEquivalentRealDays: (r as typeof r & { injuryEquivalentRealDays?: number | null }).injuryEquivalentRealDays ?? null,
+        injuryCause: ((r as typeof r & { injuryCause?: string | null }).injuryCause as Player["injuryCause"]) ?? null,
         contractDays: r.contractDays,
         isYouth: r.isYouth,
         starter: r.starter,
@@ -1807,6 +1821,12 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
     st.events.unshift({ minute: 0, half: 0, type: 9, subtype: 0, clubId: winnerId, playerId: null, player2Id: null, goalType: 0 });
   }
   st.playerEnergy ??= {};
+  // Live states persisted before the Energy/Injury overhaul have no calendar
+  // anchor. Without stamping it, any injury occurring in a resumed match would
+  // be recorded against absolute game day 0 and expire immediately.
+  st.absoluteGameDay ??= world.mp.absoluteGameDay ?? world.dayIndex;
+  st.roundsPerSeason ??= calendarValues().roundsPerSeason;
+  st.matchSpacingDays ??= calendarValues().matchSpacingDays;
   const playerIds = new Set([...st.homeXI, ...st.awayXI, ...st.homeSubs, ...st.awaySubs, ...st.homeOn, ...st.awayOn]);
   for (const id of playerIds) {
     if (typeof st.playerEnergy[id] !== "number") {

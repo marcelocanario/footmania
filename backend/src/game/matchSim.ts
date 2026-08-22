@@ -2,7 +2,8 @@ import type { Club, LiveCardState, LiveInjuryState, LiveMatchState, LiveSubstitu
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
 import { nextDouble, nextInt, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
-import { injuryDays as injuryDaysDuration } from "./player";
+import { ENERGY_INJURY_MODEL, energyLoss, injuryRiskMultiplier, loadIncrement, physicalSkill, readiness, recordInjury } from "./energyInjury";
+import { gameConfig } from "../config";
 
 // ---------------------------------------------------------------------------
 // Possession-state match engine (plans/6. match-simulator-overhaul.md).
@@ -123,10 +124,7 @@ export function robustZ(value: number, median: number, sigma: number): number {
 // ---------------------------------------------------------------------------
 
 function readinessFactor(energy: number): number {
-  const { fullEnergyThreshold, maxPenalty, curveExponent } = MS.readiness;
-  if (energy >= fullEnergyThreshold) return 1;
-  const p = (fullEnergyThreshold - energy) / fullEnergyThreshold;
-  return 1 - maxPenalty * Math.pow(p, curveExponent);
+  return readiness(energy);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +278,8 @@ interface Engine {
   homeOn: Player[];
   awayOn: Player[];
   playerMinutes: Record<number, number>;
+  playerRecentLoad: Record<number, number>;
+  playerMatchLoad: Record<number, number>;
   commentary: string[];
   ended: boolean;
   extraTimePlayed: boolean;
@@ -1274,67 +1274,47 @@ function removeFromPitch(eng: Engine, side: Side, playerId: number): void {
  *  simulations average `injuries.targetPerMatch`. A single RNG draw per action
  *  keeps the stream chunk-independent (determinism between instant and
  *  streamed simulation). */
-function resolveInjuryHazard(eng: Engine, side: Side, minute: number, addedTime?: number): void {
+function resolveInjuryHazard(eng: Engine, action: string, minute: number, addedTime?: number): void {
   const expectedActionsPerMatch = 2 * (MS.validation.reference["TEAM_MATCH.modeledActions"]?.mean ?? 956);
-  const baseHazardPerAction = MS.injuries.targetPerMatch / Math.max(1, expectedActionsPerMatch);
-  const involved = involvedPlayers(side, eng.zone);
-  if (involved.length === 0) return;
-  // One aggregate hazard roll for the whole acting side; the victim is then
-  // selected from the involved players so a red-card-like removal is rare but
-  // deterministic.
-  let riskSum = 0;
-  const risks: { ps: LivePlayerState; player: Player }[] = [];
-  for (const { ps } of involved) {
-    const player = eng.onPitchBySide[side.idx].find((p) => p.id === ps.id);
-    if (!player) continue;
-    const workload = clamp((minutesPlayedLast72h(player) - 90) / 180, 0, 1);
-    const fatigueRisk = 1 - ps.readiness;
-    const ageYears = Math.max(0, ps.age - MS.injuries.ageRiskStartAge);
-    const logRisk =
-      MS.injuries.recentWorkloadLogRiskCoefficient * workload +
-      MS.injuries.fatigueLogRiskCoefficient * fatigueRisk +
-      MS.injuries.ageLogRiskPerYear * ageYears;
-    const riskMultiplier = Math.exp(logRisk);
-    const localActionInvolvement = ps.readiness;
-    const pInjury = 1 - Math.exp(-baseHazardPerAction * riskMultiplier * localActionInvolvement);
-    risks.push({ ps, player });
-    riskSum += pInjury;
-  }
-  const pAny = 1 - Math.exp(-riskSum);
-  if (nextDouble(eng.rng) >= pAny) return;
-  // Select the victim proportional to its individual risk.
-  let roll = nextDouble(eng.rng) * riskSum;
-  for (const { ps, player } of risks) {
-    const workload = clamp((minutesPlayedLast72h(player) - 90) / 180, 0, 1);
-    const logRisk =
-      MS.injuries.recentWorkloadLogRiskCoefficient * workload +
-      MS.injuries.fatigueLogRiskCoefficient * (1 - ps.readiness) +
-      MS.injuries.ageLogRiskPerYear * Math.max(0, ps.age - MS.injuries.ageRiskStartAge);
-    const w = 1 - Math.exp(-baseHazardPerAction * Math.exp(logRisk) * ps.readiness);
-    roll -= w;
-    if (roll <= 0) {
-      const days = injuryDaysDuration(eng.rng, player);
-      player.injuryDays = days;
-      eng.st.playerEnergy ??= {};
-      eng.st.playerEnergy[ps.id] = ps.energy;
-      eng.injuries.push({ playerId: ps.id, days, minute });
-      eng.stats[side.idx === 0 ? "home" : "away"].injuries++;
-      eng.events.push({
-        minute, half: eng.period, type: EVENT_CODES.INJURY, subtype: 0, clubId: side.club.id, playerId: ps.id, player2Id: null, goalType: days,
-        ...(addedTime !== undefined ? { addedTime } : {}),
-      });
-      ps.onPitch = false;
-      removeFromPitch(eng, side, ps.id);
-      return;
+  const rawActions = ENERGY_INJURY_MODEL.injuryRisk.actionRiskRaw;
+  const rawAction = rawActions[action] ?? rawActions.PASS;
+  // Spec §13.5 normalizes with the neutral empirical action distribution from
+  // football-baseline.json; that artifact is not in the repository yet, so the
+  // unweighted mean over the versioned table stands in until it lands.
+  const meanRawActionRisk = Object.values(rawActions).reduce((sum, value) => sum + value, 0) / Object.values(rawActions).length;
+  const referenceRisk = injuryRiskMultiplier(ENERGY_INJURY_MODEL.injuryRisk.referenceEnergy, ENERGY_INJURY_MODEL.injuryRisk.referenceRecentLoad, ENERGY_INJURY_MODEL.injuryRisk.ageReference);
+  const baseHazardPerAction = gameConfig.injuries.matchTargetPerMatch / Math.max(1, expectedActionsPerMatch * referenceRisk);
+  const participants: { ps: LivePlayerState; player: Player; side: Side; weight: number; lambda: number }[] = [];
+  for (const currentSide of [eng.home, eng.away]) {
+    for (const { ps, weight } of involvedPlayers(currentSide, eng.zone)) {
+      const player = eng.onPitchBySide[currentSide.idx].find((candidate) => candidate.id === ps.id);
+      if (!player) continue;
+      const recentLoad = eng.playerRecentLoad[ps.id] ?? 0;
+      participants.push({ ps, player, side: currentSide, weight, lambda: baseHazardPerAction * injuryRiskMultiplier(ps.energy, recentLoad, ps.age) });
     }
   }
-}
-
-function minutesPlayedLast72h(player: Player): number {
-  const minutes = player.recentMinutes ?? [];
-  let total = 0;
-  for (const m of minutes.slice(0, 3)) total += m;
-  return total;
+  const exposureTotal = participants.reduce((sum, participant) => sum + Math.max(0, participant.weight), 0);
+  if (exposureTotal <= 0) return;
+  let lambdaAction = 0;
+  for (const participant of participants) {
+    participant.lambda *= participant.weight / exposureTotal * rawAction / Math.max(1e-9, meanRawActionRisk);
+    lambdaAction += participant.lambda;
+  }
+  if (nextDouble(eng.rng) >= 1 - Math.exp(-lambdaAction)) return;
+  let roll = nextDouble(eng.rng) * lambdaAction;
+  for (const participant of participants) {
+    roll -= participant.lambda;
+    if (roll > 0) continue;
+    const result = recordInjury(eng.rng, participant.player, "MATCH", eng.st.absoluteGameDay ?? 0, eng.st.roundsPerSeason, eng.st.matchSpacingDays);
+    eng.st.playerEnergy ??= {};
+    eng.st.playerEnergy[participant.ps.id] = participant.ps.energy;
+    eng.injuries.push({ playerId: participant.ps.id, days: result.days, minute, equivalentRealDays: result.equivalentRealDays, cause: "MATCH" });
+    eng.stats[participant.side.idx === 0 ? "home" : "away"].injuries++;
+    eng.events.push({ minute, half: eng.period, type: EVENT_CODES.INJURY, subtype: 0, clubId: participant.side.club.id, playerId: participant.ps.id, player2Id: null, goalType: result.days, ...(addedTime !== undefined ? { addedTime } : {}) });
+    participant.ps.onPitch = false;
+    removeFromPitch(eng, participant.side, participant.ps.id);
+    return;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,30 +1324,15 @@ function minutesPlayedLast72h(player: Player): number {
 function fatigueEnergyLoss(eng: Engine, side: Side, dtSeconds: number): void {
   const minutes = dtSeconds / 60;
   for (const ps of side.on) {
-    const roleGroup = ps.tacPos === 1 ? "GK" : ps.tacPos <= 9 ? "DEF" : ps.tacPos <= 17 ? "MID" : "ATT";
-    const roleLoad = MS.fatigue.roleLoad[roleGroup] ?? 1;
-    const pressLoad = 1 + MS.fatigue.pressLoadCoefficient * side.tactics.pressing;
-    const ageLoad = 1 + MS.fatigue.ageLoadCoefficient * Math.max(0, ps.age - MS.fatigue.agePenaltyStartAge);
-    const staminaCapacity = staminaCapacityFor(ps);
-    const energyTerm = 1 + MS.fatigue.lowEnergyAcceleration * (1 - ps.energy / 100);
-    const fatiguePerMinute = MS.fatigue.perMinuteBase * roleLoad * pressLoad * ageLoad * (100 / Math.max(1, staminaCapacity)) * energyTerm;
-    const involvementWeight = involvedPlayers(side, eng.zone).some((l) => l.ps.id === ps.id)
-      ? MS.fatigue.involvementBase + MS.fatigue.involvementRange * 1
-      : MS.fatigue.involvementBase;
-    const loss = MS.fatigue.fatigueScale * fatiguePerMinute * minutes * involvementWeight;
-    ps.energy = Math.max(1, ps.energy - loss);
+    const involvementWeight = involvement(tacPosRole(ps.tacPos), eng.zone);
+    const press = side.tactics.pressing * 100;
+    ps.energy = Math.max(0, ps.energy - energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: physicalSkill({ skills: ps.skills }), position: ps.position, pressing: press, involvement: involvementWeight, minutes }));
+    eng.playerMatchLoad[ps.id] = (eng.playerMatchLoad[ps.id] ?? 0) + loadIncrement({ position: ps.position, pressing: press, involvement: involvementWeight, minutes });
     refreshReadiness(ps, eng.centers);
   }
   // Formation support/coverage feeds tactical and organisation signals, so it
   // must follow the same readiness changes in instant and streamed runs.
   computeSupport(side);
-}
-
-function staminaCapacityFor(ps: LivePlayerState): number {
-  const physicalSkill = (ps.skills.vel + physicalOf(ps.skills)) / 2;
-  const agePenalty = MS.fatigue.agePenaltyPerYear * Math.max(0, ps.age - MS.fatigue.agePenaltyStartAge);
-  const physicalBonus = MS.fatigue.physicalBonusCoefficient * (physicalSkill - MS.fatigue.physicalBonusCenter);
-  return clamp(100 - agePenalty + physicalBonus, MS.fatigue.staminaCapacityMin, MS.fatigue.staminaCapacityMax);
 }
 
 // ---------------------------------------------------------------------------
@@ -1638,7 +1603,8 @@ function stepPossession(eng: Engine): void {
   if (LONG_RANK[eng.zone] >= 2) eng.attThirdSeconds[attSide] += dt;
 
   // Fatigue uses actual match-clock progress.
-  fatigueEnergyLoss(eng, attSide === 0 ? eng.home : eng.away, dt);
+  fatigueEnergyLoss(eng, eng.home, dt);
+  fatigueEnergyLoss(eng, eng.away, dt);
   updateOrganisation(eng, dt);
 
   // Minutes bookkeeping (approx: match-clock seconds → display minutes).
@@ -1658,11 +1624,13 @@ function stepPossession(eng: Engine): void {
   const clockInfo = displayMinuteForClock(eng, eng.clockSeconds);
   const displayMinute = clockInfo.minute;
   const displayAddedTime = clockInfo.addedTime;
-  const eventHalf = eng.period as number;
-  resolveInjuryHazard(eng, attSide === 0 ? eng.home : eng.away, displayMinute, displayAddedTime);
 
   // SHOT resolution
   if (action === "SHOT") {
+    const eventHalf = eng.period as number;
+    // Shots have no foul outcome; evaluate the hazard with the modeled action
+    // factor right before the shot resolves.
+    resolveInjuryHazard(eng, "SHOT", displayMinute, displayAddedTime);
     const def = opp(eng, attSide);
     const result = resolveShot(eng, sideOf(eng, attSide), def);
     stats.shots++;
@@ -1723,6 +1691,11 @@ function stepPossession(eng: Engine): void {
 
   // Non-shot: resolve outcome
   const outcome = resolveOutcome(eng, action);
+  // Spec §13.5: a FOUL outcome carries the FOUL action factor; every other
+  // non-shot action uses its modeled/failure factor. The hazard must run after
+  // the outcome is known but before the outcome's consequences (so an injured
+  // defender can no longer be selected as the fouler).
+  resolveInjuryHazard(eng, outcome === "FOUL" ? "FOUL" : action, displayMinute, displayAddedTime);
 
   if (outcome === "CONTINUE") {
     const beforeZone = eng.zone;
@@ -2003,6 +1976,8 @@ function buildEngine(
     homeOn: homeXI,
     awayOn: awayXI,
     playerMinutes: { ...(st.playerMinutes ?? {}) },
+    playerRecentLoad: { ...(st.playerRecentLoad ?? {}) },
+    playerMatchLoad: { ...(st.playerMatchLoad ?? {}) },
     commentary: [],
     ended: st.ended ?? false,
     extraTimePlayed: st.extraTimePlayed ?? false,
@@ -2148,6 +2123,8 @@ function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimula
   for (const side of [eng.home, eng.away]) {
     for (const ps of side.on) st.playerEnergy[ps.id] = ps.energy;
   }
+  st.playerRecentLoad = { ...eng.playerRecentLoad };
+  st.playerMatchLoad = { ...eng.playerMatchLoad };
   st.homeOn = eng.home.on.map((ps) => ps.id);
   st.awayOn = eng.away.on.map((ps) => ps.id);
   st.scores = eng.scores;

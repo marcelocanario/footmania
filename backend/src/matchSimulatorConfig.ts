@@ -157,12 +157,6 @@ const normalizationSchema = z.object({
   minTacticalSigma: positiveNumber,
 });
 
-const readinessSchema = z.object({
-  fullEnergyThreshold: positiveNumber,
-  maxPenalty: z.number().min(0).max(1),
-  curveExponent: positiveNumber,
-});
-
 const actionQualitySchema = z.object({
   localDensityCoefficient: nonNegativeNumber,
   attributeWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
@@ -212,31 +206,6 @@ const counterattackSchema = z.object({
   endOrganisationFraction: z.number().min(0).max(1),
 });
 
-const fatigueSchema = z.object({
-  fatigueScale: positiveNumber,
-  agePenaltyStartAge: z.number(),
-  agePenaltyPerYear: z.number(),
-  physicalBonusCoefficient: z.number(),
-  physicalBonusCenter: z.number(),
-  staminaCapacityMin: z.number().min(0).max(100),
-  staminaCapacityMax: z.number().min(0).max(100),
-  restLast24hPenalty: nonNegativeNumber,
-  restLast72hPenalty: nonNegativeNumber,
-  restDaysSinceMatchBonus: nonNegativeNumber,
-  dailyRecoveryBase: nonNegativeNumber,
-  dailyRecoveryStaminaCoefficient: nonNegativeNumber,
-  dailyRecoveryRestCoefficient: nonNegativeNumber,
-  dailyRecoveryMin: nonNegativeNumber,
-  dailyRecoveryMax: nonNegativeNumber,
-  roleLoad: z.record(z.string(), nonNegativeNumber),
-  pressLoadCoefficient: nonNegativeNumber,
-  ageLoadCoefficient: nonNegativeNumber,
-  perMinuteBase: nonNegativeNumber,
-  lowEnergyAcceleration: nonNegativeNumber,
-  involvementBase: nonNegativeNumber,
-  involvementRange: nonNegativeNumber,
-});
-
 const foulsSchema = z.object({
   disciplineRiskLogitCoefficient: z.number(),
   pressIntensityLogitCoefficient: z.number(),
@@ -252,14 +221,6 @@ const cardsSchema = z.object({
   fatigueLogitCoefficient: z.number(),
   pressIntensityLogitCoefficient: z.number(),
   highThreatLogitCoefficient: z.number(),
-});
-
-const injuriesSchema = z.object({
-  targetPerMatch: positiveNumber,
-  ageRiskStartAge: z.number(),
-  ageLogRiskPerYear: positiveNumber,
-  fatigueLogRiskCoefficient: positiveNumber,
-  recentWorkloadLogRiskCoefficient: positiveNumber,
 });
 
 const substitutionAiSchema = z.object({
@@ -334,7 +295,6 @@ const matchSimulatorSchema = z
     shotModel: shotModelSchema,
     homeAdvantage: homeAdvantageSchema,
     normalization: normalizationSchema,
-    readiness: readinessSchema,
     actionQuality: actionQualitySchema,
     formationSupport: formationSupportSchema,
     tacticalFamiliarity: tacticalFamiliaritySchema,
@@ -342,10 +302,8 @@ const matchSimulatorSchema = z
     pressing: pressingSchema,
     defensiveOrganisation: defensiveOrganisationSchema,
     counterattack: counterattackSchema,
-    fatigue: fatigueSchema,
     fouls: foulsSchema,
     cards: cardsSchema,
-    injuries: injuriesSchema,
     substitutionAi: substitutionAiSchema,
     aiTactics: aiTacticsSchema,
     epv: epvSchema,

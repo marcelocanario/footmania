@@ -232,25 +232,6 @@ export function shouldRetire(rng: RngState, player: Player): boolean {
   return roll > retirementRollThreshold(player.age, player.position);
 }
 
-export function injuryDays(rng: RngState, player: Player): number {
-  let days = nextInt(rng, 14);
-  const base = 5 + nextInt(rng, 20);
-  let n = days;
-  if (player.energy < 10) n += 5;
-  else if (player.energy < 50) n += 1;
-  if (player.age <= 20) n = n;
-  else if (player.age <= 25) n = n + 1;
-  else if (player.age <= 30) n = n + 2;
-  else if (player.age <= 35) n = n + 3;
-  else if (player.age <= 40) n = n + base;
-  else n = n + base + 10;
-  const bonus = nextInt(rng, 100);
-  if (bonus === 1) n += 70;
-  else if (bonus < 4) n += 40;
-  else if (bonus < 10) n += 20;
-  return n;
-}
-
 export function aging(rng: RngState, player: Player, club: Club) {
   player.age += 1;
   player.seasonGoals = 0;

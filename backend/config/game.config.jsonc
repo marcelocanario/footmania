@@ -43,8 +43,8 @@
   // the derived season length so a full season sums to the stored annual salary.
   // (e.g. 7 = wages are paid every 7 game-days.)
   "payrollIntervalDays": 7,
-  // Game-day cadence for weekly sim updates (energy recovery,
-  // potential growth, contracts).
+  // Game-day cadence for weekly simulation updates (potential growth and
+  // contracts). Energy recovery is now processed every game day.
   // (e.g. 7 = a weekly sim update runs every 7 game-days.)
   "weeklyIntervalDays": 7,
   // Real-time days an unclaimed free agent remains available across relists.
@@ -246,5 +246,16 @@
   "liveMatch": {
     "matchDurationMinutes": 30,
     "halftimePauseMinutes": 5
+  },
+
+  "energy": {
+    "matchLossScale": 1.0,
+    "recoveryScale": 1.0
+  },
+
+  "injuries": {
+    "matchTargetPerMatch": 0.35,
+    "trainingTargetPerClubSeason": 1.5,
+    "severityScale": 1.0
   }
 }

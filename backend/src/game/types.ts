@@ -32,6 +32,8 @@ export interface Player {
   overall: number;
   potential: number;
   energy: number;
+  /** Hidden exponentially-decaying recent match workload. */
+  recentLoad?: number;
   salary: number;
   payrollPaidThroughDay: number;
   payrollPaidAmount: number;
@@ -39,6 +41,11 @@ export interface Player {
   value: number;
   releaseClause: number;
   injuryDays: number;
+  /** Absolute game-day injury state. injuryDays is retained as a derived legacy view. */
+  injuryUntilAbsoluteGameDay?: number | null;
+  injuryInitialGameDays?: number | null;
+  injuryEquivalentRealDays?: number | null;
+  injuryCause?: "MATCH" | "TRAINING" | null;
   contractDays: number;
   isYouth: boolean;
   starter: boolean;
@@ -357,6 +364,8 @@ export interface LiveInjuryState {
   playerId: number;
   days: number;
   minute: number;
+  equivalentRealDays?: number;
+  cause?: "MATCH" | "TRAINING";
 }
 
 export interface LiveSubstitutionState {
@@ -445,6 +454,13 @@ export interface LiveMatchState {
    *  (the database field is an integer) so streamed ticks and reloads do not
    *  reset fatigue or introduce rounding drift. */
   playerEnergy: Record<number, number>;
+  /** Persistent workload snapshot and this match's accumulated load. */
+  playerRecentLoad?: Record<number, number>;
+  playerMatchLoad?: Record<number, number>;
+  playerPreMatchLoad?: Record<number, number>;
+  absoluteGameDay?: number;
+  roundsPerSeason?: number;
+  matchSpacingDays?: number;
   shootout?: { scores: [number, number]; winner: number };
   ended: boolean;
   // Real clock (epoch ms) of the last time this match was advanced. Used to

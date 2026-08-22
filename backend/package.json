@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/copy-game-data.mjs",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:calibration": "vitest run --config vitest.calibration.config.ts",
@@ -13,6 +13,7 @@
     "test:all": "npm test && npm run test:integration && npm run test:calibration",
     "test:watch": "vitest",
     "calibrate:match": "tsx scripts/match-calibration.ts",
+    "regenerate:match-golden": "tsx scripts/regenerate-match-golden.mts",
     "db:generate": "prisma generate",
     "db:upgrade": "prisma db push && tsx scripts/migrate-contract-market.ts",
     "db:push": "prisma db push",

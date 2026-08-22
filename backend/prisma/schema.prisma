@@ -269,6 +269,7 @@ model Player {
   overall         Int
   potential       Int
   energy          Int
+  recentLoad      Float    @default(0)
   salary          Int
   payrollPaidThroughDay Int @default(0)
   payrollPaidAmount Int @default(0)
@@ -276,6 +277,10 @@ model Player {
   value           Int
   releaseClause   Int
   injuryDays      Int
+  injuryUntilAbsoluteGameDay Int?
+  injuryInitialGameDays Int?
+  injuryEquivalentRealDays Float?
+  injuryCause     String?
   contractDays    Int
   isYouth         Boolean
   starter         Boolean

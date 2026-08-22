@@ -162,7 +162,9 @@ describe("generation neutrality", () => {
           seed: 4200 + division,
           slot,
         }));
-        expect(player).toEqual(fixture.seniorPlayers[seniorIndex++]);
+        const { recentLoad: _recentLoad, injuryUntilAbsoluteGameDay: _until, injuryInitialGameDays: _initial, injuryEquivalentRealDays: _equivalent, injuryCause: _cause, ...legacyPlayer } = player;
+        expect(legacyPlayer).toEqual(fixture.seniorPlayers[seniorIndex++]);
+        expect(player.recentLoad).toBe(0);
       }
     }
 
@@ -180,7 +182,9 @@ describe("generation neutrality", () => {
           seed: 9000 + youthIndex,
           slot,
         }));
-        expect(player).toEqual(fixture.youthPlayers[youthIndex++]);
+        const { recentLoad: _recentLoad, injuryUntilAbsoluteGameDay: _until, injuryInitialGameDays: _initial, injuryEquivalentRealDays: _equivalent, injuryCause: _cause, ...legacyPlayer } = player;
+        expect(legacyPlayer).toEqual(fixture.youthPlayers[youthIndex++]);
+        expect(player.recentLoad).toBe(0);
       }
     }
   });

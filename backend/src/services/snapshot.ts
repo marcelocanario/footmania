@@ -8,10 +8,11 @@ import { getCommitmentTotals, financialState, remainingSeasonFraction } from "..
 import { resolveClubKits } from "../game/kits";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { seasonKey } from "../game/clock";
+import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 
 const snapshotCache = new WeakMap<World, Map<number, unknown>>();
 
-export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }) {
+export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }, absoluteGameDay = 0) {
   const nick = (p.nickname ?? "").trim();
   return {
     id: p.id,
@@ -30,7 +31,11 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     value: p.value,
     salary: p.salary,
     contractDays: p.contractDays,
-    injuryDays: p.injuryDays,
+    injuryDays: injuryDaysRemaining(p, absoluteGameDay),
+    injuryDaysRemaining: injuryDaysRemaining(p, absoluteGameDay),
+    injuryCause: p.injuryCause ?? null,
+    injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+    conditionLabel: conditionLabel(p, absoluteGameDay),
     isYouth: p.isYouth,
     seasonGoals: p.seasonGoals,
     seasonAssists: p.seasonAssists,
@@ -110,11 +115,11 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   const squad = world.players
     .filter((p) => p.clubId === clubId && !p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById)));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex));
   const juniors = world.players
     .filter((p) => p.clubId === clubId && p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById)));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex));
   // Players the club owns but that are away on loan, so the ceding club can
   // still see them in its roster.
   const loanedOutIds = new Set(
@@ -125,7 +130,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   const loanedOut = world.players
     .filter((p) => p.clubId !== clubId && p.loanId !== null && loanedOutIds.has(p.loanId))
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById)));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex));
   // Loaned-out players appear in the senior roster (greyed out in the UI).
   const squadAll = [...squad, ...loanedOut].sort((a, b) => b.overall - a.overall);
 
@@ -180,7 +185,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
         .filter((p) => p.clubId === null && listedPlayerIds.has(p.id))
         .sort((a, b) => b.overall - a.overall)
         .slice(0, 30)
-        .map((p) => playerView(p));
+        .map((p) => playerView(p, undefined, world.mp.absoluteGameDay ?? world.dayIndex));
     })()
     : [];
 

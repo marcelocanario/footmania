@@ -8,7 +8,7 @@ import type {
 } from "./types";
 import { createLiveMatchState, applyLiveMatchEnergy, applyMatchToPlayers, buildMatchFromState, tickLiveMatch, isHalftime } from "./match";
 import { updateStandings } from "./league";
-import { MP_CONFIG } from "../config";
+import { gameConfig, MP_CONFIG } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { syncClubSeasons } from "./multiplayer";
 import { applyMatchElo } from "./elo";
@@ -60,6 +60,10 @@ export function startLiveMatch(world: World, fixture: Fixture): Match | null {
   const home = findClub(world, fixture.homeClubId);
   const away = findClub(world, fixture.awayClubId);
   if (!home || !away) return null;
+  // AI rotation (plan 9 §21.4): futureCost is zeroed when no further league
+  // fixture follows this season for the club.
+  const futureFixtures = (clubId: number): boolean =>
+    world.fixtures.some((f) => !f.played && f.id !== fixture.id && f.competitionId === fixture.competitionId && (f.homeClubId === clubId || f.awayClubId === clubId));
   const comp = findCompetition(world, fixture.competitionId);
   const match: Match = {
     id: world.nextId++,
@@ -86,6 +90,11 @@ export function startLiveMatch(world: World, fixture: Fixture): Match | null {
     decider: false,
     compKind: comp?.kind ?? "division",
     year: world.mp.seasonYear,
+    absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex,
+    roundsPerSeason: gameConfig.roundsPerSeason,
+    matchSpacingDays: gameConfig.matchSpacingDays,
+    homeFutureFixtures: futureFixtures(home.id),
+    awayFutureFixtures: futureFixtures(away.id),
   });
   world.liveMatches.push(st);
   // A restarted worker must account for time spent offline. The fixture's
@@ -161,10 +170,20 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
     const totalRegulation = MS.timing.regulationSeconds + (st.firstHalfAddedMinutes ?? 0) * 60 + (st.secondHalfAddedMinutes ?? 0) * 60;
     const remainingMinutes = Math.max(0, (totalRegulation - clockSeconds) / 60);
     const minutes = Math.min(wholeMinutes, Math.max(1, Math.ceil(remainingMinutes)));
-    // Advance one match-minute at a time so per-minute automation triggers fire correctly
-    // even when catching up after downtime (otherwise a 10-minute catch-up would skip 9 minutes of rules).
-    for (let iter = 0; iter < minutes; iter++) {
-      if (st.ended) break;
+    // Added time is only stamped once the clock enters stoppage. A downtime
+    // catch-up whose minute budget was frozen before that discovery would
+    // otherwise strand an overdue match one tick short of full time, so the
+    // loop keeps running while newly discovered added time extends the
+    // requirement (bounded well above any realistic stoppage total).
+    const addedAtEntry = (st.firstHalfAddedMinutes ?? 0) + (st.secondHalfAddedMinutes ?? 0);
+    const hardCap = wholeMinutes + 20;
+    let iter = 0;
+    while (!st.ended && iter < hardCap) {
+      if (iter >= minutes) {
+        const addedNow = (st.firstHalfAddedMinutes ?? 0) + (st.secondHalfAddedMinutes ?? 0);
+        if (addedNow <= addedAtEntry) break;
+      }
+      iter++;
       // During halftime we already handled the pause above; for normal play we
       // auto-play through the halftime boundary only for AI vs AI (human pause
       // is handled explicitly). Using ignoreHalfTime lets the engine cross the

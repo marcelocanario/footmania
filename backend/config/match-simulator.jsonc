@@ -4146,11 +4146,6 @@
         "contestZClamp": 2.5,
         "minTacticalSigma": 0.25
       },
-      "readiness": {
-        "fullEnergyThreshold": 75,
-        "maxPenalty": 0.28,
-        "curveExponent": 1.35
-      },
       "actionQuality": {
         "localDensityCoefficient": 3,
         "attributeWeights": {
@@ -4299,35 +4294,6 @@
         "activationThreshold": 0.35,
         "endOrganisationFraction": 0.85
       },
-      "fatigue": {
-        "fatigueScale": 1,
-        "agePenaltyStartAge": 27,
-        "agePenaltyPerYear": 1.8,
-        "physicalBonusCoefficient": 0.25,
-        "physicalBonusCenter": 50,
-        "staminaCapacityMin": 45,
-        "staminaCapacityMax": 100,
-        "restLast24hPenalty": 1.1,
-        "restLast72hPenalty": 0.35,
-        "restDaysSinceMatchBonus": 15,
-        "dailyRecoveryBase": 4,
-        "dailyRecoveryStaminaCoefficient": 0.04,
-        "dailyRecoveryRestCoefficient": 0.02,
-        "dailyRecoveryMin": 4,
-        "dailyRecoveryMax": 10,
-        "roleLoad": {
-          "GK": 0.2,
-          "DEF": 0.75,
-          "MID": 1,
-          "ATT": 0.9
-        },
-        "pressLoadCoefficient": 0.22,
-        "ageLoadCoefficient": 0.006,
-        "perMinuteBase": 0.32,
-        "lowEnergyAcceleration": 0.35,
-        "involvementBase": 0.75,
-        "involvementRange": 0.6
-      },
       "fouls": {
         "disciplineRiskLogitCoefficient": 0.35,
         "pressIntensityLogitCoefficient": 0.2,
@@ -4342,13 +4308,6 @@
         "fatigueLogitCoefficient": 0.25,
         "pressIntensityLogitCoefficient": 0.2,
         "highThreatLogitCoefficient": 0.2
-      },
-      "injuries": {
-        "targetPerMatch": 0.088,
-        "ageRiskStartAge": 28,
-        "ageLogRiskPerYear": 0.025,
-        "fatigueLogRiskCoefficient": 1.25,
-        "recentWorkloadLogRiskCoefficient": 0.35
       },
       "substitutionAi": {
         "needWeights": {
