@@ -137,6 +137,17 @@ export interface MpStatus {
   } | null;
 }
 
+export interface MarketUpdate {
+  type: "marketUpdated";
+  marketType: "TRANSFER" | "FREE_AGENT";
+  listingId: number;
+  status: string;
+  currentPrice?: number;
+  deadline?: number;
+  bidderCount?: number;
+  amILeading?: boolean;
+}
+
 export interface SchedulerClockView {
   absoluteGameDay: number;
   seasonId: number;
@@ -542,6 +553,20 @@ export interface LiveState {
   awayIsHuman: boolean;
 }
 
+export interface LiveStateDelta {
+  matchId: number;
+  minute: number;
+  half: number;
+  phase: LiveState["phase"];
+  homeScore: number;
+  awayScore: number;
+  stats: MatchStats;
+  newEvents: LiveEvent[];
+  automationFiredCount: number;
+  progressPct: number;
+  currentAddedTime: number | null;
+}
+
 export interface LineupPlayer {
   id: number;
   name: string;
@@ -597,6 +622,7 @@ const inFlight = new Map<string, Promise<unknown>>();
 let cacheGeneration = 0;
 type CacheListener = (scope?: string) => void;
 const cacheListeners = new Set<CacheListener>();
+const marketUpdateListeners = new Set<(event: MarketUpdate) => void>();
 
 // Auth endpoints, live match info, match live state, and settings are never cached.
 const NEVER_CACHE = /^api\/(auth|mp\/live-match$|matches\/.*\/(live|events|sub|halftime|ws)|settings)/;
@@ -654,6 +680,15 @@ export const cache = {
     cacheListeners.add(listener);
     return () => {
       cacheListeners.delete(listener);
+    };
+  },
+  emitMarketUpdated: (event: MarketUpdate) => {
+    for (const listener of marketUpdateListeners) listener(event);
+  },
+  subscribeMarketUpdated: (listener: (event: MarketUpdate) => void) => {
+    marketUpdateListeners.add(listener);
+    return () => {
+      marketUpdateListeners.delete(listener);
     };
   },
   get<T>(key: string): T | undefined {

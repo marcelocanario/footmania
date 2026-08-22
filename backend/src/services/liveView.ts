@@ -93,6 +93,20 @@ export interface LiveStateView {
   awayIsHuman: boolean;
 }
 
+export interface LiveStateDeltaView {
+  matchId: number;
+  minute: number;
+  half: number;
+  phase: string;
+  homeScore: number;
+  awayScore: number;
+  stats: LiveMatchState["stats"];
+  newEvents: LiveEventView[];
+  automationFiredCount: number;
+  progressPct: number;
+  currentAddedTime: number | null;
+}
+
 export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: number | null): LiveStateView {
   const byId = new Map(world.players.map((p) => [p.id, p]));
   const club = (id: number) => world.clubs.find((c) => c.id === id);
@@ -219,5 +233,51 @@ function kitView(design: LiveKitView | null, fallbackPrimary: string, fallbackSe
     accent: design?.accent ?? "#ffffff",
     numberColor: design?.numberColor ?? "#ffffff",
     pattern: design?.pattern ?? "solid",
+  };
+}
+
+/** Compact, viewer-neutral update used during server-driven live play. */
+export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart: number): LiveStateDeltaView {
+  const byId = new Map(world.players.map((p) => [p.id, p]));
+  const newEvents = st.events.slice(Math.max(0, eventStart)).map((e, offset) => ({
+    sequence: Math.max(0, eventStart) + offset,
+    minute: e.minute,
+    half: e.half,
+    type: e.type,
+    subtype: e.subtype,
+    clubId: e.clubId,
+    playerId: e.playerId,
+    player2Id: e.player2Id,
+    player: e.playerId ? (byId.get(e.playerId) ? displayName(byId.get(e.playerId)!) : "") : "",
+    player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
+    ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
+  }));
+  const firstAdded = st.firstHalfAddedMinutes ?? 0;
+  const secondAdded = st.secondHalfAddedMinutes ?? 0;
+  const clock = st.matchClockSeconds ?? 0;
+  const effectiveClock = st.period === 2 && clock >= MS.timing.firstHalfEndSeconds + firstAdded * 60
+    ? clock - firstAdded * 60
+    : clock;
+  const progressPct = Math.min(100, Math.max(0, effectiveClock / MS.timing.regulationSeconds * 100));
+  let currentAddedTime: number | null = null;
+  const firstEnd = MS.timing.firstHalfEndSeconds;
+  const secondEnd = MS.timing.regulationSeconds + firstAdded * 60;
+  if (firstAdded > 0 && clock >= firstEnd && clock < firstEnd + firstAdded * 60 && st.period === 1) {
+    currentAddedTime = Math.floor((clock - firstEnd) / 60) + 1;
+  } else if (secondAdded > 0 && clock >= secondEnd && clock < secondEnd + secondAdded * 60 && st.period === 2) {
+    currentAddedTime = Math.floor((clock - secondEnd) / 60) + 1;
+  }
+  return {
+    matchId: st.matchId,
+    minute: st.minute,
+    half: st.half,
+    phase: livePhase(st),
+    homeScore: st.scores[0],
+    awayScore: st.scores[1],
+    stats: st.stats,
+    newEvents,
+    automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
+    progressPct,
+    currentAddedTime,
   };
 }

@@ -1,17 +1,14 @@
 import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorldMutable, persistLiveMatchState, persistWorld } from "../services/saveService";
-import { liveStateView } from "../services/liveView";
+import { liveStateView, liveStateDeltaView } from "../services/liveView";
 import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
-import { advanceLiveMatches } from "../game/world";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
 import { StaleWorldError } from "../services/saveService";
-import { hasPro } from "../services/pro";
-import { createNotification, notifyMatchFinished } from "../services/notifications";
-import { EVENT_CODES } from "../game/constants";
 import { readUserLiveMatch } from "../services/readService";
-import { publishUserWorldEvent, registerWorldEventPublisher } from "../services/worldEvents";
+import { registerWorldEventPublisher } from "../services/worldEvents";
+import { registerLiveMatchBroadcaster, type LiveMatchUpdate } from "../services/liveMatchEvents";
 
 const COOKIE_NAME = "fm_session";
 const conns = new Map<number, Set<WebSocket>>();
@@ -31,13 +28,32 @@ function send(ws: WebSocket, msg: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
-function broadcastState(world: import("../game/types").World) {
+function broadcastState(world: import("../game/types").World, matchId?: number) {
   for (const st of world.liveMatches) {
+    if (matchId !== undefined && st.matchId !== matchId) continue;
     for (const ws of conns.get(st.matchId) ?? []) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
       const viewerClub = meta ? world.clubs.find((club) => club.ownerUserId === meta.userId) : undefined;
       if (!meta || !viewerClub || (viewerClub.id !== st.homeClubId && viewerClub.id !== st.awayClubId)) continue;
       send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
+    }
+  }
+}
+
+function broadcastLiveMatchUpdates(world: import("../game/types").World, updates: LiveMatchUpdate[]) {
+  for (const update of updates) {
+    const state = world.liveMatches.find((candidate) => candidate.matchId === update.matchId);
+    for (const ws of conns.get(update.matchId) ?? []) {
+      const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
+      const viewerClub = meta ? world.clubs.find((club) => club.ownerUserId === meta.userId) : undefined;
+      if (!meta || !viewerClub || (viewerClub.id !== update.homeClubId && viewerClub.id !== update.awayClubId)) continue;
+      if (update.finished || !state) {
+        send(ws, { type: "finished", matchId: update.matchId });
+      } else if (update.phaseChanged) {
+        send(ws, { type: "state", state: liveStateView(world, state, meta.userId) });
+      } else {
+        send(ws, { type: "delta", delta: liveStateDeltaView(world, state, update.eventStart) });
+      }
     }
   }
 }
@@ -67,6 +83,7 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
   registerWorldEventPublisher((userId, event) => {
     for (const ws of userConns.get(userId) ?? []) send(ws, event);
   });
+  registerLiveMatchBroadcaster(broadcastLiveMatchUpdates);
 
   app.addHook("onClose", async () => {
     clearInterval(heartbeat);
@@ -79,6 +96,7 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
     conns.clear();
     userConns.clear();
     registerWorldEventPublisher(null);
+    registerLiveMatchBroadcaster(null);
     wss.close();
   });
 
@@ -180,7 +198,7 @@ async function handleMessage(
     send(ws, { type: "pong" });
     return;
   }
-  if (msg.type !== "tick" && msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "automation" && msg.type !== "halftimeReady") {
+  if (msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "automation" && msg.type !== "halftimeReady") {
     send(ws, { type: "error", message: "Unknown message type" });
     return;
   }
@@ -211,52 +229,6 @@ async function handleMessage(
           send(ws, { type: "error", message: "You are not a participant in this match" });
           return;
         }
-        if (msg.type === "tick") {
-          if (!isParticipant) {
-            send(ws, { type: "error", message: "You are not a participant in this match" });
-            return;
-          }
-        const beforeEvents = st.events.length;
-        const finished = advanceLiveMatches(world, Date.now());
-        const res = {
-          events: st.events.slice(beforeEvents),
-          atHalfTime: isHalftime(st),
-        };
-        if (finished.length > 0 || !world.liveMatches.some((match) => match.matchId === meta.matchId)) {
-          await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-        } else {
-          await persistLiveMatchState(app.prisma, loaded.save.id, loaded.save.id, st, world.rng.state, loaded.save.revision);
-        }
-        // Best-effort inbox notifications for finished matches + pro goal pushes
-        for (const m of finished) {
-          try {
-            await notifyMatchFinished(app.prisma, world, m);
-          } catch {}
-          for (const clubId of [m.homeClubId, m.awayClubId]) {
-            const ownerUserId = world.clubs.find((club) => club.id === clubId)?.ownerUserId;
-            if (ownerUserId !== null && ownerUserId !== undefined) {
-              publishUserWorldEvent(ownerUserId, { type: "liveMatchEnded", matchId: m.id });
-            }
-          }
-        }
-        // Pro goal push (best-effort)
-        try {
-          const goalEvents = res.events.filter((e) => e.type === EVENT_CODES.GOAL);
-          if (goalEvents.length > 0) {
-            const u = await app.prisma.user.findUnique({ where: { id: meta.userId } });
-            if (u && hasPro(u as never)) {
-              for (const g of goalEvents) await createNotification(app.prisma, meta.userId, "MATCH_GOAL", { matchId: st.matchId, fixtureId: st.fixtureId, minute: g.minute, clubId: g.clubId, scores: st.scores });
-            }
-          }
-        } catch {}
-        send(ws, { type: "tick", events: res.events, atHalfTime: res.atHalfTime, state: liveStateView(world, st, meta.userId) });
-        if (st.ended || !world.liveMatches.some((match) => match.matchId === meta.matchId)) {
-          for (const ws2 of conns.get(meta.matchId) ?? []) send(ws2, { type: "finished", matchId: meta.matchId });
-        } else {
-          broadcastState(world);
-        }
-        return;
-      }
       if (msg.type === "sub") {
         if (st.ended) {
           send(ws, { type: "error", message: "Match already finished" });
@@ -274,7 +246,7 @@ async function handleMessage(
         }
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "sub", event: res.event, state: liveStateView(world, st, meta.userId) });
-        broadcastState(world);
+         broadcastState(world, meta.matchId);
         return;
       }
       if (msg.type === "lineup") {
@@ -305,7 +277,7 @@ async function handleMessage(
         rebuildLiveHumanLineup(st, humanClub, world.players);
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "lineup", state: liveStateView(world, st, meta.userId) });
-        broadcastState(world);
+         broadcastState(world, meta.matchId);
         return;
       }
       if (msg.type === "automation") {
@@ -319,7 +291,7 @@ async function handleMessage(
         st.automationDisabled[side] = !enabled;
         await persistLiveMatchState(app.prisma, loaded.save.id, loaded.save.id, st, world.rng.state, loaded.save.revision);
         send(ws, { type: "automation", enabled, state: liveStateView(world, st, meta.userId) });
-        broadcastState(world);
+         broadcastState(world, meta.matchId);
         return;
       }
       if (msg.type === "halftimeReady") {
@@ -335,12 +307,11 @@ async function handleMessage(
         markHalftimeReady(world, st, side as 0 | 1);
         await persistLiveMatchState(app.prisma, loaded.save.id, loaded.save.id, st, world.rng.state, loaded.save.revision);
         send(ws, { type: "halftimeReady", state: liveStateView(world, st, meta.userId) });
-        broadcastState(world);
+         broadcastState(world, meta.matchId);
         return;
       }
-      // Matches advance only on the server clock: the "tick" message is a
-      // strictly elapsed-time catch-up for viewers and can never accelerate
-      // play. There is deliberately no client-driven finish/force-advance.
+      // The worker advances matches on the server clock. This message only
+      // returns the latest authoritative state for a participant.
       send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
     } catch (e) {
       if (e instanceof StaleWorldError) throw e;

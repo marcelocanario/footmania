@@ -391,6 +391,8 @@ export const MP_CONFIG = {
   },
   // How often (ms) the worker loop wakes up.
   workerIntervalMs: 5000,
+  // How often (ms) the server advances and broadcasts live matches.
+  liveMatchIntervalMs: 1000,
   // How many match-minutes to advance per worker tick for an in-progress match.
   liveAdvanceMinutesPerTick: 1,
   // Idempotency guard: only one UTC day's daily tick runs per key.

@@ -3,6 +3,7 @@ import type { RolloverWorkflowStep } from "../game/types";
 import { withGlobalLease, withGlobalLock } from "./lock";
 import { loadGlobalWorldMutable, persistWorld } from "./saveService";
 import { publishUserWorldEvent, type UserWorldEvent } from "./worldEvents";
+import { marketUpdatedEvents } from "./marketEvents";
 import { gameConfig } from "../config";
 import { calendarValues, payrollDayIndices } from "./seasonCalendar";
 import { MP_CONFIG } from "../config";
@@ -12,7 +13,8 @@ import { processDueFreeAgentListing } from "../game/freeAgents";
 import { processGameDayPayroll, processGameDayStart, processGameDayWeekly } from "../game/daily";
 import { endLoan, processContractExpiry, processContractWarning } from "../game/season";
 import { executeRolloverStep, ROLLOVER_WORKFLOW_STEPS } from "./seasonRolloverService";
-import { notifyMatchFinished, notifyMatchStarted } from "./notifications";
+import { notifyMatchStarted } from "./notifications";
+import { notifyFinishedMatches } from "./matchNotifications";
 
 export enum ScheduledEventType {
   GAME_DAY_ADVANCE = "GAME_DAY_ADVANCE",
@@ -603,18 +605,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
       if (fixture && !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixtureId)) startLiveMatch(world, fixture);
        const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
-       for (const m of finished) {
-         try { await notifyMatchFinished(prisma, world, m); } catch {}
-       }
-       const userEvents: { userId: number; event: UserWorldEvent }[] = [];
-       for (const m of finished) {
-         const home = world.clubs.find((club) => club.id === m.homeClubId);
-         const away = world.clubs.find((club) => club.id === m.awayClubId);
-         for (const userId of [home?.ownerUserId, away?.ownerUserId]) {
-           if (userId !== null && userId !== undefined) userEvents.push({ userId, event: { type: "liveMatchEnded", matchId: m.id } });
-         }
-       }
-       return { userEvents };
+        return { userEvents: await notifyFinishedMatches(prisma, world, finished) };
     }
     case ScheduledEventType.AUCTION_END: {
       if (payload.marketType === "FREE_AGENT") {
@@ -629,7 +620,12 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
             releaseAllReservations(world, listing.id, "FREE_AGENT");
             listing.status = "CANCELLED";
             listing.completedAt = settleAt;
-            return { userEvents: invalidateHumanUsers(world, "transfers") };
+             return {
+               userEvents: [
+                 ...invalidateHumanUsers(world, "transfers"),
+                 ...marketUpdatedEvents(world, "FREE_AGENT", listing.id, "CANCELLED"),
+               ],
+             };
           }
           throw new Error(result.error);
         }
@@ -660,7 +656,13 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
             data: { status: "CANCELLED", version: { increment: 1 } },
           });
         }
-        return { userEvents: invalidateHumanUsers(world, "transfers") };
+        const marketEvents = result.kind === "DELETED"
+          ? result.listingIds.flatMap((listingId) => marketUpdatedEvents(world, "FREE_AGENT", listingId, "CANCELLED"))
+          : [
+              ...marketUpdatedEvents(world, "FREE_AGENT", result.listingId),
+              ...(result.kind === "RELISTED" ? marketUpdatedEvents(world, "FREE_AGENT", result.newListingId) : []),
+            ];
+        return { userEvents: [...invalidateHumanUsers(world, "transfers"), ...marketEvents] };
       }
       const listing = world.transferAuctions.find((candidate) => candidate.id === Number(payload.auctionId ?? entityId));
       if (!listing || listing.status !== "ACTIVE") return;
@@ -672,11 +674,21 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         // succeed on retry: fail closed instead of exhausting attempts.
         if (result.terminal) {
           cancelUnsettleableAuction(world, listing, settleAt, result.error);
-          return { userEvents: invalidateHumanUsers(world, "transfers") };
+           return {
+             userEvents: [
+               ...invalidateHumanUsers(world, "transfers"),
+               ...marketUpdatedEvents(world, "TRANSFER", listing.id, "CANCELLED"),
+             ],
+           };
         }
         throw new Error(result.error);
       }
-       return { userEvents: invalidateHumanUsers(world, "transfers") };
+       return {
+         userEvents: [
+           ...invalidateHumanUsers(world, "transfers"),
+           ...marketUpdatedEvents(world, "TRANSFER", listing.id),
+         ],
+       };
     }
     case ScheduledEventType.LOAN_END: {
       const loan = world.loans.find((candidate) => candidate.id === Number(payload.loanId ?? entityId));

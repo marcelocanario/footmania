@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, type MarketUpdate } from "../api/client";
 import { useGame } from "../store/game";
 
 interface MpWsMessage {
@@ -7,6 +7,13 @@ interface MpWsMessage {
   scope?: string;
   matchId?: number;
   userId?: number;
+  marketType?: "TRANSFER" | "FREE_AGENT";
+  listingId?: number;
+  status?: string;
+  currentPrice?: number;
+  deadline?: number;
+  bidderCount?: number;
+  amILeading?: boolean;
 }
 
 /**
@@ -19,14 +26,13 @@ interface MpWsMessage {
  * degrades to no polling — cached data and on-demand fetches remain available.
  *
  * The match-specific WebSocket in `LiveMatch.tsx` (per-match `/api/matches/:id/ws`)
- * is preserved and untouched.
+ * carries server-driven match deltas and manager commands.
  */
 export function useMpSocket() {
   const { user, setUser, setLiveMatch, refresh } = useGame();
   const [attempts, setAttempts] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(5_000);
-  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     // Only connect when authenticated. The `user` is set by the Gate component
@@ -47,14 +53,6 @@ export function useMpSocket() {
       // state after every connection or reconnect.
       void api.me().then((res) => setUser(res.user)).catch(() => undefined);
     };
-
-    // Heartbeat: send ping every 30s to keep the socket alive through proxies
-    // that silently drop idle connections.
-    pingRef.current = setInterval(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "ping" }));
-      }
-    }, 30_000);
 
     ws.onmessage = (ev) => {
       let msg: MpWsMessage;
@@ -84,6 +82,24 @@ export function useMpSocket() {
         case "mpStatus":
           void refresh();
           break;
+        case "dayAdvanced":
+          void refresh();
+          break;
+        case "marketUpdated": {
+          if (msg.marketType && msg.listingId !== undefined && msg.status) {
+            api.cache.emitMarketUpdated({
+              type: "marketUpdated",
+              marketType: msg.marketType,
+              listingId: msg.listingId,
+              status: msg.status,
+              ...(msg.currentPrice !== undefined ? { currentPrice: msg.currentPrice } : {}),
+              ...(msg.deadline !== undefined ? { deadline: msg.deadline } : {}),
+              ...(msg.bidderCount !== undefined ? { bidderCount: msg.bidderCount } : {}),
+              ...(msg.amILeading !== undefined ? { amILeading: msg.amILeading } : {}),
+            } satisfies MarketUpdate);
+          }
+          break;
+        }
         case "permissionsChanged":
           void api.me().then((res) => setUser(res.user)).catch(() => undefined);
           break;
@@ -94,7 +110,6 @@ export function useMpSocket() {
     };
 
     ws.onclose = () => {
-      if (pingRef.current) clearInterval(pingRef.current);
       wsRef.current = null;
       if (disposed) return;
 
@@ -109,7 +124,6 @@ export function useMpSocket() {
 
     return () => {
       disposed = true;
-      if (pingRef.current) clearInterval(pingRef.current);
       if (reconnectTimer) clearTimeout(reconnectTimer);
       ws.close();
     };

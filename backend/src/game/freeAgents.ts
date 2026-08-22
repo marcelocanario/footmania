@@ -165,7 +165,7 @@ export function applyFreeAgentBid(
     now?: number;
     seasonRolloverAt?: number;
   }
-): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number } | { ok: false; error: string } {
+): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number; outbidClubId?: number } | { ok: false; error: string } {
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
   // Invariant #28: ephemeral filler-AI clubs never sign free agents.
@@ -285,7 +285,14 @@ export function applyFreeAgentBid(
     }
   }
 
-  return { ok: true, currentPrice: listing.currentPrice, leading: listing.leadingClubId === club.id, contractSeasons, contractSalary };
+  return {
+    ok: true,
+    currentPrice: listing.currentPrice,
+    leading: listing.leadingClubId === club.id,
+    contractSeasons,
+    contractSalary,
+    ...(previousLeader !== null && previousLeader !== club.id && listing.leadingClubId !== previousLeader ? { outbidClubId: previousLeader } : {}),
+  };
 }
 /**
  * Settle a due free-agent listing. The winner pays the SYSTEM (money leaves

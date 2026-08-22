@@ -1,10 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Flag, RefreshCw, Subscript, Users } from "lucide-react";
-import { api, type LiveEvent, type LivePlayer, type LiveState } from "../api/client";
+import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
-import { useSettings } from "../store/settings";
-import { tickDelayMs } from "../matchPace";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
 
@@ -53,6 +51,7 @@ interface WsMessage {
   events?: LiveEvent[];
   event?: LiveEvent | null;
   state?: LiveState;
+  delta?: LiveStateDelta;
   dayResult?: unknown;
   message?: string;
   error?: string;
@@ -60,7 +59,6 @@ interface WsMessage {
 
 export function LiveMatch() {
   const { refresh, setLiveMatch } = useGame();
-  const { matchDurationMinutes } = useSettings();
   const navigate = useNavigate();
   const [state, setState] = useState<LiveState | null>(null);
   const [wsMode, setWsMode] = useState(false);
@@ -70,7 +68,7 @@ export function LiveMatch() {
   const [subOut, setSubOut] = useState<LivePlayer | null>(null);
   const [subIn, setSubIn] = useState<LivePlayer | null>(null);
   const [subBusy, setSubBusy] = useState(false);
-  const [tickBusy, setTickBusy] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
   const [noLive, setNoLive] = useState(false);
   const [liveId, setLiveId] = useState<number | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
@@ -104,6 +102,26 @@ export function LiveMatch() {
     setState(s);
   }, []);
 
+  const applyDelta = useCallback((delta: LiveStateDelta) => {
+    const current = stateRef.current;
+    if (!current || current.matchId !== delta.matchId) return;
+    const known = new Set(current.events.map((event) => event.sequence));
+    const events = [...current.events, ...delta.newEvents.filter((event) => event.sequence === undefined || !known.has(event.sequence))];
+    applyState({
+      ...current,
+      minute: delta.minute,
+      half: delta.half,
+      phase: delta.phase,
+      homeScore: delta.homeScore,
+      awayScore: delta.awayScore,
+      stats: delta.stats,
+      events,
+      automationFiredCount: delta.automationFiredCount,
+      progressPct: delta.progressPct,
+      currentAddedTime: delta.currentAddedTime,
+    });
+  }, [applyState]);
+
   const send = useCallback(
     (msg: unknown) => {
       const ws = wsRef.current;
@@ -116,11 +134,11 @@ export function LiveMatch() {
     []
   );
 
-  const tick = useCallback(async () => {
+  const refreshLiveState = useCallback(async () => {
     if (!matchId) return;
-    if (tickBusy) return;
+    if (refreshBusy) return;
     if (send({ type: "state" })) return;
-    setTickBusy(true);
+    setRefreshBusy(true);
     try {
       const res = await api.liveState(matchId);
       applyState(res.state);
@@ -128,9 +146,9 @@ export function LiveMatch() {
     } catch (e) {
       if ((e as Error).message.includes("No live match")) setNoLive(true);
     } finally {
-      setTickBusy(false);
+      setRefreshBusy(false);
     }
-  }, [matchId, send, applyState, tickBusy]);
+  }, [matchId, send, applyState, refreshBusy]);
 
   const connectWs = useCallback(() => {
     if (!matchId) return;
@@ -153,9 +171,10 @@ export function LiveMatch() {
         setWsMode(true);
         setReconnecting(false);
         applyState(msg.state);
-      } else if (msg.type === "tick" && msg.state) {
-        applyState(msg.state);
-        if (msg.state.ended) setNoLive(true);
+      } else if (msg.type === "delta" && msg.delta) {
+        setWsMode(true);
+        setReconnecting(false);
+        applyDelta(msg.delta);
       } else if (msg.type === "sub" && msg.state) {
         applyState(msg.state);
         setSubBusy(false);
@@ -189,7 +208,7 @@ export function LiveMatch() {
     ws.onerror = () => {
       ws.close();
     };
-  }, [matchId, applyState]);
+  }, [matchId, applyState, applyDelta]);
 
   // Matches advance only on the server clock; when the live state is done the
   // client simply returns to the dashboard.
@@ -212,30 +231,8 @@ export function LiveMatch() {
 
   useEffect(() => {
     if (!matchId) return;
-    if (!stateRef.current) {
-      api
-        .liveState(matchId)
-        .then((res) => applyState(res.state))
-        .catch((e) => {
-          if ((e as Error).message.includes("No live match")) setNoLive(true);
-        });
-    }
-    const delay = tickDelayMs(matchDurationMinutes);
-    const iv = setInterval(() => {
-      const st = stateRef.current;
-      if (!st) return;
-      if (st.phase === "halftime" || st.phase === "pregame") return;
-      if (st.ended) return;
-      if (!wsMode && !wsRef.current && !reconnecting) {
-        void tick();
-        return;
-      }
-      if (wsMode) {
-        void tick();
-      }
-    }, delay);
-    return () => clearInterval(iv);
-  }, [matchId, applyState, tick, wsMode, reconnecting, matchDurationMinutes]);
+    if (!stateRef.current) void refreshLiveState();
+  }, [matchId, refreshLiveState]);
 
   useEffect(() => {
     if (!wsMode && !reconnecting && stateRef.current && !stateRef.current.ended) {
@@ -363,7 +360,7 @@ export function LiveMatch() {
                 Set your starting eleven and bench before kickoff. Changes are saved instantly.
               </div>
             </div>
-            <button className="btn gold" style={{ fontSize: "1.05rem", padding: "12px 28px" }} onClick={() => void tick()}>
+            <button className="btn gold" style={{ fontSize: "1.05rem", padding: "12px 28px" }} onClick={() => void refreshLiveState()}>
               <RefreshCw size={17} /> Refresh
             </button>
           </div>
@@ -475,7 +472,7 @@ export function LiveMatch() {
                   {myReady ? "✓ Ready" : "I'm Ready — Resume"}
                 </button>
               )}
-              <button className="btn ghost" onClick={() => void tick()}><RefreshCw size={15} /> Refresh</button>
+              <button className="btn ghost" onClick={() => void refreshLiveState()}><RefreshCw size={15} /> Refresh</button>
             </div>
             {showLineup && (
               <div style={{ textAlign: "left", marginTop: 16 }}>
@@ -583,7 +580,7 @@ export function LiveMatch() {
         ) : (
           state.phase !== "halftime" && (
             <>
-              <button className="btn ghost" onClick={() => void tick()}>
+              <button className="btn ghost" onClick={() => void refreshLiveState()}>
                 <RefreshCw size={15} /> Refresh
               </button>
               <button className="btn ghost" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>

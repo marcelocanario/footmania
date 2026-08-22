@@ -825,7 +825,7 @@ export function applyMaxBid(
     now?: number;
     seasonRolloverAt?: number;
   }
-): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number } | { ok: false; error: string } {
+): { ok: true; currentPrice: number; leading: boolean; contractSeasons: number; contractSalary: number; outbidClubId?: number } | { ok: false; error: string } {
   const now = opts.now ?? Date.now();
   const { listing, club, player } = opts;
   // Invariant #28: ephemeral filler-AI clubs never enter bid commitments.
@@ -948,7 +948,14 @@ export function applyMaxBid(
     }
   }
 
-  return { ok: true, currentPrice: listing.currentPrice, leading: listing.leadingClubId === club.id, contractSeasons, contractSalary };
+  return {
+    ok: true,
+    currentPrice: listing.currentPrice,
+    leading: listing.leadingClubId === club.id,
+    contractSeasons,
+    contractSalary,
+    ...(previousLeader !== null && previousLeader !== club.id && listing.leadingClubId !== previousLeader ? { outbidClubId: previousLeader } : {}),
+  };
 }
 
 /** Public projection for one listing (never competing maximums, §15/§16). */

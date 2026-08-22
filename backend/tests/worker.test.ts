@@ -68,7 +68,7 @@ async function humanTrader(world: World, userId: number, name: string) {
 describe("worker wiring", () => {
   it("starts and stops the durable-scheduler loop without side effects on an empty world", async () => {
     const stop = startWorker(prisma, 10_000);
-    // The single timer belongs to schedulerProcessor; stopping must be clean.
+    // Both the durable scheduler and server-driven match timers must stop cleanly.
     expect(typeof stop).toBe("function");
     stop();
   });

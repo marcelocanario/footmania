@@ -3,9 +3,16 @@
  * this bus only wakes connected clients and is intentionally a no-op offline.
  */
 export interface UserWorldEvent {
-  type: "liveMatchStarted" | "liveMatchEnded" | "invalidate" | "mpStatus" | "permissionsChanged";
+  type: "liveMatchStarted" | "liveMatchEnded" | "invalidate" | "mpStatus" | "permissionsChanged" | "marketUpdated" | "dayAdvanced";
   scope?: string;
   matchId?: number;
+  marketType?: "TRANSFER" | "FREE_AGENT";
+  listingId?: number;
+  status?: string;
+  currentPrice?: number;
+  deadline?: number;
+  bidderCount?: number;
+  amILeading?: boolean;
 }
 
 type Publisher = (userId: number, event: UserWorldEvent) => void;

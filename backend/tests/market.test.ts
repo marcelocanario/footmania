@@ -28,6 +28,7 @@ import { gameConfig, MARKET_CONFIG } from "../src/config";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import type { Club, TransferAuction, World } from "../src/game/types";
+import { marketUpdatedEvents } from "../src/services/marketEvents";
 import { makeWorld } from "./helpers";
 
 function makeClub(id: number, overrides: Partial<Club> = {}): Club {
@@ -550,6 +551,7 @@ describe("applyMaxBid integration", () => {
     expect(second.ok).toBe(true);
     if (!second.ok) return;
     expect(second.leading).toBe(true);
+    expect(second.outbidClubId).toBe(buyer.id);
     expect(listing.leadingClubId).toBe(buyer2.id);
     // Loser's reservation released; winner reserves its own max.
     expect(world.marketReservations.filter((r) => r.clubId === buyer.id && r.releasedAt !== null)).toHaveLength(1);
@@ -560,6 +562,18 @@ describe("applyMaxBid integration", () => {
     expect(listing.leadingClubId).toBe(buyer.id);
     expect(world.marketReservations.find((r) => r.clubId === buyer.id)?.releasedAt).toBeNull();
     expect(world.marketReservations.find((r) => r.clubId === buyer.id)?.amount).toBe(12_000_000);
+  });
+
+  it("publishes only public auction fields and recipient-specific leading state", () => {
+    const { world, buyer, seller, player, listing } = setupWorld();
+    const buyer2 = makeClub(2, { cash: 40_000_000 });
+    world.clubs.push(buyer2);
+    applyMaxBid(world, { listing, club: buyer, player, proposedMaximum: 10_000_000, buyerDivision: 1, immediateAvailableCash: 20_000_000, now: 1_000 });
+    const events = marketUpdatedEvents(world, "TRANSFER", listing.id);
+    expect(events).toHaveLength(3);
+    expect(events.find((item) => item.userId === buyer.ownerUserId)?.event.amILeading).toBe(true);
+    expect(events.find((item) => item.userId === seller.ownerUserId)?.event).not.toHaveProperty("maxBid");
+    expect(events.find((item) => item.userId === seller.ownerUserId)?.event).toMatchObject({ currentPrice: listing.currentPrice, bidderCount: 1 });
   });
 
   it("clears at second-highest + increment when three clubs compete", () => {

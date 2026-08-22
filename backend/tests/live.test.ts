@@ -258,7 +258,7 @@ describe("live match over REST", () => {
 });
 
 describe("live match over WebSocket", () => {
-  it("streams state and lets the manager finish over the socket", async () => {
+  it("streams server-driven state and rejects client-driven ticks", async () => {
     const app = buildServer();
     await app.ready();
     const port = await app.listen({ port: 0, host: "127.0.0.1" });
@@ -296,14 +296,19 @@ describe("live match over WebSocket", () => {
     const s0 = messages.find((m) => m.type === "state")!.state as { phase: string };
     expect(s0.phase).toBe("pregame");
 
-    // The elapsed-time catch-up tick advances the server-paced match; when it
-    // reaches full time the server broadcasts "finished" to every viewer.
-    for (let i = 0; i < 3; i++) ws.send(JSON.stringify({ type: "tick", minutes: 4, resume: true }));
-    await waitFor("finished", 20000);
+    ws.send(JSON.stringify({ type: "tick", minutes: 4, resume: true }));
+    await waitFor("error");
+    expect(messages.find((m) => m.type === "error")?.message).toBe("Unknown message type");
+
+    const { liveMatchProcessor } = await import("../src/services/jobs/liveMatchProcessor");
+    await liveMatchProcessor(app.prisma);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const streamed = messages.some((message) => message.type === "delta" || message.type === "finished" || (message.type === "state" && (message.state as { phase?: string } | undefined)?.phase !== "pregame"));
 
     ws.close();
     await app.close();
-  }, 90_000);
+    expect(streamed).toBe(true);
+  }, 30_000);
 });
 
 describe("multiplayer world WebSocket", () => {

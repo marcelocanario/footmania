@@ -5,6 +5,7 @@ import { withGlobalLease, withGlobalLock } from "./lock";
 import { loadGlobalWorldMutable, persistWorld } from "./saveService";
 import { executeGameDayEventsInLock, executeMandatoryEventsInLock, materializeSeasonEvents, scheduleEvent, ScheduledEventType } from "./scheduler";
 import { rollover } from "./mpService";
+import { publishUserWorldEvent } from "./worldEvents";
 
 export interface GameClockView {
   id: "WORLD";
@@ -160,8 +161,9 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
        await executeGameDayEventsInLock(prisma, fresh.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true, fresh);
        await scheduleNextAutomaticAdvance(prisma, fresh.save.id, nextAbsolute, now);
        const row = await ensureGameClock(prisma, fresh.save.id, fresh.world);
-      await writeAdminAudit(prisma, fresh.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
-      return row;
+       await writeAdminAudit(prisma, fresh.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
+       publishDayAdvanced(fresh.world);
+       return row;
     }
 
     world.mp.absoluteGameDay = nextAbsolute;
@@ -176,7 +178,14 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
     await scheduleNextAutomaticAdvance(prisma, loaded.save.id, nextAbsolute, now);
     const row = await ensureGameClock(prisma, loaded.save.id, loaded.world);
     await writeAdminAudit(prisma, loaded.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
+    publishDayAdvanced(loaded.world);
     return row;
+}
+
+function publishDayAdvanced(world: import("../game/types").World): void {
+  for (const club of world.clubs) {
+    if (club.ownerUserId !== null) publishUserWorldEvent(club.ownerUserId, { type: "dayAdvanced" });
+  }
 }
 
 async function scheduleNextAutomaticAdvance(prisma: PrismaClient, saveId: number, nextAbsolute: number, now: Date): Promise<void> {

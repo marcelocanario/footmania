@@ -80,6 +80,20 @@ export function Transfers() {
     if (scope === "transfers" || scope === "background:transfers") void loadAuctions();
   }), [loadAuctions]);
 
+  useEffect(() => api.cache.subscribeMarketUpdated((event) => {
+    const patch = <T extends AuctionView | FreeAgentView>(items: T[]) => items
+      .filter((item) => !(item.id === event.listingId && event.status !== "ACTIVE"))
+      .map((item) => item.id !== event.listingId ? item : {
+        ...item,
+        ...(event.currentPrice !== undefined ? { currentPrice: event.currentPrice } : {}),
+        ...(event.deadline !== undefined ? { deadline: event.deadline } : {}),
+        ...(event.bidderCount !== undefined ? { bidderCount: event.bidderCount } : {}),
+        ...(event.amILeading !== undefined ? { amILeading: event.amILeading } : {}),
+      });
+    if (event.marketType === "TRANSFER") setAuctions(patch);
+    else setFreeAgents(patch);
+  }), []);
+
   useEffect(() => {
     if (freeAgentContractSeasons > maxContractSeasons) setFreeAgentContractSeasons(maxContractSeasons);
     if (auctionContractSeasons > maxContractSeasons) setAuctionContractSeasons(maxContractSeasons);

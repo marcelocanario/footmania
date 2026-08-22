@@ -20,7 +20,9 @@ import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { World } from "../game/types";
 import { materializeSeasonEvents } from "../services/scheduler";
-import { publishUserWorldEvent } from "../services/worldEvents";
+import { createNotification } from "../services/notifications";
+import { marketUpdatedEvents } from "../services/marketEvents";
+import { publishUserWorldEvent, type UserWorldEvent } from "../services/worldEvents";
 
 const auctionCreateSchema = z.object({ playerId: z.number().int(), openingPrice: z.number().int().positive().optional() });
 const maxBidSchema = z.object({ maxBid: z.number().int().positive(), contractSeasons: z.number().int().min(1).max(gameConfig.maxContractSeasons) });
@@ -62,11 +64,18 @@ function humanUserIds(world: World): number[] {
   return world.clubs.flatMap((club) => club.ownerUserId === null ? [] : [club.ownerUserId]);
 }
 
+interface WorldMutationResult {
+  error?: { code: number; body: unknown };
+  value?: unknown;
+  userEvents?: { userId: number; event: UserWorldEvent }[];
+  notifications?: { userId: number; type: string; payload: unknown }[];
+}
+
 async function withWorld(
   app: FastifyInstance,
   userId: number,
   activity: string,
-  fn: (world: World, clubId: number) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>
+  fn: (world: World, clubId: number) => Promise<WorldMutationResult>
 ) {
   return withGlobalLock(() => withGlobalLease(app.prisma, async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -80,11 +89,16 @@ async function withWorld(
       try {
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
         await materializeSeasonEvents(app.prisma, loaded.save.id, loaded.world);
+        for (const notification of res.notifications ?? []) {
+          await createNotification(app.prisma, notification.userId, notification.type, notification.payload);
+        }
+        for (const item of res.userEvents ?? []) publishUserWorldEvent(item.userId, item.event);
         const transferChanged = activity.startsWith("transfer_") || activity === "free_agent_bid" || activity.startsWith("loan_") || activity === "release_player";
         if (transferChanged) {
+          const isBid = activity === "transfer_auction_bid" || activity === "free_agent_bid";
           for (const affectedUserId of humanUserIds(loaded.world)) {
-            publishUserWorldEvent(affectedUserId, { type: "invalidate", scope: "club" });
-            publishUserWorldEvent(affectedUserId, { type: "invalidate", scope: "transfers" });
+            if (affectedUserId === userId) publishUserWorldEvent(affectedUserId, { type: "invalidate", scope: "club" });
+            if (!isBid) publishUserWorldEvent(affectedUserId, { type: "invalidate", scope: "transfers" });
           }
         } else {
           publishUserWorldEvent(userId, { type: "invalidate", scope: "club" });
@@ -309,7 +323,27 @@ export async function gameRoutes(app: FastifyInstance) {
         contractSeasons: parsed.data.contractSeasons,
       });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
-      return { value: result };
+      const outbidClub = result.outbidClubId === undefined
+        ? undefined
+        : world.clubs.find((candidate) => candidate.id === result.outbidClubId);
+      return {
+        value: {
+          ok: true,
+          currentPrice: result.currentPrice,
+          leading: result.leading,
+          contractSeasons: result.contractSeasons,
+          contractSalary: result.contractSalary,
+        },
+        userEvents: [
+          ...marketUpdatedEvents(world, "TRANSFER", listing.id),
+          ...(outbidClub?.ownerUserId
+            ? [{ userId: outbidClub.ownerUserId, event: { type: "invalidate" as const, scope: "club" } }]
+            : []),
+        ],
+        notifications: outbidClub?.ownerUserId
+          ? [{ userId: outbidClub.ownerUserId, type: "MARKET_OUTBID", payload: { listingId: listing.id, marketType: "TRANSFER", currentPrice: listing.currentPrice } }]
+          : [],
+      };
     });
     return replyFrom(res, reply);
   });
@@ -345,7 +379,27 @@ export async function gameRoutes(app: FastifyInstance) {
       if (!listing || !player) return { error: { code: 404, body: { error: "Free-agent listing not found" } } };
       const result = applyFreeAgentBid(world, { listing, club, player, proposedMaximum: parsed.data.maxBid, immediateAvailableCash: getImmediateAvailableCash(world, club), contractSeasons: parsed.data.contractSeasons });
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
-      return { value: result };
+      const outbidClub = result.outbidClubId === undefined
+        ? undefined
+        : world.clubs.find((candidate) => candidate.id === result.outbidClubId);
+      return {
+        value: {
+          ok: true,
+          currentPrice: result.currentPrice,
+          leading: result.leading,
+          contractSeasons: result.contractSeasons,
+          contractSalary: result.contractSalary,
+        },
+        userEvents: [
+          ...marketUpdatedEvents(world, "FREE_AGENT", listing.id),
+          ...(outbidClub?.ownerUserId
+            ? [{ userId: outbidClub.ownerUserId, event: { type: "invalidate" as const, scope: "club" } }]
+            : []),
+        ],
+        notifications: outbidClub?.ownerUserId
+          ? [{ userId: outbidClub.ownerUserId, type: "MARKET_OUTBID", payload: { listingId: listing.id, marketType: "FREE_AGENT", currentPrice: listing.currentPrice } }]
+          : [],
+      };
     });
     return replyFrom(res, reply);
   });

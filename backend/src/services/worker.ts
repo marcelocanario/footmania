@@ -1,5 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
+import { MP_CONFIG } from "../config";
 import { schedulerProcessor } from "./jobs/schedulerProcessor";
+import { liveMatchProcessor } from "./jobs/liveMatchProcessor";
 
 /**
  * Server-authoritative clock worker orchestrator (worker plan §1).
@@ -21,6 +23,7 @@ export interface WorkerOptions {
 
 export function startWorker(prisma: PrismaClient, intervalMs: number, opts: WorkerOptions = {}) {
   const schedulerInterval = opts.schedulerIntervalMs ?? intervalMs;
+  const matchInterval = opts.matchIntervalMs ?? MP_CONFIG.liveMatchIntervalMs;
 
   const timers: ReturnType<typeof setInterval>[] = [];
 
@@ -44,8 +47,10 @@ export function startWorker(prisma: PrismaClient, intervalMs: number, opts: Work
     return schedulerProcessor({ prisma });
   };
   const stopScheduler = schedule("scheduler", schedulerInterval, runScheduler);
+  const stopLiveMatches = schedule("live-matches", matchInterval, () => liveMatchProcessor(prisma));
 
   return () => {
     stopScheduler();
+    stopLiveMatches();
   };
 }
