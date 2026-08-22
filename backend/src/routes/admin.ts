@@ -366,7 +366,9 @@ export async function adminRoutes(app: FastifyInstance) {
     const events = await app.prisma.scheduledEvent.findMany({
       where: {
         saveId: loaded.save.id,
-        ...(query.status ? { status: query.status } : {}),
+        // Comma-separated status lists let the UI request e.g.
+        // "PENDING,RUNNING,FAILED" in one query; single values still work.
+        ...(query.status ? { status: { in: query.status.split(",").map((s) => s.trim()).filter(Boolean) } } : {}),
         ...(query.type ? { type: query.type } : {}),
         ...(query.timeBasis ? { timeBasis: query.timeBasis } : {}),
         ...(query.entityType ? { entityType: query.entityType } : {}),

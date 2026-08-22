@@ -16,7 +16,7 @@ import {
   Swords,
   Trophy,
   Users,
-  Whistle,
+  Flag,
 } from "lucide-react";
 
 export type EventCategory = "clock" | "match" | "market" | "finance" | "contract" | "season";
@@ -95,7 +95,7 @@ export const EVENT_CATALOG: Record<string, EventTypeInfo> = {
     label: "Match start",
     description: "Kicks off a scheduled fixture and opens it as a live match.",
     category: "match",
-    icon: Whistle,
+    icon: Flag,
   },
   MATCH_COMPLETE: {
     label: "Match complete",

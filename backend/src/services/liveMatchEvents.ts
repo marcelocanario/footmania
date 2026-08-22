@@ -1,4 +1,4 @@
-import type { LiveMatchState, World } from "../game/types";
+import type { World } from "../game/types";
 
 export interface LiveMatchUpdate {
   matchId: number;
@@ -24,8 +24,4 @@ export function publishLiveMatchUpdates(world: World, updates: LiveMatchUpdate[]
   } catch {
     // Live delivery is best effort and must never fail a persisted mutation.
   }
-}
-
-export function liveMatchClubIds(state: Pick<LiveMatchState, "homeClubId" | "awayClubId">): [number, number] {
-  return [state.homeClubId, state.awayClubId];
 }

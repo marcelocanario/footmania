@@ -604,8 +604,8 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const fixtureId = Number(payload.fixtureId ?? entityId);
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
       if (fixture && !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixtureId)) startLiveMatch(world, fixture);
-       const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
-        return { userEvents: await notifyFinishedMatches(prisma, world, finished) };
+      const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
+      return { userEvents: await notifyFinishedMatches(prisma, world, finished) };
     }
     case ScheduledEventType.AUCTION_END: {
       if (payload.marketType === "FREE_AGENT") {
@@ -620,12 +620,12 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
             releaseAllReservations(world, listing.id, "FREE_AGENT");
             listing.status = "CANCELLED";
             listing.completedAt = settleAt;
-             return {
-               userEvents: [
-                 ...invalidateHumanUsers(world, "transfers"),
-                 ...marketUpdatedEvents(world, "FREE_AGENT", listing.id, "CANCELLED"),
-               ],
-             };
+          return {
+            userEvents: [
+              ...invalidateHumanUsers(world, "transfers"),
+              ...marketUpdatedEvents(world, "FREE_AGENT", listing.id, "CANCELLED"),
+            ],
+          };
           }
           throw new Error(result.error);
         }
@@ -674,21 +674,21 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         // succeed on retry: fail closed instead of exhausting attempts.
         if (result.terminal) {
           cancelUnsettleableAuction(world, listing, settleAt, result.error);
-           return {
-             userEvents: [
-               ...invalidateHumanUsers(world, "transfers"),
-               ...marketUpdatedEvents(world, "TRANSFER", listing.id, "CANCELLED"),
-             ],
-           };
+          return {
+            userEvents: [
+              ...invalidateHumanUsers(world, "transfers"),
+              ...marketUpdatedEvents(world, "TRANSFER", listing.id, "CANCELLED"),
+            ],
+          };
         }
         throw new Error(result.error);
       }
-       return {
-         userEvents: [
-           ...invalidateHumanUsers(world, "transfers"),
-           ...marketUpdatedEvents(world, "TRANSFER", listing.id),
-         ],
-       };
+      return {
+        userEvents: [
+          ...invalidateHumanUsers(world, "transfers"),
+          ...marketUpdatedEvents(world, "TRANSFER", listing.id),
+        ],
+      };
     }
     case ScheduledEventType.LOAN_END: {
       const loan = world.loans.find((candidate) => candidate.id === Number(payload.loanId ?? entityId));

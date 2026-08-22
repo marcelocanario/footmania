@@ -152,23 +152,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
     ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
   }));
-  const firstAdded = st.firstHalfAddedMinutes ?? 0;
-  const secondAdded = st.secondHalfAddedMinutes ?? 0;
-  const clock = st.matchClockSeconds ?? 0;
-  const effectiveClock = st.period === 2 && clock >= MS.timing.firstHalfEndSeconds + firstAdded * 60
-    ? clock - firstAdded * 60
-    : clock;
-  const progressPct = Math.min(100, Math.max(0, effectiveClock / MS.timing.regulationSeconds * 100));
-  let currentAddedTime: number | null = null;
-  {
-    const firstEnd = MS.timing.firstHalfEndSeconds;
-    const secondEnd = MS.timing.regulationSeconds + firstAdded * 60;
-    if (firstAdded > 0 && clock >= firstEnd && clock < firstEnd + firstAdded * 60 && st.period === 1) {
-      currentAddedTime = Math.floor((clock - firstEnd) / 60) + 1;
-    } else if (secondAdded > 0 && clock >= secondEnd && clock < secondEnd + secondAdded * 60 && st.period === 2) {
-      currentAddedTime = Math.floor((clock - secondEnd) / 60) + 1;
-    }
-  }
+  const { progressPct, currentAddedTime } = clockProgress(st);
   // Determine which side the viewer controls (if any).
   const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
   const humanClubId = viewerClub?.id ?? null;
@@ -245,6 +229,30 @@ function kitView(design: LiveKitView | null, fallbackPrimary: string, fallbackSe
   };
 }
 
+/**
+ * Wall-clock progress projection shared by the full view and deltas so both
+ * cannot drift apart: regulation-relative progress and the stoppage-time
+ * minute currently being played (null outside added time).
+ */
+function clockProgress(st: LiveMatchState): { progressPct: number; currentAddedTime: number | null } {
+  const firstAdded = st.firstHalfAddedMinutes ?? 0;
+  const secondAdded = st.secondHalfAddedMinutes ?? 0;
+  const clock = st.matchClockSeconds ?? 0;
+  const effectiveClock = st.period === 2 && clock >= MS.timing.firstHalfEndSeconds + firstAdded * 60
+    ? clock - firstAdded * 60
+    : clock;
+  const progressPct = Math.min(100, Math.max(0, effectiveClock / MS.timing.regulationSeconds * 100));
+  let currentAddedTime: number | null = null;
+  const firstEnd = MS.timing.firstHalfEndSeconds;
+  const secondEnd = MS.timing.regulationSeconds + firstAdded * 60;
+  if (firstAdded > 0 && clock >= firstEnd && clock < firstEnd + firstAdded * 60 && st.period === 1) {
+    currentAddedTime = Math.floor((clock - firstEnd) / 60) + 1;
+  } else if (secondAdded > 0 && clock >= secondEnd && clock < secondEnd + secondAdded * 60 && st.period === 2) {
+    currentAddedTime = Math.floor((clock - secondEnd) / 60) + 1;
+  }
+  return { progressPct, currentAddedTime };
+}
+
 /** Compact, viewer-neutral update used during server-driven live play. */
 export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart: number): LiveStateDeltaView {
   const byId = new Map(world.players.map((p) => [p.id, p]));
@@ -261,21 +269,7 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
     ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
   }));
-  const firstAdded = st.firstHalfAddedMinutes ?? 0;
-  const secondAdded = st.secondHalfAddedMinutes ?? 0;
-  const clock = st.matchClockSeconds ?? 0;
-  const effectiveClock = st.period === 2 && clock >= MS.timing.firstHalfEndSeconds + firstAdded * 60
-    ? clock - firstAdded * 60
-    : clock;
-  const progressPct = Math.min(100, Math.max(0, effectiveClock / MS.timing.regulationSeconds * 100));
-  let currentAddedTime: number | null = null;
-  const firstEnd = MS.timing.firstHalfEndSeconds;
-  const secondEnd = MS.timing.regulationSeconds + firstAdded * 60;
-  if (firstAdded > 0 && clock >= firstEnd && clock < firstEnd + firstAdded * 60 && st.period === 1) {
-    currentAddedTime = Math.floor((clock - firstEnd) / 60) + 1;
-  } else if (secondAdded > 0 && clock >= secondEnd && clock < secondEnd + secondAdded * 60 && st.period === 2) {
-    currentAddedTime = Math.floor((clock - secondEnd) / 60) + 1;
-  }
+  const { progressPct, currentAddedTime } = clockProgress(st);
   return {
     matchId: st.matchId,
     minute: st.minute,

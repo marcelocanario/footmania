@@ -160,10 +160,10 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
        await materializeSeasonEvents(prisma, fresh.save.id, fresh.world);
        await executeGameDayEventsInLock(prisma, fresh.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true, fresh);
        await scheduleNextAutomaticAdvance(prisma, fresh.save.id, nextAbsolute, now);
-       const row = await ensureGameClock(prisma, fresh.save.id, fresh.world);
-       await writeAdminAudit(prisma, fresh.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
-       publishDayAdvanced(fresh.world);
-       return row;
+        const row = await ensureGameClock(prisma, fresh.save.id, fresh.world);
+        await writeAdminAudit(prisma, fresh.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
+        publishDayAdvanced(fresh.world);
+        return row;
     }
 
     world.mp.absoluteGameDay = nextAbsolute;

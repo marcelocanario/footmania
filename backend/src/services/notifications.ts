@@ -41,18 +41,26 @@ export async function notifyMatchFinished(prisma: PrismaClient, world: import(".
   // Minimal v1: if both clubs have pro, they also get MATCH_GOAL detail via separate helper during live ticks; league digest deferred.
 }
 
-/** Pro-only: goal events while live (called per-minute when new goal appears). */
+/**
+ * Pro-only: goal events while live (called when a new goal appears).
+ * A goal scored in the tick that finishes the match is detected after
+ * finalizeLiveMatch has detached the live state, so participant clubs and the
+ * score payload fall back to the persisted Match record.
+ */
 export async function notifyMatchGoal(prisma: PrismaClient, world: import("../game/types").World, matchId: number, scoringClubId: number, minute: number): Promise<void> {
   const st = world.liveMatches.find((m) => m.matchId === matchId);
-  if (!st) return;
-  const clubs = [world.clubs.find((c) => c.id === st.homeClubId), world.clubs.find((c) => c.id === st.awayClubId)].filter(Boolean) as import("../game/types").Club[];
-  for (const club of clubs) {
-    if (!club.ownerUserId) continue;
+  const finishedMatch = st ? undefined : world.matches.find((m) => m.id === matchId);
+  const homeClubId = st?.homeClubId ?? finishedMatch?.homeClubId;
+  const awayClubId = st?.awayClubId ?? finishedMatch?.awayClubId;
+  if (homeClubId === undefined || awayClubId === undefined) return;
+  const scores = st?.scores ?? (finishedMatch ? [finishedMatch.homeScore, finishedMatch.awayScore] as [number, number] : undefined);
+  if (!scores) return;
+  const fixtureId = st?.fixtureId ?? finishedMatch?.fixtureId ?? null;
+  for (const clubId of [homeClubId, awayClubId]) {
+    const club = world.clubs.find((c) => c.id === clubId);
+    if (!club?.ownerUserId) continue;
     const user = await prisma.user.findUnique({ where: { id: club.ownerUserId } });
     if (!user || !hasPro(user)) continue;
-    // Pro gets goal push regardless of which side scored if it's their match
-    if (club.id === st.homeClubId || club.id === st.awayClubId) {
-      await createNotification(prisma, club.ownerUserId, "MATCH_GOAL", { matchId, fixtureId: st.fixtureId, scoringClubId, minute, scores: st.scores });
-    }
+    await createNotification(prisma, club.ownerUserId, "MATCH_GOAL", { matchId, fixtureId, scoringClubId, minute, scores });
   }
 }

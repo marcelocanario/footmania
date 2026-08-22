@@ -246,7 +246,7 @@ async function handleMessage(
         }
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "sub", event: res.event, state: liveStateView(world, st, meta.userId) });
-         broadcastState(world, meta.matchId);
+        broadcastState(world, meta.matchId);
         return;
       }
       if (msg.type === "lineup") {
@@ -277,7 +277,7 @@ async function handleMessage(
         rebuildLiveHumanLineup(st, humanClub, world.players);
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "lineup", state: liveStateView(world, st, meta.userId) });
-         broadcastState(world, meta.matchId);
+        broadcastState(world, meta.matchId);
         return;
       }
       if (msg.type === "automation") {
@@ -291,7 +291,7 @@ async function handleMessage(
         st.automationDisabled[side] = !enabled;
         await persistLiveMatchState(app.prisma, loaded.save.id, loaded.save.id, st, world.rng.state, loaded.save.revision);
         send(ws, { type: "automation", enabled, state: liveStateView(world, st, meta.userId) });
-         broadcastState(world, meta.matchId);
+        broadcastState(world, meta.matchId);
         return;
       }
       if (msg.type === "halftimeReady") {
@@ -307,7 +307,7 @@ async function handleMessage(
         markHalftimeReady(world, st, side as 0 | 1);
         await persistLiveMatchState(app.prisma, loaded.save.id, loaded.save.id, st, world.rng.state, loaded.save.revision);
         send(ws, { type: "halftimeReady", state: liveStateView(world, st, meta.userId) });
-         broadcastState(world, meta.matchId);
+        broadcastState(world, meta.matchId);
         return;
       }
       // The worker advances matches on the server clock. This message only

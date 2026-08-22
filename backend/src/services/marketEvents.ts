@@ -1,4 +1,4 @@
-import type { FreeAgentListing, MarketType, TransferAuction, World } from "../game/types";
+import type { MarketType, World } from "../game/types";
 import type { UserWorldEvent } from "./worldEvents";
 
 function listingDetails(world: World, marketType: MarketType, listingId: number): Pick<UserWorldEvent, "status" | "currentPrice" | "deadline" | "bidderCount"> {
@@ -38,18 +38,4 @@ export function marketUpdatedEvents(
         ...(leadingClubId !== null ? { amILeading: leadingClubId === club.id } : {}),
       },
     }));
-}
-
-export function transferMarketEvent(
-  world: World,
-  listing: TransferAuction,
-): ReturnType<typeof marketUpdatedEvents> {
-  return marketUpdatedEvents(world, "TRANSFER", listing.id);
-}
-
-export function freeAgentMarketEvent(
-  world: World,
-  listing: FreeAgentListing,
-): ReturnType<typeof marketUpdatedEvents> {
-  return marketUpdatedEvents(world, "FREE_AGENT", listing.id);
 }

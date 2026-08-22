@@ -1,90 +1,42 @@
-import { useEffect, useState } from "react";
-import { FastForward, RefreshCw, Undo2 } from "lucide-react";
-import { api, type ScheduledEventView, type SchedulerAuctionView, type SchedulerAuditView, type SchedulerClockView, type SchedulerMatchView, type SchedulerPreviewEntry } from "../api/client";
+import { useEffect, useRef, useState } from "react";
+import { Toast } from "primereact/toast";
+import { CalendarClock, CalendarRange, Gauge, RefreshCw, ScrollText, Trophy, Users } from "lucide-react";
+import { api } from "../api/client";
 import { useGame } from "../store/game";
+import { Segmented } from "../components/Segmented";
+import { useAdminFetch } from "./admin/adminShared";
+import { OverviewTab } from "./admin/OverviewTab";
+import { EventsTab } from "./admin/EventsTab";
+import { MatchesAuctionsTab } from "./admin/MatchesAuctionsTab";
+import { SeasonTab } from "./admin/SeasonTab";
+import { UsersTab } from "./admin/UsersTab";
+import { AuditTab } from "./admin/AuditTab";
 
-interface AdminWorld {
-  seasonKey: string;
-  seasonStatus: string;
-  completedRounds: number;
-  joinState: string;
-  joinLockRound: number;
-  manualRound: number | null;
-  realCompletedRounds: number;
-  roundsPerSeason: number;
-  divisionCount: number;
-  clubCount: number;
-  humanClubCount: number;
-  liveMatchCount: number;
-}
+type TabId = "overview" | "events" | "liveops" | "season" | "users" | "audit";
 
 export function Admin() {
   const { user } = useGame();
-  const [world, setWorld] = useState<AdminWorld | null>(null);
-  const [clock, setClock] = useState<SchedulerClockView | null>(null);
-  const [events, setEvents] = useState<ScheduledEventView[]>([]);
-  const [matches, setMatches] = useState<SchedulerMatchView[]>([]);
-  const [auctions, setAuctions] = useState<SchedulerAuctionView[]>([]);
-  const [audit, setAudit] = useState<SchedulerAuditView[]>([]);
-  const [preview, setPreview] = useState<SchedulerPreviewEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [targetRound, setTargetRound] = useState(14);
-  const [advanceDays, setAdvanceDays] = useState(1);
-  const [reason, setReason] = useState("");
-  const [auctionExtensionMinutes, setAuctionExtensionMinutes] = useState(30);
-  const [userSearch, setUserSearch] = useState("");
-  const [users, setUsers] = useState<{ id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt: string | null; banReason: string | null; createdAt: string }[]>([]);
-  const [usersLoading, setUsersLoading] = useState(false);
+  const toast = useRef<Toast>(null);
+  const [tab, setTab] = useState<TabId>("overview");
+  // Bumped by manual refresh / window focus so the mounted tab refetches.
+  const [version, setVersion] = useState(0);
+  const [eventStatusPreset, setEventStatusPreset] = useState<string | null>(null);
+  const lastFocusRefresh = useRef(0);
 
-  const refresh = async () => {
-    setLoading(true);
-    try {
-      const [status, scheduler, scheduled, matchRows, auctionRows, auditRows] = await Promise.all([
-        api.adminStatus(),
-        api.adminSchedulerClock(),
-        api.adminSchedulerEvents(),
-        api.adminSchedulerMatches(),
-        api.adminSchedulerAuctions(),
-        api.adminSchedulerAudit(),
-      ]);
-      setWorld(status.world);
-      setClock(scheduler.clock);
-      setEvents(scheduled.events);
-      setMatches(matchRows.matches);
-      setAuctions(auctionRows.auctions);
-      setAudit(auditRows.audit);
-      setError(null);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const clock = useAdminFetch(() => api.adminSchedulerClock().then((r) => r.clock), [version]);
 
   useEffect(() => {
-    void refresh();
+    const onFocus = () => {
+      if (Date.now() - lastFocusRefresh.current < 15000) return;
+      lastFocusRefresh.current = Date.now();
+      setVersion((v) => v + 1);
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
   }, []);
 
-  useEffect(() => {
-    if (!clock) return;
-    void api.adminSchedulerPreview(clock.seasonId).then((result) => setPreview(result.season)).catch(() => setPreview([]));
-  }, [clock?.seasonId]);
-
-  const run = async (action: () => Promise<unknown>) => {
-    setLoading(true);
-    setMessage(null);
-    setError(null);
-    try {
-      await action();
-      await refresh();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const notify = (severity: "success" | "error" | "warn" | "info", summary: string, detail?: string) =>
+    toast.current?.show({ severity, summary, detail });
 
   if (!user?.isAdmin) {
     return (
@@ -94,267 +46,78 @@ export function Admin() {
     );
   }
 
+  const clockData = clock.data;
+  const eventBadge = clockData ? clockData.pendingEvents + clockData.failedEvents : undefined;
+
+  const jumpToFailedEvents = () => {
+    setEventStatusPreset("FAILED");
+    setTab("events");
+  };
+
   return (
     <div>
+      <Toast ref={toast} position="bottom-right" />
       <div className="page-head">
         <div>
           <div className="kicker">Admin</div>
-          <h1>Multiplayer Clock</h1>
+          <h1>World control</h1>
         </div>
-        <button className="btn" onClick={() => void refresh()} disabled={loading}>
-          <RefreshCw size={15} /> Refresh
+        <Segmented<TabId>
+          value={tab}
+          onChange={(next) => {
+            if (next !== "events") setEventStatusPreset(null);
+            setTab(next);
+          }}
+          items={[
+            { value: "overview", label: "Overview", icon: <Gauge size={14} /> },
+            { value: "events", label: "Events", icon: <CalendarClock size={14} />, count: eventBadge },
+            { value: "liveops", label: "Matches & Auctions", icon: <Trophy size={14} /> },
+            { value: "season", label: "Season", icon: <CalendarRange size={14} /> },
+            { value: "users", label: "Users", icon: <Users size={14} /> },
+            { value: "audit", label: "Audit", icon: <ScrollText size={14} /> },
+          ]}
+        />
+      </div>
+
+      {clock.error && (
+        <div className="card" style={{ borderColor: "rgba(255,99,99,0.5)", color: "#ff6b6b", marginBottom: 12 }}>
+          Scheduler unavailable: {clock.error}
+        </div>
+      )}
+
+      {clockData && clockData.health !== "HEALTHY" && tab !== "overview" && tab !== "events" && (
+        <button
+          className="card hoverable"
+          onClick={jumpToFailedEvents}
+          style={{
+            width: "100%",
+            textAlign: "left",
+            marginBottom: 12,
+            padding: "10px 16px",
+            display: "flex",
+            gap: 10,
+            alignItems: "center",
+            color: clockData.health === "OVERDUE" ? "var(--gold-2)" : "#ff6b6b",
+          }}
+        >
+          <CalendarClock size={15} />
+          <span>
+            Scheduler attention needed{clockData.failedEvents > 0 ? ` — ${clockData.failedEvents} failed event(s)` : clockData.overdueEvents > 0 ? ` — ${clockData.overdueEvents} overdue event(s)` : ""}. Click to inspect.
+          </span>
         </button>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-        <span className="kicker" style={{ alignSelf: "center", marginRight: 8 }}>Scheduler sections</span>
-        <a className="btn" href="#world-clock">World Clock</a>
-        <a className="btn" href="#scheduled-events">Scheduled Events</a>
-        <a className="btn" href="#scheduled-matches">Matches</a>
-        <a className="btn" href="#scheduled-auctions">Auctions</a>
-        <a className="btn" href="#season-preview">Season Preview</a>
-        <a className="btn" href="#scheduler-audit">Audit</a>
-        <a className="btn" href="#users">Users</a>
-      </div>
-
-      {error && <div className="card" style={{ borderColor: "rgba(255,99,99,0.5)", color: "#ff6b6b", marginBottom: 12 }}>{error}</div>}
-      {message && <div className="card" style={{ borderColor: "rgba(61,220,132,0.5)", color: "var(--grass-2)", marginBottom: 12 }}>{message}</div>}
-
-      {world && (
-        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 12, marginBottom: 16 }}>
-          <div className="card" style={{ padding: 14 }}>
-            <div className="kicker">Season</div>
-            <div style={{ fontSize: "1.4rem", fontWeight: 800 }}>{world.seasonKey}</div>
-            <div style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>{world.seasonStatus}</div>
-          </div>
-          <div className="card" style={{ padding: 14 }}>
-            <div className="kicker">Rounds</div>
-             <div style={{ fontSize: "1.4rem", fontWeight: 800 }}>{world.completedRounds}<span style={{ color: "var(--text-3)", fontSize: "0.9rem" }}> / {world.roundsPerSeason}</span></div>
-            <div style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>join lock at {world.joinLockRound}</div>
-          </div>
-          <div className="card" style={{ padding: 14 }}>
-            <div className="kicker">Join state</div>
-            <div style={{ fontSize: "1.4rem", fontWeight: 800 }}>{world.joinState}</div>
-            <div style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>manual: {world.manualRound ?? "off"}</div>
-          </div>
-          <div className="card" style={{ padding: 14 }}>
-            <div className="kicker">World</div>
-            <div style={{ fontSize: "1.4rem", fontWeight: 800 }}>{world.humanClubCount} human</div>
-            <div style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>{world.clubCount} clubs · {world.divisionCount} divisions · {world.liveMatchCount} live</div>
-          </div>
-        </div>
       )}
 
-      {clock && (
-        <>
-          <div id="world-clock" className="card" style={{ padding: 20, marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
-              <div>
-                <h3 style={{ marginBottom: 6 }}>Durable scheduler</h3>
-               <div style={{ color: "var(--text-2)", fontSize: "0.9rem" }}>
-                   Season {clock.seasonNumber}, Day {clock.seasonDay} / {clock.seasonDays} · {clock.phase}
-                 </div>
-                 <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 4 }}>
-                   Post-match buffer: {clock.interseasonAfterMatchDays} day(s) · Inter-season starts Day {clock.interseasonStartIndex + 1} · Preparation window: {clock.interseasonBeforeNextSeasonDays} day(s)
-                 </div>
-              </div>
-              <div style={{ color: clock.health === "HEALTHY" ? "var(--grass-2)" : "#ff6b6b", fontWeight: 700 }}>
-                {clock.health.replace("_", " ")}
-              </div>
-            </div>
-            <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(140px,1fr))", gap: 10, margin: "16px 0" }}>
-              <div><div className="kicker">Absolute day</div><strong>{clock.absoluteGameDay}</strong></div>
-              <div><div className="kicker">Pending</div><strong>{clock.pendingEvents}</strong></div>
-              <div><div className="kicker">Overdue</div><strong>{clock.overdueEvents}</strong></div>
-              <div><div className="kicker">Failed</div><strong>{clock.failedEvents}</strong></div>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button className="btn gold" disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerAdvanceDay(reason || undefined); setMessage("Game day advanced."); })}>
-                <FastForward size={15} /> Advance day
-              </button>
-              <input
-                type="number"
-                min={1}
-                 max={clock.seasonDays}
-                value={advanceDays}
-                 onChange={(e) => setAdvanceDays(Math.max(1, Math.min(clock.seasonDays, Number(e.target.value) || 1)))}
-                style={{ width: 70, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
-              />
-              <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerAdvanceMany(advanceDays, reason || undefined); setMessage(`${advanceDays} game day(s) advanced.`); })}>
-                Advance many
-              </button>
-              <input
-                type="text"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Reason for audit log"
-                style={{ flex: "1 1 190px", minWidth: 160, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
-              />
-              <button className="btn" disabled={loading} onClick={() => void run(async () => { const result = await api.adminSchedulerScan(); setMessage(`${result.executed} due event(s) executed.`); })}>
-                Scan due events
-              </button>
-              <button className="btn" disabled={loading || reason.trim().length < 10} onClick={() => void run(async () => { await api.adminSchedulerForceAdvance(reason.trim()); setMessage("Force advance completed."); })}>
-                Force advance
-              </button>
-            </div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 10 }}>
-              Last advance: {new Date(clock.lastAdvancedAt).toLocaleString()}
-            </div>
-          </div>
+      {tab === "overview" && <OverviewTab version={version} notify={notify} />}
+      {tab === "events" && <EventsTab key={eventStatusPreset ?? "all"} version={version} notify={notify} statusPreset={eventStatusPreset} />}
+      {tab === "liveops" && <MatchesAuctionsTab version={version} notify={notify} />}
+      {tab === "season" && <SeasonTab version={version} notify={notify} />}
+      {tab === "users" && <UsersTab version={version} notify={notify} />}
+      {tab === "audit" && <AuditTab version={version} notify={notify} />}
 
-          <div id="scheduled-events" className="card" style={{ padding: 20, marginBottom: 16, overflowX: "auto" }}>
-            <h3 style={{ marginBottom: 12 }}>Scheduled events</h3>
-            <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.85rem" }}>
-              <thead>
-                <tr style={{ color: "var(--text-3)", textAlign: "left" }}>
-                  <th style={{ padding: "8px 6px" }}>Due</th>
-                  <th style={{ padding: "8px 6px" }}>Type</th>
-                  <th style={{ padding: "8px 6px" }}>Phase</th>
-                  <th style={{ padding: "8px 6px" }}>Status</th>
-                  <th style={{ padding: "8px 6px" }}>Attempts</th>
-                      <th style={{ padding: "8px 6px" }}>Entity</th>
-                      <th style={{ padding: "8px 6px" }}>Error</th>
-                      <th style={{ padding: "8px 6px" }}>Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {events.map((event) => (
-                  <tr key={event.id} style={{ borderTop: "1px solid var(--line)" }}>
-                    <td style={{ padding: "9px 6px", whiteSpace: "nowrap" }}>{event.timeBasis === "REAL_TIME" ? (event.dueAt ? new Date(event.dueAt).toLocaleString() : "-") : `Day ${(event.dueAbsoluteGameDay ?? 0) + 1}`}</td>
-                    <td style={{ padding: "9px 6px" }}>{event.type}</td>
-                    <td style={{ padding: "9px 6px" }}>{event.phase ?? "-"}</td>
-                    <td style={{ padding: "9px 6px" }}>{event.status}</td>
-                    <td style={{ padding: "9px 6px" }}>{event.attempts}</td>
-                    <td style={{ padding: "9px 6px" }}>{event.entityType ? `${event.entityType}:${event.entityId ?? ""}` : "-"}</td>
-                    <td style={{ padding: "9px 6px", color: "#ff6b6b", maxWidth: 240 }}>{event.lastError ?? "-"}</td>
-                    <td style={{ padding: "9px 6px", whiteSpace: "nowrap" }}>
-                      {event.status === "PENDING" && <button className="btn" style={{ marginRight: 6 }} disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerExecuteEvent(event.id, reason || undefined); setMessage(`${event.type} executed.`); })}>Execute</button>}
-                      {event.status === "FAILED" && <button className="btn" style={{ marginRight: 6 }} disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerRetryEvent(event.id); setMessage(`${event.type} queued for retry.`); })}>Retry</button>}
-                      {event.status === "PENDING" && <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerCancelEvent(event.id); setMessage(`${event.type} cancelled.`); })}>Cancel</button>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {events.length === 0 && <div className="empty-state" style={{ padding: 18 }}>No scheduled events.</div>}
-          </div>
-        </>
-      )}
-
-      <div className="card" style={{ maxWidth: 620, padding: 20 }}>
-        <h3 style={{ marginBottom: 10 }}>Manual clock</h3>
-        <div style={{ color: "var(--text-2)", marginBottom: 16, fontSize: "0.9rem" }}>
-          Instantly simulate every division through the requested round. While manual mode is set, the real schedule is paused and the manual round is authoritative.
-        </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <button className="btn gold" disabled={loading} onClick={() => void run(() => api.adminAdvanceRound(targetRound))}>
-            <FastForward size={15} /> Advance to round
-          </button>
-          <input
-            type="number"
-            min={1}
-             max={world?.roundsPerSeason ?? 14}
-            value={targetRound}
-            onChange={(e) => setTargetRound(Number(e.target.value))}
-            style={{ width: 90, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
-          />
-          <button className="btn" disabled={loading} onClick={() => void run(() => api.adminSetRound(targetRound))}>
-            Set manual round
-          </button>
-          <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminClearManual(); setMessage("Manual mode cleared — real schedule resumed."); })}>
-            <Undo2 size={15} /> Clear manual
-          </button>
-           <button className="btn" disabled={loading || reason.trim().length < 10} onClick={() => void run(async () => { await api.adminSchedulerRollover(reason.trim()); setMessage("Rollover forced."); })}>
-            <RefreshCw size={15} /> Force rollover
-          </button>
-        </div>
-      </div>
-
-      <div id="users" className="card" style={{ padding: 20, marginTop: 16 }}>
-        <h3 style={{ marginBottom: 8 }}>Users · Pro & moderation</h3>
-        <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginBottom: 12 }}>Admins have cumulative permissions (Pro + Admin). Grant Pro to test or reward. Bans block login and kill sessions; warnings surface as a banner until acknowledged.</div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search username" style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }} />
-          <button className="btn" disabled={usersLoading} onClick={() => void (async () => { setUsersLoading(true); try { const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); } finally { setUsersLoading(false); } })()}>{usersLoading ? "…" : "Search"}</button>
-          <button className="btn ghost" disabled={usersLoading} onClick={() => void (async () => { setUserSearch(""); setUsersLoading(true); try { const res = await api.adminListUsers(undefined, 30); setUsers(res.users); } finally { setUsersLoading(false); } })()}>List all</button>
-        </div>
-        {users.length > 0 && (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", minWidth: 700, borderCollapse: "collapse", fontSize: "0.85rem" }}>
-              <thead><tr style={{ color: "var(--text-3)", textAlign: "left" }}><th style={{ padding: "8px 6px" }}>User</th><th style={{ padding: "8px 6px" }}>Pro</th><th style={{ padding: "8px 6px" }}>Admin</th><th style={{ padding: "8px 6px" }}>Banned</th><th style={{ padding: "8px 6px" }}>Actions</th></tr></thead>
-              <tbody>
-                {users.map((u) => (
-                  <tr key={u.id} style={{ borderTop: "1px solid var(--line)" }}>
-                    <td style={{ padding: "9px 6px" }}>{u.username} <span style={{ color: "var(--text-3)" }}>#{u.id}</span></td>
-                    <td style={{ padding: "9px 6px" }}>{u.isPro ? "PRO" : "—"}</td>
-                    <td style={{ padding: "9px 6px" }}>{u.isAdmin ? "ADMIN" : "—"}</td>
-                    <td style={{ padding: "9px 6px" }}>{u.bannedAt ? `Banned: ${u.banReason ?? ""}` : "—"}</td>
-                    <td style={{ padding: "9px 6px", display: "flex", gap: 6, flexWrap: "wrap" }}>
-                      <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSetPro(u.id, !u.isPro); setMessage(`${u.username} Pro ${!u.isPro ? "granted" : "revoked"}`); const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); })}>{u.isPro ? "Revoke Pro" : "Grant Pro"}</button>
-                      {u.bannedAt ? <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminUnbanUser(u.id); setMessage(`${u.username} unbanned`); const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); })}>Unban</button> : <button className="btn ghost" disabled={loading || u.isAdmin} onClick={() => void run(async () => { const r = prompt(`Ban reason for ${u.username}:`); if (!r) return; await api.adminBanUser(u.id, r); setMessage(`${u.username} banned`); const res = await api.adminListUsers(userSearch || undefined, 30); setUsers(res.users); })}>Ban</button>}
-                      <button className="btn ghost" disabled={loading} onClick={() => void run(async () => { const r = prompt(`Warning for ${u.username}:`); if (!r) return; await api.adminWarnUser(u.id, r); setMessage(`Warned ${u.username}`); })}>Warn</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <span className="kicker">Quick moderation (need club/player ids from World / Matches tabs):</span>
-          <button className="btn ghost" onClick={() => void run(async () => { const clubId = Number(prompt("Club id to reset name:")); if (!clubId) return; const name = prompt("New club name:"); if (!name) return; const r = prompt("Reason:"); if (!r) return; await api.adminResetClubName(clubId, name, r); setMessage("Club name reset"); })}>Reset club name</button>
-          <button className="btn ghost" onClick={() => void run(async () => { const clubId = Number(prompt("Club id to remove logo:")); if (!clubId) return; const r = prompt("Reason:"); if (!r) return; await api.adminRemoveLogo(clubId, r); setMessage("Logo removed"); })}>Remove logo</button>
-          <button className="btn ghost" onClick={() => void run(async () => { const pid = Number(prompt("Player id to clear nickname:")); if (!pid) return; const r = prompt("Reason:"); if (!r) return; await api.adminClearNickname(pid, r); setMessage("Nickname cleared"); })}>Clear nickname</button>
-        </div>
-      </div>
-
-      <div id="scheduled-matches" className="card" style={{ padding: 20, marginTop: 16, overflowX: "auto" }}>
-        <h3 style={{ marginBottom: 12 }}>Matches</h3>
-        <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.85rem" }}>
-          <thead><tr style={{ color: "var(--text-3)", textAlign: "left" }}><th style={{ padding: "8px 6px" }}>Day</th><th style={{ padding: "8px 6px" }}>Fixture</th><th style={{ padding: "8px 6px" }}>Status</th><th style={{ padding: "8px 6px" }}>Actions</th></tr></thead>
-          <tbody>{matches.map((match) => <tr key={match.id} style={{ borderTop: "1px solid var(--line)" }}>
-            <td style={{ padding: "9px 6px" }}>Day {match.scheduledGameDay}</td>
-            <td style={{ padding: "9px 6px" }}>{match.homeClub} vs {match.awayClub}</td>
-            <td style={{ padding: "9px 6px" }}>{match.status}</td>
-            <td style={{ padding: "9px 6px" }}>
-              {match.status === "SCHEDULED" && <button className="btn" style={{ marginRight: 6 }} disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerStartMatch(match.id, reason || undefined); setMessage("Match started."); })}>Start Now</button>}
-              {match.status !== "COMPLETED" && <button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerResolveMatch(match.id, reason || undefined); setMessage("Match resolved."); })}>Resolve Now</button>}
-            </td>
-          </tr>)}</tbody>
-        </table>
-      </div>
-
-      <div id="scheduled-auctions" className="card" style={{ padding: 20, marginTop: 16, overflowX: "auto" }}>
-        <h3 style={{ marginBottom: 12 }}>Auctions</h3>
-        <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginBottom: 10 }}>Extension minutes: <input type="number" min={1} value={auctionExtensionMinutes} onChange={(e) => setAuctionExtensionMinutes(Math.max(1, Number(e.target.value) || 1))} style={{ width: 70, marginLeft: 6, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }} /></div>
-        <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.85rem" }}>
-          <thead><tr style={{ color: "var(--text-3)", textAlign: "left" }}><th style={{ padding: "8px 6px" }}>Player</th><th style={{ padding: "8px 6px" }}>Seller</th><th style={{ padding: "8px 6px" }}>Ends</th><th style={{ padding: "8px 6px" }}>Status</th><th style={{ padding: "8px 6px" }}>Actions</th></tr></thead>
-          <tbody>{auctions.map((auction) => <tr key={auction.id} style={{ borderTop: "1px solid var(--line)" }}>
-            <td style={{ padding: "9px 6px" }}>{auction.player}</td>
-            <td style={{ padding: "9px 6px" }}>{auction.seller}</td>
-            <td style={{ padding: "9px 6px" }}>{new Date(auction.endsAt).toLocaleString()}</td>
-            <td style={{ padding: "9px 6px" }}>{auction.status}</td>
-            <td style={{ padding: "9px 6px" }}>
-              {auction.status === "ACTIVE" && <><button className="btn" style={{ marginRight: 6 }} disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerEndAuction(auction.id, reason || undefined); setMessage("Auction ended."); })}>End Now</button><button className="btn" disabled={loading} onClick={() => void run(async () => { await api.adminSchedulerExtendAuction(auction.id, auctionExtensionMinutes, reason || undefined); setMessage("Auction extended."); })}>Extend</button></>}
-            </td>
-          </tr>)}</tbody>
-        </table>
-      </div>
-
-      <div id="season-preview" className="card" style={{ padding: 20, marginTop: 16, overflowX: "auto" }}>
-        <h3 style={{ marginBottom: 12 }}>Season preview</h3>
-        <table style={{ width: "100%", minWidth: 620, borderCollapse: "collapse", fontSize: "0.85rem" }}>
-          <thead><tr style={{ color: "var(--text-3)", textAlign: "left" }}><th style={{ padding: "8px 6px" }}>Day</th><th style={{ padding: "8px 6px" }}>Label</th><th style={{ padding: "8px 6px" }}>Phase</th><th style={{ padding: "8px 6px" }}>Payroll</th><th style={{ padding: "8px 6px" }}>Weekly simulation</th></tr></thead>
-          <tbody>{preview.map((entry) => <tr key={entry.seasonDayIndex} style={{ borderTop: "1px solid var(--line)" }}><td style={{ padding: "9px 6px" }}>{entry.seasonDay}</td><td style={{ padding: "9px 6px" }}>{entry.label}</td><td style={{ padding: "9px 6px" }}>{entry.phase}</td><td style={{ padding: "9px 6px" }}>{entry.payroll ? "Yes" : "-"}</td><td style={{ padding: "9px 6px" }}>{entry.weeklySimulation ? "Yes" : "-"}</td></tr>)}</tbody>
-        </table>
-      </div>
-
-      <div id="scheduler-audit" className="card" style={{ padding: 20, marginTop: 16, overflowX: "auto" }}>
-        <h3 style={{ marginBottom: 12 }}>Scheduler audit</h3>
-        <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", fontSize: "0.85rem" }}>
-          <thead><tr style={{ color: "var(--text-3)", textAlign: "left" }}><th style={{ padding: "8px 6px" }}>Time</th><th style={{ padding: "8px 6px" }}>Action</th><th style={{ padding: "8px 6px" }}>Target</th><th style={{ padding: "8px 6px" }}>Reason</th></tr></thead>
-          <tbody>{audit.map((entry) => <tr key={entry.id} style={{ borderTop: "1px solid var(--line)" }}><td style={{ padding: "9px 6px" }}>{new Date(entry.createdAt).toLocaleString()}</td><td style={{ padding: "9px 6px" }}>{entry.action}</td><td style={{ padding: "9px 6px" }}>{entry.targetType}:{entry.targetId ?? ""}</td><td style={{ padding: "9px 6px" }}>{entry.reason ?? "-"}</td></tr>)}</tbody>
-        </table>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
+        <button className="btn ghost" disabled={clock.loading} onClick={() => setVersion((v) => v + 1)}>
+          <RefreshCw size={14} /> Refresh all
+        </button>
       </div>
     </div>
   );
