@@ -5,7 +5,6 @@ import { emptyStandingsRow } from "../src/game/league";
 import { generateDivisionFixtures } from "../src/game/multiplayer";
 import { roundDayIndex } from "../src/services/seasonCalendar";
 import {
-  anchorMinutes,
   localSlotAt,
   pickFixtureKickoff,
   pickSynchronizedKickoff,
@@ -57,23 +56,25 @@ describe("fixture kickoff selection", () => {
   const day = Date.UTC(2026, 0, 2);
 
   it("picks an overlapping slot when preferences intersect", () => {
-    // Home 15:00–21:00, away 18:00–24:00 → overlap contains the 19:00 anchor.
-    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(30, 41) }, { timezone: "UTC", preferredSlots: slots(36, 47) }, day, anchorMinutes());
-    expect(kickoff).toBe(utcAt(day, 38));
+    // Home 15:00–21:00, away 18:00–24:00 → the selected slot is in their overlap.
+    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(30, 41) }, { timezone: "UTC", preferredSlots: slots(36, 47) }, day, "overlap");
+    expect(slots(36, 41).map((slot) => utcAt(day, slot))).toContain(kickoff);
+    expect(kickoff).toBe(pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(30, 41) }, { timezone: "UTC", preferredSlots: slots(36, 47) }, day, "overlap"));
   });
 
   it("falls back to the home-best slot closest to the away windows", () => {
     // Home 01:00–09:00, away 14:00–22:00: no overlap. Midnight wrapping makes
     // 01:00 the home slot closest to the away block's late end (22:30).
-    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(2, 17) }, { timezone: "UTC", preferredSlots: slots(28, 43) }, day, anchorMinutes());
+    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(2, 17) }, { timezone: "UTC", preferredSlots: slots(28, 43) }, day, "disjoint");
     expect(kickoff).toBe(utcAt(day, 2));
   });
 
-  it("lets an unconstrained opponent defer to the home club and anchor", () => {
+  it("lets an unconstrained opponent defer to the home club and seeded spread", () => {
     // Home 10:00–14:00, away AI (unconstrained): any home slot wins on
-    // distance, ties resolve toward the configured 19:00 anchor → 13:30.
-    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(20, 27) }, { timezone: "UTC", preferredSlots: null }, day, anchorMinutes());
-    expect(kickoff).toBe(utcAt(day, 27));
+    // distance, then the stable seed selects one of those equally good slots.
+    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(20, 27) }, { timezone: "UTC", preferredSlots: null }, day, "home-window");
+    expect(slots(20, 27).map((slot) => utcAt(day, slot))).toContain(kickoff);
+    expect(kickoff).toBe(pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(20, 27) }, { timezone: "UTC", preferredSlots: null }, day, "home-window"));
   });
 
   it("synchronizes a final round on one shared instant", () => {
@@ -83,7 +84,7 @@ describe("fixture kickoff selection", () => {
       { home: { timezone: "UTC", preferredSlots: slots(12, 17) }, away: { timezone: "UTC", preferredSlots: slots(14, 19) } },
       { home: { timezone: "UTC", preferredSlots: slots(40, 45) }, away: { timezone: "UTC", preferredSlots: slots(42, 47) } },
     ];
-    const kickoff = pickSynchronizedKickoff(pairs, day, anchorMinutes());
+    const kickoff = pickSynchronizedKickoff(pairs, day, "final-round");
     // Brute force: no candidate beats the chosen one on (homeSum, awaySum).
     let best: { home: number; away: number } | null = null;
     for (let slot = 0; slot < 48; slot++) {
@@ -97,7 +98,16 @@ describe("fixture kickoff selection", () => {
     expect(chosenHome).toBe(best!.home);
     expect(chosenAway).toBe(best!.away);
     // Deterministic regardless of input order.
-    expect(kickoff).toBe(pickSynchronizedKickoff([...pairs].reverse(), day, anchorMinutes()));
+    expect(kickoff).toBe(pickSynchronizedKickoff([...pairs].reverse(), day, "final-round"));
+  });
+
+  it("spreads unconstrained fixtures across the day deterministically", () => {
+    const unconstrained = { timezone: null, preferredSlots: null };
+    const kickoffs = Array.from({ length: 24 }, (_, i) => pickFixtureKickoff(unconstrained, unconstrained, day, `division:0:${i}:home:away`));
+    const slotsChosen = new Set(kickoffs.map((kickoff) => Math.round((kickoff - day) / SLOT_MS)));
+
+    expect(slotsChosen.size).toBeGreaterThan(8);
+    expect(kickoffs).toEqual(Array.from({ length: 24 }, (_, i) => pickFixtureKickoff(unconstrained, unconstrained, day, `division:0:${i}:home:away`)));
   });
 });
 
@@ -146,7 +156,7 @@ describe("generateDivisionFixtures timing", () => {
       const dayStart = SEASON_START + roundDayIndex(f.round) * DAY_MS;
       if (f.round === lastRound) continue;
       // Ordinary rounds follow the per-fixture objective exactly.
-      expect(f.kickoffAt).toBe(pickFixtureKickoff(prefOf(f.homeClubId), prefOf(f.awayClubId), dayStart, anchorMinutes()));
+      expect(f.kickoffAt).toBe(pickFixtureKickoff(prefOf(f.homeClubId), prefOf(f.awayClubId), dayStart, `${comp.id}:${f.round}:${f.homeClubId}:${f.awayClubId}`));
     }
 
     const finals = fixtures.filter((f) => f.round === lastRound);
@@ -154,7 +164,7 @@ describe("generateDivisionFixtures timing", () => {
     expect(new Set(finals.map((f) => f.kickoffAt)).size).toBe(1);
     const dayStart = SEASON_START + roundDayIndex(lastRound) * DAY_MS;
     expect(finals[0].kickoffAt).toBe(
-      pickSynchronizedKickoff(finals.map((f) => ({ home: prefOf(f.homeClubId), away: prefOf(f.awayClubId) })), dayStart, anchorMinutes())
+      pickSynchronizedKickoff(finals.map((f) => ({ home: prefOf(f.homeClubId), away: prefOf(f.awayClubId) })), dayStart, `${comp.id}:${lastRound}`)
     );
   });
 

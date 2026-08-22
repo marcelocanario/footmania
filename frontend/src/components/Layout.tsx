@@ -30,6 +30,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const isMobile = useIsMobile();
   useLiveMatchWatcher();
   const club = snapshot?.club;
+  const teamCreationRequired = status !== null && !status.club;
   const provisional = club?.competitionState === "PROVISIONAL" || status?.club?.competitionState === "PROVISIONAL";
   const dormant = club?.competitionState === "DORMANT" || status?.club?.competitionState === "DORMANT";
   const [notifications, setNotifications] = useState<{ id: string; type: string; payload: unknown; createdAt: string; readAt: string | null }[]>([]);
@@ -68,7 +69,15 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <NavLink to="/dashboard" className="logo" style={{ textDecoration: "none" }}>
+          <NavLink
+            to="/dashboard"
+            className="logo"
+            style={{ textDecoration: "none" }}
+            onClick={(event) => {
+              if (teamCreationRequired) event.preventDefault();
+            }}
+            aria-disabled={teamCreationRequired}
+          >
           <img src="/footmania-logo.svg" alt="" className="logo-img" />
           {strings.app.name}
         </NavLink>
@@ -80,6 +89,10 @@ export function Layout({ children }: { children: ReactNode }) {
                 key={item.to}
                 to={item.to}
                 className={({ isActive }) => (isActive ? "active" : "")}
+                onClick={(event) => {
+                  if (teamCreationRequired) event.preventDefault();
+                }}
+                aria-disabled={teamCreationRequired}
               >
                 {item.icon}
                 {item.label}
@@ -159,6 +172,10 @@ export function Layout({ children }: { children: ReactNode }) {
               key={item.to}
               to={item.to}
               className={({ isActive }) => (isActive ? "active" : "")}
+              onClick={(event) => {
+                if (teamCreationRequired) event.preventDefault();
+              }}
+              aria-disabled={teamCreationRequired}
             >
               {item.icon}
               {item.label}

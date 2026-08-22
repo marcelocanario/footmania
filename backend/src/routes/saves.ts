@@ -251,6 +251,7 @@ export async function savesRoutes(app: FastifyInstance) {
     const rows = standingsTiebreak(Object.values(comp.standings))
       .map((row) => {
         const club = world.clubs.find((c) => c.id === row.clubId);
+        const seasonEntry = world.mpClubSeasons.find((entry) => entry.clubId === row.clubId && entry.seasonId === world.mp.seasonId && entry.divisionId === comp.id);
         return {
           ...row,
           clubId: row.clubId,
@@ -259,6 +260,9 @@ export async function savesRoutes(app: FastifyInstance) {
           colors: { primary: club?.primaryColor ?? "", secondary: club?.secondaryColor ?? "" },
           isHuman: club?.ownerUserId !== null,
           clubType: club?.ownerUserId !== null ? "HUMAN" : "AI",
+          isMine: club?.ownerUserId === req.user!.id,
+          promotionStatus: seasonEntry?.promotionStatus ?? "NONE",
+          relegationStatus: seasonEntry?.relegationStatus ?? "NONE",
         };
       });
     return { competition: { id: comp.id, name: comp.name, tier: tierOf(comp), groupIndex: groupIndexOf(comp) }, standings: rows };

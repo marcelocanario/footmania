@@ -7,12 +7,6 @@ import { generateSeniorPlayer, generateYouthPlayer, tierFromZ } from "./playerGe
 
 export { overallFromSkills } from "./rating";
 
-export const CHARACTERISTIC_NAMES = [
-  "Positioning", "Penalty Save", "Reflexes", "Off the Line", "Playmaking",
-  "Heading", "Crossing", "Tackling", "Dribbling", "Finishing",
-  "Marking", "Passing", "Stamina", "Speed",
-];
-
 /**
  * Compatibility wrapper for the canonical division-driven generator
  * (player-generation spec §70/§71). New players are always created through the

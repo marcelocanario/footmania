@@ -5,7 +5,7 @@ process.env.NODE_ENV = "test";
 
 import { PrismaClient } from "@prisma/client";
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
-import { generateWorld, createHumanClub } from "../src/game/worldgen";
+import { createHumanClub } from "../src/game/worldgen";
 import { loadGlobalWorld, persistWorld, ensureGlobalSave, StaleWorldError } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
 import { applyDevelopment } from "../src/game/player";
@@ -73,6 +73,31 @@ describe("global multiplayer world persistence", () => {
     expect(reloaded!.world.clubEloEvents).toHaveLength(1);
     expect(reloaded!.world.clubEloEvents![0].matchId).toBe(880000);
     expect(reloaded!.world.nextId).toBeGreaterThan(880001);
+  });
+
+  it("round-trips retained player values without regeneration", async () => {
+    const { saveId } = await freshGlobalWorld(6767);
+    const { world } = await withSeason(saveId);
+    const player = world.players[0];
+    const skills = { gol: 11, vel: 22, tec: 33, pas: 44, des: 55, arm: 66, fin: 77 };
+    const skillAcc = [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77];
+    player.skills = skills;
+    player.overall = 77;
+    player.potential = 88;
+    player.salary = 123456;
+    player.value = 654321;
+    player.skillAcc = skillAcc;
+
+    await persistWorld(prisma, saveId, saveId, world);
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const saved = reloaded!.world.players.find((candidate) => candidate.id === player.id)!;
+    expect(saved.skills).toEqual(skills);
+    expect(saved.overall).toBe(77);
+    expect(saved.potential).toBe(88);
+    expect(saved.salary).toBe(123456);
+    expect(saved.value).toBe(654321);
+    expect(saved.skillAcc).toEqual(skillAcc);
   });
 
   it("round-trips live match state (multiple) and records player minutes on finish", async () => {

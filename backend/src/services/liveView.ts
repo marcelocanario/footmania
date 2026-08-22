@@ -34,6 +34,14 @@ export interface LivePlayerView {
   suspended: boolean;
 }
 
+export interface LiveKitView {
+  primary: string;
+  secondary: string;
+  accent: string;
+  numberColor: string;
+  pattern: string;
+}
+
 export interface LiveStateView {
   matchId: number;
   fixtureId: number;
@@ -44,8 +52,10 @@ export interface LiveStateView {
   awayClubId: number;
   home: string;
   away: string;
-  homeKit: { primary: string; secondary: string; accent: string; numberColor: string; pattern: string };
-  awayKit: { primary: string; secondary: string; accent: string; numberColor: string; pattern: string };
+  homeKit: LiveKitView;
+  awayKit: LiveKitView;
+  homeGkKit: LiveKitView;
+  awayGkKit: LiveKitView;
   homeScore: number;
   awayScore: number;
   minute: number;
@@ -139,6 +149,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
   // Determine which side the viewer controls (if any).
   const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
   const humanClubId = viewerClub?.id ?? null;
+  const homeKits = home ? resolveClubKits(home) : null;
+  const awayKits = away ? resolveClubKits(away) : null;
   return {
     matchId: st.matchId,
     fixtureId: st.fixtureId,
@@ -149,27 +161,12 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayClubId: st.awayClubId,
     home: home?.name ?? "",
     away: away?.name ?? "",
-    // Kit Lab: full home/away designs so pitch markers can mirror the pattern.
-    homeKit: (() => {
-      const k = home ? resolveClubKits(home).home : null;
-      return {
-        primary: k?.primary ?? "#23a55a",
-        secondary: k?.secondary ?? "#14693c",
-        accent: k?.accent ?? "#ffffff",
-        numberColor: k?.numberColor ?? "#ffffff",
-        pattern: k?.pattern ?? "solid",
-      };
-    })(),
-    awayKit: (() => {
-      const k = away ? resolveClubKits(away).away : null;
-      return {
-        primary: k?.primary ?? "#f0b429",
-        secondary: k?.secondary ?? "#8c6510",
-        accent: k?.accent ?? "#ffffff",
-        numberColor: k?.numberColor ?? "#ffffff",
-        pattern: k?.pattern ?? "solid",
-      };
-    })(),
+    // Kit Lab: full home/away/GK designs so pitch markers can mirror the
+    // pattern; each side's goalkeeper wears the side's GK design.
+    homeKit: kitView(homeKits?.home ?? null, "#23a55a", "#14693c"),
+    awayKit: kitView(awayKits?.away ?? null, "#f0b429", "#8c6510"),
+    homeGkKit: kitView(homeKits?.gk ?? null, "#d4770f", "#8a4d09"),
+    awayGkKit: kitView(awayKits?.gk ?? null, "#0e6ba8", "#084a75"),
     homeScore: st.scores[0],
     awayScore: st.scores[1],
     minute: st.minute,
@@ -212,4 +209,15 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
 function formationName(club: { tactics?: { formation: number } } | undefined): string {
   if (!club?.tactics) return "";
   return FORMATION_NAMES[club.tactics.formation] ?? "";
+}
+
+/** Project a stored design onto the live view, with placeholders for missing clubs. */
+function kitView(design: LiveKitView | null, fallbackPrimary: string, fallbackSecondary: string): LiveKitView {
+  return {
+    primary: design?.primary ?? fallbackPrimary,
+    secondary: design?.secondary ?? fallbackSecondary,
+    accent: design?.accent ?? "#ffffff",
+    numberColor: design?.numberColor ?? "#ffffff",
+    pattern: design?.pattern ?? "solid",
+  };
 }

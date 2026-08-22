@@ -237,7 +237,7 @@ export function processContractWarning(world: World, playerId: number): void {
   const player = world.players.find((candidate) => candidate.id === playerId);
   const club = player?.clubId === null || player?.clubId === undefined ? undefined : world.clubs.find((candidate) => candidate.id === player.clubId);
   if (!player || !club || club.competitionState !== "ACTIVE" || player.contractDays <= 0 || player.contractDays > gameConfig.seasonDays * gameConfig.contractWarningSeasons) return;
-  const text = `${player.name} (${club.name}) contract expiring soon`;
+  const text = `${player.name} contract expiring soon`;
   if (!world.news.some((item) => item.kind === "contract" && item.clubId === club.id && item.text === text)) {
     world.news.push({ dayIndex: world.dayIndex, text, kind: "contract", clubId: club.id });
   }

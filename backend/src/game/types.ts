@@ -31,8 +31,6 @@ export interface Player {
   skills: SkillSet;
   overall: number;
   potential: number;
-  characteristic1: number;
-  characteristic2: number;
   energy: number;
   salary: number;
   payrollPaidThroughDay: number;

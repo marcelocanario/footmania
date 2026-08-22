@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { generateWorld } from "../src/game/worldgen";
-import { createHumanClub } from "../src/game/worldgen";
+import { generateWorld, createHumanClub } from "../src/game/worldgen";
+import { initSeason, createFillerAI } from "../src/game/multiplayer";
+import { createLiveMatchState } from "../src/game/match";
+import { createRng } from "../src/game/rng";
+import { liveStateView } from "../src/services/liveView";
 import {
   clubKitsSchema,
   deserializeClubKits,
@@ -80,6 +83,19 @@ describe("AI kit derivation", () => {
       expect(kits.gk.primary.toLowerCase()).not.toBe(kits.home.primary.toLowerCase());
       expect(kits.gk.primary.toLowerCase()).not.toBe(kits.away.primary.toLowerCase());
       expect(kitDesignSchema.safeParse(kits.gk).success).toBe(true);
+    }
+  });
+
+  it("is stored on filler AI clubs with the identity columns mirroring the home shell", () => {
+    const world = generateWorld(4242);
+    initSeason(world, { year: 2026, month: 1 }, 1);
+    createFillerAI(world, 1, 1);
+    const fillers = world.clubs.filter((c) => !c.isHuman);
+    expect(fillers.length).toBeGreaterThan(0);
+    for (const filler of fillers) {
+      expect(filler.kits).toEqual(deriveAiKits(filler.id));
+      expect(filler.primaryColor).toBe(filler.kits!.home.primary);
+      expect(filler.secondaryColor).toBe(filler.kits!.home.secondary);
     }
   });
 });
@@ -165,6 +181,29 @@ describe("human club creation with kits", () => {
     });
     expect(club.kits).toBeNull();
     expect(club.primaryColor).toBe("#aa0000");
+  });
+});
+
+describe("match-day kit usage (live view)", () => {
+  it("sends home design for home, away design for away, and each side's GK design", () => {
+    const world = generateWorld(2026);
+    const storedKits: ClubKits = {
+      home: { ...validKit, primary: "#112233", secondary: "#ffffff" },
+      away: { ...validKit, pattern: "solid", primary: "#445566", secondary: "#ffffff" },
+      gk: { ...validKit, pattern: "hoops", primary: "#ff8800", secondary: "#111111" },
+    };
+    const home = createHumanClub(world, { userId: 11, clubName: "Stored FC", country: "BRA", timezone: null, kits: storedKits, preferredHours: null });
+    const away = createHumanClub(world, { userId: 12, clubName: "Derived FC", country: "BRA", timezone: null, preferredHours: null });
+    const st = createLiveMatchState(createRng(7), home, away, world.players, { matchId: 1, fixtureId: 1, competitionId: 1 });
+
+    const view = liveStateView(world, st);
+    expect(view.homeKit).toEqual(storedKits.home);
+    expect(view.homeGkKit).toEqual(storedKits.gk);
+    // The away side wears its own away design, never the home design.
+    const derivedAway = resolveClubKits(away).away;
+    expect(view.awayKit).toEqual(derivedAway);
+    expect(view.awayKit.primary).not.toBe(view.homeKit.primary);
+    expect(view.awayGkKit).toEqual(resolveClubKits(away).gk);
   });
 });
 

@@ -16,6 +16,7 @@ import { nextInt } from "./rng";
 
 const nameCache: Record<string, string[]> = {};
 const poolSource: Record<string, "db" | "fallback"> = {};
+const dbNameCountries = new Set<string>();
 
 const FALLBACK_NAMES = ["Alex", "João", "Marco", "Luca", "James", "Ken", "Ivan", "Diego", "Omar", "Yuki"];
 const FALLBACK_SURNAMES = ["Silva", "Rossi", "Smith", "Khan", "Sato", "Nakamura", "Ferreira", "Muller", "Garcia", "Kim"];
@@ -35,9 +36,11 @@ export function registerNamePool(kind: "names" | "surnames", country: string, va
   if (values.length > 0) {
     nameCache[key] = values;
     poolSource[key] = "db";
+    if (kind === "names") dbNameCountries.add(country);
   } else {
     delete nameCache[key];
     poolSource[key] = "fallback";
+    if (kind === "names") dbNameCountries.delete(country);
   }
 }
 
@@ -45,6 +48,11 @@ export function registerNamePool(kind: "names" | "surnames", country: string, va
 export function hasNamePool(country: string): boolean {
   const key = `names:${country}`;
   return Boolean(nameCache[key]) && poolSource[key] === "db";
+}
+
+/** Countries with a real first-name table, in a stable order for deterministic selection. */
+export function countriesWithNamePools(): string[] {
+  return [...dbNameCountries].sort();
 }
 
 export function generateName(rng: RngState, country: string): string {

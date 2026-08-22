@@ -1,8 +1,8 @@
 import type { Player, Position, RngState, SkillSet } from "./types";
-import { createRng, nextInt, truncatedNormal } from "./rng";
-import { generateName } from "./names";
+import { createRng, nextDouble, nextInt, truncatedNormal } from "./rng";
+import { countriesWithNamePools, generateName } from "./names";
 import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
-import { overallFromSkills, SKILL_KEYS, OVERALL_SCALE } from "./rating";
+import { overallFromSkills, SKILL_KEYS, OVERALL_SCALE, type SkillKey } from "./rating";
 import { calculateAcademySalary, calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
 import { generateDevelopmentProfile } from "./player";
 import { gameConfig } from "../config";
@@ -179,51 +179,112 @@ export function tierFromZ(z: number): number {
 // Skills toward a target OVR (spec §39)
 // ---------------------------------------------------------------------------
 
-const TACTICAL_PAIRS: Record<Position, [number, number][]> = {
-  0: [[0, 3], [0, 1], [2, 0], [1, 2], [3, 1], [0, 2]],
-  1: [[6, 10], [6, 13], [10, 11], [10, 13], [10, 6], [10, 9], [6, 11]],
-  2: [[7, 10], [7, 12], [7, 5], [10, 13], [7, 13], [7, 10], [7, 5], [7, 13], [7, 12], [7, 9], [7, 10], [5, 12]],
-  3: [[4, 11], [4, 9], [9, 11], [11, 9], [4, 8], [4, 13], [7, 10], [7, 11], [7, 5], [7, 13], [10, 13], [10, 11], [9, 4], [10, 12], [4, 11], [8, 11], [7, 9], [11, 13], [7, 11]],
-  4: [[9, 5], [13, 9], [9, 5], [8, 9], [9, 13], [9, 5], [9, 8], [5, 13], [8, 11], [9, 11], [9, 12], [13, 8]],
+export interface SkillStep {
+  key: SkillKey;
+  fixed: number;
+  randomExclusive?: number;
+}
+
+export interface SkillShapeRecipe {
+  variant: 0 | 1 | 2;
+  steps: readonly SkillStep[];
+}
+
+function step(key: SkillKey, fixed: number, randomExclusive?: number): SkillStep {
+  const result: SkillStep = { key, fixed };
+  if (randomExclusive !== undefined) result.randomExclusive = randomExclusive;
+  return result;
+}
+
+function recipe(variant: SkillShapeRecipe["variant"], ...steps: SkillStep[]): SkillShapeRecipe {
+  return { variant, steps };
+}
+
+/**
+ * Generator-only skill shapes. The selected index and these steps are never
+ * stored on a player or exposed through an API; only the resulting skills live
+ * beyond generation.
+ */
+export const SKILL_SHAPE_RECIPES: Record<Position, readonly SkillShapeRecipe[]> = {
+  0: [
+    recipe(0, step("tec", 2, 5), step("tec", 0, 2)),
+    recipe(0, step("tec", 2, 5), step("gol", 0, 2)),
+    recipe(0, step("vel", 2, 5), step("tec", 0, 2)),
+    recipe(0, step("gol", 1, 3), step("vel", 0, 2)),
+    recipe(0, step("tec", 2, 5), step("gol", 0, 2)),
+    recipe(0, step("tec", 2, 5), step("vel", 0, 2)),
+  ],
+  1: [
+    recipe(1, step("pas", 2, 3), step("des", 3, 5)),
+    recipe(1, step("pas", 2, 3), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 5), step("pas", 3, 3)),
+    recipe(0, step("des", 3, 5), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 5), step("pas", 2, 3)),
+    recipe(0, step("des", 3, 5), step("fin", 3, 3), step("vel", 3, 3)),
+    recipe(1, step("pas", 2, 3), step("pas", 3, 3)),
+  ],
+  2: [
+    recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
+    recipe(0, step("des", 3, 3), step("des", 3, 2)),
+    recipe(0, step("des", 3, 3), step("arm", 3, 6)),
+    recipe(0, step("des", 3, 3), step("pas", 2, 3), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
+    recipe(0, step("des", 3, 3), step("arm", 3, 6)),
+    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("des", 3, 2)),
+    recipe(0, step("des", 3, 3), step("arm", 3, 3), step("fin", 3, 3)),
+    recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
+    recipe(0, step("arm", 3, 6), step("des", 3, 2)),
+  ],
+  3: [
+    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("pas", 3, 2)),
+    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("fin", 3, 3)),
+    recipe(1, step("fin", 3, 3), step("pas", 3, 2)),
+    recipe(1, step("pas", 3, 2), step("fin", 3, 3)),
+    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("tec", 3, 3)),
+    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("des", 3, 3)),
+    recipe(0, step("des", 3, 3), step("pas", 3, 2)),
+    recipe(0, step("des", 3, 3), step("fin", 2, 3), step("des", 2, 3)),
+    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("pas", 3, 2)),
+    recipe(1, step("fin", 3, 3), step("arm", 3, 5), step("pas", 3, 5)),
+    recipe(0, step("des", 3, 3), step("des", 3, 3)),
+    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("pas", 3, 2)),
+    recipe(1, step("tec", 3, 3), step("pas", 3, 2)),
+    recipe(0, step("des", 3, 3), step("fin", 3, 3)),
+    recipe(1, step("pas", 3, 2), step("vel", 16, 3)),
+    recipe(0, step("des", 3, 3), step("pas", 3, 2)),
+  ],
+  4: [
+    recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
+    recipe(2, step("vel", 16, 3), step("fin", 3, 3)),
+    recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
+    recipe(2, step("tec", 3, 3), step("fin", 3, 3)),
+    recipe(1, step("fin", 3, 3), step("vel", 16, 3)),
+    recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
+    recipe(1, step("fin", 3, 3), step("tec", 3, 3)),
+    recipe(1, step("fin", 2, 3), step("vel", 16, 3)),
+    recipe(2, step("tec", 3, 3), step("pas", 16, 2)),
+    recipe(1, step("fin", 3, 3), step("pas", 16, 2)),
+    recipe(1, step("fin", 3, 3), step("des", 3, 3), step("fin", 2)),
+    recipe(2, step("vel", 16, 3), step("tec", 3, 3)),
+  ],
 };
 
 /** Fixed supporting-skill baseline retained from the existing skill model. */
 const SUPPORTING_SKILL_BASE = 16;
 
-function sideVariant(position: Position, c1: number, c2: number): number {
-  if (position === 0 || position === 2) return 0;
-  if (position === 1) {
-    if (c1 === 13 || c1 === 6) return 1;
-    if (c1 === 7 || c1 === 10) return 0;
-    if (c2 === 13 || c1 === 6) return 1;
-    if (c2 === 7 || c2 === 10) return 0;
-    if (c1 === 8 || c1 === 9 || c1 === 11 || c1 === 4) return 1;
-    return 0;
-  }
-  if (position === 3) {
-    if (c1 === 11 || c1 === 9 || c1 === 8 || c1 === 4) return 1;
-    if (c1 === 7 || c1 === 10) return 0;
-    if (c2 === 11 || c2 === 9 || c2 === 8 || c2 === 4) return 1;
-    if (c2 === 7 || c2 === 10) return 0;
-    return 1;
-  }
-  if (position === 4) {
-    if (c1 === 7 || c1 === 10) return 0;
-    if (c1 === 8 || c1 === 13 || c1 === 6) return 2;
-    return 1;
-  }
-  return 0;
-}
-
 /** The base Brasfoot-style skill generator, independent of club ownership or division. */
-function generateRawSkills(rng: RngState, position: Position, c1: number, c2: number, overall: number): SkillSet {
+function generateRawSkills(rng: RngState, position: Position, variant: 0 | 1 | 2, target: number, recipe: SkillShapeRecipe): SkillSet {
   const n2 = SUPPORTING_SKILL_BASE;
   const n4 = Math.round(n2 / 3);
   const n3 = 3;
   let s: SkillSet = { gol: 1, vel: 1, tec: 1, pas: 1, des: 1, arm: 1, fin: 1 };
-  const variant = sideVariant(position, c1, c2);
   if (position === 0) {
-    s.gol = overall + nextInt(rng, 2);
+    s.gol = target + nextInt(rng, 2);
     s.vel = n2 + nextInt(rng, 7);
     s.tec = n2 + nextInt(rng, 4);
     s.pas = n2 + nextInt(rng, 4);
@@ -233,14 +294,14 @@ function generateRawSkills(rng: RngState, position: Position, c1: number, c2: nu
   } else if (position === 1) {
     s.gol = 1 + nextInt(rng, 4);
     if (variant === 0) {
-      s.des = Math.round(overall * 0.8) + nextInt(rng, 6);
+      s.des = Math.round(target * 0.8) + nextInt(rng, 6);
       s.fin = n3 + nextInt(rng, 4);
       s.pas = n2 + nextInt(rng, 3);
       s.tec = n2 + nextInt(rng, 7);
       s.arm = n3 + nextInt(rng, 5);
       s.vel = n2 + n3 + nextInt(rng, 6);
     } else {
-      s.arm = Math.round(overall * 0.5) + nextInt(rng, 5);
+      s.arm = Math.round(target * 0.5) + nextInt(rng, 5);
       s.fin = n2 + n3 + nextInt(rng, 4);
       s.pas = n2 + n4 + nextInt(rng, 3);
       s.tec = n2 + n4 + nextInt(rng, 7);
@@ -249,7 +310,7 @@ function generateRawSkills(rng: RngState, position: Position, c1: number, c2: nu
     }
   } else if (position === 2) {
     s.gol = 1 + nextInt(rng, 7);
-    s.des = Math.round(overall * 0.9) + nextInt(rng, 2);
+    s.des = Math.round(target * 0.9) + nextInt(rng, 2);
     s.vel = n2 + n3 + nextInt(rng, 4);
     s.tec = n2 + n3 + nextInt(rng, 7);
     s.pas = n2 + n3 + nextInt(rng, 3);
@@ -258,14 +319,14 @@ function generateRawSkills(rng: RngState, position: Position, c1: number, c2: nu
   } else if (position === 3) {
     s.gol = 1 + nextInt(rng, 4);
     if (variant === 0) {
-      s.des = Math.round(overall * 0.7) + nextInt(rng, 6);
+      s.des = Math.round(target * 0.7) + nextInt(rng, 6);
       s.fin = n2 + nextInt(rng, 4);
       s.pas = n2 + nextInt(rng, 3);
       s.tec = n2 + nextInt(rng, 7);
       s.arm = n2 + nextInt(rng, 5);
       s.vel = n2 + n3 + nextInt(rng, 6);
     } else {
-      s.arm = overall + nextInt(rng, 2);
+      s.arm = target + nextInt(rng, 2);
       s.fin = n2 + n4 + nextInt(rng, 4);
       s.pas = n2 + n3 + nextInt(rng, 3);
       s.tec = n2 + n4 + nextInt(rng, 7);
@@ -274,66 +335,16 @@ function generateRawSkills(rng: RngState, position: Position, c1: number, c2: nu
     }
   } else {
     s.gol = 1 + nextInt(rng, 6);
-    s.fin = Math.round(overall * 0.8) + nextInt(rng, 2);
+    s.fin = Math.round(target * 0.8) + nextInt(rng, 2);
     s.vel = n2 + n4 + nextInt(rng, 4);
     s.tec = n2 + n4 + nextInt(rng, 7);
     s.pas = n2 + n3 + nextInt(rng, 3);
     s.des = n3 + nextInt(rng, 6);
     s.arm = n2 + n3 + nextInt(rng, 5);
   }
-  const applyTrait = (c: number, primary: boolean) => {
-    if (position === 0) {
-      if (c === 0 || c === 3) s.tec += primary ? 2 + nextInt(rng, 5) : nextInt(rng, 2);
-      if (c === 2) s.vel += primary ? 2 + nextInt(rng, 5) : nextInt(rng, 2);
-      if (c === 1) s.gol += primary ? 1 + nextInt(rng, 3) : nextInt(rng, 2);
-    } else if (position === 1) {
-      if (c === 4) { s.arm += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) { s.fin += 2 + nextInt(rng, 3); s.des += 2 + nextInt(rng, 3); }
-      if (c === 6) s.pas += 2 + nextInt(rng, 3);
-      if (c === 7) s.des += n3 + nextInt(rng, 3);
-      if (c === 8) s.tec += n3 + nextInt(rng, 3);
-      if (c === 9) { s.fin += n3 + nextInt(rng, 3); s.vel += n3 + nextInt(rng, 3); }
-      if (c === 10) s.des += n3 + nextInt(rng, 5);
-      if (c === 11) s.pas += n3 + nextInt(rng, 3);
-      if (c === 12) s.des += 3 + nextInt(rng, 3);
-      if (c === 13) s.vel += n2 + nextInt(rng, 3);
-    } else if (position === 2) {
-      if (c === 4) { s.arm += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) s.arm += n3 + nextInt(rng, 6);
-      if (c === 6) s.pas += 2 + nextInt(rng, 3);
-      if (c === 7) s.des += n3 + nextInt(rng, 3);
-      if (c === 8) s.tec += n3 + nextInt(rng, 3);
-      if (c === 9) { s.arm += 3 + nextInt(rng, 3); s.fin += 3 + nextInt(rng, 3); }
-      if (c === 10) { s.des += 3 + nextInt(rng, 3); s.pas += 2 + nextInt(rng, 3); }
-      if (c === 11) s.pas += n3 + nextInt(rng, 3);
-      if (c === 12) s.des += n3 + nextInt(rng, 2);
-      if (c === 13) s.vel += n2 + nextInt(rng, 3);
-    } else if (position === 3) {
-      if (c === 4) { s.arm += n3 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) { s.fin += 2 + nextInt(rng, 3); s.des += 2 + nextInt(rng, 3); }
-      if (c === 6) s.pas += 2 + nextInt(rng, 3);
-      if (c === 7) s.des += n3 + nextInt(rng, 3);
-      if (c === 8) s.tec += n3 + nextInt(rng, 3);
-      if (c === 9) s.fin += n3 + nextInt(rng, 3);
-      if (c === 10) s.des += 3 + nextInt(rng, 3);
-      if (c === 11) s.pas += n3 + nextInt(rng, 2);
-      if (c === 12) s.des += 3 + nextInt(rng, 3);
-      if (c === 13) s.vel += n2 + nextInt(rng, 3);
-    } else {
-      if (c === 4) { s.arm += n2 + nextInt(rng, 5); s.pas += n3 + nextInt(rng, 5); }
-      if (c === 5) s.fin += 2 + nextInt(rng, 3);
-      if (c === 6) s.pas += 2 + nextInt(rng, 3);
-      if (c === 7) s.des += n3 + nextInt(rng, 3);
-      if (c === 8) s.tec += n3 + nextInt(rng, 3);
-      if (c === 9) s.fin += 3 + nextInt(rng, 3);
-      if (c === 10) s.des += 3 + nextInt(rng, 3);
-      if (c === 11) s.pas += n2 + nextInt(rng, 2);
-      if (c === 12) { s.des += 3 + nextInt(rng, 3); s.fin += 2; }
-      if (c === 13) s.vel += n2 + nextInt(rng, 3);
-    }
-  };
-  applyTrait(c1, true);
-  applyTrait(c2, false);
+  for (const operation of recipe.steps) {
+    s[operation.key] += operation.fixed + (operation.randomExclusive === undefined ? 0 : nextInt(rng, operation.randomExclusive));
+  }
   for (const key of Object.keys(s) as (keyof SkillSet)[]) {
     if (s[key] > 100) s[key] = 100;
   }
@@ -344,13 +355,13 @@ function generateRawSkills(rng: RngState, position: Position, c1: number, c2: nu
  * Generate skills that produce an OVR within tolerance of `target`, preserving
  * the positional/tactical skill shape. Bounded retries (spec §39).
  */
-export function generateSkillsForTarget(rng: RngState, position: Position, target: number): { skills: SkillSet; c1: number; c2: number } {
-  const pairs = TACTICAL_PAIRS[position];
+export function generateSkillsForTarget(rng: RngState, position: Position, target: number): { skills: SkillSet } {
+  const recipes = SKILL_SHAPE_RECIPES[position];
   let best: SkillSet | null = null;
   let bestError = Infinity;
   for (let attempt = 0; attempt < SKILL_GENERATION_MAX_RETRIES; attempt++) {
-    const pair = pairs[nextInt(rng, pairs.length)];
-    let skills = generateRawSkills(rng, position, pair[0], pair[1], target);
+    const selected = recipes[nextInt(rng, recipes.length)];
+    let skills = generateRawSkills(rng, position, selected.variant, target, selected);
     let actual = overallFromSkills(position, skills);
     // Scale every skill toward the target using the per-position scale factor
     // (the OVR is a weighted mean scaled by OVERALL_SCALE).
@@ -392,14 +403,15 @@ export function generateSkillsForTarget(rng: RngState, position: Position, targe
     }
     const error = Math.abs(actual - target);
     if (error <= SKILL_TARGET_TOLERANCE_OVR) {
-      return { skills, c1: pair[0], c2: pair[1] };
+      return { skills };
     }
     if (error < bestError) {
       bestError = error;
       best = skills;
     }
   }
-  return { skills: best ?? generateRawSkills(rng, position, TACTICAL_PAIRS[position][0][0], TACTICAL_PAIRS[position][0][1], target), c1: TACTICAL_PAIRS[position][0][0], c2: TACTICAL_PAIRS[position][0][1] };
+  const fallback = recipes[0];
+  return { skills: best ?? generateRawSkills(rng, position, fallback.variant, target, fallback) };
 }
 
 // ---------------------------------------------------------------------------
@@ -508,25 +520,25 @@ function buildGeneratedPlayer(
   actualOverall: number,
   potential: number,
   skills: SkillSet,
-  c1: number,
-  c2: number,
 ): Player {
   const rng = playerRng(ctx.seed, ctx.clubId, ctx.generationType, ctx.slot, ctx.seasonId);
+  const availableForeignCountries = countriesWithNamePools().filter((country) => country !== ctx.country);
+  const country = availableForeignCountries.length > 0 && nextDouble(rng) < gameConfig.playerGenerationRules.foreignPlayerChance
+    ? availableForeignCountries[nextInt(rng, availableForeignCountries.length)]
+    : ctx.country;
   const contractDays = ctx.isYouth ? DAYS_PER_YEAR * gameConfig.playerGenerationRules.academyContractSeasons : DAYS_PER_YEAR * (1 + nextInt(rng, 3));
   const salary = ctx.isYouth ? calculateAcademySalary(actualOverall, age) : calculateBaseSalary(actualOverall, age);
   const value = calculatePlayerValue(actualOverall, age, remainingSeasons(contractDays));
   const player: Player = {
     id: ctx.id,
-    name: generateName(rng, ctx.country),
-    country: ctx.country,
+    name: generateName(rng, country),
+    country,
     age,
     position: ctx.position,
     side: nextInt(rng, 2),
     skills,
     overall: actualOverall,
     potential,
-    characteristic1: c1,
-    characteristic2: c2,
     energy: 100,
     salary,
     payrollPaidThroughDay: 0,
@@ -575,11 +587,11 @@ export function generateSeniorPlayer(ctx: GeneratePlayerContext): Player {
   const mu = divisionMean(ctx.currentDivision, ctx.totalDivisions);
   const target = mu + qualitySigma() * rawZ;
   const age = ctx.age ?? drawSeniorAge(rng);
-  const { skills, c1, c2 } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
+  const { skills } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
   const actualOverall = overallFromSkills(ctx.position, skills);
   const profile = generateDevelopmentProfile(rng);
   const potential = initialPotential(actualOverall, age, profile.declineStartAge, profile.developmentRate);
-  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills, c1, c2);
+  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills);
 }
 
 /** Youth age generation (spec §31): UniformInteger(academyMinAge, academyMaxAge). */
@@ -599,11 +611,11 @@ export function generateYouthPlayer(ctx: GeneratePlayerContext): Player {
   const pedigree = academyPedigree(ctx.currentDivision, ctx.highestDivisionReached, ctx.totalDivisions);
   const muAge = youthDivisionMeanForAge(age);
   const target = muAge + qualitySigma() * rawZ + academyPedigreeOverallOffset(pedigree);
-  const { skills, c1, c2 } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
+  const { skills } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
   const actualOverall = overallFromSkills(ctx.position, skills);
   const profile = generateDevelopmentProfile(rng);
   const potential = initialPotential(actualOverall, age, profile.declineStartAge, profile.developmentRate);
-  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills, c1, c2);
+  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills);
 }
 
 export { gameConfig };

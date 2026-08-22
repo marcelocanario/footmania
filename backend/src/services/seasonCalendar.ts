@@ -1,4 +1,4 @@
-import { configuredUtcHour, gameConfig, type GameConfig } from "../config";
+import { gameConfig, type GameConfig } from "../config";
 
 export type SeasonPhase = "ACTIVE" | "POST_MATCH" | "INTERSEASON";
 
@@ -78,11 +78,6 @@ export function seasonDayIndexForAbsoluteGameDay(absoluteGameDay: number, startA
   const index = absoluteGameDay - startAbsoluteGameDay;
   if (index < 0 || index >= config.seasonDays) throw new Error(`Absolute game day ${absoluteGameDay} is outside the season`);
   return index;
-}
-
-export function scheduledMatchAt(seasonStartAt: Date | number, seasonDayIndex: number, config = gameConfig): number {
-  const start = seasonStartAt instanceof Date ? seasonStartAt.getTime() : seasonStartAt;
-  return start + seasonDayIndex * 24 * 60 * 60 * 1000 + configuredUtcHour(config.scheduler.leagueMatchStartUtc) * 60 * 60 * 1000;
 }
 
 /**

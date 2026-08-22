@@ -65,8 +65,6 @@ export interface PlayerView {
   careerAssists: number;
   yellows: number;
   reds: number;
-  characteristic1: number;
-  characteristic2: number;
   onSale: boolean;
   suspended: boolean;
   suspendedGames: number;
@@ -506,6 +504,8 @@ export interface LiveState {
   away: string;
   homeKit: KitDesign;
   awayKit: KitDesign;
+  homeGkKit: KitDesign;
+  awayGkKit: KitDesign;
   homeScore: number;
   awayScore: number;
   minute: number;

@@ -32,7 +32,7 @@ export function Login() {
 
   return (
     <div className="auth-wrap">
-      <Toast ref={toast} />
+      <Toast ref={toast} position="bottom-right" />
       <div className="auth-card">
         <div className="hero">
           <img src="/footmania-logo.svg" alt="Footmania" className="logo-img hero-logo" />

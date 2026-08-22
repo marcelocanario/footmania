@@ -7,6 +7,8 @@ interface PitchTeam {
   clubId: number;
   name: string;
   kit: KitDesign;
+  /** Kit Lab GK design; the tacPos===1 marker wears it (LiveState.homeGkKit/awayGkKit). */
+  gkKit: KitDesign;
   players: LivePlayer[];
   formationId: number;
 }
@@ -173,8 +175,8 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
         </svg>
         {cue && <CueOverlay cue={cue} reducedMotion={motionReduced} />}
         <div className="pitch-players">
-          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} />)}
-          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} />)}
+          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} />)}
+          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} />)}
         </div>
         {cue && activeEvent && <div className="pitch-event-banner"><b>{EVENT_COPY[cue.kind]}</b><span>{cue.event.player || cue.event.player2}</span></div>}
       </div>

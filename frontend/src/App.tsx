@@ -3,7 +3,6 @@ import { BrowserRouter, Navigate, Route, Routes, useNavigate } from "react-route
 import { api } from "./api/client";
 import { useGame } from "./store/game";
 import { useSettings } from "./store/settings";
-import { strings } from "./strings";
 import { Layout } from "./components/Layout";
 import { Login } from "./screens/Login";
 import { Join } from "./screens/Join";
@@ -21,6 +20,7 @@ import { SettingsScreen } from "./screens/Settings";
 import { MyClub } from "./screens/MyClub";
 import { Automation } from "./screens/Automation";
 import { Admin } from "./screens/Admin";
+import { PageLoading } from "./components/PageLoading";
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, setUser } = useGame();
@@ -39,7 +39,7 @@ function Gate({ children }: { children: React.ReactNode }) {
     if (user) void loadSettings();
   }, [user, loadSettings]);
 
-  if (!user) return null;
+  if (!user) return <PageLoading message="Signing you in" />;
   return <>{children}</>;
 }
 
@@ -71,7 +71,7 @@ function ClubGuard({ children }: { children: React.ReactNode }) {
     };
   }, [loadStatus, loadClub, snapshot, navigate]);
 
-  if (!checked) return <div className="empty-state" style={{ paddingTop: 80 }}>{strings.common.loading}</div>;
+  if (!checked) return <PageLoading />;
   if (!hasClub) {
     return <Navigate to="/saves" replace />;
   }

@@ -370,8 +370,8 @@ export function LiveMatch() {
           <TacticsBoard mode="match" matchId={state.matchId} liveState={state} />
         </div>
         <MatchPitch
-          home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn, formationId: state.homeFormationId }}
-          away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn, formationId: state.awayFormationId }}
+          home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
+          away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
           events={state.events}
           phase={state.phase}
           minute={state.minute}
@@ -431,8 +431,8 @@ export function LiveMatch() {
       </div>
 
       <MatchPitch
-        home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, players: state.homeOn, formationId: state.homeFormationId }}
-        away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, players: state.awayOn, formationId: state.awayFormationId }}
+        home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
+        away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
         events={state.events}
         phase={state.phase}
         minute={state.minute}

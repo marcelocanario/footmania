@@ -36,8 +36,6 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     careerAssists: p.careerAssists,
     yellows: p.yellows,
     reds: p.reds,
-    characteristic1: p.characteristic1,
-    characteristic2: p.characteristic2,
     onSale: p.onSale,
     suspended: p.suspendedGames > 0,
     suspendedGames: p.suspendedGames,

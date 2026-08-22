@@ -36,6 +36,7 @@ import { applyTeamColorPreset, deriveKitDefaults } from "../components/kit/defau
 import { PREVIEW_NUMBERS, type ClubKits } from "../components/kit/types";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
+import { PageLoading } from "../components/PageLoading";
 
 const TIMEZONES = [
   "America/Los_Angeles",
@@ -153,7 +154,7 @@ export function Join() {
         const lowest = sorted[sorted.length - 1];
         const withAI = lowest.divisions.find((d) => d.aiCount > 0) ?? lowest.divisions[0];
         if (withAI) setEntryDiv(`Division ${withAI.name}`);
-        else setEntryDiv(`Tier ${lowest.tier}`);
+        else setEntryDiv(`Division ${lowest.tier}`);
       })
       .catch(() => undefined);
   }, []);
@@ -241,13 +242,13 @@ export function Join() {
   };
 
   if (loading) {
-    return <div className="empty-state" style={{ paddingTop: 80 }}>{strings.common.loading}</div>;
+    return <PageLoading message="Loading team creation" />;
   }
 
   if (hasClub) {
     return (
       <div className="join-wrap">
-        <Toast ref={toast} />
+        <Toast ref={toast} position="bottom-right" />
         <div className="page-head">
           <div>
             <div className="kicker">{strings.saves.startNew}</div>
@@ -278,7 +279,7 @@ export function Join() {
                   <AlertTriangle size={18} />
                   <div>
                     <b>Dormant club</b>
-                    <p>Return at the lowest available tier, or wait for next season.</p>
+                    <p>Return at the lowest available division, or wait for next season.</p>
                   </div>
                 </div>
               ) : isProvisional ? (
@@ -375,7 +376,7 @@ export function Join() {
 
   return (
     <div className="join-wrap">
-      <Toast ref={toast} />
+      <Toast ref={toast} position="bottom-right" />
 
       {/* HERO — floodlit pitch */}
       <div className="jm-hero">
@@ -427,6 +428,7 @@ export function Join() {
             const valid = t.id === "identity" ? identityValid : t.id === "schedule" ? scheduleValid : true;
             const active = t.id === activeTab;
             const done = valid && idx < tabIdx;
+            const locked = idx > tabIdx;
             return (
               <button
                 key={t.id}
@@ -434,8 +436,11 @@ export function Join() {
                 aria-selected={active}
                 aria-controls={`panel-${t.id}`}
                 id={`tab-${t.id}`}
-                className={`jm-tab ${active ? "active" : ""} ${done ? "done" : ""}`}
-                onClick={() => setActiveTab(t.id)}
+                className={`jm-tab ${active ? "active" : ""} ${done ? "done" : ""} ${locked ? "locked" : ""}`}
+                onClick={() => {
+                  if (!locked) setActiveTab(t.id);
+                }}
+                disabled={locked}
               >
                 <span className="jm-tab-icon">{done ? <Check size={14} /> : t.icon}</span>
                 <span className="jm-tab-text"><b>{t.label}</b></span>

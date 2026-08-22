@@ -268,8 +268,6 @@ model Player {
   side            Int
   overall         Int
   potential       Int
-  characteristic1 Int
-  characteristic2 Int
   energy          Int
   salary          Int
   payrollPaidThroughDay Int @default(0)

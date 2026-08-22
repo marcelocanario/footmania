@@ -27,11 +27,6 @@
     // when this instant is crossed.
     // (e.g. "00:00" = a new game-day starts at midnight UTC.)
     "gameDayRolloverUtc": "00:00",
-    // Kickoff time for scheduled league fixtures on their match day.
-    // Fixture timestamps are persisted in UTC; changing this affects only
-    // newly generated schedules.
-    // (e.g. "19:00" = rounds kick off at 19:00 UTC.)
-    "leagueMatchStartUtc": "19:00",
     // Lease duration in real seconds for the global mutation lock and due-event
     // claims. A crashed holder's lease expires after this window so work can be
     // retried; stale entries are reclaimed after twice this duration.
@@ -224,7 +219,11 @@
     // Age at which youth are automatically promoted to the senior squad.
     "academyPromotionAge": 21,
     // Contract length (seasons) for newly generated youth.
-    "academyContractSeasons": 4
+    "academyContractSeasons": 4,
+    // Probability that a newly generated player is from a country other than
+    // the club's country. The selected country also supplies the player's name.
+    // (e.g. 0.05 = 5% foreign-born players.)
+    "foreignPlayerChance": 0.05
   },
 
   // --- Match simulator influence (plans/6. match-simulator-overhaul.md §6) ---

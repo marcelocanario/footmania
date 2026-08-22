@@ -26,6 +26,7 @@ import {
   SKILL_TARGET_TOLERANCE_OVR,
   type GeneratePlayerContext,
 } from "../src/game/playerGeneration";
+import { countriesWithNamePools } from "../src/game/names";
 import { overallFromSkills } from "../src/game/rating";
 import { gameConfig } from "../src/config";
 import { buildLineup } from "../src/game/club";
@@ -34,6 +35,7 @@ import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
 import type { Position } from "../src/game/types";
 import { calibrationDescribe } from "./calibration";
+import { readNamePoolsArtifact } from "../src/services/namePoolService";
 
 function seniorCtx(overrides: Partial<Parameters<typeof generateSeniorPlayer>[0]> = {}) {
   return {
@@ -70,6 +72,21 @@ function youthCtx(overrides: Partial<Parameters<typeof generateYouthPlayer>[0]> 
     slot: 0,
     ...overrides,
   };
+}
+
+function withForeignPlayerChance<T>(chance: number, fn: () => T): T {
+  const previous = gameConfig.playerGenerationRules.foreignPlayerChance;
+  gameConfig.playerGenerationRules.foreignPlayerChance = chance;
+  try {
+    return fn();
+  } finally {
+    gameConfig.playerGenerationRules.foreignPlayerChance = previous;
+  }
+}
+
+function nameUsesCountryPool(name: string, country: string): boolean {
+  const names = readNamePoolsArtifact().countries[country]?.names ?? [];
+  return names.some((firstName) => name === firstName || name.startsWith(`${firstName} `));
 }
 
 describe("division strength (spec §10)", () => {
@@ -251,6 +268,43 @@ describe("skill generation toward a target (spec §39)", () => {
     const rng = createRng(1);
     const { skills } = generateSkillsForTarget(rng, 4, 100);
     expect(overallFromSkills(4, skills)).toBeGreaterThan(80);
+  });
+});
+
+describe("generated player countries", () => {
+  it("defaults to a five percent foreign-player chance", () => {
+    expect(gameConfig.playerGenerationRules.foreignPlayerChance).toBeCloseTo(0.05, 10);
+  });
+
+  it("uses the club country when the foreign chance is disabled", () => {
+    withForeignPlayerChance(0, () => {
+      for (let slot = 0; slot < 20; slot++) {
+        expect(generateSeniorPlayer(seniorCtx({ slot })).country).toBe("BRA");
+      }
+    });
+  });
+
+  it("selects a different country and matching name pool when foreign generation is guaranteed", () => {
+    const pooledCountries = countriesWithNamePools().filter((country) => country !== "BRA");
+    expect(pooledCountries.length).toBeGreaterThan(0);
+
+    withForeignPlayerChance(1, () => {
+      for (let slot = 0; slot < 20; slot++) {
+        const player = generateSeniorPlayer(seniorCtx({ slot }));
+        expect(player.country).not.toBe("BRA");
+        expect(pooledCountries).toContain(player.country);
+        expect(nameUsesCountryPool(player.name, player.country)).toBe(true);
+      }
+    });
+  });
+
+  it("keeps country and name deterministic for the same generation identity", () => {
+    withForeignPlayerChance(1, () => {
+      const first = generateSeniorPlayer(seniorCtx({ slot: 27 }));
+      const second = generateSeniorPlayer(seniorCtx({ slot: 27 }));
+      expect(second.country).toBe(first.country);
+      expect(second.name).toBe(first.name);
+    });
   });
 });
 

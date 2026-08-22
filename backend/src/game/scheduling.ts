@@ -1,4 +1,4 @@
-import { gameConfig, MP_CONFIG } from "../config";
+import { MP_CONFIG } from "../config";
 
 /**
  * Preferred-time fixture scheduling.
@@ -12,8 +12,13 @@ import { gameConfig, MP_CONFIG } from "../config";
  * Objective per fixture (lexicographic):
  *   1. minimize the home club's distance to its preferred windows;
  *   2. then the away club's distance;
- *   3. ties resolve toward the configured default kickoff
- *      (`scheduler.leagueMatchStartUtc`), then the earliest slot.
+ *   3. ties resolve pseudo-randomly, seeded from stable fixture identity
+ *      (competition/round/clubs) so retries cannot reroll the outcome;
+ *   4. hash collisions fall back to the earliest slot.
+ *
+ * The seeded tie-break spreads unconstrained fixtures (AI vs AI scores 0
+ * everywhere) across the whole day instead of stacking every kickoff on one
+ * instant, smoothing MATCH_START worker load per round.
  *
  * The final round of a season is synchronized per division/group: one slot is
  * chosen to minimize the summed home distances first, then summed away
@@ -21,7 +26,7 @@ import { gameConfig, MP_CONFIG } from "../config";
  *
  * Clubs without preferences (AI fillers and legacy humans) are unconstrained:
  * their distance is 0 everywhere, so they never distort the optimum but do
- * let tie-breaks fall back to the default kickoff time.
+ * participate in the seeded spread.
  */
 
 /** Scheduling flexibility of one club. */
@@ -75,25 +80,36 @@ export function candidateKickoffs(dayStartMs: number): number[] {
   return Array.from({ length: MP_CONFIG.slotsPerDay }, (_, slot) => dayStartMs + slot * MS_PER_SLOT);
 }
 
-/** Configured default kickoff as minutes after UTC midnight — the tie-break anchor. */
-export function anchorMinutes(): number {
-  const [hours, minutes] = gameConfig.scheduler.leagueMatchStartUtc.split(":").map(Number);
-  return (hours || 0) * 60 + (minutes || 0);
+/**
+ * Stable 32-bit FNV-1a hash. Deterministic "noise" for tie-breaks: seeded
+ * from stable identity strings so a restart or regeneration retry cannot
+ * reroll a different kickoff.
+ */
+function stableHash(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+    hash >>>= 0;
+  }
+  return hash >>> 0;
 }
 
 interface ScoredCandidate {
   slot: number;
   home: number;
   away: number;
-  anchor: number;
+  jitter: number;
 }
 
-function scoreCandidates(dayStartMs: number, anchorMin: number, pairs: { home: PreferenceInput; away: PreferenceInput }[]): ScoredCandidate[] {
+function scoreCandidates(dayStartMs: number, seedKey: string, pairs: { home: PreferenceInput; away: PreferenceInput }[]): ScoredCandidate[] {
   return candidateKickoffs(dayStartMs).map((at, slot) => ({
     slot,
     home: pairs.reduce((sum, pair) => sum + preferenceDistance(pair.home.preferredSlots, at, pair.home.timezone), 0),
     away: pairs.reduce((sum, pair) => sum + preferenceDistance(pair.away.preferredSlots, at, pair.away.timezone), 0),
-    anchor: Math.abs(slot * MP_CONFIG.preferredSlotMinutes - anchorMin),
+    // Per-slot pseudo-random priority: among equally-preferred slots the
+    // winner is uniform over them, unique per fixture identity.
+    jitter: stableHash(`${seedKey}:${slot}`),
   }));
 }
 
@@ -101,25 +117,24 @@ function bestCandidate(candidates: ScoredCandidate[]): ScoredCandidate {
   return candidates.reduce((best, c) => {
     if (c.home !== best.home) return c.home < best.home ? c : best;
     if (c.away !== best.away) return c.away < best.away ? c : best;
-    if (c.anchor !== best.anchor) return c.anchor < best.anchor ? c : best;
+    if (c.jitter !== best.jitter) return c.jitter < best.jitter ? c : best;
     return c.slot < best.slot ? c : best;
   });
 }
 
-/** Best kickoff instant for one fixture (home priority, then away, then anchor). */
-export function pickFixtureKickoff(home: PreferenceInput, away: PreferenceInput, dayStartMs: number, anchorMin = anchorMinutes()): number {
-  const winner = bestCandidate(scoreCandidates(dayStartMs, anchorMin, [{ home, away }]));
+/** Best kickoff instant for one fixture (home priority, then away, then seeded spread). */
+export function pickFixtureKickoff(home: PreferenceInput, away: PreferenceInput, dayStartMs: number, seedKey: string): number {
+  const winner = bestCandidate(scoreCandidates(dayStartMs, seedKey, [{ home, away }]));
   return dayStartMs + winner.slot * MS_PER_SLOT;
 }
 
 /**
  * Single synchronized kickoff for every fixture of a group's final round:
- * minimize summed home distance first, then summed away distance, then anchor,
- * then earliest slot.
+ * minimize summed home distance first, then summed away distance, then seeded
+ * spread, then earliest slot.
  */
-export function pickSynchronizedKickoff(pairs: { home: PreferenceInput; away: PreferenceInput }[], dayStartMs: number, anchorMin = anchorMinutes()): number {
-  if (pairs.length === 0) return dayStartMs + Math.round(anchorMin / MP_CONFIG.preferredSlotMinutes) * MS_PER_SLOT;
-  const winner = bestCandidate(scoreCandidates(dayStartMs, anchorMin, pairs));
+export function pickSynchronizedKickoff(pairs: { home: PreferenceInput; away: PreferenceInput }[], dayStartMs: number, seedKey: string): number {
+  const winner = bestCandidate(scoreCandidates(dayStartMs, seedKey, pairs));
   return dayStartMs + winner.slot * MS_PER_SLOT;
 }
 

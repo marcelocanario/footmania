@@ -145,7 +145,7 @@ export function MyClub() {
 
   return (
     <div>
-      <Toast ref={toast} />
+      <Toast ref={toast} position="bottom-right" />
       <div className="page-head">
         <div>
           <div className="kicker">Club office</div>

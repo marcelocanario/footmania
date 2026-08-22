@@ -185,6 +185,8 @@ a { color: var(--grass-2); text-decoration: none; }
 }
 
 .topbar nav.top-nav a:hover { color: var(--text); background: rgba(228, 245, 235, 0.06); }
+.topbar nav.top-nav a[aria-disabled="true"],
+.bottom-bar a[aria-disabled="true"] { cursor: not-allowed; opacity: 0.55; }
 
 .topbar nav.top-nav a.active {
   color: var(--grass-2);
@@ -886,6 +888,53 @@ a { color: var(--grass-2); text-decoration: none; }
 .p-dropdown .p-dropdown-label.p-placeholder { color: var(--text-3); }
 .p-dropdown .p-dropdown-trigger { color: var(--text-3); }
 
+.p-multiselect {
+  background: rgba(4, 13, 8, 0.7);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.p-multiselect:not(.p-disabled):hover { border-color: var(--grass-dark); }
+.p-multiselect.p-focus {
+  border-color: var(--grass);
+  box-shadow: 0 0 0 3px rgba(35, 165, 90, 0.22);
+  outline: none;
+}
+.p-multiselect .p-multiselect-label { color: var(--text); padding: 12px 14px; }
+.p-multiselect .p-multiselect-label.p-placeholder { color: var(--text-3); }
+.p-multiselect .p-multiselect-trigger { color: var(--text-3); }
+
+.p-multiselect-panel {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: 14px;
+  box-shadow: 0 24px 50px -20px rgba(0, 0, 0, 0.85);
+}
+.p-multiselect-panel .p-multiselect-header {
+  background: rgba(228, 245, 235, 0.04);
+  color: var(--text-2);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+.p-multiselect-panel .p-multiselect-header .p-multiselect-close { color: var(--text-3); }
+.p-multiselect-panel .p-multiselect-item { color: var(--text); padding: 10px 14px; }
+.p-multiselect-panel .p-multiselect-item:not(.p-highlight):not(.p-disabled):hover { background: rgba(228, 245, 235, 0.06); color: var(--text); }
+.p-multiselect-panel .p-multiselect-item.p-highlight { background: rgba(35, 165, 90, 0.22); color: var(--grass-2); }
+.p-multiselect-panel .p-checkbox .p-checkbox-box {
+  background: rgba(4, 13, 8, 0.7);
+  border-color: var(--line-2);
+}
+.p-multiselect-panel .p-checkbox:not(.p-checkbox-disabled) .p-checkbox-box:hover { border-color: var(--grass); }
+.p-multiselect-panel .p-checkbox .p-checkbox-box.p-highlight {
+  background: var(--grass);
+  border-color: var(--grass);
+  color: var(--grass-ink);
+}
+
 .p-dropdown-panel {
   background: var(--surface);
   border: 1px solid var(--line-2);
@@ -1562,6 +1611,33 @@ a { color: var(--grass-2); text-decoration: none; }
   gap: 12px;
 }
 
+.page-loading {
+  min-height: 52vh;
+  display: grid;
+  place-items: center;
+  padding: 48px 20px;
+}
+
+.page-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 220px;
+  padding: 28px 34px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(18, 46, 30, 0.9), rgba(8, 20, 12, 0.96));
+  box-shadow: var(--shadow-card);
+  color: var(--text);
+}
+
+.page-loading-card > span:last-child { color: var(--text-3); font-size: 0.82rem; }
+.page-loading-spinner { display: grid; place-items: center; width: 48px; height: 48px; border-radius: 15px; color: var(--gold-2); background: rgba(240, 180, 41, 0.12); border: 1px solid rgba(240, 180, 41, 0.28); }
+.page-loading-spinner svg { animation: pageSpin 0.9s linear infinite; }
+
+@keyframes pageSpin { to { transform: rotate(360deg); } }
+
 .football {
   width: 54px;
   height: 54px;
@@ -1671,6 +1747,37 @@ a { color: var(--grass-2); text-decoration: none; }
 
   .auth-card { padding: 28px 22px; border-radius: 22px; }
 }
+
+.rank-pill.champion-rank {
+  background: linear-gradient(180deg, var(--gold-2), var(--gold));
+  color: var(--gold-ink);
+  box-shadow: 0 4px 12px -4px rgba(240, 180, 41, 0.6);
+}
+
+.p-datatable .p-datatable-tbody > tr.standings-champion > td {
+  background: rgba(240, 180, 41, 0.08);
+  border-top: 1px solid rgba(240, 180, 41, 0.28);
+  border-bottom: 1px solid rgba(240, 180, 41, 0.28);
+}
+
+.p-datatable .p-datatable-tbody > tr.standings-champion > td:first-child { box-shadow: inset 3px 0 0 var(--gold-2); }
+.p-datatable .p-datatable-tbody > tr.standings-promotion-possible > td {
+  background: rgba(240, 180, 41, 0.045);
+  border-top: 1px dotted rgba(240, 180, 41, 0.55);
+  border-bottom: 1px dotted rgba(240, 180, 41, 0.55);
+}
+.p-datatable .p-datatable-tbody > tr.standings-promotion-possible > td:first-child { box-shadow: inset 3px 0 0 var(--gold-2); }
+.p-datatable .p-datatable-tbody > tr.standings-promoted > td:first-child { box-shadow: inset 3px 0 0 var(--grass-2); }
+.p-datatable .p-datatable-tbody > tr.standings-relegated > td:first-child { box-shadow: inset 3px 0 0 var(--red-2); }
+
+.squad-table-wrap { overflow-x: hidden; }
+.squad-filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.squad-filters .p-inputtext { flex: 1 1 220px; min-width: 0; }
+.squad-filters .p-multiselect { flex: 0 1 180px; min-width: 160px; }
+.squad-player-cell { display: block; min-width: 0; overflow: hidden; }
+.squad-player-cell .player-name { width: 100%; min-width: 0; }
+.squad-player-cell .nm { min-width: 0; }
+.squad-table .p-datatable-tbody > tr > td { overflow: hidden; white-space: nowrap; }
 
 @media (max-width: 560px) {
   .fin-stat-grid { grid-template-columns: 1fr; }
@@ -1849,6 +1956,8 @@ a { color: var(--grass-2); text-decoration: none; }
   color: var(--text-2);
 }
 .jm-tab:hover { border-color: var(--line-2); transform: translateY(-1px); }
+.jm-tab:disabled { cursor: not-allowed; opacity: 0.55; transform: none; }
+.jm-tab:disabled:hover { border-color: var(--line); }
 .jm-tab.active {
   border-color: rgba(61, 220, 132, 0.45);
   background: linear-gradient(180deg, rgba(18, 46, 30, 0.95), rgba(12, 28, 17, 0.98));

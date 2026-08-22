@@ -3,13 +3,14 @@ import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Dialog } from "primereact/dialog";
 import { Dropdown } from "primereact/dropdown";
+import { MultiSelect } from "primereact/multiselect";
 import { Toast } from "primereact/toast";
-import { Dumbbell, ShieldCheck, Users, Clapperboard } from "lucide-react";
+import { AlertTriangle, Dumbbell, ShieldCheck, Users, Clapperboard } from "lucide-react";
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
-import { PlayerName } from "../components/PlayerName";
+import { PlayerName, POSITION_CLASS } from "../components/PlayerName";
 import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
@@ -17,6 +18,7 @@ import { TacticsBoard } from "../components/TacticsBoard";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
+import { countryFlag } from "../countryFlags";
 
 const STYLES = [
   { label: "Balanced", value: 0 },
@@ -35,14 +37,15 @@ const DIRECTIONS = [
   { label: "Down the wings", value: 1 },
 ];
 
-const TRAITS = [
-  "Positioning", "Penalty Save", "Reflexes", "Off the Line", "Playmaking",
-  "Heading", "Crossing", "Tackling", "Dribbling", "Finishing",
-  "Marking", "Passing", "Stamina", "Speed",
-];
-
 type Tab = "seniors" | "juniors" | "tactics";
 type TrainingFocus = "assistant" | "primary" | "secondary";
+
+const POSITION_OPTIONS = ["GK", "FB", "CB", "MF", "FW"].map((label, value) => ({ label, value }));
+
+function energyColor(value: number): string {
+  const pct = Math.max(0, Math.min(100, value));
+  return `hsl(${pct * 1.2}, 72%, 48%)`;
+}
 
 export function Squad() {
   const { snapshot, refresh } = useGame();
@@ -66,6 +69,9 @@ export function Squad() {
   const [showHistory, setShowHistory] = useState(false);
   const [historyData, setHistoryData] = useState<{ player: PlayerView & { displayName?: string }; seasons: { seasonKey: string; clubName: string; goals: number; assists: number; yellows: number; reds: number }[]; transfers: { type: string; price: number; seasonKey: string }[]; matches: { minute: number; type: number; matchHomeScore: number | null; matchAwayScore: number | null }[] } | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [positionFilter, setPositionFilter] = useState<number[]>([]);
+  const [countryNames, setCountryNames] = useState<Record<string, string>>({});
   const seasonsOf = (days: number) => {
     const per = snapshot?.save.seasonDays;
     if (!per) return `${days}d`;
@@ -77,10 +83,34 @@ export function Squad() {
   const seniors = snapshot?.squad ?? [];
   const juniors = snapshot?.juniors ?? [];
   const rows = tab === "juniors" ? juniors : seniors;
+  const seasonDays = snapshot?.save.seasonDays ?? 30;
+  const tableRows = rows.map((player) => ({
+    ...player,
+    contractSeasons: player.contractDays > 0 ? Math.ceil(player.contractDays / seasonDays) : 0,
+  }));
+  const filteredRows = tableRows.filter((player) => {
+    const query = filter.trim().toLowerCase();
+    const nameMatches = !query || (player.displayName ?? player.name).toLowerCase().includes(query);
+    const positionMatches = positionFilter.length === 0 || positionFilter.includes(player.position);
+    return nameMatches && positionMatches;
+  });
 
   useEffect(() => {
     void api.finances().then((response) => setFinance(response.finance)).catch(() => setFinance(null));
   }, [snapshot?.club?.cash]);
+
+  useEffect(() => {
+    let active = true;
+    void api.countries()
+      .then((response) => {
+        if (!active) return;
+        setCountryNames(Object.fromEntries(response.allCountries.map((country) => [country.code, country.name])));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const openRenew = (p: PlayerView) => {
     setSelected(p);
@@ -207,7 +237,17 @@ export function Squad() {
     </span>
   );
 
+  const contractBody = (p: PlayerView & { contractSeasons: number }) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }} title={p.contractSeasons <= 1 ? "Contract expires this season" : undefined}>
+      {p.contractSeasons <= 1 && <AlertTriangle size={14} style={{ color: "var(--gold-2)" }} aria-label="Expiring contract" />}
+      {p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} ${p.contractSeasons === 1 ? "season" : "seasons"}`}
+    </span>
+  );
+
   const selectedPlayer = selected ?? rows[0];
+  const selectedTablePlayer = selectedPlayer ? tableRows.find((player) => player.id === selectedPlayer.id) ?? null : null;
+  const selectedCountryName = selectedPlayer ? countryNames[selectedPlayer.country] ?? selectedPlayer.country : "";
+  const selectedCountryFlag = selectedPlayer ? countryFlag(selectedPlayer.country) : null;
 
   useEffect(() => {
     if (selectedPlayer) setNicknameInput(selectedPlayer.nickname ?? "");
@@ -249,7 +289,7 @@ export function Squad() {
 
   return (
     <div>
-      <Toast ref={toast} />
+      <Toast ref={toast} position="bottom-right" />
       <div className="page-head">
         <div>
           <div className="kicker">{strings.squad.title}</div>
@@ -314,23 +354,50 @@ export function Squad() {
       ) : (
         <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
           <div className="card" style={{ padding: isMobile ? 10 : 20 }}>
-            <div className="table-wrap">
+            <div className="table-wrap squad-table-wrap">
               <DataTable
-                value={rows}
+                value={filteredRows}
                 selectionMode="single"
-                selection={selectedPlayer}
-                onSelectionChange={(e) => setSelected(e.value)}
+                selection={selectedTablePlayer}
+                onSelectionChange={(e) => setSelected(e.value as PlayerView | null)}
                 rowClassName={(p) => (p.id === selectedPlayer?.id ? "human-row" : "")}
                 rows={15}
                 paginator
                 dataKey="id"
+                sortMode="single"
+                className="squad-table"
+                tableStyle={{ width: "100%", tableLayout: "fixed" }}
+                header={
+                  <div className="squad-filters">
+                    <InputText
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="Search player name"
+                      aria-label="Search player name"
+                    />
+                    <MultiSelect
+                      value={positionFilter}
+                      options={POSITION_OPTIONS}
+                      onChange={(e) => setPositionFilter(e.value as number[])}
+                      optionLabel="label"
+                      optionValue="value"
+                      placeholder="All positions"
+                      maxSelectedLabels={2}
+                      selectedItemsLabel="{0} positions"
+                      scrollHeight="320px"
+                      aria-label="Filter by position"
+                    />
+                  </div>
+                }
               >
-                <Column field="name" header={strings.squad.player} body={(p) => <PlayerName player={p} />} style={isMobile ? { minWidth: 170, width: 170 } : { minWidth: 230 }} frozen={isMobile} />
-                <Column field="overall" header={strings.squad.overall} body={ratingBody} style={{ width: 70 }} />
-                <Column field="age" header={strings.squad.age} style={{ width: 50 }} />
-                <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} />} style={{ width: 120 }} />
-                {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} style={{ width: 90 }} />}
-                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => `${money(p.salary)}/season`} style={{ width: 100 }} />}
+                <Column field="position" header="Pos" body={(p) => <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`}>{p.positionName}</span>} sortable style={{ width: isMobile ? 70 : "8%" }} frozen={isMobile} />
+                <Column field="name" header={strings.squad.player} body={(p) => <span className="squad-player-cell"><PlayerName player={p} showPosition={false} /></span>} sortable style={isMobile ? { width: 160 } : { width: "25%" }} frozen={isMobile} />
+                <Column field="overall" header={strings.squad.overall} body={ratingBody} sortable style={{ width: "8%" }} />
+                <Column field="age" header={strings.squad.age} sortable style={{ width: "7%" }} />
+                <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} color={energyColor(p.energy)} />} sortable style={{ width: "14%" }} />
+                {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} sortable style={{ width: "11%" }} />}
+                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => money(p.salary)} sortable style={{ width: "11%" }} />}
+                <Column field="contractSeasons" header={strings.squad.contract} body={contractBody} sortable style={{ width: isMobile ? 105 : "16%" }} />
               </DataTable>
             </div>
           </div>
@@ -342,7 +409,11 @@ export function Squad() {
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
                   {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>Real name: {selectedPlayer.name}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
-                    {selectedPlayer.positionName} · {selectedPlayer.age} yrs · {selectedPlayer.country}
+                    {selectedPlayer.positionName} · {selectedPlayer.age} yrs ·{" "}
+                    <span title={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
+                      {selectedCountryFlag && <span aria-hidden="true">{selectedCountryFlag} </span>}
+                      {selectedCountryName}
+                    </span>
                     {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
                   </div>
                   <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
@@ -380,14 +451,6 @@ export function Squad() {
               <div style={{ margin: "14px 0", padding: "12px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
                 <div className="section-label" style={{ marginBottom: 2 }}>Skill profile</div>
                 <PlayerSkillsRadar skills={selectedPlayer.skills} />
-                <div style={{ color: "var(--text-3)", fontSize: "0.78rem", lineHeight: 1.45, marginTop: 6 }}>
-                  {strings.squad.overallHint}
-                </div>
-              </div>
-
-              <div style={{ display: "flex", gap: 7, flexWrap: "wrap", marginBottom: 14 }}>
-                <span className="pos-tag">{TRAITS[selectedPlayer.characteristic1]}</span>
-                <span className="pos-tag">{TRAITS[selectedPlayer.characteristic2]}</span>
               </div>
 
               <div className="stats-row">
@@ -469,10 +532,6 @@ export function Squad() {
                 }}
                 style={{ width: "100%" }}
               />
-            </div>
-            <div className="form-group">
-              <label>{strings.squad.newSalary}</label>
-              <div className="card" style={{ padding: 10 }}>{money(renewDemand)}/season</div>
             </div>
             {renewalCushion !== null && renewalCushion < 0 && (
               <div className="card" style={{ marginBottom: 10, padding: 10, fontSize: "0.88rem", color: "var(--gold-2)", borderColor: "var(--gold-2)" }}>

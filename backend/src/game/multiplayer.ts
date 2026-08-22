@@ -3,7 +3,7 @@ import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, updateStand
 import { simulateMatch } from "./match";
 import { seasonKey, joinLockRound } from "./clock";
 import { roundDayIndex } from "../services/seasonCalendar";
-import { anchorMinutes, pickFixtureKickoff, pickSynchronizedKickoff, type PreferenceInput } from "./scheduling";
+import { pickFixtureKickoff, pickSynchronizedKickoff, type PreferenceInput } from "./scheduling";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
@@ -11,6 +11,7 @@ import { overallFromSkills } from "./rating";
 import { applyMatchElo, eloRatings } from "./elo";
 import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "./market";
 import { generateFillerRoster, totalDivisionsForGeneration } from "./clubGenerator";
+import { deriveAiKits } from "./kits";
 
 export const CLUBS_PER_DIVISION = gameConfig.league.teams;
 export const ROUNDS_PER_SEASON = gameConfig.league.turns * (gameConfig.league.teams - 1);
@@ -201,6 +202,9 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
   const city = pickCity(rng);
   const name = `${city} FC`;
   const country = "BRA";
+  // Kit Lab: fillers wear their deterministic palette-derived designs; the
+  // identity columns mirror the home shell so color readers stay consistent.
+  const kits = deriveAiKits(id);
   const club: Club = {
     id,
     name,
@@ -217,8 +221,9 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
     // charged or paid to them (invariant #28).
     cash: 0,
     stadiumName: `${city} Stadium`,
-    primaryColor: "#334455",
-    secondaryColor: "#112233",
+    kits,
+    primaryColor: kits.home.primary,
+    secondaryColor: kits.home.secondary,
     coachName: generateName(rng, country),
     tactics: randomTactics(rng),
     trainingFocus: "assistant",
@@ -348,7 +353,7 @@ export function setDivisionState(world: World, divisionId: number, state: "CREAT
  * Kickoffs are optimized inside the clubs' preferred half-hour windows while
  * game days/rounds stay fixed (see game/scheduling.ts):
  * - ordinary rounds are optimized per fixture (home preference first, then
- *   the away club's, ties toward the default kickoff);
+ *   the away club's, ties resolved by the stable seeded spread);
  * - the last round is synchronized per division/group: one shared instant
  *   minimizes summed home distance, then summed away distance;
  * - AI fillers and legacy humans without preferences are unconstrained.
@@ -360,7 +365,6 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
   const clubIds = Object.keys(comp.standings).map(Number);
   const fixtures = createLeagueFixtures(world.rng, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
   const seasonStart = world.mp.seasonStartAt ?? Date.now();
-  const anchorMin = anchorMinutes();
   const prefOf = (clubId: number): PreferenceInput => {
     const club = clubById(world, clubId);
     return { timezone: club?.timezone ?? null, preferredSlots: club?.preferredHours ?? null };
@@ -375,10 +379,11 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
   for (const [round, roundFixtures] of byRound) {
     const dayStart = seasonStart + roundDayIndex(round) * 24 * 60 * 60 * 1000;
     if (round === lastRound) {
-      const kickoff = pickSynchronizedKickoff(roundFixtures.map((f) => ({ home: prefOf(f.homeClubId), away: prefOf(f.awayClubId) })), dayStart, anchorMin);
+      // Seed from stable identity so retries cannot reroll kickoffs.
+      const kickoff = pickSynchronizedKickoff(roundFixtures.map((f) => ({ home: prefOf(f.homeClubId), away: prefOf(f.awayClubId) })), dayStart, `${comp.id}:${round}`);
       for (const f of roundFixtures) f.kickoffAt = kickoff;
     } else {
-      for (const f of roundFixtures) f.kickoffAt = pickFixtureKickoff(prefOf(f.homeClubId), prefOf(f.awayClubId), dayStart, anchorMin);
+      for (const f of roundFixtures) f.kickoffAt = pickFixtureKickoff(prefOf(f.homeClubId), prefOf(f.awayClubId), dayStart, `${comp.id}:${round}:${f.homeClubId}:${f.awayClubId}`);
     }
   }
   for (const f of fixtures) {

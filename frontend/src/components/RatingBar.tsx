@@ -5,7 +5,7 @@ export function RatingBar({ value, max = 100, color }: { value: number; max?: nu
       <div className="track">
         <div className="fill" style={{ width: `${pct}%`, background: color }} />
       </div>
-      <div className="value">{value}</div>
+      <div className="value" style={color ? { color } : undefined}>{value}</div>
     </div>
   );
 }

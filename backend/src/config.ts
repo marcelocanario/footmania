@@ -33,7 +33,6 @@ const gameConfigSchema = z
     interseasonBeforeNextSeasonDays: z.number().int().min(0).default(5),
     scheduler: z.object({
       gameDayRolloverUtc: timeSchema,
-      leagueMatchStartUtc: timeSchema,
       leaseSeconds: z.number().int().min(5).default(30),
     }),
     economy: z.object({
@@ -81,6 +80,7 @@ const gameConfigSchema = z
       academyMaxAge: z.number().int().min(1),
       academyPromotionAge: z.number().int().min(1),
       academyContractSeasons: z.number().int().min(1),
+      foreignPlayerChance: z.number().min(0).max(1).default(0.05),
     }),
     // Primary balance tunables of the match simulator (plans/6. §0/§6). The
     // full matchSimulator model lives in config/match-simulator.jsonc; only the
@@ -368,8 +368,8 @@ export const MP_CONFIG = {
   matchKickoffHourUtc: 20,
   // Preferred-time scheduling: the day is divided into half-hour slots and
   // humans pick at least `minPreferredSlots` of them (8 hours). Fixture
-  // kickoffs are optimized inside these slots; the configured
-  // scheduler.leagueMatchStartUtc remains the tie-break anchor.
+  // kickoffs are optimized inside these slots; ties resolve through the
+  // stable seeded spread in game/scheduling.ts (no configured default time).
   preferredSlotMinutes: 30,
   slotsPerDay: 48,
   minPreferredSlots: 16,
@@ -559,7 +559,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   interseasonDays: 7,
   interseasonAfterMatchDays: 2,
   interseasonBeforeNextSeasonDays: 5,
-  scheduler: { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+  scheduler: { gameDayRolloverUtc: "00:00", leaseSeconds: 30 },
   economy: { referenceSeasonDays: 30 },
   payrollIntervalDays: 7,
   weeklyIntervalDays: 7,
@@ -618,6 +618,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     academyMaxAge: 19,
     academyPromotionAge: 21,
     academyContractSeasons: 4,
+    foreignPlayerChance: 0.05,
   },
   matchSimulator: {
     influence: { team: 0.4, tactics: 0.35, luck: 0.25 },
@@ -654,7 +655,7 @@ export function parseGameConfig(raw: unknown): GameConfig {
           ...legacy,
           league: { ...legacyLeague, restDaysBetweenMatches: restDays },
           interseasonDays: legacy.interseasonDays ?? 7,
-          scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+          scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leaseSeconds: 30 },
           economy: legacy.economy ?? { referenceSeasonDays: 30 },
         };
         delete (normalized.league as Record<string, unknown>).matchIntervalDays;
@@ -673,7 +674,7 @@ export function parseGameConfig(raw: unknown): GameConfig {
           interseasonDays: gap,
           interseasonAfterMatchDays: after,
           interseasonBeforeNextSeasonDays: before,
-          scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leagueMatchStartUtc: "19:00", leaseSeconds: 30 },
+          scheduler: legacy.scheduler ?? { gameDayRolloverUtc: "00:00", leaseSeconds: 30 },
           economy: legacy.economy ?? { referenceSeasonDays: 30 },
         };
         delete normalized.seasonDays;
