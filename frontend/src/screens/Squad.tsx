@@ -514,9 +514,6 @@ export function Squad() {
                     <button className="btn" onClick={() => void saveNumber()} disabled={numberBusy || numberInput === selectedPlayer.squadNumber} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{numberBusy ? "Saving…" : "Save number"}</button>
                     {numberSwapHint && <div style={{ color: "var(--gold-2)", fontSize: "0.8rem" }}>Swaps with the current wearer.</div>}
                   </div>
-                  <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 6 }}>
-                    Numbers are unique per club. Goalkeepers: #1 best keeper, #12 second.
-                  </div>
                 </div>
               )}
 

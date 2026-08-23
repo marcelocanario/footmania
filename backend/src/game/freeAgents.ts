@@ -451,8 +451,8 @@ export function deleteUnclaimedFreeAgent(world: World, playerId: number, now: nu
 }
 
 /** Process one due listing for both the durable scheduler and worker fallback. */
-export function processDueFreeAgentListing(world: World, listing: FreeAgentListing, now: number): DueFreeAgentResult {
-  if (listing.status !== "ACTIVE" || listing.deadline > now) return { kind: "FAILED", listingId: listing.id, error: "Listing is not due" };
+export function processDueFreeAgentListing(world: World, listing: FreeAgentListing, now: number, opts: { forceClose?: boolean } = {}): DueFreeAgentResult {
+  if (listing.status !== "ACTIVE" || (!opts.forceClose && listing.deadline > now)) return { kind: "FAILED", listingId: listing.id, error: "Listing is not due" };
   const bids = world.marketBids.filter((bid) => bid.marketType === "FREE_AGENT" && bid.listingId === listing.id);
   if (bids.length > 0) {
     const settled = settleFreeAgentListing(world, listing, now);

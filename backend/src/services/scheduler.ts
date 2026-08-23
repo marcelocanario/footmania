@@ -574,8 +574,9 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
       if (!fixture || fixture.played) return;
       const live = world.liveMatches.find((match) => match.fixtureId === fixtureId);
-       if (!live && !startLiveMatch(world, fixture)) throw new Error("Match participants are unavailable");
-       const completionAt = (fixture.kickoffAt ?? now.getTime()) + MP_CONFIG.matchDurationMinutes * 60 * 1000;
+       const startedAt = context.ignoreDueTime ? now.getTime() : (fixture.kickoffAt ?? now.getTime());
+       if (!live && !startLiveMatch(world, fixture, startedAt)) throw new Error("Match participants are unavailable");
+       const completionAt = startedAt + MP_CONFIG.matchDurationMinutes * 60 * 1000;
        const home = world.clubs.find((club) => club.id === fixture.homeClubId);
        const away = world.clubs.find((club) => club.id === fixture.awayClubId);
        await scheduleEvent(prisma, {
@@ -603,16 +604,24 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const completionAt = Number(payload.completionAt ?? now.getTime());
       const fixtureId = Number(payload.fixtureId ?? entityId);
       const fixture = world.fixtures.find((candidate) => candidate.id === fixtureId);
-      if (fixture && !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixtureId)) startLiveMatch(world, fixture);
-      const finished = advanceLiveMatches(world, context.ignoreDueTime ? Math.max(now.getTime(), completionAt) : now.getTime());
+      if (fixture && !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixtureId)) {
+        startLiveMatch(world, fixture, context.ignoreDueTime ? now.getTime() : undefined);
+      }
+      // An administrator executing a completion event early means "complete
+      // now", not "pretend the clock has reached the future due time".
+      const advanceAt = context.ignoreDueTime ? now.getTime() : Math.max(now.getTime(), completionAt);
+      const finished = advanceLiveMatches(world, advanceAt);
       return { userEvents: await notifyFinishedMatches(prisma, world, finished) };
     }
     case ScheduledEventType.AUCTION_END: {
       if (payload.marketType === "FREE_AGENT") {
         const listing = world.freeAgentListings.find((candidate) => candidate.id === Number(payload.listingId ?? entityId));
         if (!listing || listing.status !== "ACTIVE") return;
-        const settleAt = context.ignoreDueTime ? Math.max(now.getTime(), listing.deadline) : now.getTime();
-        const result = processDueFreeAgentListing(world, listing, settleAt);
+        // Admin execution intentionally settles at the execution time. Using
+        // the future deadline here makes an early execution look completed while
+        // recording a transaction in the future.
+        const settleAt = now.getTime();
+        const result = processDueFreeAgentListing(world, listing, settleAt, { forceClose: context.ignoreDueTime });
         if (result.kind === "FAILED") {
           // Terminal failures (missing reservation, roster cap breach) can
           // never succeed on retry: fail closed instead of exhausting attempts.
@@ -667,8 +676,10 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       const listing = world.transferAuctions.find((candidate) => candidate.id === Number(payload.auctionId ?? entityId));
       if (!listing || listing.status !== "ACTIVE") return;
       if (payload.deadlineVersion !== undefined && Number(payload.deadlineVersion) !== (listing.deadlineVersion ?? 0)) return;
-      const settleAt = context.ignoreDueTime ? Math.max(now.getTime(), listing.deadline) : now.getTime();
-      const result = settleTransferAuction(world, listing, settleAt);
+      // Admin execution intentionally settles at the execution time; the
+      // deadline is only a gate for automatic processing.
+      const settleAt = now.getTime();
+      const result = settleTransferAuction(world, listing, settleAt, { forceClose: context.ignoreDueTime });
       if (!result.ok) {
         // Terminal failures (missing reservation, roster cap breach) can never
         // succeed on retry: fail closed instead of exhausting attempts.

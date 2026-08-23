@@ -33,8 +33,9 @@ function broadcastState(world: import("../game/types").World, matchId?: number) 
     if (matchId !== undefined && st.matchId !== matchId) continue;
     for (const ws of conns.get(st.matchId) ?? []) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
-      const viewerClub = meta ? world.clubs.find((club) => club.ownerUserId === meta.userId) : undefined;
-      if (!meta || !viewerClub || (viewerClub.id !== st.homeClubId && viewerClub.id !== st.awayClubId)) continue;
+      // Live matches are public: every connected spectator receives state,
+      // not just the two participants.
+      if (!meta) continue;
       send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
     }
   }
@@ -45,8 +46,9 @@ function broadcastLiveMatchUpdates(world: import("../game/types").World, updates
     const state = world.liveMatches.find((candidate) => candidate.matchId === update.matchId);
     for (const ws of conns.get(update.matchId) ?? []) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
-      const viewerClub = meta ? world.clubs.find((club) => club.ownerUserId === meta.userId) : undefined;
-      if (!meta || !viewerClub || (viewerClub.id !== update.homeClubId && viewerClub.id !== update.awayClubId)) continue;
+      // Spectators follow the match too; control messages remain
+      // participant-gated in handleMessage below.
+      if (!meta) continue;
       if (update.finished || !state) {
         send(ws, { type: "finished", matchId: update.matchId });
       } else if (update.phaseChanged) {
@@ -224,12 +226,13 @@ async function handleMessage(
     }
       const humanClub = world.clubs.find((c) => c.ownerUserId === meta.userId);
       try {
-        const isParticipant = humanClub !== undefined && (st.homeClubId === humanClub.id || st.awayClubId === humanClub.id);
-        if (msg.type === "state" && !isParticipant) {
-          send(ws, { type: "error", message: "You are not a participant in this match" });
+        // Read-only spectating: everyone may pull the current state. Every
+        // mutating message type below re-checks participation on its own.
+        if (msg.type === "state") {
+          send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
           return;
         }
-      if (msg.type === "sub") {
+        if (msg.type === "sub") {
         if (st.ended) {
           send(ws, { type: "error", message: "Match already finished" });
           return;

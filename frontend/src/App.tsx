@@ -149,6 +149,7 @@ function AppRoutes() {
       {/* Matches screen removed: fixtures live inside Tables. Old links redirect. */}
       <Route path="/matchday" element={<Navigate to="/competitions" replace />} />
       <Route path="/live-match" element={<ClubGuard><LiveMatch /></ClubGuard>} />
+      <Route path="/live-match/:matchId" element={<ClubGuard><LiveMatch /></ClubGuard>} />
       <Route path="/transfers" element={<ClubGuard><Transfers /></ClubGuard>} />
       <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />
       <Route path="/season-end" element={<ClubGuard><SeasonEnd /></ClubGuard>} />

@@ -330,6 +330,10 @@ export interface FixtureView {
   venue?: string;
   kickoffAt: number | null;
   played: boolean;
+  /** Stored match id once played; null while unplayed. */
+  matchId?: number | null;
+  /** Set while this fixture is being played right now; spectators can watch. */
+  liveMatchId?: number | null;
   homeScore: number | null;
   awayScore: number | null;
   isHuman: boolean;
@@ -575,6 +579,8 @@ export interface LiveState {
   awayBench: LivePlayer[];
   usedSubs: [number, number];
   humanSide: 0 | 1;
+  /** True when the viewer's own club is playing; spectators get read-only UI. */
+  isParticipant?: boolean;
   homeManager: string;
   awayManager: string;
   homeFormation: string;
@@ -636,7 +642,8 @@ export interface MatchEvents {
     away: string;
     homeScore: number;
     awayScore: number;
-    stats: MatchStats;
+    /** Detailed stats are a Pro feature; null for regular users. */
+    stats: MatchStats | null;
   };
   events: LiveEvent[];
 }

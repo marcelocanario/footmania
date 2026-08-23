@@ -56,7 +56,7 @@ export function findCompetition(world: World, id: number): Competition | undefin
 /** Create a live match state for a scheduled fixture. Every league match fires
  *  live at its kickoff, whether or not a human is watching; humans present can
  *  intervene via the WebSocket (subs, formation). */
-export function startLiveMatch(world: World, fixture: Fixture): Match | null {
+export function startLiveMatch(world: World, fixture: Fixture, startAt = fixture.kickoffAt ?? Date.now()): Match | null {
   const home = findClub(world, fixture.homeClubId);
   const away = findClub(world, fixture.awayClubId);
   if (!home || !away) return null;
@@ -97,12 +97,14 @@ export function startLiveMatch(world: World, fixture: Fixture): Match | null {
     awayFutureFixtures: futureFixtures(away.id),
   });
   world.liveMatches.push(st);
-  // A restarted worker must account for time spent offline. The fixture's
-  // scheduled kickoff, rather than process start time, is the pacing origin.
-  st.lastAdvancedAt = fixture.kickoffAt ?? Date.now();
+  // A restarted worker must account for time spent offline. Normal scheduled
+  // starts use the fixture kickoff as the pacing origin; an administrator can
+  // start a fixture early, in which case the explicit start time is the origin
+  // so the match does not remain frozen until its original kickoff.
+  st.lastAdvancedAt = startAt;
   for (const clubId of [home.id, away.id]) {
     const club = findClub(world, clubId);
-    if (club) club.liveMatchAt = fixture.kickoffAt ?? Date.now();
+    if (club) club.liveMatchAt = startAt;
   }
   return match;
 }

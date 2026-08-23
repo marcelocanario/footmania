@@ -11,8 +11,8 @@ Game engine
 		[DONE] injuries can set back a player's skills (make it rare, logarithmic probability)
 		[DONE] model the severity of the injury (aka recovery time); has to scale with season length variables as well. younger players' injuries will generally be less severy, but not drastically
 		[DONE] the match simulator engine should incorporate the possibility of injuries (the more tired a player is, the more likely he is to become injured but does not affect severity). do we need to collect real injury data to tune coefficients?
-	[IN PROGRESS] users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
-		[IN PROGRESS] pro users can save one preset per tactic. regular users can only save one preset for one tactic
+	[DONE] users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
+		[DONE] pro users can save one preset per tactic. regular users can only save one preset for one tactic
 	implement:
 		AI substitutions in matches
 		[DONE] extra time (calculated by events in the match, not too much time)
@@ -27,7 +27,7 @@ Game engine
 Multiplayer
 	[DONE] think of tournment structure
 	[DONE] players create teams, choose team color, jerseys, country, stadium name, etc.
-		[IN PROGRESS] allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
+		[DONE] allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
 	[DONE] initial player names for that team should match the chosen country, same as youth-generated players
 	[IN PROGRESS] push notifications for match started and match ended
 		[IN PROGRESS] pros can see match goals and other events and also get their league results as push
@@ -90,6 +90,7 @@ Technical/housekeeping:
 	[DONE] when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
 	[DONE] confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
 		[DONE] consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
+	implement a message of the day (MOTD) system - admins can send messages through admin panel and those show in the home of the users, in the News section
 
 Tuning:
 	validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime
@@ -111,3 +112,13 @@ Match UX:
 	there should be a tab with text updates of the match, all events should show there. make live pitch always show on top and match history and tactics tabs. 
 	players watching the match should be able to toggle between automations ON (autopilot) and OFF (they control the match)
 	add an element above the pitch with the club names, score and a progress bar 
+	show more match events in the history. maybe some of those already exist, but if not, we should add:
+		who won the coin toss
+		start of the game (whistle icon)
+		half-time (whistle icon)
+		substitutions
+		fouls
+		penalty kicks
+		corner kicks
+		end of the game (whistle icon)
+		any other events that our data can support

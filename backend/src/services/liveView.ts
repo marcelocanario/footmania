@@ -78,7 +78,9 @@ export interface LiveStateView {
   homeBench: LivePlayerView[];
   awayBench: LivePlayerView[];
   usedSubs: [number, number];
-  humanSide: 0 | 1;
+  humanSide: number;
+  /** True when the viewer's own club is playing; spectators get read-only UI. */
+  isParticipant: boolean;
   homeManager: string;
   awayManager: string;
   homeFormation: string;
@@ -195,6 +197,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayBench: toPlayers(st.awaySubs),
     usedSubs: st.usedSubs,
     humanSide: humanClubId !== null ? (st.homeClubId === humanClubId ? 0 : 1) : 1,
+    isParticipant: humanClubId !== null && (st.homeClubId === humanClubId || st.awayClubId === humanClubId),
     homeManager: home?.coachName ?? "",
     awayManager: away?.coachName ?? "",
     homeFormation: formationName(home),

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { Flag, RefreshCw, Subscript, Users } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
@@ -60,6 +60,8 @@ interface WsMessage {
 export function LiveMatch() {
   const { refresh, setLiveMatch } = useGame();
   const navigate = useNavigate();
+  // Spectator entry: /live-match/:matchId watches any match, not just our own.
+  const routeMatchId = Number(useParams().matchId ?? "");
   const [state, setState] = useState<LiveState | null>(null);
   const [wsMode, setWsMode] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
@@ -88,6 +90,11 @@ export function LiveMatch() {
   }, [noLive, navigate, refresh, setLiveMatch]);
 
   useEffect(() => {
+    // Direct link to a specific match (spectating): skip the own-match lookup.
+    if (Number.isFinite(routeMatchId) && routeMatchId > 0) {
+      setLiveId(routeMatchId);
+      return;
+    }
     api
       .liveMatchInfo()
       .then((res) => {
@@ -95,7 +102,7 @@ export function LiveMatch() {
         else setNoLive(true);
       })
       .catch(() => setNoLive(true));
-  }, []);
+  }, [routeMatchId]);
 
   const applyState = useCallback((s: LiveState) => {
     stateRef.current = s;
@@ -280,6 +287,8 @@ export function LiveMatch() {
   };
 
   const humanSide = state?.humanSide ?? 1;
+  // Spectator: watching someone else's match — read-only UI.
+  const isSpectator = state?.isParticipant === false;
   const onPitch = humanSide === 0 ? state?.homeOn ?? [] : state?.awayOn ?? [];
   const bench = humanSide === 0 ? state?.homeBench ?? [] : state?.awayBench ?? [];
   const usedSubs = state ? state.usedSubs[humanSide] : 0;
@@ -354,17 +363,20 @@ export function LiveMatch() {
                 <span className="live-tag" style={{ fontSize: "0.7rem", padding: "3px 10px" }}>
                   {wsMode && !reconnecting ? <><span className="pulse-dot" /> Live</> : <><RefreshCw size={11} /> {reconnecting ? "Reconnecting" : "Fallback"}</>}
                 </span>{" "}
-                Match lineup
+                {isSpectator ? "Lineups" : "Match lineup"}
               </h2>
               <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>
-                Set your starting eleven and bench before kickoff. Changes are saved instantly.
+                {isSpectator ? "You are watching as a spectator. The match starts shortly." : "Set your starting eleven and bench before kickoff. Changes are saved instantly."}
               </div>
             </div>
-            <button className="btn gold" style={{ fontSize: "1.05rem", padding: "12px 28px" }} onClick={() => void refreshLiveState()}>
-              <RefreshCw size={17} /> Refresh
-            </button>
+            {!isSpectator && (
+              <button className="btn gold" style={{ fontSize: "1.05rem", padding: "12px 28px" }} onClick={() => void refreshLiveState()}>
+                <RefreshCw size={17} /> Refresh
+              </button>
+            )}
           </div>
-          <TacticsBoard mode="match" matchId={state.matchId} liveState={state} />
+          {/* Lineup editing is for participants only; spectators just see the pitch. */}
+          {!isSpectator && <TacticsBoard mode="match" matchId={state.matchId} liveState={state} />}
         </div>
         <MatchPitch
           home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
@@ -382,7 +394,10 @@ export function LiveMatch() {
     <div>
       <div className="page-head">
         <div>
-          <div className="kicker">{state.competitionName || "Matchday"}</div>
+          <div className="kicker">
+            {state.competitionName || "Matchday"}
+            {isSpectator ? " · Watching as spectator" : ""}
+          </div>
           <h1>{state.home} vs {state.away}</h1>
         </div>
       </div>
@@ -451,7 +466,9 @@ export function LiveMatch() {
           <div className="card" style={{ borderColor: "rgba(240,180,41,0.4)", marginBottom: 16, textAlign: "center", padding: "18px 14px" }}>
             <h2 style={{ fontSize: "1.3rem", marginBottom: 6 }}>Interval — {mm}:{ss}</h2>
             <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 6 }}>
-              You may change your formation or make substitutions ({subsLeft} left).
+              {isSpectator
+                ? "You are watching as a spectator."
+                : `You may change your formation or make substitutions (${subsLeft} left).`}
             </div>
             <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 12 }}>
               {bothHumans ? (
@@ -461,12 +478,16 @@ export function LiveMatch() {
               )}
             </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-              <button className="btn" onClick={() => setShowLineup((v) => !v)}>
-                <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
-              </button>
-              <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
-                <Subscript size={15} /> Substitutions
-              </button>
+              {!isSpectator && (
+                <>
+                  <button className="btn" onClick={() => setShowLineup((v) => !v)}>
+                    <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
+                  </button>
+                  <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
+                    <Subscript size={15} /> Substitutions
+                  </button>
+                </>
+              )}
               {canReady && (
                 <button className={`btn ${myReady ? "ghost" : "gold"}`} onClick={() => void doHalftimeReady()} disabled={halftimeBusy || myReady}>
                   {myReady ? "✓ Ready" : "I'm Ready — Resume"}
@@ -551,7 +572,7 @@ export function LiveMatch() {
         </div>
       </div>
 
-      {!isDone && state.automationDisabled !== undefined && (
+      {!isSpectator && !isDone && state.automationDisabled !== undefined && (
         <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
             <div style={{ fontWeight: 700 }}>Auto-presets</div>
@@ -583,9 +604,11 @@ export function LiveMatch() {
               <button className="btn ghost" onClick={() => void refreshLiveState()}>
                 <RefreshCw size={15} /> Refresh
               </button>
-              <button className="btn ghost" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
-                <Subscript size={15} /> Subs ({subsLeft})
-              </button>
+              {!isSpectator && (
+                <button className="btn ghost" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
+                  <Subscript size={15} /> Subs ({subsLeft})
+                </button>
+              )}
             </>
           )
         )}

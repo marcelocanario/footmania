@@ -13,6 +13,7 @@ import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from ".
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { recordActivity } from "../game/multiplayer";
+import { hasPro } from "../services/pro";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
@@ -127,6 +128,9 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!match) return reply.code(404).send({ error: "Match not found" });
     const home = loaded.world.clubs.find((c) => c.id === match.homeClubId);
     const away = loaded.world.clubs.find((c) => c.id === match.awayClubId);
+    // Detailed match stats are a Pro feature; the gate is enforced server-side.
+    const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user!.id } });
+    const isPro = sessionUser !== null && hasPro(sessionUser);
     const events = match.events.map((e) => ({
       minute: e.minute,
       half: e.half,
@@ -144,7 +148,8 @@ export async function gameRoutes(app: FastifyInstance) {
         away: away?.name ?? "",
         homeScore: match.homeScore,
         awayScore: match.awayScore,
-        stats: match.stats,
+        // Null for regular users; the UI shows a locked tab instead.
+        stats: isPro ? match.stats : null,
       },
       events,
     };

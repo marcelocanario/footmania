@@ -269,6 +269,8 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         const home = clubById.get(f.homeClubId);
         const away = clubById.get(f.awayClubId);
         const m = matchByFixtureId.get(f.id);
+        // Live right now? Spectators can jump into any in-progress match.
+        const liveMatch = world.liveMatches.find((s) => s.fixtureId === f.id);
         return {
           id: f.id,
           round: f.round,
@@ -286,6 +288,8 @@ export async function multiplayerRoutes(app: FastifyInstance) {
           venue: home?.stadiumName ?? "",
           kickoffAt: f.kickoffAt ?? null,
           played: f.played,
+          matchId: m?.id ?? null,
+          liveMatchId: liveMatch && !liveMatch.ended ? liveMatch.matchId : null,
           homeScore: m?.homeScore ?? null,
           awayScore: m?.awayScore ?? null,
           isHuman: myClubId !== null && (f.homeClubId === myClubId || f.awayClubId === myClubId),

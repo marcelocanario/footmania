@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Dropdown } from "primereact/dropdown";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
+import { Dialog } from "primereact/dialog";
 import { TabView, TabPanel } from "primereact/tabview";
-import { ArrowUp, ArrowDown, TrendingUp, Trophy } from "lucide-react";
-import { api, type FixtureView, type PyramidResponse, type StandingsRow } from "../api/client";
+import { ArrowUp, ArrowDown, Crown, TrendingUp, Trophy } from "lucide-react";
+import { api, type FixtureView, type LiveEvent, type MatchEvents, type MatchStats, type PyramidResponse, type StandingsRow } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { ClubCrest } from "../components/ClubCrest";
@@ -17,6 +19,34 @@ function kickoffLabel(kickoffAt: number | null): string {
 /** Groups are numbered (1-based): the pyramid grows exponentially, so letters run out. */
 function groupLabel(groupIndex: number): string {
   return String(groupIndex + 1);
+}
+
+/** Mirrors the live-match feed iconography for the results popout timeline. */
+const EVENT_LABELS: Record<number, string> = {
+  1: "Goal!",
+  2: "Yellow card",
+  3: "Red card",
+  5: "Injury",
+  6: "Substitution",
+  7: "Missed penalty",
+  8: "Assist",
+  9: "Coin toss",
+};
+
+function EventGlyph({ type, subtype }: { type: number; subtype: number }) {
+  let glyph = "⚽";
+  if (type === 1) glyph = subtype === 2 ? "🥅" : "⚽";
+  else if (type === 2) glyph = "🟨";
+  else if (type === 3) glyph = "🟥";
+  else if (type === 5) glyph = "🩹";
+  else if (type === 6) glyph = "🔄";
+  else if (type === 7) glyph = "❌";
+  else if (type === 9) glyph = "🪙";
+  return <span aria-hidden="true">{glyph}</span>;
+}
+
+function formatEventMinute(e: LiveEvent): string {
+  return e.addedTime ? `${e.minute}+${e.addedTime}'` : `${e.minute}'`;
 }
 
 function statusBadge(row: StandingsRow, position: number, isTopDivision: boolean, seasonComplete: boolean) {
@@ -51,12 +81,18 @@ function statusBadge(row: StandingsRow, position: number, isTopDivision: boolean
 
 export function Competitions() {
   const { status } = useGame();
+  const user = useGame((s) => s.user);
+  const navigate = useNavigate();
   const [pyramid, setPyramid] = useState<PyramidResponse | null>(null);
   const [selectedTier, setSelectedTier] = useState<number | null>(null);
   const [selectedDiv, setSelectedDiv] = useState<number | null>(null);
   const [table, setTable] = useState<StandingsRow[]>([]);
   const [fixtures, setFixtures] = useState<FixtureView[]>([]);
   const [tab, setTab] = useState(0);
+  // Finished-match popout: the clicked fixture plus its loaded event history.
+  const [resultFixture, setResultFixture] = useState<FixtureView | null>(null);
+  const [resultData, setResultData] = useState<MatchEvents | null>(null);
+  const [resultBusy, setResultBusy] = useState(false);
 
   useEffect(() => {
     api.pyramid().then((res) => {
@@ -96,6 +132,19 @@ export function Competitions() {
     api.divisionStandings(selectedDiv).then((res) => setTable(res.standings)).catch(() => undefined);
     api.divisionFixtures(selectedDiv).then((res) => setFixtures(res.fixtures)).catch(() => undefined);
   }, [selectedDiv]);
+
+  const openResult = (f: FixtureView) => {
+    if (f.matchId == null) return;
+    setResultFixture(f);
+    setResultData(null);
+    setResultBusy(true);
+    api.matchEvents(f.matchId)
+      .then((res) => setResultData(res))
+      .catch(() => setResultFixture(null))
+      .finally(() => setResultBusy(false));
+  };
+
+  const isPro = Boolean(user?.isPro);
 
   return (
     <div>
@@ -178,9 +227,35 @@ export function Competitions() {
                 // Full competition context per fixture; plain text on hover.
                 const contextLabel = `S${seasonNumber} · D${selected?.tier ?? "?"} · G${selected ? groupLabel(selected.groupIndex) : "?"} · R${f.round + 1}`;
                 const contextTooltip = `Season ${seasonNumber} · Division ${selected?.tier ?? "?"} · Group ${selected ? groupLabel(selected.groupIndex) : "?"} · Round ${f.round + 1}`;
+                const isLive = f.liveMatchId != null;
+                const isClickable = isLive || (f.played && f.matchId != null);
                 return (
-                  <div className={`result-card${f.isHuman ? " human" : ""}`} key={f.id} style={{ marginBottom: 6 }}>
-                    <span className="chip" title={contextTooltip} style={{ minWidth: 160, justifyContent: "center" }}>{contextLabel}</span>
+                  <div
+                    className={`result-card${f.isHuman ? " human" : ""}${isLive ? " live-now" : ""}`}
+                    key={f.id}
+                    style={{ marginBottom: 6, ...(isClickable ? { cursor: "pointer" } : {})}}
+                    role={isClickable ? "button" : undefined}
+                    tabIndex={isClickable ? 0 : undefined}
+                    onClick={() => {
+                      if (isLive && f.liveMatchId != null) navigate(`/live-match/${f.liveMatchId}`);
+                      else if (f.played) openResult(f);
+                    }}
+                    onKeyDown={(e) => {
+                      if (!isClickable) return;
+                      if (e.key === "Enter") {
+                        if (isLive && f.liveMatchId != null) navigate(`/live-match/${f.liveMatchId}`);
+                        else if (f.played) openResult(f);
+                      }
+                    }}
+                  >
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                      <span className="chip" title={contextTooltip} style={{ minWidth: 160, justifyContent: "center" }}>{contextLabel}</span>
+                      {isLive && (
+                        <span className="live-tag" style={{ fontSize: "0.68rem", padding: "2px 8px" }}>
+                          <span className="pulse-dot" /> LIVE
+                        </span>
+                      )}
+                    </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                         <div className="side">
@@ -211,11 +286,109 @@ export function Competitions() {
         </TabPanel>
       </TabView>
 
+      <Dialog
+        header={resultData
+          ? `${resultData.match.home} ${resultData.match.homeScore} – ${resultData.match.awayScore} ${resultData.match.away}`
+          : resultFixture ? `${resultFixture.home} vs ${resultFixture.away}` : ""}
+        visible={resultFixture !== null}
+        onHide={() => setResultFixture(null)}
+        style={{ width: 540 }}
+      >
+        {!resultData ? (
+          <div className="empty-state" style={{ padding: 20 }}>{resultBusy ? "Loading…" : "No data"}</div>
+        ) : (
+          <TabView>
+            <TabPanel header="Events">
+              <div className="event-feed">
+                {resultData.events.length === 0 && (
+                  <div className="empty-state" style={{ padding: 14 }}>No goals, cards or injuries to report.</div>
+                )}
+                {resultData.events.map((e, i) => {
+                  return (
+                    <div className="event-row" key={i}>
+                      <span className="min">{formatEventMinute(e)}</span>
+                      <EventGlyph type={e.type} subtype={e.subtype ?? 0} />
+                      {e.type === 1 && e.subtype !== 2 && e.player2 ? (
+                        <>
+                          <span className="ev-label">{EVENT_LABELS[e.type]}</span>
+                          <span className="ev-name">{e.player}</span>
+                          <span className="ev-label">assist {e.player2}</span>
+                        </>
+                      ) : e.type === 6 ? (
+                        <>
+                          <span className="ev-label">{EVENT_LABELS[e.type]}</span>
+                          <span className="ev-name">{e.player}</span>
+                          <span className="ev-label">↔ {e.player2}</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="ev-label">{EVENT_LABELS[e.type] ?? "Event"}</span>
+                          <span className="ev-name">{e.player}</span>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </TabPanel>
+            <TabPanel
+              header={isPro ? "Stats" : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Crown size={12} /> Stats</span>}
+            >
+              {!isPro ? (
+                <div className="empty-state" style={{ padding: 20 }}>
+                  Detailed match stats are a <b>Pro</b> feature.
+                </div>
+              ) : resultData.match.stats ? (
+                <ResultStats stats={resultData.match.stats} homeName={resultData.match.home} awayName={resultData.match.away} />
+              ) : (
+                <div className="empty-state" style={{ padding: 14 }}>No stats available.</div>
+              )}
+            </TabPanel>
+          </TabView>
+        )}
+      </Dialog>
+
       <div style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap", color: "var(--text-3)", fontSize: "0.85rem" }}>
         {!isTopDivision && <span className="chip"><ArrowUp size={12} style={{ color: "var(--gold-2)" }} /> Possible promotion · dotted line</span>}
         {!isTopDivision && <span className="chip"><ArrowUp size={12} style={{ color: "var(--grass-2)" }} /> Promoted</span>}
         <span className="chip"><ArrowDown size={12} style={{ color: "#ff6b6b" }} /> Relegation</span>
       </div>
+    </div>
+  );
+}
+
+/** Compact two-sided stats bars for the finished-match popout (Pro tab). */
+function ResultStats({ stats, homeName, awayName }: { stats: MatchStats; homeName: string; awayName: string }) {
+  const possession = (() => {
+    const total = stats.home.controlledBallSeconds + stats.away.controlledBallSeconds;
+    if (total <= 0) return [50, 50] as [number, number];
+    const home = Math.round((stats.home.controlledBallSeconds / total) * 100);
+    return [home, 100 - home] as [number, number];
+  })();
+
+  const bar = (label: string, h: number | string, a: number | string) => (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "7px 0", borderBottom: "1px solid var(--line)", fontSize: "0.9rem" }}>
+      <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, minWidth: 40, textAlign: "right" }}>{h}</span>
+      <span style={{ color: "var(--text-3)", flex: 1, textAlign: "center" }}>{label}</span>
+      <span style={{ fontFamily: "var(--font-display)", fontWeight: 700, minWidth: 40 }}>{a}</span>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 6 }}>
+        <span>{homeName}</span>
+        <span>{awayName}</span>
+      </div>
+      {bar("Possession %", possession[0], possession[1])}
+      {bar("Shots", stats.home.shots, stats.away.shots)}
+      {bar("On target", stats.home.shotsOnTarget, stats.away.shotsOnTarget)}
+      {bar("xG", stats.home.xG.toFixed(2), stats.away.xG.toFixed(2))}
+      {bar("Corners", stats.home.corners, stats.away.corners)}
+      {bar("Passes", stats.home.passes, stats.away.passes)}
+      {bar("Fouls", stats.home.fouls, stats.away.fouls)}
+      {bar("Yellows", stats.home.yellows, stats.away.yellows)}
+      {bar("Reds", stats.home.reds, stats.away.reds)}
     </div>
   );
 }

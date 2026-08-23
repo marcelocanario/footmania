@@ -4,7 +4,7 @@ process.env.DATABASE_URL = "file:./test-scheduler.db";
 process.env.NODE_ENV = "test";
 
 import { PrismaClient } from "@prisma/client";
-import { gameConfig, scaleReferenceSeasonFlow } from "../src/config";
+import { gameConfig, MP_CONFIG, scaleReferenceSeasonFlow } from "../src/config";
 import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
 import { ensureCurrentSeason } from "../src/services/mpService";
 import {
@@ -165,6 +165,38 @@ describe("durable scheduler", () => {
     const replay = await executeScheduledEvent(prisma, event.id, { now: new Date() });
     expect(replay.status).toBe("COMPLETED");
     expect(await prisma.scheduledEvent.count({ where: { saveId, status: "COMPLETED", type: ScheduledEventType.GAME_DAY_ADVANCE } })).toBe(1);
+  });
+
+  it("anchors an administrator-started match at execution time", async () => {
+    const { saveId, world } = await freshWorld();
+    const now = new Date(Date.now() + 60_000);
+    const fixture = world.fixtures.find((candidate) => !candidate.played);
+    if (!fixture) throw new Error("world did not generate an upcoming fixture");
+    fixture.kickoffAt = now.getTime() + 60 * 60 * 1000;
+    await persistWorld(prisma, saveId, saveId, world, (await prisma.save.findUniqueOrThrow({ where: { id: saveId }, select: { revision: true } })).revision);
+
+    const event = await scheduleEvent(prisma, {
+      saveId,
+      type: ScheduledEventType.MATCH_START,
+      timeBasis: "REAL_TIME",
+      dueAt: new Date(fixture.kickoffAt),
+      entityType: "MATCH",
+      entityId: String(fixture.id),
+      payload: { fixtureId: fixture.id },
+      idempotencyKey: `MATCH_START:early:${fixture.id}`,
+    });
+
+    await executeScheduledEvent(prisma, event.id, { source: "ADMIN", ignoreDueTime: true, now });
+
+    const loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("world did not reload");
+    const live = loaded.world.liveMatches.find((candidate) => candidate.fixtureId === fixture.id);
+    expect(live?.lastAdvancedAt).toBe(now.getTime());
+
+    const completion = await prisma.scheduledEvent.findFirstOrThrow({
+      where: { saveId, type: ScheduledEventType.MATCH_COMPLETE, entityType: "MATCH", entityId: String(fixture.id) },
+    });
+    expect(completion.dueAt?.getTime()).toBe(now.getTime() + MP_CONFIG.matchDurationMinutes * 60 * 1000);
   });
 
   it("recovers a stale running claim after a worker crash", async () => {
