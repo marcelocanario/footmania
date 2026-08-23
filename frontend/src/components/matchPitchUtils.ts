@@ -198,6 +198,32 @@ export function teamPitchPoints(players: LivePlayer[], side: PitchSide, formatio
 }
 
 /**
+ * Pitch points for formation slots that have no on-pitch player — used to
+ * place missing-player ghost markers at the vacated tactical position. Keyed
+ * by tacPos. Reuses the exact placement pipeline via synthetic entries so
+ * ghosts sit where the player used to stand.
+ */
+export function slotPointsFor(tacPoss: number[], side: PitchSide, formationId: number): Map<number, PitchPoint> {
+  const ghosts: LivePlayer[] = tacPoss.map((tacPos, index) => ({
+    id: -(index + 1),
+    name: "",
+    position: 0,
+    tacPos,
+    overall: 0,
+    energy: 0,
+    injuryDays: 0,
+    suspended: false,
+  }));
+  const placed = teamPitchPoints(ghosts, side, formationId);
+  const out = new Map<number, PitchPoint>();
+  for (const ghost of ghosts) {
+    const point = placed.get(ghost.id);
+    if (point) out.set(ghost.tacPos, point);
+  }
+  return out;
+}
+
+/**
  * Vertical pitch slot points for the tactics editor. Reuses the same
  * FORMATION_LAYOUTS but maps horizontal depth (x) to vertical depth (y =
  * 100 - x) so GK sits at the bottom and attackers at the top, and spreads
@@ -291,11 +317,10 @@ export function cueForEvent(event: LiveEvent, homeClubId: number, homePlayers: L
 // ---------------------------------------------------------------------------
 // Live possession ball
 //
-// The engine models possession at team/zone level (no individual carrier), so
-// the client anchors the ball to the possessing-side player whose formation
-// point best supports the ball zone. Everything here is deterministic from
-// already-persisted state (side/zone/startType + minute) so re-renders and
-// reconnects never reposition the ball differently.
+// The engine persists a deterministic presentation carrier alongside the
+// team/zone state. Older snapshots can still fall back to the nearest
+// formation-supporting player. Everything here is derived from persisted state
+// so re-renders and reconnects never reposition the ball differently.
 // ---------------------------------------------------------------------------
 
 /** Zone anchor points for the home side (attacking left -> right). */
@@ -328,8 +353,9 @@ export function pointForBall(side: PitchSide, zone: string): PitchPoint {
   return side === "home" ? { ...anchor } : { x: 100 - anchor.x, y: anchor.y };
 }
 
-/** FNV-1a seeded micro-jitter so consecutive minutes in the same zone still
- * nudge without ever rerolling between renders. */
+/** FNV-1a seeded micro-offset used to keep the ball beside, rather than on top
+ * of, its carrier. The key must identify the carrier—not the match minute—so
+ * a player standing still never appears to dribble in place. */
 function jitterFor(key: string): PitchPoint {
   let h = 2166136261;
   for (let i = 0; i < key.length; i++) {
@@ -348,17 +374,28 @@ export interface BallPlacement {
 }
 
 /**
- * Places the live ball for a possession snapshot. The ball rides the carrier's
- * marker with a small bias toward the attacked goal; deterministic per
- * (minute, zone, side).
+ * Places the live ball for a possession snapshot. The ball rides the
+ * simulator-selected carrier when present; old snapshots use the nearest
+ * formation-supporting player. Its offset is stable for the selected player,
+ * so a new minute cannot move the ball at the same feet.
  */
-export function placeLiveBall(ball: LiveBall, minute: number, players: LivePlayer[], points: Map<number, PitchPoint>): BallPlacement {
+export function placeLiveBall(ball: LiveBall, players: LivePlayer[], points: Map<number, PitchPoint>): BallPlacement {
   const side: PitchSide = ball.side === 0 ? "home" : "away";
   const anchor = pointForBall(side, ball.zone);
-  const jitter = jitterFor(`${minute}:${ball.zone}:${ball.side}`);
   // Foot bias toward the goal this side attacks.
   const attackBias = side === "home" ? 1.7 : -1.7;
-  const target = clampPitch({ x: anchor.x + jitter.x + attackBias, y: anchor.y + jitter.y });
+  const target = clampPitch({ x: anchor.x + attackBias, y: anchor.y });
+  const visualPoint = (player: LivePlayer, point: PitchPoint): BallPlacement => {
+    const offset = jitterFor(`carrier:${player.id}:${ball.side}`);
+    return {
+      carrierId: player.id,
+      point: clampPitch({ x: point.x + offset.x * 0.6 + attackBias * 0.5, y: point.y + offset.y * 0.6 }),
+    };
+  };
+  const direct = ball.carrierId == null
+    ? null
+    : players.find((player) => player.id === ball.carrierId && points.has(player.id));
+  if (direct) return visualPoint(direct, points.get(direct.id)!);
   const candidates = players
     .filter((p) => p.tacPos !== 1 || ball.startType === "GOAL_KICK")
     .map((p) => ({ p, pt: points.get(p.id) }))
@@ -371,10 +408,70 @@ export function placeLiveBall(ball: LiveBall, minute: number, players: LivePlaye
       return a.p.id - b.p.id;
     });
   const chosen = candidates[0] ?? null;
-  if (!chosen) return { carrierId: null, point: target };
+  if (!chosen) {
+    const offset = jitterFor(`zone:${ball.zone}:${ball.side}`);
+    return { carrierId: null, point: clampPitch({ x: target.x + offset.x, y: target.y + offset.y }) };
+  }
   // Ride the carrier's spot, nudged toward the attacked goal.
-  return {
-    carrierId: chosen.p.id,
-    point: clampPitch({ x: chosen.pt.x + jitter.x * 0.6 + attackBias * 0.5, y: chosen.pt.y + jitter.y * 0.6 }),
-  };
+  return visualPoint(chosen.p, chosen.pt);
+}
+
+// ---------------------------------------------------------------------------
+// Turnover intent projection
+//
+// When possession flips sides the client draws a dotted "intent" line showing
+// where the dispossessed move was heading before the solid interception line
+// to the actual new carrier. Everything is derived from already-persisted
+// ball fields (prevZone/lastAction) so reconnects never re-reroll the line.
+// ---------------------------------------------------------------------------
+
+/** Lane-preserving zone ladder from own goal to the box. */
+const ZONE_LADDER_WIDE = ["DEF_WIDE", "MID_WIDE", "ATT_WIDE", "BOX"];
+const ZONE_LADDER_CENTRAL = ["DEF_CENTRAL", "MID_CENTRAL", "ATT_CENTRAL", "BOX"];
+
+/** The zone one step further toward goal along the same lane. */
+export function nextZoneTowardAttack(zone: string): string {
+  const ladder = zone.endsWith("WIDE") ? ZONE_LADDER_WIDE : ZONE_LADDER_CENTRAL;
+  const i = ladder.indexOf(zone);
+  if (i < 0 || i === ladder.length - 1) return zone;
+  return ladder[i + 1];
+}
+
+export interface IntentLine {
+  from: PitchPoint;
+  to: PitchPoint;
+}
+
+/**
+ * Projects where a broken-down move was heading: the old side's continuation
+ * anchor one zone further toward attack, snapped to the nearest supporting
+ * teammate for passes/crosses (the plausible intended receiver).
+ */
+export function turnoverIntent(
+  sourcePoint: PitchPoint,
+  prevZone: string,
+  prevSide: PitchSide,
+  attemptedAction: string | null | undefined,
+  players: LivePlayer[],
+  points: Map<number, PitchPoint>,
+  targetPlayerId: number | null = null,
+): IntentLine {
+  const from = clampPitch(sourcePoint);
+  const authoritativeTarget = targetPlayerId == null ? null : points.get(targetPlayerId);
+  if (authoritativeTarget) return { from, to: clampPitch(authoritativeTarget) };
+  const to = clampPitch(pointForBall(prevSide, nextZoneTowardAttack(prevZone)));
+  if (attemptedAction !== "PASS" && attemptedAction !== "CROSS") return { from, to };
+  const candidates = players
+    .filter((p) => p.tacPos !== 1)
+    .map((p) => ({ p, pt: points.get(p.id) }))
+    .filter((c): c is { p: LivePlayer; pt: PitchPoint } => !!c.pt)
+    .sort((a, b) => {
+      const da = (a.pt.x - to.x) ** 2 + (a.pt.y - to.y) ** 2;
+      const db = (b.pt.x - to.x) ** 2 + (b.pt.y - to.y) ** 2;
+      if (da !== db) return da - db;
+      if (a.p.tacPos !== b.p.tacPos) return a.p.tacPos - b.p.tacPos;
+      return a.p.id - b.p.id;
+    });
+  const receiver = candidates[0];
+  return receiver ? { from, to: clampPitch(receiver.pt) } : { from, to };
 }

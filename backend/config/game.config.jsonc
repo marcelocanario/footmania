@@ -248,7 +248,10 @@
   "liveMatch": {
     "matchDurationMinutes": 30,
     "halftimePauseMinutes": 5,
-    "tacticsCooldownMatchMinutes": 10
+    "tacticsCooldownMatchMinutes": 10,
+    // Maximum substitutions per side per match (manual, automation and the
+    // engine's injury auto-substitution all draw from this shared cap).
+    "maxSubsPerSide": 5
   },
 
   "energy": {
@@ -259,7 +262,11 @@
   "injuries": {
     "matchTargetPerMatch": 0.35,
     "trainingTargetPerClubSeason": 1.5,
-    "severityScale": 1.0
+    "severityScale": 1.0,
+    // Auto-replace a player removed by a match injury with the best
+    // same-position bench player, consuming one of the side's substitution
+    // slots. Without slots or an eligible candidate the team plays short.
+    "autoSubstitute": true
   },
 
   // --- Admin message of the day ---

@@ -9,7 +9,7 @@ import { StatusChip } from "./StatusChip";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { ModerationDialog, WarningsDialog, type ModerationRequest } from "./moderationShared";
 
-type AdminUser = { id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt: string | null; banReason: string | null; createdAt: string };
+type AdminUser = { id: number; username: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string };
 
 export function UsersTab({ version, notify }: TabProps) {
   const [searchInput, setSearchInput] = useState("");
@@ -208,6 +208,7 @@ export function UsersTab({ version, notify }: TabProps) {
                 {!u.isPro && !u.isAdmin && !u.bannedAt && <StatusChip label="regular" tone="neutral" />}
               </div>
             )} style={{ width: 220 }} />
+            <Column header="Elo" body={(u) => u.elo === null ? <span style={{ color: "var(--text-3)" }}>-</span> : u.elo.toLocaleString()} sortable sortField="elo" style={{ width: 90 }} />
             <Column header="Joined" body={(u) => new Date(u.createdAt).toLocaleDateString()} sortable sortField="createdAt" style={{ width: 120 }} />
             <Column header="Ban detail" body={(u) => u.bannedAt ? <span style={{ color: "#ff6b6b" }}>{u.banReason ?? "banned"} · since {new Date(u.bannedAt).toLocaleDateString()}</span> : <span style={{ color: "var(--text-3)" }}>-</span>} style={{ width: "auto" }} />
             <Column header="Actions" body={userActions} style={{ width: 320 }} />

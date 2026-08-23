@@ -5,6 +5,7 @@ import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDel
 import { useGame } from "../store/game";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
+import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
@@ -84,6 +85,13 @@ export function LiveMatch() {
   const stateRef = useRef<LiveState | null>(null);
 
   const liveTactics = state ? (state.humanSide === 0 ? state.homeTactics : state.awayTactics) : null;
+  // Live-match tactics lock (server-enforced): match-minutes left until this
+  // side may change style/pressing/direction again.
+  const tacticsCooldownMinutes = state
+    ? state.humanSide === 0
+      ? state.homeTacticsCooldownMinutes ?? 0
+      : state.awayTacticsCooldownMinutes ?? 0
+    : 0;
 
   useEffect(() => {
     if (liveTactics) setTacticDraft(liveTactics);
@@ -136,6 +144,9 @@ export function LiveMatch() {
       automationFiredCount: delta.automationFiredCount,
       progressPct: delta.progressPct,
       currentAddedTime: delta.currentAddedTime,
+      homeTacticsCooldownMinutes: delta.homeTacticsCooldownMinutes,
+      awayTacticsCooldownMinutes: delta.awayTacticsCooldownMinutes,
+      missingPlayers: delta.missingPlayers ?? current.missingPlayers,
       ball: delta.ball ?? current.ball,
     });
   }, [applyState]);
@@ -346,7 +357,7 @@ export function LiveMatch() {
   const scoreKey = `${state.homeScore}-${state.awayScore}`;
 
   const phaseLabel = PHASE_LABEL[state.phase] ?? state.phase;
-  const canChangeTactics = !isSpectator && !isDone && state.phase !== "shootout";
+  const canChangeTactics = !isSpectator && !isDone && state.phase !== "shootout" && tacticsCooldownMinutes <= 0;
 
   if (state.phase === "pregame") {
     return (
@@ -354,7 +365,7 @@ export function LiveMatch() {
         <div className="page-head">
           <div>
             <div className="kicker">{matchContextLabel(state)}</div>
-            <h1>{state.home} vs {state.away}</h1>
+            <h1><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /> vs <ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></h1>
           </div>
         </div>
         <div className="card" style={{ borderColor: "rgba(61,220,132,0.4)", marginBottom: 16, padding: "22px 20px" }}>
@@ -382,6 +393,7 @@ export function LiveMatch() {
         <MatchPitch
           home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
           away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
+          missing={state.missingPlayers ?? []}
           events={state.events}
           phase={state.phase}
           minute={state.minute}
@@ -400,7 +412,7 @@ export function LiveMatch() {
              {matchContextLabel(state)}
             {isSpectator ? " · Watching as spectator" : ""}
           </div>
-          <h1>{state.home} vs {state.away}</h1>
+          <h1><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /> vs <ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></h1>
         </div>
       </div>
 
@@ -417,11 +429,11 @@ export function LiveMatch() {
         )}
 
         <div className="live-score" key={scoreKey}>
-          <span className="score-team">{state.home}</span>
+          <span className="score-team"><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /></span>
           <span className="score-num">{state.homeScore}</span>
           <span className="sep">—</span>
           <span className="score-num">{state.awayScore}</span>
-          <span className="score-team">{state.away}</span>
+          <span className="score-team"><ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></span>
         </div>
         {state.shootout && (
           <div style={{ color: "var(--gold-2)", fontWeight: 700, marginBottom: 6 }}>
@@ -440,6 +452,7 @@ export function LiveMatch() {
           <MatchPitch
             home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
             away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
+            missing={state.missingPlayers ?? []}
             events={state.events}
             phase={state.phase}
             minute={state.minute}
@@ -478,10 +491,15 @@ export function LiveMatch() {
               <div className="live-tactics-hint">
                 {isSpectator ? "You are watching these tactics as a spectator." : "Style, pressing and direction apply from the next simulation tick."}
               </div>
+              {!isSpectator && tacticsCooldownMinutes > 0 && (
+                <div className="live-tactics-hint" style={{ color: "var(--gold-2)" }}>
+                  Tactics are locked for {tacticsCooldownMinutes} more minute{tacticsCooldownMinutes === 1 ? "" : "s"} after your last change.
+                </div>
+              )}
               <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{PRESSING.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              {!isSpectator && <button className="btn gold" onClick={() => void doTactics()} disabled={!canChangeTactics || tacticsBusy}>{tacticsBusy ? "Applying..." : "Apply tactics"}</button>}
+              {!isSpectator && <button className="btn gold" onClick={() => void doTactics()} disabled={!canChangeTactics || tacticsBusy}>{tacticsBusy ? "Applying..." : tacticsCooldownMinutes > 0 ? `Locked (${tacticsCooldownMinutes}')` : "Apply tactics"}</button>}
               {!isSpectator && !isDone && <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}><Subscript size={15} /> Substitutions ({subsLeft})</button>}
               {tacticsStatus && <div className="live-tactics-status">{tacticsStatus}</div>}
               {!isSpectator && state.phase === "halftime" && <div className="live-tactics-hint">Formation and lineup changes are available in the interval controls.</div>}

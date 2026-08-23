@@ -424,6 +424,24 @@ export interface SubSlots {
   gm: number[][];
 }
 
+/**
+ * Presentation attribution for the last possession action. The match model
+ * resolves outcomes at team/zone level, so these IDs are selected by a stable
+ * formation-local rule and never participate in match calculations or RNG.
+ */
+export interface LiveBallAction {
+  sequence: number;
+  action: string;
+  outcome: string;
+  side: 0 | 1;
+  fromZone: string;
+  toZone: string | null;
+  fromPlayerId: number | null;
+  targetPlayerId: number | null;
+  interceptorId: number | null;
+  foulerId: number | null;
+}
+
 export interface LiveMatchState {
   matchId: number;
   fixtureId: number;
@@ -527,6 +545,20 @@ export interface LiveMatchState {
   teamStats: { home: TeamMatchStats; away: TeamMatchStats };
   /** Bookkeeping: is this possession a live counterattack. */
   isCounter: boolean;
+  /** Client ball choreography: the last resolved possession action
+   *  ("PASS"/"CROSS"/"CARRY"/"DRIBBLE"/"SHOT") and the zone that action
+   *  started from, before its outcome moved the ball. Optional so live states
+   *  persisted before these fields existed load unchanged. Both are plain
+   *  observations of already-computed engine values — writing them never
+   *  consumes RNG draws, so match outcomes stay byte-identical. */
+  lastAction?: string | null;
+  prevZone?: string | null;
+  /** Stable visual carrier for the current team/zone possession. */
+  ballCarrierId?: number | null;
+  /** Monotonic presentation sequence for the last action. */
+  ballActionSequence?: number;
+  /** Authoritative presentation participants for the last action. */
+  lastBallAction?: LiveBallAction | null;
   /** Bookkeeping: high-recovery was recorded for the current possession. */
   possessionHighRecovery: boolean;
   /** Bookkeeping: opponent control window for sustained-pressure commentary. */

@@ -255,6 +255,28 @@ describe("live match engine", () => {
     expect(Math.min(...Object.values(st.playerEnergy))).toBeLessThan(energyAfterFirstTick);
   });
 
+  it("publishes the last action and its origin zone for ball choreography", () => {
+    const rng = createRng(2468);
+    const home = makeClub(75);
+    const away = makeClub(75);
+    const players = [...makeSquad(rng, home, 30), ...makeSquad(rng, away, 30, 30)];
+    const st = createLiveMatchState(rng, home, away, players, { matchId: 1, competitionId: 1, fixtureId: 1 });
+    tickLiveMatch(rng, home, away, players, st, 20, { ignoreHalfTime: true });
+    // The client's turnover intent lines key off these; they must always be
+    // populated after play and drawn from the known vocabularies.
+    expect(new Set(["PASS", "CROSS", "CARRY", "DRIBBLE", "SHOT"]).has(st.lastAction ?? "")).toBe(true);
+    expect(
+      new Set(["DEF_WIDE", "DEF_CENTRAL", "MID_WIDE", "MID_CENTRAL", "ATT_WIDE", "ATT_CENTRAL", "BOX"]).has(st.prevZone ?? "")
+    ).toBe(true);
+    expect(st.ballActionSequence).toBeGreaterThan(0);
+    expect(st.lastBallAction?.sequence).toBe(st.ballActionSequence);
+    expect(st.lastBallAction?.fromPlayerId).not.toBeNull();
+    expect(players.some((player) => player.id === st.ballCarrierId)).toBe(true);
+    for (const id of [st.lastBallAction?.fromPlayerId, st.lastBallAction?.targetPlayerId, st.lastBallAction?.interceptorId, st.lastBallAction?.foulerId]) {
+      if (id !== null && id !== undefined) expect(players.some((player) => player.id === id)).toBe(true);
+    }
+  });
+
   it("does not restore dismissed players when rebuilding a halftime lineup", () => {
     const rng = createRng(6789);
     const home = makeClub(75, { isHuman: true });

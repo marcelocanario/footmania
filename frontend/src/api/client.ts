@@ -144,6 +144,7 @@ export interface MpStatus {
     dayIndex: number;
     round: number;
     opponent: string;
+    opponentClubId: number;
     isHome: boolean;
     played: boolean;
     goalsFor: number | null;
@@ -414,9 +415,12 @@ export interface Snapshot {
   seasonSummary: {
     leagueChampion: string | null;
     leagueRunnerUp: string | null;
+    /** IDs so clients can link the champion/runner-up to the team screen. */
+    leagueChampionId: number | null;
+    leagueRunnerUpId: number | null;
   } | null;
   club: ClubView | null;
-  nextFixture: { id: number; home: string; away: string; dayLabel: string; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
+  nextFixture: { id: number; home: string; away: string; homeClubId: number; awayClubId: number; dayLabel: string; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
   competitions: { id: number; kind: string; name: string; stage: string; round: number; tier: number | null; groupIndex: number | null; position: number; winnerId: number | null }[];
   squad: PlayerView[];
   juniors: PlayerView[];
@@ -428,7 +432,85 @@ export interface Snapshot {
   seasonAwards: SeasonAward[];
 }
 
-export type PyramidResponse = { seasonKey: string | null; tiers: PyramidTier[]; myDivisionId?: number | null };
+export interface PyramidResponse { seasonKey: string | null; tiers: PyramidTier[]; myDivisionId?: number | null }
+
+/** Public identity block of the team screen (GET /api/mp/clubs/:id). */
+export interface TeamClubIdentity {
+  id: number;
+  name: string;
+  shortName: string;
+  country: string;
+  stadiumName: string;
+  primaryColor: string;
+  secondaryColor: string;
+  kits: ClubKits;
+  logoVariant: number;
+  hasCustomLogo: boolean;
+  coachName: string;
+  isHuman: boolean;
+  competitionState: string;
+}
+
+export interface TeamSeasonSummary {
+  seasonNumber: number | null;
+  division: { id: number; name: string; tier: number; groupIndex: number };
+  position: number | null;
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  points: number;
+}
+
+/** One archived season in a club's history timeline (movement derived from
+ *  consecutive recorded tiers; tier 1 is strongest). */
+export interface TeamHistoryRow {
+  seasonKey: string;
+  divisionName: string;
+  tier: number;
+  position: number;
+  played: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  goalsFor: number;
+  goalsAgainst: number;
+  points: number;
+  champion: boolean;
+  promoted: boolean;
+  relegated: boolean;
+}
+
+/** Minimal player row for the team-screen squad list (nickname quoted client-side). */
+export interface TeamPlayerRow {
+  id: number;
+  name: string;
+  nickname: string | null;
+  position: number;
+  positionName: string;
+  tacPosName: string;
+  overall: number;
+  age: number;
+  country: string;
+  isYouth: boolean;
+}
+
+/** Full team-screen payload. Public identity, competitive results, squad
+ *  digest and aggregate value — never salaries, contracts or Elo of another
+ *  manager's club. */
+export interface TeamProfile {
+  club: TeamClubIdentity;
+  trophies: Record<string, number>;
+  /** Squad market value plus cash balance. */
+  totalValue: number;
+  players: TeamPlayerRow[];
+  season: TeamSeasonSummary | null;
+  standings: StandingsRow[];
+  fixtures: FixtureView[];
+  history: TeamHistoryRow[];
+}
 
 export interface CareerRecord {
   category: string;
@@ -578,6 +660,21 @@ export interface LiveEvent {
   goalType?: number;
 }
 
+/**
+ * A player missing from the pitch with cause: sent off (RED) or injured while
+ * no substitution slot/candidate remained (INJURY). Auto-subbed injuries do
+ * not appear — their SUB event removes them from the projection.
+ */
+export interface LiveMissingPlayer {
+  side: 0 | 1;
+  playerId: number;
+  name: string;
+  number?: number | null;
+  kind: "INJURY" | "RED";
+  /** Tactical slot he last occupied. */
+  tacPos: number;
+}
+
 export interface TeamMatchStats {
   controlledBallSeconds: number;
   attackingThirdControlledSeconds: number;
@@ -614,6 +711,19 @@ export interface LiveTactics {
   direction: number;
 }
 
+export interface LiveBallAction {
+  sequence: number;
+  action: string;
+  outcome: string;
+  side: 0 | 1;
+  fromZone: string;
+  toZone: string | null;
+  fromPlayerId: number | null;
+  targetPlayerId: number | null;
+  interceptorId: number | null;
+  foulerId: number | null;
+}
+
 /** Possession projection for the live pitch ball (see backend liveView.ts). */
 export interface LiveBall {
   /** Possessing team index: 0 = home, 1 = away. */
@@ -622,6 +732,13 @@ export interface LiveBall {
   phase: string;
   startType: string;
   counter: boolean;
+  /** Stable on-pitch carrier selected by the simulator for rendering. */
+  carrierId?: number | null;
+  /** Last resolved possession action + zone it started from; drives turnover
+   *  intent lines. Null on matches started before the engine tracked them. */
+  lastAction?: string | null;
+  prevZone?: string | null;
+  lastBallAction?: LiveBallAction | null;
 }
 
 export interface LiveState {
@@ -670,6 +787,9 @@ export interface LiveState {
   awayFormationId: number;
   homeTactics: LiveTactics;
   awayTactics: LiveTactics;
+  /** Live-match tactics lock: match-minutes remaining per side (0 = unlocked). */
+  homeTacticsCooldownMinutes: number;
+  awayTacticsCooldownMinutes: number;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
   progressPct: number;
@@ -682,6 +802,8 @@ export interface LiveState {
   currentAddedTime?: number | null;
   homeIsHuman: boolean;
   awayIsHuman: boolean;
+  /** Players absent from the pitch (red cards; unreplaced injuries). */
+  missingPlayers?: LiveMissingPlayer[];
   ball?: LiveBall;
 }
 
@@ -697,6 +819,10 @@ export interface LiveStateDelta {
   automationFiredCount: number;
   progressPct: number;
   currentAddedTime: number | null;
+  homeTacticsCooldownMinutes: number;
+  awayTacticsCooldownMinutes: number;
+  /** Full missing-player snapshot each delta (deltas carry no roster lists). */
+  missingPlayers?: LiveMissingPlayer[];
   ball?: LiveBall;
 }
 
@@ -958,7 +1084,7 @@ export const api = {
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
   // Friends & invitations (plan 9)
-  friends: () => request<{ friends: { userId: number; username: string; clubName: string | null; competitionState: string | null; since: string }[] }>("/api/auth/friends"),
+  friends: () => request<{ friends: { userId: number; username: string; clubId: number | null; clubName: string | null; competitionState: string | null; since: string }[] }>("/api/auth/friends"),
   removeFriend: (userId: number) =>
     request<{ ok: boolean }>(`/api/auth/friends/${userId}`, { method: "DELETE" }),
   invitations: () => request<{ invitations: { token: string; createdAt: string }[] }>("/api/auth/invitations"),
@@ -987,6 +1113,7 @@ export const api = {
   divisionStandings: (id: number) =>
     request<{ competition: { id: number; name: string; tier: number; groupIndex: number }; standings: StandingsRow[] }>(`/api/mp/divisions/${id}/standings`),
   divisionFixtures: (id: number) => request<{ fixtures: FixtureView[] }>(`/api/mp/divisions/${id}/fixtures`),
+  teamProfile: (clubId: number) => request<TeamProfile>(`/api/mp/clubs/${clubId}`),
   countries: () => request<{ featuredCountries: CountryOption[]; allCountries: CountryOption[] }>("/api/mp/countries"),
   history: () => request<{ seasons: SeasonHistoryView[] }>("/api/mp/history"),
 
@@ -1141,7 +1268,7 @@ export const api = {
   ackWarning: (id: number) => request<{ ok: boolean }>(`/api/auth/warnings/${id}/acknowledge`, { method: "POST" }),
 
   // Admin user management
-  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt: string | null; banReason: string | null; createdAt: string }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
+  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; username: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
   adminSetPro: (userId: number, isPro: boolean) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ isPro }) }),
   adminBanUser: (userId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/users/${userId}/ban`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminUnbanUser: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/unban`, { method: "POST" }),

@@ -231,12 +231,34 @@ export function evaluateAutomationForMatch(params: {
   let mutated = false;
   const clubId = club.id;
   const margin = marginForSide(st, side);
+  // Lazily-built index of this club's roster for the permanent-eligibility
+  // check below (one pass over world.players per evaluation, not per rule).
+  let squadIndex: Map<number, import("./types").Player> | null = null;
+  const squadPlayer = (id: number | undefined): import("./types").Player | null => {
+    if (id === undefined) return null;
+    squadIndex ??= new Map(world.players.filter((candidate) => candidate.clubId === clubId).map((candidate) => [candidate.id, candidate]));
+    return squadIndex.get(id) ?? null;
+  };
 
   for (const preset of armed) {
     for (const rule of preset.rules) {
       const firedKey = `${preset.id}:${rule.id}`;
       // Back-compat: old rows stored bare rule.id
       if (fired.has(firedKey) || fired.has(rule.id)) continue;
+      // A SUB rule whose incoming player is permanently unavailable (injured,
+      // suspended, on sale, or no longer in this squad) can never legally send
+      // him onto the pitch. Discard it up front — marked fired so it never
+      // refires — instead of letting it consume its trigger on an impossible
+      // action. Runtime-only problems (player already used, GK mismatch) stay
+      // with performLiveSub's graceful failure below.
+      if (rule.action.kind === "SUB") {
+        const inPlayer = squadPlayer(rule.action.inPlayerId);
+        if (!inPlayer || inPlayer.injuryDays > 0 || inPlayer.suspendedGames > 0 || inPlayer.onSale) {
+          fired.add(firedKey);
+          st.automationFiredRuleIds = Array.from(fired);
+          continue;
+        }
+      }
       if (!triggerMatches(rule, st, side, ctx.newEventsThisMinute, ctx.minute, clubId)) continue;
       if (!conditionMatches(rule.condition as AutomationCondition, margin)) continue;
 

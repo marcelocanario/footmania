@@ -110,6 +110,7 @@ const gameConfigSchema = z
         matchDurationMinutes: z.number().int().min(1).max(60),
         halftimePauseMinutes: z.number().int().min(0).max(30),
         tacticsCooldownMatchMinutes: z.number().int().min(0).max(90),
+        maxSubsPerSide: z.number().int().min(1).max(11),
       })
       .partial()
       .optional(),
@@ -121,7 +122,11 @@ const gameConfigSchema = z
       matchTargetPerMatch: z.number().positive(),
       trainingTargetPerClubSeason: z.number().positive(),
       severityScale: z.number().positive(),
-    }).default({ matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 }),
+      // When a match injury removes a player, the engine automatically brings
+      // on the best same-position bench player (consuming a substitution
+      // slot). With no slots or no eligible candidate the team plays short.
+      autoSubstitute: z.boolean(),
+    }).default({ matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1, autoSubstitute: true }),
     // Admin "message of the day" broadcast. Optional with a default so
     // older/custom config objects keep parsing without a migration.
     motd: z.object({
@@ -411,6 +416,13 @@ export const MP_CONFIG = {
     const raw = (gameConfig as unknown as { liveMatch?: { tacticsCooldownMatchMinutes?: number } })?.liveMatch;
     return raw?.tacticsCooldownMatchMinutes ?? 10;
   },
+  // Maximum substitutions per side per match. Shared by manual subs, human
+  // automation rules and the engine's injury auto-substitution so no pathway
+  // can exceed the cap.
+  get maxSubsPerSide(): number {
+    const raw = (gameConfig as unknown as { liveMatch?: { maxSubsPerSide?: number } })?.liveMatch;
+    return Math.max(1, Math.min(11, raw?.maxSubsPerSide ?? 5));
+  },
   // How often (ms) the worker loop wakes up.
   workerIntervalMs: 5000,
   // How often (ms) the server advances and broadcasts live matches.
@@ -651,9 +663,10 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     matchDurationMinutes: 30,
     halftimePauseMinutes: 5,
     tacticsCooldownMatchMinutes: 10,
+    maxSubsPerSide: 5,
   },
   energy: { matchLossScale: 1, recoveryScale: 1 },
-  injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 },
+  injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1, autoSubstitute: true },
   motd: { maxLength: 280 },
   roundsPerSeason: 14,
   matchSpacingDays: 2,

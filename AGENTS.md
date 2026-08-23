@@ -21,6 +21,44 @@ single-player/career mode.
 A change is **not** complete until every applicable item below passes. Never
 declare a change complete based only on "it looks right".
 
+## Concurrent agents and shared workspace
+
+Assume that other agents may be editing and testing unrelated parts of the
+repository at the same time. The working tree, generated files, database,
+ports, and test resources are shared.
+
+- Before editing, inspect `git status` and the relevant `git diff`; do not
+  overwrite, revert, or reformat changes that another agent has made.
+- Re-read a file immediately before patching it, and keep edits narrowly scoped
+  to the requested change. If another agent changes the same lines, stop and
+  resolve the conflict rather than guessing or discarding either change.
+- Never use destructive commands such as `git reset`, `git checkout`, `git
+  clean`, or broad cleanup commands to resolve a local problem. Do not delete
+  generated files or test data that may belong to another running task.
+- Do not commit, amend, stage, or otherwise alter another agent's work. Before
+  handing off, inspect the diff and status so only the intended files changed.
+
+## Shared test and build execution
+
+Tests and builds can interfere with one another through shared databases,
+ports, generated output, caches, and resource usage.
+
+- Do not run the same test suite, build, migration, seed, or server-backed
+  check concurrently with another agent. Check for an existing run and
+  coordinate when possible; wait for it to finish instead of starting a
+  duplicate run.
+- Treat backend integration, calibration, and all-suite commands as exclusive
+  shared resources. They may mutate shared database state or consume shared
+  ports. Do not reset their database, kill their processes, or clean their
+  artifacts while they are running.
+- Backend and frontend builds can update generated output and TypeScript/Vite
+  caches. Avoid overlapping builds and do not interpret transient generated
+  file changes as application changes.
+- If a test or build fails while another task may have been using the same
+  resources, do not change production code to address the failure. Wait for
+  the other run to finish and rerun the applicable command once in a stable
+  workspace.
+
 Tests and builds are slow. Run them **once at the end of all changes**, after
 the full implementation is done — never after each individual step or edit.
 Iterate on code without running the suite in between; only the final state of

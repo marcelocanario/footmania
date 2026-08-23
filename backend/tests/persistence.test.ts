@@ -5,6 +5,7 @@ process.env.NODE_ENV = "test";
 
 import { PrismaClient } from "@prisma/client";
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
+import { EVENT_CODES } from "../src/game/constants";
 import { createHumanClub } from "../src/game/worldgen";
 import { loadGlobalWorld, loadGlobalWorldMutable, persistLiveMatchState, persistWorld, ensureGlobalSave, invalidateWorldCache, StaleWorldError } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
@@ -212,6 +213,13 @@ describe("global multiplayer world persistence", () => {
     expect(st2!.matchClockSeconds).toBe(st.matchClockSeconds);
     expect(st2!.rngState).toEqual(st.rngState);
     expect(st2!.playerEnergy).toEqual(st.playerEnergy);
+    // Ball choreography fields ride the state JSON; a reload must not lose
+    // them or the client would draw turnover intent lines from stale data.
+    expect(st2!.ballCarrierId ?? null).toBe(st.ballCarrierId ?? null);
+    expect(st2!.ballActionSequence ?? null).toBe(st.ballActionSequence ?? null);
+    expect(st2!.lastBallAction ?? null).toEqual(st.lastBallAction ?? null);
+    expect(st2!.lastAction ?? null).toBe(st.lastAction ?? null);
+    expect(st2!.prevZone ?? null).toBe(st.prevZone ?? null);
     expect(st2!.stats.home.controlledBallSeconds + st2!.stats.away.controlledBallSeconds).toBeGreaterThan(0);
 
     // Finalize via the multiplayer path: minutes land on players.
@@ -226,6 +234,60 @@ describe("global multiplayer world persistence", () => {
     const onPitchId = st2!.homeOn[0];
     const p = reloaded!.world.players.find((x) => x.id === onPitchId)!;
     expect(p.recentMinutes.length).toBeGreaterThan(0);
+  });
+
+  it("round-trips injury auto-substitutions without duplication on resume", async () => {
+    const { saveId } = await freshGlobalWorld(31339);
+    const { seasonId, world } = await withSeason(saveId);
+    const div = world.competitions.find((c) => c.kind === "division" && c.seasonId === seasonId)!;
+    const home = world.clubs[0];
+    const away = world.clubs[1];
+    // Force a high injury rate so an auto-substitution certainly happens.
+    const prevTarget = gameConfig.injuries.matchTargetPerMatch;
+    gameConfig.injuries.matchTargetPerMatch = 6;
+    try {
+      const st = createLiveMatchState(world.rng, home, away, world.players, {
+        matchId: 992001,
+        fixtureId: 992001,
+        competitionId: div.id,
+      });
+      // Tick until the first auto-sub fires, so the save lands directly after
+      // an injury+SUB pair — the exact restart boundary where a replay bug
+      // would double-fire.
+      let guard = 0;
+      while (!st.ended && st.events.filter((event) => event.type === EVENT_CODES.SUB).length === 0 && guard < 120) {
+        tickLiveMatch(world.rng, home, away, world.players, st, 5, { ignoreHalfTime: true });
+        guard++;
+      }
+      const subsBefore = st.events.filter((event) => event.type === EVENT_CODES.SUB).length;
+      const injuriesBefore = st.events.filter((event) => event.type === EVENT_CODES.INJURY).length;
+      expect(injuriesBefore).toBeGreaterThan(0);
+      expect(subsBefore).toBeGreaterThan(0);
+      for (const sub of st.events.filter((event) => event.type === EVENT_CODES.SUB)) {
+        expect(st.events.some((event) => event.type === EVENT_CODES.INJURY && event.clubId === sub.clubId && event.playerId === sub.playerId)).toBe(true);
+      }
+
+      world.liveMatches = [st];
+      await persistWorld(prisma, saveId, saveId, world);
+      const reloaded = await loadGlobalWorld(prisma);
+      expect(reloaded).not.toBeNull();
+      const st2 = reloaded!.world.liveMatches.find((s) => s.matchId === 992001)!;
+      expect(st2).not.toBeNull();
+      expect(st2!.substitutions.length).toBe(subsBefore);
+      expect(st2!.events.filter((event) => event.type === EVENT_CODES.SUB)).toHaveLength(subsBefore);
+
+      // Resume on the reloaded world: the persisted injury must not re-fire.
+      const home2 = reloaded!.world.clubs.find((c) => c.id === home.id)!;
+      const away2 = reloaded!.world.clubs.find((c) => c.id === away.id)!;
+      tickLiveMatch(reloaded!.world.rng, home2, away2, reloaded!.world.players, st2!, 3, { ignoreHalfTime: true });
+      expect(st2!.events.filter((event) => event.type === EVENT_CODES.SUB)).toHaveLength(subsBefore);
+      expect(st2!.substitutions.length).toBe(subsBefore);
+      // Each substitution replaces a distinct injured player.
+      const outs = st2!.substitutions.map((substitution) => substitution.outId);
+      expect(new Set(outs).size).toBe(outs.length);
+    } finally {
+      gameConfig.injuries.matchTargetPerMatch = prevTarget;
+    }
   });
 
   it("persists ongoing live-match progress without rewriting the world tables", async () => {

@@ -23,6 +23,10 @@ Game engine
 		during auctions, everyone can see full history of the player in the auction
 	[DONE] remove player morale
 	[DONE] make sure that the random player generator for each team will generate players from diverse positions and we do not end up with a team that has too many or too few players from the same positions
+	allow admins to:
+		pause/resume a season (pause all jobs, do not advance the day)
+		trigger a recalculation of the fixtures (before the first match of the season has taken place)
+		restart the whole game - keep created accounts, but clear players, leagues, histories, etc.; everyone will be forced to re-create their teams and start from scratch
 
 Multiplayer
 	[DONE] think of tournment structure
@@ -52,6 +56,7 @@ UI:
 	generate players faces using: https://github.com/zengm-games/facesjs
 	allow users to change player numbers
 	in tactics tab, instead of showing a circle with the player initials, show the team jersey with player number
+	group together all news that would be posted in the same day for a given club in regards to player contracts expiring. add to a pre-season report (single message), including league, finance, contracts expiring, academy, etc.
 
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)

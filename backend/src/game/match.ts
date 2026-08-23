@@ -497,7 +497,7 @@ export function performLiveSub(
   const inPlayer = byId.get(inId);
   if (!out) return { event: null, error: "Player not on the pitch" };
   if (!inPlayer) return { event: null, error: "Player not on the bench" };
-  if (st.usedSubs[side] >= 5) return { event: null, error: "No substitutions left" };
+  if (st.usedSubs[side] >= MP_CONFIG.maxSubsPerSide) return { event: null, error: "No substitutions left" };
   if (out.tacPos === 1 && inPlayer.position !== 0) return { event: null, error: "Replace the goalkeeper with another goalkeeper" };
   // Apply the substitution to the live state; the engine picks it up on next tick.
   const idx = on.indexOf(outId);

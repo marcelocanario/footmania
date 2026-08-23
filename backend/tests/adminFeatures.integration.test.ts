@@ -160,4 +160,29 @@ describe("admin panel features (MOTD / world browsing / moderation)", () => {
 
     await app.close();
   });
+
+  it("shows human club Elo in the admin user list without exposing it to regular users", async () => {
+    const app = buildServer();
+    await app.ready();
+
+    const ownerCookie = await registerAndLogin(app, "elouser");
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie: ownerCookie },
+      payload: { clubName: "Elo United", country: "BRA", stadiumName: "Elo Arena", coachName: "Elo Coach", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+    });
+    expect(join.statusCode).toBe(200);
+
+    const adminCookie = await registerAndLogin(app, "elolistadmin");
+    await app.prisma.user.update({ where: { username: "elolistadmin" }, data: { isAdmin: true } });
+    const users = await app.inject({ method: "GET", url: "/api/admin/users?search=elouser", headers: { cookie: adminCookie } });
+    expect(users.statusCode).toBe(200);
+    expect(users.json().users).toMatchObject([{ username: "elouser", elo: 1500 }]);
+
+    const forbidden = await app.inject({ method: "GET", url: "/api/admin/users", headers: { cookie: ownerCookie } });
+    expect(forbidden.statusCode).toBe(403);
+
+    await app.close();
+  });
 });

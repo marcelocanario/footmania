@@ -1,4 +1,4 @@
-import type { LiveMatchState, World } from "../game/types";
+import type { LiveBallAction, LiveMatchState, Player, World } from "../game/types";
 import { livePhase, tacticsCooldownMinutesRemaining } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
 import { EVENT_CODES, FORMATION_NAMES } from "../game/constants";
@@ -43,6 +43,24 @@ export interface LivePlayerView {
   suspended: boolean;
 }
 
+/**
+ * A player missing from the pitch with cause: sent off (RED) or injured while
+ * no substitution slot/candidate remained (INJURY). Auto-subbed injuries do
+ * not appear — their SUB event removes them from this projection. The pitch
+ * renders a ghost marker at the vacated tactical slot.
+ */
+export interface LiveMissingPlayerView {
+  /** 0 = home, 1 = away. */
+  side: 0 | 1;
+  playerId: number;
+  name: string;
+  /** Squad shirt number for the ghost marker. */
+  number: number | null;
+  kind: "INJURY" | "RED";
+  /** Tactical slot he last occupied. */
+  tacPos: number;
+}
+
 export interface LiveKitView {
   primary: string;
   secondary: string;
@@ -59,8 +77,9 @@ export interface LiveTacticView {
 
 /**
  * Possession projection for the live pitch ball (read straight off the
- * possession-state engine's persisted runtime fields). The client anchors the
- * ball to a representative on-pitch player from side + zone.
+ * possession-state engine's persisted runtime fields). The carrier and action
+ * participants are presentation-only identities selected by the simulator;
+ * they never affect match calculations.
  */
 export interface LiveBallView {
   /** Possessing team index: 0 = home, 1 = away. */
@@ -69,6 +88,15 @@ export interface LiveBallView {
   phase: string;
   startType: string;
   counter: boolean;
+  /** Stable on-pitch carrier for the current possession. */
+  carrierId: number | null;
+  /** Last resolved possession action (PASS/CROSS/CARRY/DRIBBLE/SHOT) and the
+   *  zone it started from; lets the client draw turnover intent lines. Null on
+   *  live states persisted before the engine tracked them. */
+  lastAction: string | null;
+  prevZone: string | null;
+  /** Participants for the last resolved action, when available. */
+  lastBallAction: LiveBallAction | null;
 }
 
 export interface LiveStateView {
@@ -133,6 +161,8 @@ export interface LiveStateView {
   currentAddedTime?: number | null;
   homeIsHuman: boolean;
   awayIsHuman: boolean;
+  /** Players absent from the pitch (red cards; unreplaced injuries). */
+  missingPlayers: LiveMissingPlayerView[];
   ball: LiveBallView;
 }
 
@@ -150,6 +180,9 @@ export interface LiveStateDeltaView {
   currentAddedTime: number | null;
   homeTacticsCooldownMinutes: number;
   awayTacticsCooldownMinutes: number;
+  /** Full missing-player snapshot each delta so the pitch stays correct
+   *  between full-state pushes (deltas carry no roster lists). */
+  missingPlayers: LiveMissingPlayerView[];
   ball: LiveBallView;
 }
 
@@ -268,8 +301,39 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     currentAddedTime,
     homeIsHuman: !!home?.ownerUserId,
     awayIsHuman: !!away?.ownerUserId,
+    missingPlayers: missingPlayersView(st, byId),
     ball: ballView(st),
   };
+}
+
+/**
+ * Players currently absent from the pitch: red-carded, or injured with no
+ * substitution slot/candidate left (plan 9 §17 step 7). Injuries that were
+ * auto-subbed emit a normal SUB event whose outId is the injured player, so
+ * they drop out of this projection. Side comes from roster membership; tacPos
+ * retains the last slot the player occupied.
+ */
+function missingPlayersView(st: LiveMatchState, byId: Map<number, Player>): LiveMissingPlayerView[] {
+  const subbedOut = new Set(st.events.filter((event) => event.type === EVENT_CODES.SUB).map((event) => event.playerId));
+  const entries = new Map<number, LiveMissingPlayerView>();
+  const add = (playerId: number, kind: "INJURY" | "RED") => {
+    if (subbedOut.has(playerId) || entries.has(playerId)) return;
+    const p = byId.get(playerId);
+    if (!p) return;
+    entries.set(playerId, {
+      side: p.clubId === st.homeClubId ? 0 : 1,
+      playerId,
+      name: displayName(p),
+      number: p.squadNumber ?? null,
+      kind,
+      tacPos: p.tacPos,
+    });
+  };
+  for (const card of st.cards ?? []) {
+    if (card.kind === "RED" || card.kind === "YELLOW_RED") add(card.playerId, "RED");
+  }
+  for (const injury of st.injuries ?? []) add(injury.playerId, "INJURY");
+  return Array.from(entries.values()).sort((a, b) => a.side - b.side || a.tacPos - b.tacPos || a.playerId - b.playerId);
 }
 
 function tacticView(tactics: LiveMatchState["homeTactics"]): LiveTacticView {
@@ -296,6 +360,10 @@ function ballView(st: LiveMatchState): LiveBallView {
     phase: st.phase ?? "BUILD_UP",
     startType: st.possessionStartType ?? "KICK_OFF",
     counter: !!st.isCounter,
+    carrierId: st.ballCarrierId ?? null,
+    lastAction: st.lastAction ?? null,
+    prevZone: st.prevZone ?? null,
+    lastBallAction: st.lastBallAction ? { ...st.lastBallAction } : null,
   };
 }
 
@@ -366,6 +434,7 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     currentAddedTime,
     homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),
     awayTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 1),
+    missingPlayers: missingPlayersView(st, byId),
     ball: ballView(st),
   };
 }

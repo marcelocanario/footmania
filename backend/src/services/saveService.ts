@@ -1875,6 +1875,9 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
   st.injuries ??= [];
   st.substitutions ??= [];
   st.isCounter ??= false;
+  st.ballCarrierId ??= null;
+  st.ballActionSequence ??= 0;
+  st.lastBallAction ??= null;
   st.possessionHighRecovery ??= false;
   st.opponentControlSeconds ??= [0, 0];
   st.pressureWindowAdvancedStates ??= [0, 0];

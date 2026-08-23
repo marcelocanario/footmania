@@ -91,21 +91,19 @@ export interface Lineup {
   positions: number[];
 }
 
+/**
+ * Preview the lineup kickoff would field. NOTE: like every lineup builder in
+ * this module (buildLineup, lineupForMatch), this mutates squad players'
+ * `starter`/`tacPos` bookkeeping while resolving the sanitized saved lineup —
+ * it is not a pure read.
+ */
 export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const saved = club.savedLineup;
   if (saved && saved.starters.length === 11) {
-    const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
-    const rosterIds = new Set(allPlayers.filter((p) => p.clubId === club.id).map((p) => p.id));
-    const starters = saved.starters
-      .map((id) => allPlayers.find((p) => p.id === id))
-      .filter((p): p is Player => !!p && rosterIds.has(p.id) && p.injuryDays === 0 && p.suspendedGames === 0);
-    if (starters.length === 11) {
-      const seen = new Set(starters.map((p) => p.id));
-      const subs = saved.subs
-        .map((id) => allPlayers.find((p) => p.id === id))
-        .filter((p): p is Player => !!p && !seen.has(p.id) && rosterIds.has(p.id) && p.injuryDays === 0 && p.suspendedGames === 0);
-      return { starters, subs, formation: club.tactics.formation, positions: formation };
-    }
+    // Preview the same sanitized lineup kickoff would use, so unavailable
+    // entries are shown as their cascaded replacements.
+    const sanitized = sanitizeSavedLineup(club, allPlayers, saved);
+    if (sanitized) return sanitized;
   }
   const lineup = buildLineup(club, allPlayers);
   if (!lineup) return null;
@@ -240,27 +238,80 @@ export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedL
   return null;
 }
 
-function byId(allPlayers: Player[], id: number): Player | null {
-  return allPlayers.find((p) => p.id === id) ?? null;
-}
+/**
+ * Repair a saved lineup whose players became unavailable after it was saved
+ * (injured, suspended, on sale, sold, duplicated). The cascade keeps every
+ * valid entry in its role:
+ * 1. each invalid starter slot is filled from the remaining valid bench
+ *    (position-fit first), then from the best available squad player;
+ * 2. vacated bench slots are topped up from the squad so the match-squad size
+ *    the user chose is preserved.
+ * Returns null only when no valid starting eleven can be assembled; callers
+ * fall back to a fresh `buildLineup`. Deterministic — no RNG, stable ordering.
+ */
+export function sanitizeSavedLineup(club: Club, allPlayers: Player[], saved: NonNullable<Club["savedLineup"]>): Lineup | null {
+  const roster = allPlayers.filter((p) => p.clubId === club.id);
+  const rosterById = new Map(roster.map((p) => [p.id, p]));
+  const healthy = (id: number): Player | null => {
+    const p = rosterById.get(id);
+    return p && p.injuryDays === 0 && p.suspendedGames === 0 && !p.onSale ? p : null;
+  };
+  for (const player of allPlayers) {
+    if (player.clubId === club.id) player.starter = false;
+  }
+  const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
+  const used = new Set<number>();
+  // Slot i of the saved starters maps to formation[i] (see lineupForMatch).
+  const slots: (Player | null)[] = saved.starters.slice(0, 11).map((id) => {
+    const p = healthy(id);
+    if (!p || used.has(p.id)) return null;
+    used.add(p.id);
+    return p;
+  });
+  // Valid bench entries keep their relative order; starters win duplicates.
+  const benchPool = saved.subs
+    .map((id) => healthy(id))
+    .filter((p): p is Player => !!p && !used.has(p.id))
+    .filter((p, index, list) => list.findIndex((candidate) => candidate.id === p.id) === index);
 
-function lineupValid(club: Club, saved: NonNullable<Club["savedLineup"]>, allPlayers: Player[]): boolean {
-  if (!saved.starters || saved.starters.length !== 11) return false;
-  const rosterIds = new Set(allPlayers.filter((p) => p.clubId === club.id).map((p) => p.id));
-  const seen = new Set<number>();
-  for (const id of saved.starters) {
-    const p = byId(allPlayers, id);
-    if (!p || !rosterIds.has(id) || seen.has(id)) return false;
-    if (p.injuryDays > 0 || p.suspendedGames > 0 || p.onSale) return false;
-    seen.add(id);
+  // Cascade step 1: promote a bench player into each invalid starter slot,
+  // preferring position fit; otherwise take the best remaining squad player.
+  const availableSquad = () => roster.filter((p) => p.injuryDays === 0 && p.suspendedGames === 0 && !p.onSale && !used.has(p.id));
+  for (let i = 0; i < slots.length; i++) {
+    if (slots[i]) continue;
+    const tacPos = formation[i];
+    const promoted =
+      pickForTacPos(benchPool, tacPos, used, true) ??
+      pickFallbackForTacPos(availableSquad(), tacPos, used);
+    if (!promoted) continue;
+    const poolIdx = benchPool.findIndex((p) => p.id === promoted.id);
+    if (poolIdx >= 0) benchPool.splice(poolIdx, 1);
+    used.add(promoted.id);
+    slots[i] = promoted;
   }
-  for (const id of saved.subs) {
-    if (seen.has(id) || !rosterIds.has(id)) return false;
-    const p = byId(allPlayers, id);
-    if (!p || p.injuryDays > 0 || p.suspendedGames > 0 || p.onSale) return false;
-    seen.add(id);
+  const starters = slots.filter((p): p is Player => !!p);
+  if (starters.length < 11) return null;
+
+  // Cascade step 2: keep surviving valid bench entries in their saved order,
+  // then top vacated bench slots up to the squad size the user chose with the
+  // best remaining available players (youth included — see buildLineup note).
+  const benchTarget = Math.min(BENCH_ORDER.length, saved.subs.length);
+  const bench: Player[] = [...benchPool];
+  const claimed = new Set(bench.map((p) => p.id));
+  const topUp = availableSquad().filter((p) => !claimed.has(p.id)).sort((a, b) => b.overall - a.overall || a.id - b.id);
+  while (bench.length < benchTarget && topUp.length > 0) {
+    bench.push(topUp.shift()!);
   }
-  return true;
+  for (let i = 0; i < 11; i++) {
+    const p = starters[i];
+    p.tacPos = formation[i];
+    p.starter = true;
+  }
+  bench.forEach((p, i) => {
+    p.tacPos = BENCH_ORDER[i] ?? 1;
+    p.starter = false;
+  });
+  return { starters, subs: bench, formation: club.tactics.formation, positions: formation };
 }
 
 export function lineupForMatch(club: Club, allPlayers: Player[], options: { futureFixtures?: boolean } = {}): Lineup | null {
@@ -268,27 +319,14 @@ export function lineupForMatch(club: Club, allPlayers: Player[], options: { futu
     if (player.clubId === club.id) player.starter = false;
   }
   const saved = club.savedLineup;
-  if (saved && lineupValid(club, saved, allPlayers)) {
-    const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
-    const starters: Player[] = [];
-    for (let i = 0; i < 11; i++) {
-      const p = byId(allPlayers, saved.starters[i]);
-      if (p) {
-        p.tacPos = formation[i];
-        p.starter = true;
-        starters.push(p);
-      }
-    }
-    const subs: Player[] = [];
-    for (let i = 0; i < saved.subs.length; i++) {
-      const p = byId(allPlayers, saved.subs[i]);
-      if (p) {
-        p.tacPos = BENCH_ORDER[i] ?? 1;
-        p.starter = false;
-        subs.push(p);
-      }
-    }
-    if (starters.length === 11) return { starters, subs, formation: club.tactics.formation, positions: formation };
+  if (saved && saved.starters.length !== 11) {
+    return buildLineup(club, allPlayers, options);
+  }
+  if (saved) {
+    // Saved lineups survive unavailability: invalid entries are repaired by
+    // sanitizeSavedLineup instead of discarding the whole lineup.
+    const sanitized = sanitizeSavedLineup(club, allPlayers, saved);
+    if (sanitized) return sanitized;
   }
   return buildLineup(club, allPlayers, options);
 }

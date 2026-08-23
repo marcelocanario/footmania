@@ -9,6 +9,7 @@ import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
 import { PlayerName, POSITION_CLASS, POSITION_LETTER } from "../components/PlayerName";
+import { ClubNameLink } from "../components/ClubNameLink";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
 import { money } from "../format";
@@ -354,11 +355,18 @@ export function Transfers() {
                 <div className="card hoverable" key={loan.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontWeight: 700 }}>{loan.player.name}</div>
-                    <div className="hint">{loan.player.overall} OVR · {loan.player.age} yrs · Salary {money(loan.player.salary)}/season · From {loan.fromClub}</div>
+                    <div className="hint">
+                      {loan.player.overall} OVR · {loan.player.age} yrs · Salary {money(loan.player.salary)}/season · From{" "}
+                      <ClubNameLink clubId={loan.fromClubId} name={loan.fromClub} showCrest={false} />
+                    </div>
                   </div>
                   {loan.available && <button className="btn" title={strings.transfers.borrowLoanHint} onClick={() => setLoanTarget(loan)}>View profile & take</button>}
                   {!loan.available && loan.claimableIn > 0 && !loan.toClub && <span className="chip">Claimable in {formatDuration(loan.claimableIn * 1000)}</span>}
-                  {!loan.available && loan.toClub && <span className="chip">At {loan.toClub}</span>}
+                  {!loan.available && loan.toClub && (
+                    <span className="chip">
+                      At {loan.toClubId != null ? <ClubNameLink clubId={loan.toClubId} name={loan.toClub} showCrest={false} /> : loan.toClub}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -551,7 +559,9 @@ export function Transfers() {
               <div>
                 <div className="kicker">Player profile</div>
                 <h3>{loanTarget.player.positionName} · {loanTarget.player.age} yrs</h3>
-                <div style={{ color: "var(--text-2)", marginTop: 4 }}>From {loanTarget.fromClub} · Salary {money(loanTarget.player.salary)}/season</div>
+                <div style={{ color: "var(--text-2)", marginTop: 4 }}>
+                  From <ClubNameLink clubId={loanTarget.fromClubId} name={loanTarget.fromClub} showCrest={false} /> · Salary {money(loanTarget.player.salary)}/season
+                </div>
               </div>
               <span className="transfer-overall">{loanTarget.player.overall}</span>
             </div>

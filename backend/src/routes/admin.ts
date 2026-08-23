@@ -16,6 +16,7 @@ import { calendarValues, seasonSchedulePreview } from "../services/seasonCalenda
 import { publishUserWorldEvent, publishWorldEventToUsers, type UserWorldEvent } from "../services/worldEvents";
 import { EVENT_CODES, MOTD_NEWS_KIND } from "../game/constants";
 import { multiplayerDayLabel } from "../game/calendar";
+import { displayElo } from "../game/elo";
 import type { World } from "../game/types";
 
 const advanceSchema = z.object({
@@ -616,8 +617,21 @@ export async function adminRoutes(app: FastifyInstance) {
     const q = (req.query as { search?: string; limit?: string }).search?.trim() ?? "";
     const limit = Math.max(1, Math.min(100, Number((req.query as { limit?: string }).limit ?? 20) || 20));
     const where = q ? { username: { contains: q } } : {};
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    const eloByUserId = new Map(
+      (loaded?.world.clubs ?? [])
+        .filter((club) => club.ownerUserId !== null)
+        .map((club) => [club.ownerUserId!, displayElo(club)]),
+    );
     const users = await app.prisma.user.findMany({ where, orderBy: { id: "asc" }, take: limit, select: { id: true, username: true, isAdmin: true, isPro: true, bannedAt: true, banReason: true, createdAt: true } });
-    return { users: users.map((u) => ({ ...u, bannedAt: u.bannedAt?.toISOString() ?? null, createdAt: u.createdAt.toISOString() })) };
+    return {
+      users: users.map((u) => ({
+        ...u,
+        elo: eloByUserId.get(u.id) ?? null,
+        bannedAt: u.bannedAt?.toISOString() ?? null,
+        createdAt: u.createdAt.toISOString(),
+      })),
+    };
   });
 
   app.post("/admin/users/:id/pro", async (req, reply) => {

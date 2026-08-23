@@ -1984,6 +1984,35 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   animation: pitchTrajectoryDraw 2.5s linear both;
 }
 
+/* Scripted shot sequences (save → GK → distribution, woodwork frame) glide
+   faster than the possession ball's default drift. */
+.pitch-live-ball-seq {
+  transition-duration: 0.9s;
+}
+.pitch-live-ball-seq-start {
+  transition: none;
+}
+.pitch-shot-trail line {
+  animation-duration: 0.9s;
+}
+
+/* Turnover intent: dotted line toward where the dispossessed move was
+   heading; fades out beside the solid interception trajectory. */
+.pitch-live-trail line.pitch-trail-intent {
+  stroke: rgba(240, 248, 244, 0.75);
+  stroke-width: 0.55;
+  stroke-linecap: round;
+  stroke-dasharray: 2 2.4;
+  stroke-dashoffset: 0;
+  animation: pitchTrailIntentFade 1.7s ease-out both;
+}
+@keyframes pitchTrailIntentFade {
+  0% { opacity: 0; }
+  12% { opacity: 1; }
+  70% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+
 .pitch-players { z-index: 5; pointer-events: none; }
 
 .pitch-player {
@@ -2043,6 +2072,32 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .pitch-player-injured .pitch-player-dot { filter: saturate(0.55); }
 .pitch-player-injured .pitch-player-kit { filter: saturate(0.55) drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55)); }
+
+/* Ghost marker for a vacated slot (red card / unreplaced injury): the jersey
+   reads as absent — desaturated, translucent, dashed outline — with a
+   persistent cause badge pinned to its corner. */
+.pitch-missing { opacity: 0.62; }
+.pitch-missing .pitch-player-kit {
+  filter: grayscale(0.75) saturate(0.4) brightness(0.8);
+  outline: 1.5px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.pitch-missing-badge {
+  position: absolute;
+  top: -7px;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: rgba(4, 19, 10, 0.85);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.6);
+  font-size: 0.62rem;
+  line-height: 1;
+}
+.pitch-missing-injury { color: #ff8a8a; }
 
 .pitch-cue-icon {
   position: absolute;

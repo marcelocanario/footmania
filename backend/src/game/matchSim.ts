@@ -1,9 +1,9 @@
-import type { Club, LiveCardState, LiveInjuryState, LiveMatchState, LiveSubstitutionState, LiveTactics, MatchEvent, MatchSimulationDiagnostics, Player, RngState, TeamMatchStats, World } from "./types";
+import type { Club, LiveBallAction, LiveCardState, LiveInjuryState, LiveMatchState, LiveSubstitutionState, LiveTactics, MatchEvent, MatchSimulationDiagnostics, Player, RngState, TeamMatchStats, World } from "./types";
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
 import { nextDouble, nextInt, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
 import { ENERGY_INJURY_MODEL, energyLoss, injuryRiskMultiplier, loadIncrement, physicalSkill, readiness, recordInjury } from "./energyInjury";
-import { gameConfig } from "../config";
+import { gameConfig, MP_CONFIG } from "../config";
 
 // ---------------------------------------------------------------------------
 // Possession-state match engine (plans/6. match-simulator-overhaul.md).
@@ -269,6 +269,14 @@ interface Engine {
   substitutions: LiveSubstitutionState[];
   events: MatchEvent[];
   isCounter: boolean;
+  /** Client ball choreography: last resolved action and the zone it started
+   *  from. Pure observations set each step; never consume RNG draws. */
+  lastAction: string | null;
+  prevZone: string | null;
+  /** Stable visual carrier used only by the live pitch projection. */
+  ballCarrierId: number | null;
+  ballActionSequence: number;
+  lastBallAction: LiveBallAction | null;
   possessionHighRecovery: boolean;
   opponentControlSeconds: [number, number];
   pressureAdvancedStates: [number, number];
@@ -389,6 +397,37 @@ function involvedPlayers(side: Side, zone: MatchZone): { ps: LivePlayerState; we
     if (w > 0) out.push({ ps, weight: w });
   }
   return out;
+}
+
+/**
+ * Selects a stable visual participant without touching the match RNG stream.
+ * The simulator intentionally models possession at team/zone level; this
+ * deterministic attribution gives the pitch a real jersey to animate while
+ * keeping the simulation's probability model unchanged.
+ */
+function presentationPlayerId(side: Side, zone: MatchZone, excludeId: number | null = null, allowGoalkeeper = false): number | null {
+  const local = involvedPlayers(side, zone)
+    .filter(({ ps }) => allowGoalkeeper || ps.tacPos !== 1)
+    .sort((a, b) => b.weight - a.weight || a.ps.tacPos - b.ps.tacPos || a.ps.id - b.ps.id);
+  const pool = local.length > 0
+    ? local
+    : side.on
+      .filter((ps) => allowGoalkeeper || ps.tacPos !== 1)
+      .sort((a, b) => a.tacPos - b.tacPos || a.id - b.id)
+      .map((ps) => ({ ps, weight: 0 }));
+  const chosen = pool.find(({ ps }) => ps.id !== excludeId) ?? pool[0];
+  return chosen?.ps.id ?? null;
+}
+
+/** Structural zone projection for a failed pass/cross; no probability draw. */
+function presentationIntentZone(zone: MatchZone, action: string): MatchZone {
+  const forward = action === "PASS" || action === "CROSS" || action === "CARRY" || action === "DRIBBLE";
+  const wide = zone.endsWith("WIDE");
+  const ladder = wide ? ["DEF_WIDE", "MID_WIDE", "ATT_WIDE", "BOX"] : ["DEF_CENTRAL", "MID_CENTRAL", "ATT_CENTRAL", "BOX"];
+  const index = ladder.indexOf(zone);
+  if (index < 0) return zone;
+  const next = forward ? Math.min(ladder.length - 1, index + 1) : Math.max(0, index - 1);
+  return ladder[next] as MatchZone;
 }
 
 /** Local support relative to the eleven-player formation reference. */
@@ -950,7 +989,7 @@ function samplePossessionStart(eng: Engine, restart: string | null): { startZone
   return { startZone: last.startZone as MatchZone, firstAction: last.firstAction, startType: last.startType };
 }
 
-function beginPossession(eng: Engine, restart: string | null, keepLane = false): void {
+function beginPossession(eng: Engine, restart: string | null, keepLane = false, preferredCarrierId?: number | null): void {
   eng.possessionAgeSeconds = 0;
   eng.isCounter = false;
   eng.possessionHighRecovery = false;
@@ -974,6 +1013,45 @@ function beginPossession(eng: Engine, restart: string | null, keepLane = false):
     eng.phase = phaseForZone(start.startZone);
   }
   eng.pendingFirstAction = start.firstAction;
+  const preferred = preferredCarrierId == null
+    ? null
+    : sideOf(eng, eng.possessionSide).on.find((ps) => ps.id === preferredCarrierId)?.id ?? null;
+  eng.ballCarrierId = preferred ?? presentationPlayerId(
+    sideOf(eng, eng.possessionSide),
+    eng.zone,
+    null,
+    eng.possessionStartType === "GOAL_KICK",
+  );
+}
+
+function startBallAction(eng: Engine, action: string, side: 0 | 1, zone: MatchZone): LiveBallAction {
+  const actorId = eng.ballCarrierId ?? presentationPlayerId(sideOf(eng, side), zone);
+  const targetZone = presentationIntentZone(zone, action);
+  const targetId = action === "CARRY" || action === "DRIBBLE"
+    ? actorId
+    : action === "PASS" || action === "CROSS" || action === "CLEARANCE"
+      ? presentationPlayerId(sideOf(eng, side), targetZone, actorId)
+      : null;
+  eng.ballCarrierId = actorId;
+  const record: LiveBallAction = {
+    sequence: eng.ballActionSequence + 1,
+    action,
+    outcome: "PENDING",
+    side,
+    fromZone: zone,
+    toZone: zone,
+    fromPlayerId: actorId,
+    targetPlayerId: targetId,
+    interceptorId: null,
+    foulerId: null,
+  };
+  eng.ballActionSequence = record.sequence;
+  eng.lastBallAction = record;
+  return record;
+}
+
+function finishBallAction(record: LiveBallAction, patch: Partial<LiveBallAction>): void {
+  Object.assign(record, patch);
 }
 
 // ---------------------------------------------------------------------------
@@ -1270,6 +1348,69 @@ function removeFromPitch(eng: Engine, side: Side, playerId: number): void {
   computeSupport(side);
 }
 
+/**
+ * Bench player who replaces a player removed by a match injury. Goalkeepers can
+ * only be replaced by goalkeepers; an outfield player prefers the same natural
+ * position and otherwise falls back to the best remaining outfielder.
+ * Deterministic (overall desc, then lower id): no RNG draw, so instant and
+ * streamed runs — and restarts — always agree. Exported for tests.
+ */
+export function pickInjuryReplacement(bench: Player[], outPosition: number): Player | null {
+  const eligible = bench.filter((p) => p.injuryDays === 0 && p.suspendedGames === 0);
+  const rank = (a: Player, b: Player) => b.overall - a.overall || a.id - b.id;
+  if (outPosition === 0) return eligible.filter((p) => p.position === 0).sort(rank)[0] ?? null;
+  const samePosition = eligible.filter((p) => p.position === outPosition).sort(rank)[0];
+  if (samePosition) return samePosition;
+  return eligible.filter((p) => p.position !== 0).sort(rank)[0] ?? null;
+}
+
+/**
+ * Automatic substitution for a player just removed by a match injury
+ * (`gameConfig.injuries.autoSubstitute`). Consumes one of the side's shared
+ * substitution slots; without slots or an eligible candidate the team simply
+ * continues one player short (red-card semantics, plan 9 §17).
+ *
+ * Mirrors `performLiveSub` bookkeeping inside the engine so the change is
+ * picked up immediately and survives persistence: pitch/bench lists, slot
+ * counter, SUB event + substitution record, and the energy/load/minutes maps
+ * the full-time commit reads. Idempotent across chunks: the next engine build
+ * starts from persisted state where the injured player is already off the
+ * pitch, so this fires exactly once per injury.
+ */
+function applyInjuryAutoSub(eng: Engine, side: Side, outPs: LivePlayerState, minute: number): void {
+  if (!gameConfig.injuries.autoSubstitute) return;
+  if ((eng.st.usedSubs[side.idx] ?? 0) >= MP_CONFIG.maxSubsPerSide) return;
+  const incoming = pickInjuryReplacement(side.bench, outPs.position);
+  if (!incoming) return;
+  // The replacement occupies the injured player's tactical slot.
+  incoming.tacPos = outPs.tacPos;
+  const ps = buildPlayerState(incoming, eng.centers, eng.st.playerEnergy[incoming.id] ?? incoming.energy);
+  side.on.push(ps);
+  eng.onPitchBySide[side.idx].push(incoming);
+  side.bench = side.bench.filter((p) => p.id !== incoming.id);
+  const persistedBench = side.idx === 0 ? eng.st.homeSubs : eng.st.awaySubs;
+  const bIdx = persistedBench.indexOf(incoming.id);
+  if (bIdx >= 0) persistedBench.splice(bIdx, 1);
+  eng.st.usedSubs[side.idx]++;
+  // Mirror performLiveSub's ledger so future consumers of subbedIn see
+  // engine-driven replacements too.
+  eng.st.subbedIn ??= [[], []];
+  eng.st.subbedIn[side.idx].push(incoming.id);
+  eng.substitutions.push({ minute, outId: outPs.id, inId: incoming.id });
+  eng.events.push({ minute, half: eng.period, type: EVENT_CODES.SUB, subtype: 0, clubId: side.club.id, playerId: outPs.id, player2Id: incoming.id, goalType: 0 });
+  // Seed the workload maps exactly like performLiveSub: energy from his
+  // persisted value, match-load counter from zero, pre-match load snapshot for
+  // the full-time commit (writeBack never overwrites it).
+  eng.st.playerEnergy ??= {};
+  eng.st.playerEnergy[incoming.id] = ps.energy;
+  eng.st.playerPreMatchLoad ??= {};
+  eng.st.playerPreMatchLoad[incoming.id] = incoming.recentLoad ?? 0;
+  eng.playerRecentLoad[incoming.id] = incoming.recentLoad ?? 0;
+  eng.playerMatchLoad[incoming.id] = 0;
+  eng.playerMinutes[incoming.id] ??= 0;
+  computeSupport(side);
+}
+
 /** Injury hazard check for the acting side (plan §37). Normalized so neutral
  *  simulations average `injuries.targetPerMatch`. A single RNG draw per action
  *  keeps the stream chunk-independent (determinism between instant and
@@ -1313,6 +1454,7 @@ function resolveInjuryHazard(eng: Engine, action: string, minute: number, addedT
     eng.events.push({ minute, half: eng.period, type: EVENT_CODES.INJURY, subtype: 0, clubId: participant.side.club.id, playerId: participant.ps.id, player2Id: null, goalType: result.days, ...(addedTime !== undefined ? { addedTime } : {}) });
     participant.ps.onPitch = false;
     removeFromPitch(eng, participant.side, participant.ps.id);
+    applyInjuryAutoSub(eng, participant.side, participant.ps, minute);
     return;
   }
 }
@@ -1583,7 +1725,15 @@ function stepPossession(eng: Engine): void {
   if (!action) {
     const failure = controlFailureStep(eng);
     action = failure ?? selectIntentionalAction(eng);
-  }  // Stats counting
+  }
+  // Client ball choreography snapshot: what this step attempted and where the
+  // ball was when it started (before the outcome below moves zone/possession).
+  eng.lastAction = action;
+  eng.prevZone = eng.zone;
+  const actionSide = eng.possessionSide;
+  const actionZone = eng.zone;
+  const ballAction = startBallAction(eng, action, actionSide, actionZone);
+  // Stats counting
   const attSide = eng.possessionSide;
   const stats = eng.stats[attSide === 0 ? "home" : "away"];
   if (action === "PASS") stats.passes++;
@@ -1633,10 +1783,14 @@ function stepPossession(eng: Engine): void {
     resolveInjuryHazard(eng, "SHOT", displayMinute, displayAddedTime);
     const def = opp(eng, attSide);
     const result = resolveShot(eng, sideOf(eng, attSide), def);
+    const shotGk = def.on.find((ps) => ps.tacPos === 1) ?? null;
+    ballAction.fromPlayerId = result.shooter?.id ?? ballAction.fromPlayerId;
+    ballAction.targetPlayerId = result.saved ? shotGk?.id ?? null : null;
     stats.shots++;
     stats.xG += result.finalXg;
     if (result.onTarget) stats.shotsOnTarget++;
     if (result.goal) {
+      finishBallAction(ballAction, { outcome: "GOAL", toZone: null, targetPlayerId: null });
       const club = sideOf(eng, attSide).club;
       eng.scores[attSide]++;
       eng.events.push({
@@ -1666,7 +1820,7 @@ function stepPossession(eng: Engine): void {
     // exactly with shotsOnTarget (saves counted for the defending side).
     if (result.saved || result.woodwork) {
       const shotClubId = sideOf(eng, attSide).club.id;
-      const gk = def.on.find((ps) => ps.tacPos === 1) ?? null;
+      const gk = shotGk;
       eng.events.push({
         minute: displayMinute, half: eventHalf,
         type: result.saved ? EVENT_CODES.SAVE : EVENT_CODES.WOODWORK,
@@ -1680,33 +1834,45 @@ function stepPossession(eng: Engine): void {
     }
     // Non-goal shot resolution
     if (result.saved) {
+      finishBallAction(ballAction, { outcome: "SAVE", toZone: null, targetPlayerId: shotGk?.id ?? null });
       // Goalkeeper begins possession.
       eng.possessionSide = attSide === 0 ? 1 : 0;
       beginPossession(eng, null);
+      eng.ballCarrierId = shotGk?.id ?? eng.ballCarrierId;
+      ballAction.toZone = eng.zone;
       return;
     }
     if (result.blocked) {
+      finishBallAction(ballAction, { outcome: "BLOCKED", toZone: null });
       // Live second ball — new possession, possible corner.
       eng.possessionSide = attSide === 0 ? 1 : 0;
       beginPossession(eng, null);
+      ballAction.toZone = eng.zone;
       return;
     }
     if (result.rebound) {
+      finishBallAction(ballAction, { outcome: "REBOUND", toZone: "BOX", targetPlayerId: result.shooter?.id ?? null });
       // Rebound returns to BOX/ATT_CENTRAL for the same team.
       eng.zone = "BOX";
       eng.lane = "CENTRE";
       eng.phase = "FINAL_THIRD";
+      eng.ballCarrierId = result.shooter?.id ?? presentationPlayerId(sideOf(eng, attSide), eng.zone);
+      ballAction.toZone = eng.zone;
       return;
     }
     if (result.woodwork) {
+      finishBallAction(ballAction, { outcome: "WOODWORK", toZone: null });
       // Play continues — reset to a defensive restart.
       eng.possessionSide = attSide === 0 ? 1 : 0;
       beginPossession(eng, null);
+      ballAction.toZone = eng.zone;
       return;
     }
     // On-target save (controlled) handled above; a miss with no on-target = GK restart.
+    finishBallAction(ballAction, { outcome: "MISS", toZone: null });
     eng.possessionSide = attSide === 0 ? 1 : 0;
     beginPossession(eng, null);
+    ballAction.toZone = eng.zone;
     return;
   }
 
@@ -1733,6 +1899,11 @@ function stepPossession(eng: Engine): void {
       // high recovery already tracked at possession start
     }
     if (mappedZone === "BOX") stats.boxEntries++;
+    const nextCarrierId = action === "CARRY" || action === "DRIBBLE"
+      ? ballAction.fromPlayerId
+      : presentationPlayerId(sideOf(eng, attSide), mappedZone, ballAction.fromPlayerId);
+    eng.ballCarrierId = nextCarrierId;
+    finishBallAction(ballAction, { outcome: "CONTINUE", toZone: mappedZone, targetPlayerId: nextCarrierId });
     return;
   }
 
@@ -1747,6 +1918,13 @@ function stepPossession(eng: Engine): void {
     eng.possessionSide = attSide === 0 ? 1 : 0;
     eng.lane = mirrorLane(eng.lane);
     eng.possessionAgeSeconds = 0;
+    const interceptorId = presentationPlayerId(sideOf(eng, eng.possessionSide), eng.zone);
+    eng.ballCarrierId = interceptorId;
+    finishBallAction(ballAction, {
+      outcome: "TURNOVER",
+      toZone: eng.zone,
+      interceptorId,
+    });
     // Defensive organisation disruption for the newly-defending side.
     const newDef = opp(eng, eng.possessionSide);
     const { disruption, recoveryTime } = disruptionAfterTurnover(eng, newDef);
@@ -1763,20 +1941,20 @@ function stepPossession(eng: Engine): void {
     const def = opp(eng, attSide);
     stats.fouls++;
     const fouler = selectFouler(eng, def);
+    finishBallAction(ballAction, { outcome: "FOUL", foulerId: fouler.id });
     resolveCards(eng, fouler, def, displayMinute, displayAddedTime);
     // Same team keeps possession; restart.
+    let restart: RestartType = "FREE_KICK";
     if (eng.zone === "BOX") {
       // Defending foul in BOX → penalty restart (penalty shot resolves via the
       // PENALTY possession start which pins SHOT as the first action).
       stats.penalties++;
-      beginPossession(eng, "PENALTY");
-      eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
-      eng.deadBallSeconds += MS.timing.deadBallSecondsPerRestart;
-    } else {
-      beginPossession(eng, "FREE_KICK");
-      eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
-      eng.deadBallSeconds += MS.timing.deadBallSecondsPerRestart;
+      restart = "PENALTY";
     }
+    beginPossession(eng, restart);
+    eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
+    eng.deadBallSeconds += MS.timing.deadBallSecondsPerRestart;
+    finishBallAction(ballAction, { toZone: eng.zone, targetPlayerId: eng.ballCarrierId });
     return;
   }
 
@@ -1787,13 +1965,15 @@ function stepPossession(eng: Engine): void {
     const labels = Object.keys(restartRow);
     const weights = labels.map((l) => restartRow[l]);
     const restart = weightedPick(eng.rng, labels, weights) as RestartType;
+    let restartCarrierId: number | null = null;
     if (restart === "CORNER") {
       stats.corners++;
+      restartCarrierId = cornerTakerId(eng, attSide, stats.corners);
       // Curated timeline: corner awards mirror the stat counter exactly and
       // name a (deterministically chosen) taker for the feed.
       eng.events.push({
         minute: displayMinute, half: eng.period as number, type: EVENT_CODES.CORNER, subtype: 0,
-        clubId: sideOf(eng, attSide).club.id, playerId: cornerTakerId(eng, attSide, stats.corners), player2Id: null, goalType: 0,
+        clubId: sideOf(eng, attSide).club.id, playerId: restartCarrierId, player2Id: null, goalType: 0,
         ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
       });
     }
@@ -1801,7 +1981,8 @@ function stepPossession(eng: Engine): void {
       eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
       eng.deadBallSeconds += MS.timing.deadBallSecondsPerRestart;
     }
-    beginPossession(eng, restart);
+    beginPossession(eng, restart, false, restartCarrierId);
+    finishBallAction(ballAction, { outcome: "RETAINED_RESTART", toZone: eng.zone, targetPlayerId: eng.ballCarrierId });
     return;
   }
 }
@@ -2067,6 +2248,13 @@ function buildEngine(
     substitutions: st.substitutions ?? [],
     events: st.events,
     isCounter: false,
+    lastAction: st.lastAction ?? null,
+    prevZone: st.prevZone ?? null,
+    ballCarrierId: st.ballCarrierId != null && (st.withBall === 0 ? homeXI : awayXI).some((p) => p.id === st.ballCarrierId)
+      ? st.ballCarrierId
+      : null,
+    ballActionSequence: st.ballActionSequence ?? 0,
+    lastBallAction: st.lastBallAction ? { ...st.lastBallAction } : null,
     possessionHighRecovery: false,
     opponentControlSeconds: st.opponentControlSeconds ?? [0, 0],
     pressureAdvancedStates: st.pressureWindowAdvancedStates ?? [0, 0],
@@ -2104,6 +2292,8 @@ function buildEngine(
   // continues from its persisted zone/phase/lane.
   if (eng.clockSeconds <= 0) {
     beginPossession(eng, "KICK_OFF");
+  } else if (eng.ballCarrierId === null) {
+    eng.ballCarrierId = presentationPlayerId(sideOf(eng, eng.possessionSide), eng.zone, null, eng.possessionStartType === "GOAL_KICK");
   }
 
   computeEpv();
@@ -2202,6 +2392,11 @@ function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimula
   st.teamStats = eng.stats;
   st.stats = { home: { ...eng.stats.home }, away: { ...eng.stats.away } };
   st.isCounter = eng.isCounter;
+  st.lastAction = eng.lastAction;
+  st.prevZone = eng.prevZone;
+  st.ballCarrierId = eng.ballCarrierId;
+  st.ballActionSequence = eng.ballActionSequence;
+  st.lastBallAction = eng.lastBallAction ? { ...eng.lastBallAction } : null;
   st.opponentControlSeconds = eng.opponentControlSeconds;
   st.pressureWindowAdvancedStates = eng.pressureAdvancedStates;
   st.pressureWindowStartSeconds = eng.pressureWindowStart;
