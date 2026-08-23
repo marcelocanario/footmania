@@ -3,7 +3,7 @@ import { generateWorld, createHumanClub } from "../src/game/worldgen";
 import { initSeason, createDivision, ensureDivisionFull, divisionForClub, recordDivision, tierOf } from "../src/game/multiplayer";
 
 function makeHumanClub(world: ReturnType<typeof generateWorld>, userId: number, name: string) {
-  return createHumanClub(world, { userId, clubName: name, country: "BRA", timezone: "UTC" });
+  return createHumanClub(world, { userId, clubName: name, country: "BRA" });
 }
 
 describe("divisionForClub", () => {

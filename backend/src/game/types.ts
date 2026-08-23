@@ -154,8 +154,6 @@ export interface Club {
   shortName: string;
   // Multiplayer: the user who owns this club, null for filler AI clubs.
   ownerUserId: number | null;
-  // Multiplayer: IANA timezone of the owner (clustering target).
-  timezone: string | null;
   // Multiplayer competition state: NEW | PROVISIONAL | ACTIVE | DORMANT.
   competitionState: "NEW" | "PROVISIONAL" | "ACTIVE" | "DORMANT";
   // Multiplayer: epoch ms of the last meaningful activity.
@@ -166,10 +164,16 @@ export interface Club {
   abandonmentEligibleAt: number | null;
   // Multiplayer: epoch ms of the scheduled live-match kickoff (if any).
   liveMatchAt: number | null;
-  // Preferred match-time half-hour slots (local wall clock, 0..47). Null =
-  // unconstrained (legacy humans, AI): every slot scores distance 0. Only
-  // consulted when a season's fixtures are generated; never reschedules.
+  // Preferred match-time half-hour slots on a UTC grid (0..47). Null =
+  // unconstrained (legacy humans, AI): every slot scores distance 0. Clients
+  // convert from/to the browser's timezone at the edges; the server never sees
+  // a timezone. Consulted when a season's fixtures are generated AND when
+  // divisions are regrouped (window-overlap clustering); never reschedules.
   preferredHours?: number[] | null;
+  /** Friend-grouping consent (bilateral rule): this owner's accepted friendships
+   * may pull them into the same division group only when BOTH friends opted in.
+   * Undefined = true for legacy rows. Serialized to Club.friendGroupingOptIn. */
+  friendGroupingOptIn?: boolean;
   country: string;
   // Highest division this club has ever reached (1 = strongest). Historical
   // milestone, independent of the current division (which is derived from
@@ -231,9 +235,9 @@ export interface Competition {
   seasonId?: number;
   tier?: number;
   groupIndex?: number;
-  // Fixed for the life of this season.  It is used only when the configured
-  // match-time mode is DIVISION_LOCAL_KICKOFF; changing an owner's timezone
-  // must never move already scheduled fixtures.
+  // Legacy multiplayer field: never written by current code and unused by
+  // match-time modes, but kept for old save rows. Must never move already
+  // scheduled fixtures.
   referenceTimezone?: string | null;
   status?: string;
   config: {

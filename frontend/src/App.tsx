@@ -25,6 +25,7 @@ const SeasonEnd = lazyNamed(() => import("./screens/SeasonEnd"), "SeasonEnd");
 const Records = lazyNamed(() => import("./screens/Records"), "Records");
 const History = lazyNamed(() => import("./screens/History"), "History");
 const SettingsScreen = lazyNamed(() => import("./screens/Settings"), "SettingsScreen");
+const FriendsScreen = lazyNamed(() => import("./screens/Friends"), "FriendsScreen");
 const MyClub = lazyNamed(() => import("./screens/MyClub"), "MyClub");
 const Admin = lazyNamed(() => import("./screens/Admin"), "Admin");
 
@@ -156,6 +157,7 @@ function AppRoutes() {
       <Route path="/records" element={<ClubGuard><Records /></ClubGuard>} />
       <Route path="/history" element={<ClubGuard><History /></ClubGuard>} />
       <Route path="/settings" element={<ClubGuard><SettingsScreen /></ClubGuard>} />
+      <Route path="/friends" element={<ClubGuard><FriendsScreen /></ClubGuard>} />
       <Route path="/admin" element={<Admin />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>

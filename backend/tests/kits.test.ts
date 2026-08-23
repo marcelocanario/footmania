@@ -157,7 +157,6 @@ describe("human club creation with kits", () => {
       userId: 1,
       clubName: "Test United",
       country: "BRA",
-      timezone: null,
       kits,
       stadiumName: "Test Stadium",
       preferredHours: null,
@@ -173,7 +172,6 @@ describe("human club creation with kits", () => {
       userId: 2,
       clubName: "Old FC",
       country: "GER",
-      timezone: null,
       primaryColor: "#aa0000",
       secondaryColor: "#ffffff",
       stadiumName: "Old Ground",
@@ -192,8 +190,8 @@ describe("match-day kit usage (live view)", () => {
       away: { ...validKit, pattern: "solid", primary: "#445566", secondary: "#ffffff" },
       gk: { ...validKit, pattern: "hoops", primary: "#ff8800", secondary: "#111111" },
     };
-    const home = createHumanClub(world, { userId: 11, clubName: "Stored FC", country: "BRA", timezone: null, kits: storedKits, preferredHours: null });
-    const away = createHumanClub(world, { userId: 12, clubName: "Derived FC", country: "BRA", timezone: null, preferredHours: null });
+    const home = createHumanClub(world, { userId: 11, clubName: "Stored FC", country: "BRA", kits: storedKits, preferredHours: null });
+    const away = createHumanClub(world, { userId: 12, clubName: "Derived FC", country: "BRA", preferredHours: null });
     const st = createLiveMatchState(createRng(7), home, away, world.players, { matchId: 1, fixtureId: 1, competitionId: 1 });
 
     const view = liveStateView(world, st);

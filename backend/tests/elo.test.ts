@@ -3,7 +3,6 @@ import { calculateEloChange, applyMatchElo } from "../src/game/elo";
 import { emptyStandingsRow, standingsTiebreak } from "../src/game/league";
 import type { Match } from "../src/game/types";
 import { makeClub, makeWorld } from "./helpers";
-import { calculateTimezoneDistance } from "../src/game/multiplayer";
 
 describe("human club Elo", () => {
   it("accounts for home advantage and is zero-sum", () => {
@@ -65,11 +64,5 @@ describe("human club Elo", () => {
   it("uses Elo before clubId for a complete sporting tie", () => {
     const rows = standingsTiebreak([emptyStandingsRow(20), emptyStandingsRow(10)], new Map([[10, 1400], [20, 1600]]));
     expect(rows.map((row) => row.clubId)).toEqual([20, 10]);
-  });
-
-  it("treats date-line timezone offsets as adjacent", () => {
-    expect(calculateTimezoneDistance(720, -720)).toBe(0);
-    expect(calculateTimezoneDistance(660, -660)).toBe(120);
-    expect(calculateTimezoneDistance(840, -720)).toBe(120);
   });
 });

@@ -284,7 +284,6 @@ describe("academy lifecycle & reroll exploit tests (spec §66)", () => {
       userId: 8,
       clubName: "Depth-Aware FC",
       country: "BRA",
-      timezone: "UTC",
     });
 
     expect(club.highestDivision).toBe(2);

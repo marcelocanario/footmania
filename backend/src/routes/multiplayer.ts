@@ -20,7 +20,6 @@ import { publishUserWorldEvent } from "../services/worldEvents";
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
   country: z.string().min(2).max(3),
-  timezone: z.string().max(64).optional().nullable(),
   primaryColor: z.string().optional(),
   secondaryColor: z.string().optional(),
   // Kit Lab: full three-kit set designed in the wizard. Optional for legacy
@@ -89,7 +88,6 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         userId: user.id,
         clubName: parsed.data.clubName,
         country: parsed.data.country,
-        timezone: parsed.data.timezone ?? null,
         primaryColor: parsed.data.primaryColor,
         secondaryColor: parsed.data.secondaryColor,
         kits: parsed.data.kits ?? null,
@@ -319,6 +317,23 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       club.preferredHours = preferredHours;
       recordActivity(world, req.user!.id, club.id, "preferred-hours");
       return { value: { ok: true, preferredHours } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  // --- Friend-grouping consent (bilateral rule enforced at regrouping) -----
+  app.put("/mp/club/friend-grouping", async (req, reply) => {
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await withWorld(app, req.user!.id, async (world) => {
+      const club = world.clubs.find((c) => c.ownerUserId === req.user!.id);
+      if (!club) return { error: { code: 400, body: { error: "You have no club" } } };
+      // Only affects the next season's regrouping; divisions never move
+      // mid-season because of a consent change.
+      club.friendGroupingOptIn = parsed.data.enabled;
+      recordActivity(world, req.user!.id, club.id, "friend-grouping");
+      return { value: { ok: true, friendGroupingOptIn: club.friendGroupingOptIn } };
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;

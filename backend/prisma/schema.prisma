@@ -212,9 +212,16 @@ model Club {
   // kickoff passes, the match auto-plays to completion.
   liveMatchAt      BigInt?
   // Preferred match-time windows as a JSON array of half-hour slot indices
-  // (0 = 00:00–00:30 local, 47 = 23:30–24:00). Null = unconstrained (legacy
-  // humans and all AI clubs); used only when a season's fixtures are generated.
+  // (0 = 00:00–00:30 UTC, 47 = 23:30–24:00). Null = unconstrained (legacy
+  // humans and all AI clubs); consulted at fixture generation AND at season
+  // regrouping (window-overlap clustering). Clients convert from/to the
+  // browser's timezone; the server is pure UTC (see plans/9).
   preferredHoursJson String?
+  // Friend-grouping consent (bilateral rule): when true, this owner's accepted
+  // friendships may pull them into the same division group at rollover
+  // regrouping. A pair only influences grouping when BOTH sides opted in;
+  // legacy rows default to true via the column default.
+  friendGroupingOptIn Boolean @default(true)
   name             String
   shortName        String
   country          String

@@ -79,7 +79,7 @@ describe("ephemeral filler-AI clubs (invariant #28)", () => {
   it("cannot list, bid or claim through the shared market transitions (invariant #28)", async () => {
     const world = worldWithAI(6);
     const ai = world.clubs.find((c) => isEphemeralAI(c))!;
-    const human = createHumanClub(world, { userId: 9601, clubName: "Human FC", country: "BRA", timezone: null });
+    const human = createHumanClub(world, { userId: 9601, clubName: "Human FC", country: "BRA" });
     const aiPlayer = world.players.find((p) => p.clubId === ai.id && !p.isYouth)!;
     const humanPlayer = world.players.find((p) => p.clubId === human.id && !p.isYouth)!;
     const { applyMaxBid } = await import("../src/game/market");
@@ -174,7 +174,7 @@ describe("ephemeral filler-AI clubs (invariant #28)", () => {
   it("never receives sale or loan-fee cash, even via force-settled or legacy listings", async () => {
     const world = worldWithAI(7);
     const ai = world.clubs.find((c) => isEphemeralAI(c))!;
-    const human = createHumanClub(world, { userId: 9602, clubName: "Buyer FC", country: "BRA", timezone: null });
+    const human = createHumanClub(world, { userId: 9602, clubName: "Buyer FC", country: "BRA" });
     human.cash = 10_000_000;
     const { applyMaxBid, settleTransferAuction } = await import("../src/game/market");
     const { claimLoan } = await import("../src/game/loans");

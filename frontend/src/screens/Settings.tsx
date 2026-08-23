@@ -1,25 +1,26 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Globe2, Clock } from "lucide-react";
+import { Settings as SettingsIcon, Clock, Users } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { AvailabilityPicker, PRESET_EVENINGS, MIN_SLOTS } from "../components/AvailabilityPicker";
+import { localSlotsToUtc, utcSlotsToLocal } from "../utils/time";
 
 export function SettingsScreen() {
   const { status, loadStatus } = useGame();
-  const [timezone, setTimezone] = useState(status?.club?.timezone ?? "UTC");
-  const [timezoneSaved, setTimezoneSaved] = useState(false);
-  const [preferredHours, setPreferredHours] = useState<number[]>(status?.club?.preferredHours ?? PRESET_EVENINGS);
+  const [preferredHours, setPreferredHours] = useState<number[]>(PRESET_EVENINGS);
   const [hoursSaved, setHoursSaved] = useState(false);
   const [savingHours, setSavingHours] = useState(false);
+  const [friendGrouping, setFriendGrouping] = useState(true);
+  const [friendGroupingSaved, setFriendGroupingSaved] = useState(false);
   const [pushState, setPushState] = useState<"idle" | "subscribed" | "unsupported">("idle");
   const [pushBusy, setPushBusy] = useState(false);
 
   useEffect(() => {
-    if (status?.club?.timezone) setTimezone(status.club.timezone);
-    if (status?.club?.preferredHours) setPreferredHours(status.club.preferredHours);
+    if (status?.club?.preferredHours) setPreferredHours(utcSlotsToLocal(status.club.preferredHours));
+    if (status?.club) setFriendGrouping(status.club.friendGroupingOptIn);
     if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) setPushState("unsupported");
-  }, [status?.club?.timezone, status?.club?.preferredHours]);
+  }, [status?.club?.preferredHours, status?.club?.friendGroupingOptIn]);
 
   return (
     <div>
@@ -30,25 +31,11 @@ export function SettingsScreen() {
         </div>
       </div>
 
-      <div className="card" style={{ maxWidth: 520 }}>
-        <h2 className="card-title"><Globe2 size={17} /> Account timezone</h2>
-        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
-          Used for the next season's division clustering. Changing it never moves a club during the current season.
-        </div>
-        <select className="select" value={timezone} onChange={(e) => { setTimezone(e.target.value); setTimezoneSaved(false); }}>
-          {TIMEZONES.map((value) => <option key={value} value={value}>{value}</option>)}
-        </select>
-        <button className="btn" style={{ marginTop: 12 }} onClick={() => void (async () => {
-          await api.updateTimezone(timezone);
-          await loadStatus();
-          setTimezoneSaved(true);
-        })()} disabled={!status?.club}>{timezoneSaved ? "Saved" : "Save timezone"}</button>
-      </div>
-
-      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
+      <div className="card" style={{ maxWidth: 640 }}>
         <h2 className="card-title"><Clock size={17} /> Preferred match times</h2>
         <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
-          When can you usually play? Fixtures are scheduled inside these windows whenever possible. Changes apply from the next season's fixture generation — current fixtures never move.
+          When can you usually play? Fixtures are scheduled inside these windows whenever possible, and players with similar
+          schedules are grouped into the same division next season. Changes apply from the next season — current fixtures never move.
         </div>
         <AvailabilityPicker value={preferredHours} onChange={(next) => { setPreferredHours(next); setHoursSaved(false); }} disabled={!status?.club} />
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
@@ -57,7 +44,7 @@ export function SettingsScreen() {
             onClick={() => void (async () => {
               setSavingHours(true);
               try {
-                await api.updatePreferredHours(preferredHours);
+                await api.updatePreferredHours(localSlotsToUtc(preferredHours));
                 await loadStatus();
                 setHoursSaved(true);
                 setTimeout(() => setHoursSaved(false), 2000);
@@ -70,6 +57,38 @@ export function SettingsScreen() {
             <SettingsIcon size={15} /> {savingHours ? strings.common.saving : strings.common.save}
           </button>
           {hoursSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{strings.settings.saved}</span>}
+        </div>
+      </div>
+
+      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
+        <h2 className="card-title"><Users size={17} /> Group me with my friends</h2>
+        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
+          When enabled, accepted friendships (see the Friends tab) influence next season's division grouping so you and your
+          friends land in the same group when possible. It only takes effect if your friend enables it too.
+        </div>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: status?.club ? "pointer" : "default" }}>
+          <input
+            type="checkbox"
+            checked={friendGrouping}
+            disabled={!status?.club}
+            onChange={(e) => { setFriendGrouping(e.target.checked); setFriendGroupingSaved(false); }}
+          />
+          <span style={{ fontSize: "0.92rem" }}>Try to place me in a group with my friends</span>
+        </label>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+          <button
+            className="btn"
+            onClick={() => void (async () => {
+              await api.updateFriendGrouping(friendGrouping);
+              await loadStatus();
+              setFriendGroupingSaved(true);
+              setTimeout(() => setFriendGroupingSaved(false), 2000);
+            })()}
+            disabled={!status?.club}
+          >
+            {strings.common.save}
+          </button>
+          {friendGroupingSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{strings.settings.saved}</span>}
         </div>
       </div>
 
@@ -112,16 +131,9 @@ export function SettingsScreen() {
 
 function urlBase64ToUint8Array(base64String: string) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const base64 = base64String.replace(/-/g, "+").replace(/_/g, "/") + padding;
   const rawData = atob(base64);
   const outputArray = new Uint8Array(rawData.length);
   for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
   return outputArray;
 }
-
-const TIMEZONES = [
-  "UTC", "America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York",
-  "America/Sao_Paulo", "Europe/London", "Europe/Paris", "Europe/Berlin", "Africa/Cairo",
-  "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Asia/Seoul",
-  "Australia/Sydney", "Pacific/Auckland",
-];

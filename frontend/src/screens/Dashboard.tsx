@@ -5,6 +5,7 @@ import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
 import { money } from "../format";
 import { ClubCrest } from "../components/ClubCrest";
+import { formatKickoff } from "../utils/time";
 
 /** Accent color per news kind; unknown kinds fall back to a neutral tone. */
 const NEWS_KIND_COLORS: Record<string, string> = {
@@ -39,6 +40,8 @@ export function Dashboard() {
   const position = league?.position ?? null;
   const posClass = position !== null ? (position === 1 ? "gold" : "") : "";
   const season = status?.season;
+  // Browser-local kickoff rendering, shared with every other screen (plan 9).
+  const nextKickoff = snapshot.nextFixture ? formatKickoff(snapshot.nextFixture.kickoffAt) : "";
 
   return (
     <div>
@@ -184,7 +187,7 @@ export function Dashboard() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
               {snapshot.nextFixture && <Clock size={12} />} {snapshot.nextFixture?.dayLabel}
-              {snapshot.nextFixture?.dateLabel && <span style={{ color: "var(--gold-2)", fontWeight: 600 }}>· {snapshot.nextFixture.dateLabel}</span>}
+              {nextKickoff && <span style={{ color: "var(--gold-2)", fontWeight: 600 }}>· {nextKickoff}</span>}
             </span>
             {snapshot.nextFixture && <ChevronRight size={14} />}
           </div>

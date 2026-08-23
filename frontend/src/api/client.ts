@@ -150,7 +150,7 @@ export interface MpStatus {
     highestDivision: number;
     cash: number;
     competitionState: string;
-    timezone: string | null;
+    friendGroupingOptIn: boolean;
     preferredHours: number[] | null;
     reservedNextSeasonAllocation: { seasonId: number; amount: number; issuedAt: number } | null;
     inactivity: { eligible: boolean; removedAtRollover: boolean; note: string | null } | null;
@@ -359,7 +359,7 @@ export interface Snapshot {
     leagueRunnerUp: string | null;
   } | null;
   club: ClubView | null;
-  nextFixture: { id: number; home: string; away: string; dayLabel: string; dayIndex: number; isHome: boolean; dateLabel: string | null } | null;
+  nextFixture: { id: number; home: string; away: string; dayLabel: string; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
   competitions: { id: number; kind: string; name: string; stage: string; round: number; tier: number | null; groupIndex: number | null; position: number; winnerId: number | null }[];
   squad: PlayerView[];
   juniors: PlayerView[];
@@ -866,15 +866,24 @@ export const api = {
   mpWsUrl: () =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/mp/ws`,
   me: () => request<{ user: User }>("/api/auth/me"),
-  register: (username: string, password: string) =>
-    request<{ user: User }>("/api/auth/register", { method: "POST", body: JSON.stringify({ username, password }) }),
+  register: (username: string, password: string, inviteToken?: string) =>
+    request<{ user: User }>("/api/auth/register", { method: "POST", body: JSON.stringify(inviteToken ? { username, password, inviteToken } : { username, password }) }),
   login: (username: string, password: string) =>
     request<{ user: User }>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
+  // Friends & invitations (plan 9)
+  friends: () => request<{ friends: { userId: number; username: string; clubName: string | null; competitionState: string | null; since: string }[] }>("/api/auth/friends"),
+  removeFriend: (userId: number) =>
+    request<{ ok: boolean }>(`/api/auth/friends/${userId}`, { method: "DELETE" }),
+  invitations: () => request<{ invitations: { token: string; createdAt: string }[] }>("/api/auth/invitations"),
+  createInvitation: () => request<{ inviteToken: string }>("/api/auth/invite", { method: "POST" }),
+  revokeInvitation: (token: string) =>
+    request<{ ok: boolean }>(`/api/auth/invitations/${token}`, { method: "DELETE" }),
+
   // Multiplayer
   mpStatus: () => request<MpStatus>("/api/mp/status"),
-  join: (payload: { clubName: string; country: string; timezone?: string | null; primaryColor?: string; secondaryColor?: string; kits?: ClubKits; stadiumName: string; coachName: string; preferredHours?: number[] }) =>
+  join: (payload: { clubName: string; country: string; primaryColor?: string; secondaryColor?: string; kits?: ClubKits; stadiumName: string; coachName: string; preferredHours?: number[] }) =>
     request<{ ok: boolean; clubId: number }>("/api/mp/join", { method: "POST", body: JSON.stringify(payload) }),
   updateClubKit: (kits: ClubKits) =>
     request<{ ok: boolean; kits: ClubKits }>("/api/mp/club/kit", { method: "PUT", body: JSON.stringify({ kits }) }),
@@ -882,6 +891,8 @@ export const api = {
     request<{ ok: boolean; name: string; stadiumName: string; coachName: string }>("/api/mp/club/profile", { method: "PUT", body: JSON.stringify(payload) }),
   updatePreferredHours: (preferredHours: number[]) =>
     request<{ ok: boolean; preferredHours: number[] }>("/api/mp/preferred-hours", { method: "PUT", body: JSON.stringify({ preferredHours }) }),
+  updateFriendGrouping: (enabled: boolean) =>
+    request<{ ok: boolean; friendGroupingOptIn: boolean }>("/api/mp/club/friend-grouping", { method: "PUT", body: JSON.stringify({ enabled }) }),
   returnClub: () =>
     request<{ ok: boolean }>("/api/mp/return", { method: "POST" }),
   practice: () =>
@@ -962,8 +973,6 @@ export const api = {
   contractDemand: (playerId: number) =>
     request<{ demand: number; demandsBySeason: Record<number, number>; salary: number; contractDays: number }>(`/api/players/${playerId}/contract`),
   settings: () => request<Settings>("/api/settings"),
-  updateTimezone: (timezone: string) =>
-    request<{ ok: boolean; timezone: string }>("/api/account/timezone", { method: "PUT", body: JSON.stringify({ timezone }) }),
 
   // Admin (manual clock / settings)
   adminStatus: () =>

@@ -5,10 +5,10 @@ import { emptyStandingsRow } from "../src/game/league";
 import { generateDivisionFixtures } from "../src/game/multiplayer";
 import { roundDayIndex } from "../src/services/seasonCalendar";
 import {
-  localSlotAt,
   pickFixtureKickoff,
   pickSynchronizedKickoff,
   preferenceDistance,
+  utcSlotAt,
   validatePreferredHours,
 } from "../src/game/scheduling";
 
@@ -25,30 +25,29 @@ function utcAt(dayStart: number, slot: number): number {
 }
 
 describe("preferred-time distance", () => {
-  it("maps UTC instants to local half-hour slots across DST changes", () => {
-    // Madrid is UTC+1 in January and UTC+2 in July.
-    const january = Date.UTC(2026, 0, 15, 19, 0);
-    const july = Date.UTC(2026, 6, 15, 19, 0);
-    expect(localSlotAt(january, "Europe/Madrid")).toBe(40);
-    expect(localSlotAt(july, "Europe/Madrid")).toBe(42);
-    expect(localSlotAt(january, null)).toBe(38);
+  it("maps UTC instants to UTC half-hour slots", () => {
+    // The server grid is pure UTC: 19:00Z is slot 38, 19:30Z slot 39.
+    const instant = Date.UTC(2026, 0, 15, 19, 0);
+    expect(utcSlotAt(instant)).toBe(38);
+    expect(utcSlotAt(instant + 30 * 60 * 1000)).toBe(39);
+    expect(utcSlotAt(Date.UTC(2026, 0, 15, 0, 0))).toBe(0);
   });
 
   it("measures circular distance to the nearest preferred slot", () => {
     const prefs = [...slots(46, 47), ...slots(0, 1)]; // 23:00–01:30
     const day = Date.UTC(2026, 0, 2);
-    expect(preferenceDistance(prefs, utcAt(day, 46), "UTC")).toBe(0);
-    expect(preferenceDistance(prefs, utcAt(day, 0), "UTC")).toBe(0);
+    expect(preferenceDistance(prefs, utcAt(day, 46))).toBe(0);
+    expect(preferenceDistance(prefs, utcAt(day, 0))).toBe(0);
     // 03:00 is five half-hours past the 01:00 window edge.
-    expect(preferenceDistance(prefs, utcAt(day, 6), "UTC")).toBe(5);
+    expect(preferenceDistance(prefs, utcAt(day, 6))).toBe(5);
     // Midnight wraps: 23:00 is one slot from the 23:30 window.
-    expect(preferenceDistance([0], utcAt(day, 47), "UTC")).toBe(1);
+    expect(preferenceDistance([0], utcAt(day, 47))).toBe(1);
   });
 
   it("treats missing preferences as unconstrained", () => {
     const day = Date.UTC(2026, 0, 2);
-    expect(preferenceDistance(null, utcAt(day, 13), "UTC")).toBe(0);
-    expect(preferenceDistance([], utcAt(day, 13), null)).toBe(0);
+    expect(preferenceDistance(null, utcAt(day, 13))).toBe(0);
+    expect(preferenceDistance([], utcAt(day, 13))).toBe(0);
   });
 });
 
@@ -57,44 +56,44 @@ describe("fixture kickoff selection", () => {
 
   it("picks an overlapping slot when preferences intersect", () => {
     // Home 15:00–21:00, away 18:00–24:00 → the selected slot is in their overlap.
-    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(30, 41) }, { timezone: "UTC", preferredSlots: slots(36, 47) }, day, "overlap");
+    const kickoff = pickFixtureKickoff({ preferredSlots: slots(30, 41) }, { preferredSlots: slots(36, 47) }, day, "overlap");
     expect(slots(36, 41).map((slot) => utcAt(day, slot))).toContain(kickoff);
-    expect(kickoff).toBe(pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(30, 41) }, { timezone: "UTC", preferredSlots: slots(36, 47) }, day, "overlap"));
+    expect(kickoff).toBe(pickFixtureKickoff({ preferredSlots: slots(30, 41) }, { preferredSlots: slots(36, 47) }, day, "overlap"));
   });
 
   it("falls back to the home-best slot closest to the away windows", () => {
     // Home 01:00–09:00, away 14:00–22:00: no overlap. Midnight wrapping makes
     // 01:00 the home slot closest to the away block's late end (22:30).
-    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(2, 17) }, { timezone: "UTC", preferredSlots: slots(28, 43) }, day, "disjoint");
+    const kickoff = pickFixtureKickoff({ preferredSlots: slots(2, 17) }, { preferredSlots: slots(28, 43) }, day, "disjoint");
     expect(kickoff).toBe(utcAt(day, 2));
   });
 
   it("lets an unconstrained opponent defer to the home club and seeded spread", () => {
     // Home 10:00–14:00, away AI (unconstrained): any home slot wins on
     // distance, then the stable seed selects one of those equally good slots.
-    const kickoff = pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(20, 27) }, { timezone: "UTC", preferredSlots: null }, day, "home-window");
+    const kickoff = pickFixtureKickoff({ preferredSlots: slots(20, 27) }, { preferredSlots: null }, day, "home-window");
     expect(slots(20, 27).map((slot) => utcAt(day, slot))).toContain(kickoff);
-    expect(kickoff).toBe(pickFixtureKickoff({ timezone: "UTC", preferredSlots: slots(20, 27) }, { timezone: "UTC", preferredSlots: null }, day, "home-window"));
+    expect(kickoff).toBe(pickFixtureKickoff({ preferredSlots: slots(20, 27) }, { preferredSlots: null }, day, "home-window"));
   });
 
   it("synchronizes a final round on one shared instant", () => {
     const pairs = [
-      { home: { timezone: "UTC", preferredSlots: slots(24, 29) }, away: { timezone: "UTC", preferredSlots: slots(26, 31) } },
-      { home: { timezone: "UTC", preferredSlots: slots(36, 41) }, away: { timezone: "UTC", preferredSlots: null } },
-      { home: { timezone: "UTC", preferredSlots: slots(12, 17) }, away: { timezone: "UTC", preferredSlots: slots(14, 19) } },
-      { home: { timezone: "UTC", preferredSlots: slots(40, 45) }, away: { timezone: "UTC", preferredSlots: slots(42, 47) } },
+      { home: { preferredSlots: slots(24, 29) }, away: { preferredSlots: slots(26, 31) } },
+      { home: { preferredSlots: slots(36, 41) }, away: { preferredSlots: null } },
+      { home: { preferredSlots: slots(12, 17) }, away: { preferredSlots: slots(14, 19) } },
+      { home: { preferredSlots: slots(40, 45) }, away: { preferredSlots: slots(42, 47) } },
     ];
     const kickoff = pickSynchronizedKickoff(pairs, day, "final-round");
     // Brute force: no candidate beats the chosen one on (homeSum, awaySum).
     let best: { home: number; away: number } | null = null;
     for (let slot = 0; slot < 48; slot++) {
       const at = utcAt(day, slot);
-      const home = pairs.reduce((sum, p) => sum + preferenceDistance(p.home.preferredSlots, at, p.home.timezone), 0);
-      const away = pairs.reduce((sum, p) => sum + preferenceDistance(p.away.preferredSlots, at, p.away.timezone), 0);
+      const home = pairs.reduce((sum, p) => sum + preferenceDistance(p.home.preferredSlots, at), 0);
+      const away = pairs.reduce((sum, p) => sum + preferenceDistance(p.away.preferredSlots, at), 0);
       if (best === null || home < best.home || (home === best.home && away < best.away)) best = { home, away };
     }
-    const chosenHome = pairs.reduce((sum, p) => sum + preferenceDistance(p.home.preferredSlots, kickoff, p.home.timezone), 0);
-    const chosenAway = pairs.reduce((sum, p) => sum + preferenceDistance(p.away.preferredSlots, kickoff, p.away.timezone), 0);
+    const chosenHome = pairs.reduce((sum, p) => sum + preferenceDistance(p.home.preferredSlots, kickoff), 0);
+    const chosenAway = pairs.reduce((sum, p) => sum + preferenceDistance(p.away.preferredSlots, kickoff), 0);
     expect(chosenHome).toBe(best!.home);
     expect(chosenAway).toBe(best!.away);
     // Deterministic regardless of input order.
@@ -102,7 +101,7 @@ describe("fixture kickoff selection", () => {
   });
 
   it("spreads unconstrained fixtures across the day deterministically", () => {
-    const unconstrained = { timezone: null, preferredSlots: null };
+    const unconstrained = { preferredSlots: null };
     const kickoffs = Array.from({ length: 24 }, (_, i) => pickFixtureKickoff(unconstrained, unconstrained, day, `division:0:${i}:home:away`));
     const slotsChosen = new Set(kickoffs.map((kickoff) => Math.round((kickoff - day) / SLOT_MS)));
 
@@ -118,7 +117,6 @@ function testWorld(clubPrefs: (number[] | null)[]): { world: World; comp: Compet
       name: `Club ${i}`,
       ownerUserId: prefs === null ? null : 10 + i,
       isHuman: prefs !== null,
-      timezone: "UTC",
       preferredHours: prefs,
     })
   );
@@ -148,7 +146,7 @@ describe("generateDivisionFixtures timing", () => {
     expect(fixtures.length).toBe(56);
 
     const lastRound = Math.max(...fixtures.map((f) => f.round));
-    const prefOf = (clubId: number) => ({ timezone: "UTC", preferredSlots: world.clubs.find((c) => c.id === clubId)!.preferredHours ?? null });
+    const prefOf = (clubId: number) => ({ preferredSlots: world.clubs.find((c) => c.id === clubId)!.preferredHours ?? null });
 
     for (const f of fixtures) {
       expect(f.kickoffAt).toBeDefined();

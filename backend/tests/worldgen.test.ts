@@ -60,7 +60,6 @@ describe("worldgen", () => {
       userId: 1,
       clubName: "Marcelo FC",
       country: "BRA",
-      timezone: "America/Sao_Paulo",
     });
     expect(club.ownerUserId).toBe(1);
     expect(club.isHuman).toBe(true);
@@ -213,7 +212,6 @@ describe("country name pools", () => {
       userId: 1,
       clubName: "Tokyo FC",
       country: "JAP",
-      timezone: "Asia/Tokyo",
     });
     expect(club.ownerUserId).toBe(1);
     expect(club.isHuman).toBe(true);
@@ -235,7 +233,6 @@ describe("country name pools", () => {
       userId: 2,
       clubName: "Named FC",
       country: "BRA",
-      timezone: "America/Sao_Paulo",
       coachName: "Rafa Silva",
     });
     expect(club.coachName).toBe("Rafa Silva");

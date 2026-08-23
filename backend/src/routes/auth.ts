@@ -3,6 +3,8 @@ import type { FastifyInstance } from "fastify";
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
 import { COOKIE_NAME } from "../config";
+import { withGlobalLock } from "../services/lock";
+import { notifyFriendshipsChanged } from "../services/saveService";
 
 const registerSchema = z.object({
   username: z.string().min(3).max(24).regex(/^[a-zA-Z0-9_]+$/),
@@ -32,6 +34,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
     const passwordHash = await bcrypt.hash(password, 10);
     let user;
+    let friendshipCreated = false;
     try {
       user = await app.prisma.$transaction(async (tx) => {
         const created = await tx.user.create({ data: { username, passwordHash } });
@@ -48,6 +51,7 @@ export async function authRoutes(app: FastifyInstance) {
             update: {},
           });
           await tx.invitation.update({ where: { token: inviteToken }, data: { inviteeUserId: created.id, acceptedAt: new Date() } });
+          friendshipCreated = true;
         }
         return created;
       });
@@ -55,6 +59,9 @@ export async function authRoutes(app: FastifyInstance) {
       if (error instanceof Error && error.message === "INVALID_INVITATION") return reply.code(400).send({ error: "Invalid or already used invitation" });
       throw error;
     }
+    // The new edge must reach World.friendships before the next season's
+    // regrouping reads it; bump the revision so cached worlds rebuild.
+    if (friendshipCreated) await withGlobalLock(() => notifyFriendshipsChanged(app.prisma));
     const token = await app.createSession(user.id);
     reply.setCookie(COOKIE_NAME, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 30 * 24 * 3600 });
     return { user: toUserView(user as never) };
@@ -66,6 +73,85 @@ export async function authRoutes(app: FastifyInstance) {
     const token = randomBytes(24).toString("hex");
     await app.prisma.invitation.create({ data: { token, inviterUserId: req.user.id } });
     return { inviteToken: token };
+  });
+
+  // --- Friends management (plan 9) -----------------------------------------
+  // Friendships are account-level data managed here; they only influence
+  // season regrouping when both owners kept friend-grouping enabled
+  // (see game/multiplayer.ts calculateSocialScore).
+
+  // Accepted friends of the current user, with their global-world club name.
+  app.get("/auth/friends", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const rows = await app.prisma.friendship.findMany({
+      where: { OR: [{ userAId: req.user.id }, { userBId: req.user.id }] },
+      orderBy: { id: "asc" },
+    });
+    const sinceByFriend = new Map<number, Date>();
+    for (const row of rows) {
+      const friendId = row.userAId === req.user.id ? row.userBId : row.userAId;
+      sinceByFriend.set(friendId, row.createdAt);
+    }
+    const friendIds = [...sinceByFriend.keys()];
+    const users = await app.prisma.user.findMany({ where: { id: { in: friendIds } }, select: { id: true, username: true } });
+    const usernameById = new Map(users.map((u) => [u.id, u.username]));
+    const save = await app.prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
+    const clubRows = save
+      ? await app.prisma.club.findMany({ where: { saveId: save.id, ownerUserId: { in: friendIds } }, select: { ownerUserId: true, name: true, competitionState: true } })
+      : [];
+    const clubByUser = new Map(clubRows.filter((c) => c.ownerUserId !== null).map((c) => [c.ownerUserId!, c]));
+    return {
+      friends: friendIds.map((userId) => ({
+        userId,
+        username: usernameById.get(userId) ?? `#${userId}`,
+        clubName: clubByUser.get(userId)?.name ?? null,
+        competitionState: clubByUser.get(userId)?.competitionState ?? null,
+        since: sinceByFriend.get(userId)!.toISOString(),
+      })),
+    };
+  });
+
+  // Sever an accepted friendship (either side may remove it).
+  app.delete("/auth/friends/:userId", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const otherId = Number((req.params as { userId: string }).userId);
+    if (!Number.isInteger(otherId) || otherId <= 0 || otherId === req.user.id) {
+      return reply.code(400).send({ error: "Invalid user" });
+    }
+    const userAId = Math.min(req.user.id, otherId);
+    const userBId = Math.max(req.user.id, otherId);
+    const existing = await app.prisma.friendship.findUnique({ where: { userAId_userBId: { userAId, userBId } } });
+    if (!existing) return reply.code(404).send({ error: "Not found" });
+    await app.prisma.friendship.delete({ where: { id: existing.id } });
+    // Severed edges must leave World.friendships too (see /auth/register).
+    await withGlobalLock(() => notifyFriendshipsChanged(app.prisma));
+    return { ok: true };
+  });
+
+  // Pending (unused) invitations created by the current user.
+  app.get("/auth/invitations", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const rows = await app.prisma.invitation.findMany({
+      where: { inviterUserId: req.user.id, acceptedAt: null },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    return { invitations: rows.map((r) => ({ token: r.token, createdAt: r.createdAt.toISOString() })) };
+  });
+
+  // Revoke a pending invitation. Already-accepted tokens are history and stay.
+  app.delete("/auth/invitations/:token", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const token = (req.params as { token: string }).token;
+    const invitation = await app.prisma.invitation.findUnique({ where: { token } });
+    if (!invitation || invitation.inviterUserId !== req.user.id) return reply.code(404).send({ error: "Not found" });
+    if (invitation.acceptedAt) return reply.code(400).send({ error: "Invitation already used" });
+    await app.prisma.invitation.delete({ where: { token } });
+    return { ok: true };
   });
 
   app.post("/auth/login", async (req, reply) => {

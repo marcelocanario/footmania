@@ -72,7 +72,6 @@ export function goldenClub(id: number, tactics: Tactics): Club {
     name: id === 1 ? "Golden Home" : "Golden Away",
     shortName: id === 1 ? "GH" : "GA",
     ownerUserId: null,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,

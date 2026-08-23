@@ -16,8 +16,10 @@ These invariants are the non-negotiable rules of the multiplayer league engine
 4. **AI filler can never be promoted.** Promotion ranking operates on human
    clubs only (`isHumanClub`); AI never consumes a promotion slot.
 
-5. **Human density takes priority over timezone clustering.** Divisions are
-   filled to 8 humans before opening another, then boundary-swapped by timezone.
+5. **Human density takes priority over preferred-time clustering.** Divisions
+   are filled to 8 humans before opening another, then boundary-swapped by
+   preferred-match-time window overlap (plan `plans/9.`; formerly timezone
+   clustering — the server no longer stores a timezone).
 
 6. **Empty divisions do not persist unnecessarily.** Divisions are created only
    when humans require them and are deleted/rebuilt at rollover.

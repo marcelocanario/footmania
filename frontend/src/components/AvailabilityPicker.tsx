@@ -1,9 +1,13 @@
 import { useEffect, useRef } from "react";
+import { userTimeZone } from "../utils/time";
 
 /**
  * Preferred match-time picker: a 24-hour timeline of 48 half-hour slots the
  * player paints (click or drag). Selections may be non-contiguous and wrap
  * midnight; at least 8 hours (16 slots) must be selected before saving.
+ *
+ * Slots are labeled in the browser's auto-detected timezone; callers convert
+ * to/from the server's UTC grid via utils/time.ts when loading and saving.
  */
 export const SLOTS_PER_DAY = 48;
 export const MIN_SLOTS = 16;
@@ -128,6 +132,9 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
       </div>
       <div style={{ marginTop: 8, fontSize: "0.88rem", color: enough ? "var(--text-2)" : "var(--gold-2)" }}>
         {hours.toFixed(1)} h selected{!enough && ` — pick at least ${MIN_SLOTS / 2} hours`}
+      </div>
+      <div style={{ marginTop: 4, fontSize: "0.78rem", color: "var(--text-3)" }}>
+        Times shown in your timezone ({userTimeZone()}).
       </div>
     </div>
   );

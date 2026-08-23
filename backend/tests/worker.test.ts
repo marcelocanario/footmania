@@ -47,7 +47,7 @@ async function withSeason(saveId: number, ref = currentMonth()) {
 async function humanTrader(world: World, userId: number, name: string) {
   await prisma.user.deleteMany({ where: { id: userId } });
   await prisma.user.create({ data: { id: userId, username: `w-${userId}-${name}`, passwordHash: "test" } });
-  const club = createHumanClub(world, { userId, clubName: name, country: "BRA", timezone: null });
+  const club = createHumanClub(world, { userId, clubName: name, country: "BRA" });
   club.competitionState = "ACTIVE";
   // Played own fixtures so the outbound-market lock is satisfied.
   const division = world.competitions.find((candidate) => candidate.kind === "division")!;

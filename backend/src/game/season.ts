@@ -301,10 +301,14 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
   // season salary.
   settlePayrollThrough(world, gameConfig.seasonDays);
   for (const player of world.players) {
-    aging(rng, player, world.clubs.find((c) => c.id === player.clubId) ?? world.clubs[0]);
+    const club = player.clubId !== null ? world.clubs.find((c) => c.id === player.clubId) : undefined;
+    // Invariant #28: ephemeral AI squads are static single-season rosters.
+    // Aging, value recalculation and retirement must not mutate or delete
+    // players from a roster that stays fixed until wholesale replacement.
+    if (club && isEphemeralAI(club)) continue;
+    aging(rng, player, club ?? world.clubs[0]);
     // Contracts elapse only for clubs participating in the season (plan
     // §18/§45): provisional and dormant clubs keep their contract time frozen.
-    const club = player.clubId !== null ? world.clubs.find((c) => c.id === player.clubId) : undefined;
     if (player.contractDays > 0 && (!club || club.competitionState === "ACTIVE")) {
       player.contractDays = Math.max(0, player.contractDays - DAYS_PER_YEAR);
     }
@@ -316,8 +320,11 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
   const retirees: number[] = [];
   for (const player of world.players) {
     if (player.clubId !== null && !player.isYouth) {
+      const club = world.clubs.find((c) => c.id === player.clubId);
+      // Invariant #28: filler players never retire out of their static
+      // roster; the whole squad is replaced with the club at rollover.
+      if (club && isEphemeralAI(club)) continue;
       if (player.age >= 33 && chance(rng, 25)) {
-        const club = world.clubs.find((c) => c.id === player.clubId);
         world.news.push({
           dayIndex: world.dayIndex,
           text: `${player.name} (${club?.name ?? ""}) announced this will be his last season`,

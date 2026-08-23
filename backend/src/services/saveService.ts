@@ -31,7 +31,7 @@ import { parseStoredPresets } from "../game/automation";
 import { deserializeClubKits, serializeClubKits } from "../game/kits";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
-import { ELO_CONFIG, gameConfig } from "../config";
+import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { ensureNamePools } from "./namePoolService";
 
@@ -114,6 +114,19 @@ export function invalidateWorldCache(prisma: PrismaClient, saveId?: number): voi
     worldCaches.get(prisma)?.delete(saveId);
     mutationBaselines.get(prisma)?.delete(saveId);
   }
+}
+
+/**
+ * Friendships live in their own table outside the serialized world, but season
+ * regrouping reads them through World.friendships, which is only materialized
+ * when a world is rebuilt. Bump Save.revision — the cross-process invalidation
+ * signal every load compares against its cache — and drop the local cache so
+ * the next world load (here and in any other process) picks up the new edges
+ * before the rollover groups divisions. Callers run this under withGlobalLock.
+ */
+export async function notifyFriendshipsChanged(prisma: PrismaClient): Promise<void> {
+  await prisma.save.updateMany({ where: { isGlobal: true }, data: { revision: { increment: 1 } } });
+  invalidateWorldCache(prisma);
 }
 
 /** Thrown when a persist targets a stale revision (another process wrote first). */
@@ -877,7 +890,13 @@ function clubRow(c: Club, saveId: number) {
      id: c.id,
      saveId,
      ownerUserId: c.ownerUserId,
-     timezone: c.timezone,
+     // Legacy migration marker (plan 9): rebuildWorld converts local slots to
+     // UTC exactly once for rows still carrying a timezone. Writing null here
+     // (both the create and the per-club UPDATE delta path flow through this
+     // row factory) makes that conversion idempotent across reload/persist
+     // cycles. The column itself stays until a later cleanup migration.
+     timezone: null,
+     friendGroupingOptIn: c.friendGroupingOptIn !== false,
      preferredHoursJson: c.preferredHours ? JSON.stringify(c.preferredHours) : null,
      competitionState: c.competitionState,
      lastMeaningfulActivityAt: c.lastMeaningfulActivityAt !== null ? BigInt(c.lastMeaningfulActivityAt) : null,
@@ -1229,6 +1248,52 @@ function statRow(m: Match, saveId: number) {
   };
 }
 
+/**
+ * Current UTC offset of an IANA zone in minutes. Only used by the one-time
+ * legacy preferredHours local→UTC migration in rebuildWorld; the server itself
+ * never interprets a timezone.
+ */
+function legacyIanaOffsetMinutes(timeZone: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" }).formatToParts(new Date());
+    const value = parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT";
+    const match = /^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(value);
+    if (!match) return 0;
+    const minutes = Number(match[2]) * 60 + Number(match[3] ?? "0");
+    return match[1] === "-" ? -minutes : minutes;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Zone offset quantized to whole half-hour slots. Shared by both conversion
+ * directions so they are exact inverses on the slot ring (:45-offset zones
+ * land consistently instead of drifting one slot per round trip).
+ */
+function offsetToSlots(offsetMinutes: number): number {
+  return Math.round(offsetMinutes / MP_CONFIG.preferredSlotMinutes);
+}
+
+/** Shift local half-hour slots onto the UTC grid (rounded to nearest slot). */
+function legacyLocalSlotsToUtc(slots: number[], offsetMinutes: number): number[] {
+  const shift = offsetToSlots(offsetMinutes);
+  const perDay = MP_CONFIG.slotsPerDay;
+  return [...new Set(slots.map((slot) => (((slot - shift) % perDay) + perDay) % perDay))].sort((a, b) => a - b);
+}
+
+/**
+ * Preferred hours of a club row, applying the one-time legacy local→UTC
+ * conversion while the row still carries its timezone marker (plan 9). Shared
+ * by rebuildWorld AND read paths so an un-migrated row can never serve local
+ * wall-clock slots mislabeled as UTC.
+ */
+export function preferredHoursFromClubRow(timeZone: string | null | undefined, preferredHoursJson: string | null | undefined): number[] | null {
+  const stored = jsonOr<number[] | null>(preferredHoursJson, null);
+  if (!stored || stored.length === 0) return null;
+  return timeZone ? legacyLocalSlotsToUtc(stored, legacyIanaOffsetMinutes(timeZone)) : stored;
+}
+
 async function rebuildWorld(
   prisma: PrismaClient,
   saveRow: { id: number; seed: number; year: number; dayIndex: number; humanClubId: number | null; rngState: bigint; mpStateJson?: string | null; seasonSummaryJson: string | null; seasonHistoryJson?: string | null; pendingEventsJson: string | null; pendingMatchIdsJson: string | null; generationEventsJson?: string | null; financialInterventionsJson?: string | null }
@@ -1296,6 +1361,7 @@ async function rebuildWorld(
        ownerUserId: number | null;
        timezone: string | null;
        preferredHoursJson: string | null;
+       friendGroupingOptIn: boolean;
        competitionState: string;
        lastMeaningfulActivityAt: bigint | null;
        abandonmentEligibleAt: bigint | null;
@@ -1313,13 +1379,18 @@ async function rebuildWorld(
        r2.customLogoData && r2.customLogoMime
          ? { mime: r2.customLogoMime, data: r2.customLogoData, status: r2.customLogoStatus ?? "ACTIVE" }
          : null;
+      // One-time legacy migration (plan 9): preferredHours were stored as LOCAL
+      // wall-clock slots while the row still carried the owner's IANA timezone.
+      // Shift them onto the UTC grid once; clubRow writes timezone back as null
+      // so this branch can never run twice for the same row.
+      const preferredHours = preferredHoursFromClubRow(r2.timezone, r2.preferredHoursJson);
      return {
        id: r.id,
        name: r.name,
        shortName: r.shortName,
        ownerUserId: r2.ownerUserId ?? null,
-       timezone: r2.timezone ?? null,
-       preferredHours: jsonOr<number[] | null>(r2.preferredHoursJson, null),
+       preferredHours,
+       friendGroupingOptIn: r2.friendGroupingOptIn !== false,
        competitionState: (r2.competitionState ?? "ACTIVE") as Club["competitionState"],
        lastMeaningfulActivityAt: r2.lastMeaningfulActivityAt !== null && r2.lastMeaningfulActivityAt !== undefined ? Number(r2.lastMeaningfulActivityAt) : null,
        abandonmentEligibleAt: r2.abandonmentEligibleAt !== null && r2.abandonmentEligibleAt !== undefined ? Number(r2.abandonmentEligibleAt) : null,

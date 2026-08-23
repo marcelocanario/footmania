@@ -275,17 +275,10 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
           dayLabel: dayLabel(nextFixture.dayIndex),
           dayIndex: nextFixture.dayIndex,
           isHome: nextFixture.homeClubId === clubId,
-          // Real-life date for UI display. Prefer the scheduled kickoff
-          // instant; fall back to the season-aligned calendar month (the
-          // multiplayer season maps its 1-based day index onto civil days).
-          dateLabel: (() => {
-            const fmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
-            const instant =
-              nextFixture.kickoffAt !== undefined && nextFixture.kickoffAt !== null
-                ? new Date(nextFixture.kickoffAt)
-                : new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, nextFixture.dayIndex)));
-            return fmt.format(instant);
-          })(),
+          // Raw epoch ms; the client renders it browser-local via utils/time.ts
+          // so the dashboard date matches every other localized timestamp
+          // instead of a server-side UTC label (plan 9).
+          kickoffAt: nextFixture.kickoffAt ?? null,
         }
       : null,
     competitions,

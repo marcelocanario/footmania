@@ -240,12 +240,12 @@ export async function executeRolloverStep(
     for (const division of divisionsInSeason(world, context.sourceSeasonId)) division.status = "ARCHIVED";
     removeFillerClubs(world);
 
-    const byTier = new Map<number, { clubId: number; timezone: string | null }[]>();
+    const byTier = new Map<number, { clubId: number }[]>();
     for (const [clubId, tier] of assignments) {
       const club = world.clubs.find((candidate) => candidate.id === clubId);
       if (!club) continue;
       if (!byTier.has(tier)) byTier.set(tier, []);
-      byTier.get(tier)!.push({ clubId, timezone: club.timezone });
+      byTier.get(tier)!.push({ clubId });
     }
     const lowestTier = assignments.size > 0 ? Math.max(...assignments.values()) : 1;
     const humansAtLowestTier = byTier.get(lowestTier)?.length ?? 0;
@@ -253,7 +253,7 @@ export async function executeRolloverStep(
     const provisionalTier = humansAtLowestTier > 0 && humansAtLowestTier % 8 === 0 ? lowestTier + 1 : lowestTier;
     if (provisional.length > 0) {
       if (!byTier.has(provisionalTier)) byTier.set(provisionalTier, []);
-      for (const club of provisional) byTier.get(provisionalTier)!.push({ clubId: club.id, timezone: club.timezone });
+      for (const club of provisional) byTier.get(provisionalTier)!.push({ clubId: club.id });
       context.provisionalClubIds = provisional.map((club) => club.id);
     }
 

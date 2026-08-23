@@ -85,7 +85,6 @@ export interface HumanClubOptions {
   userId: number;
   clubName: string;
   country: string;
-  timezone: string | null;
   primaryColor?: string;
   secondaryColor?: string;
   /** Kit Lab: full three-kit set from the creation wizard. When present the
@@ -94,8 +93,12 @@ export interface HumanClubOptions {
   stadiumName?: string;
   /** Human-entered manager name. Omitted only for internal legacy callers. */
   coachName?: string;
-  /** Validated half-hour preferred-match slots (see game/scheduling.ts). */
+  /** Validated half-hour preferred-match slots on the UTC grid
+   * (see game/scheduling.ts). */
   preferredHours?: number[] | null;
+  /** Friend-grouping consent; defaults to true (bilateral rule enforced in
+   * game/multiplayer.ts social scoring). */
+  friendGroupingOptIn?: boolean;
 }
 
 /**
@@ -114,8 +117,8 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     name,
     shortName: name,
     ownerUserId: opts.userId,
-    timezone: opts.timezone,
     preferredHours: opts.preferredHours ?? null,
+    friendGroupingOptIn: opts.friendGroupingOptIn ?? true,
     competitionState: "NEW",
     lastMeaningfulActivityAt: Date.now(),
     abandonmentEligibleAt: null,

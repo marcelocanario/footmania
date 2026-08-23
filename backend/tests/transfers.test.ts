@@ -12,7 +12,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     name: `Club ${id}`,
     shortName: `C${id}`,
     ownerUserId: null,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,

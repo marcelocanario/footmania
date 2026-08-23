@@ -210,7 +210,6 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
     name,
     shortName: name,
     ownerUserId: null,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,
@@ -367,7 +366,7 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
   const seasonStart = world.mp.seasonStartAt ?? Date.now();
   const prefOf = (clubId: number): PreferenceInput => {
     const club = clubById(world, clubId);
-    return { timezone: club?.timezone ?? null, preferredSlots: club?.preferredHours ?? null };
+    return { preferredSlots: club?.preferredHours ?? null };
   };
   const byRound = new Map<number, Fixture[]>();
   for (const f of fixtures) {
@@ -1029,37 +1028,45 @@ function validateAssignments(assignments: Map<number, number>, abandoned: Set<nu
   return errors;
 }
 
-export function timezoneCoordinate(tz: string | null): number {
-  // Approximate IANA -> longitude-derived hour coordinate for clustering.
-  // Falls back to UTC+0. Kept simple: sort roughly by UTC offset without DST.
-  const offset = utcOffsetHours(tz);
-  return offset;
+/**
+ * Pairwise window-overlap cost between two clubs' preferred match times
+ * (plan 9): squared missing-overlap of the two UTC slot sets. A pair with any
+ * unconstrained member costs 0 — same convention as kickoff scheduling, where
+ * unconstrained clubs never distort the optimum.
+ */
+export function preferredTimeDistance(a: number[] | null | undefined, b: number[] | null | undefined): number {
+  if (!a || a.length === 0 || !b || b.length === 0) return 0;
+  const setA = new Set(a);
+  const shared = b.reduce((count, slot) => count + (setA.has(slot) ? 1 : 0), 0);
+  return Math.pow(MP_CONFIG.slotsPerDay - shared, 2);
 }
 
-export function timezoneOffsetMinutes(tz: string | null, at = Date.now()): number {
-  if (!tz) return 0;
-  try {
-    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "longOffset" });
-    const name = fmt.formatToParts(new Date(at)).find((part) => part.type === "timeZoneName")?.value ?? "GMT";
-    const match = /GMT([+-])(\d{1,2})(?::?(\d{2}))?/.exec(name);
-    if (!match) return 0;
-    const minutes = Number(match[2]) * 60 + Number(match[3] ?? 0);
-    return match[1] === "-" ? -minutes : minutes;
-  } catch {
-    return 0;
-  }
-}
-
-export function calculateTimezoneDistance(offsetA: number, offsetB: number): number {
-  const raw = Math.abs(offsetA - offsetB) % 1440;
-  return Math.min(raw, 1440 - raw);
-}
-
-export function calculateTimezoneCost(groups: { timezone: string | null }[][], at = Date.now()): number {
+/** Sum of squared pairwise missing-overlap within each proposed group. */
+export function calculatePreferredTimeCost(groups: { clubId: number }[][], world: World): number {
   return groups.reduce((total, group) => total + group.reduce((cost, a, i) => cost + group.slice(i + 1).reduce((pairCost, b) => {
-    const distance = calculateTimezoneDistance(timezoneOffsetMinutes(a.timezone, at), timezoneOffsetMinutes(b.timezone, at));
-    return pairCost + distance * distance;
+    const clubA = clubById(world, a.clubId);
+    const clubB = clubById(world, b.clubId);
+    return pairCost + preferredTimeDistance(clubA?.preferredHours ?? null, clubB?.preferredHours ?? null);
   }, 0), 0), 0);
+}
+
+/**
+ * Circular centroid slot of a club's preferred windows (circular mean over the
+ * slot ring). Used only to seed the rotation order so clubs with nearby windows
+ * start contiguous; wrapped windows (nights around midnight) resolve correctly.
+ * Returns null for unconstrained clubs, which sort last.
+ */
+export function preferredCentroid(preferredSlots: number[] | null | undefined): number | null {
+  if (!preferredSlots || preferredSlots.length === 0) return null;
+  let x = 0;
+  let y = 0;
+  for (const slot of preferredSlots) {
+    const angle = (slot / MP_CONFIG.slotsPerDay) * 2 * Math.PI;
+    x += Math.cos(angle);
+    y += Math.sin(angle);
+  }
+  const normalized = ((Math.atan2(y, x) / (2 * Math.PI)) * MP_CONFIG.slotsPerDay + MP_CONFIG.slotsPerDay) % MP_CONFIG.slotsPerDay;
+  return normalized;
 }
 
 export function calculateEloBalanceCost(groups: { clubId: number }[][], world: World): number {
@@ -1073,28 +1080,50 @@ export function calculateEloBalanceCost(groups: { clubId: number }[][], world: W
   }, 0);
 }
 
+/** Canonical membership key for an unordered club pair. */
+function pairKey(a: number, b: number): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+
 /**
- * Return the lexicographic social score for a proposed grouping. Direct
- * friendships always outrank friends-of-friends. Missing friendship data is
- * intentionally treated as an empty graph for legacy worlds.
+ * Consented friendship graph over human clubs: bilateral opt-in gates every
+ * edge (plan 9). Shared by scoring AND the regrouping optimizers so the
+ * bilateral-consent rule lives in exactly one place.
  */
-export function calculateSocialScore(groups: { clubId: number }[][], world: World): { direct: number; friendsOfFriends: number } {
+function buildSocialGraph(world: World): { direct: Set<string>; neighbors: Map<number, Set<number>> } {
   const clubsByUser = new Map(world.clubs.filter((club) => club.ownerUserId !== null).map((club) => [club.ownerUserId!, club.id]));
+  const optedIn = new Set<number>();
+  for (const club of world.clubs) {
+    if (club.ownerUserId !== null && club.friendGroupingOptIn !== false) optedIn.add(club.id);
+  }
   const direct = new Set<string>();
   const neighbors = new Map<number, Set<number>>();
   for (const friendship of world.friendships ?? []) {
     if (friendship.userAId === friendship.userBId) continue;
     const a = clubsByUser.get(friendship.userAId);
     const b = clubsByUser.get(friendship.userBId);
-    if (a === undefined || b === undefined) continue;
-    const key = a < b ? `${a}:${b}` : `${b}:${a}`;
-    direct.add(key);
-    (neighbors.get(a) ?? new Set<number>()).add(b);
-    (neighbors.get(b) ?? new Set<number>()).add(a);
-    if (!neighbors.has(a)) neighbors.set(a, new Set([b]));
-    if (!neighbors.has(b)) neighbors.set(b, new Set([a]));
+    if (a === undefined || b === undefined || a === b) continue;
+    if (!optedIn.has(a) || !optedIn.has(b)) continue;
+    direct.add(pairKey(a, b));
+    if (!neighbors.has(a)) neighbors.set(a, new Set());
+    if (!neighbors.has(b)) neighbors.set(b, new Set());
+    neighbors.get(a)!.add(b);
+    neighbors.get(b)!.add(a);
   }
-  const directCount = (a: number, b: number) => direct.has(a < b ? `${a}:${b}` : `${b}:${a}`);
+  return { direct, neighbors };
+}
+
+/**
+ * Return the lexicographic social score for a proposed grouping. Direct
+ * friendships always outrank friends-of-friends. Missing friendship data is
+ * intentionally treated as an empty graph for legacy worlds.
+ *
+ * Bilateral consent (plan 9): an edge influences grouping only when BOTH
+ * owners kept friend-grouping enabled (`friendGroupingOptIn !== false`), so a
+ * player can never be pulled into someone else's group against their will.
+ */
+export function calculateSocialScore(groups: { clubId: number }[][], world: World): { direct: number; friendsOfFriends: number } {
+  const { direct, neighbors } = buildSocialGraph(world);
   let directScore = 0;
   let friendsOfFriendsScore = 0;
   for (const group of groups) {
@@ -1102,54 +1131,30 @@ export function calculateSocialScore(groups: { clubId: number }[][], world: Worl
       for (let j = i + 1; j < group.length; j++) {
         const a = group[i].clubId;
         const b = group[j].clubId;
-        if (directCount(a, b)) {
+        if (direct.has(pairKey(a, b))) {
           directScore++;
           continue;
         }
-        const aNeighbors = neighbors.get(a) ?? new Set<number>();
-        const bNeighbors = neighbors.get(b) ?? new Set<number>();
-        if ([...aNeighbors].some((neighbor) => bNeighbors.has(neighbor))) friendsOfFriendsScore++;
+        const aNeighbors = neighbors.get(a);
+        const bNeighbors = neighbors.get(b);
+        if (aNeighbors && bNeighbors && [...aNeighbors].some((neighbor) => bNeighbors.has(neighbor))) friendsOfFriendsScore++;
       }
     }
   }
   return { direct: directScore, friendsOfFriends: friendsOfFriendsScore };
 }
 
-const TZ_OFFSET_CACHE = new Map<string, number>();
-
-function utcOffsetHours(tz: string | null): number {
-  if (!tz) return 0;
-  const cached = TZ_OFFSET_CACHE.get(tz);
-  if (cached !== undefined) return cached;
-  try {
-    const now = new Date();
-    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" });
-    const parts = fmt.formatToParts(now);
-    const name = parts.find((p) => p.type === "timeZoneName")?.value ?? "";
-    const m = /GMT([+-])(\d{1,2})(?::?(\d{2}))?/.exec(name);
-    let hours = 0;
-    if (m) {
-      hours = Number(m[2]) + (Number(m[3] ?? "0") / 60);
-      if (m[1] === "-") hours = -hours;
-    }
-    TZ_OFFSET_CACHE.set(tz, hours);
-    return hours;
-  } catch {
-    TZ_OFFSET_CACHE.set(tz, 0);
-    return 0;
-  }
-}
-
 /**
  * Rebuild divisions for a tier from a set of humans, maximizing human density
- * first and then minimizing timezone spread (plan §36). Only the final
- * incomplete bottom division receives filler AI.
+ * first and then minimizing preferred-match-time spread (plan §36, as amended
+ * by plan 9: window-overlap clustering instead of timezone clustering). Only
+ * the final incomplete bottom division receives filler AI.
  */
 export function rebuildTierDivisions(
   world: World,
   seasonId: number,
   tier: number,
-  humans: { clubId: number; timezone: string | null }[],
+  humans: { clubId: number }[],
   ref: { year: number; month: number },
   options: { generateFixtures?: boolean; assignmentSeed?: number } = {},
 ): Competition[] {
@@ -1163,7 +1168,7 @@ export function rebuildTierDivisions(
   const required = humans.length === 0 ? 0 : Math.ceil(humans.length / CLUBS_PER_DIVISION);
   if (required === 0) return [];
   if (required > MAX_DIVISIONS_PER_TIER(tier)) throw new Error(`Tier ${tier} cannot contain ${humans.length} human clubs`);
-  const groups = buildBalancedTierGroups(world, humans, required, ref, options.assignmentSeed);
+  const groups = buildBalancedTierGroups(world, humans, required, options.assignmentSeed);
 
   const created: Competition[] = [];
   for (let g = 0; g < groups.length; g++) {
@@ -1186,43 +1191,51 @@ export function rebuildTierDivisions(
 
 function buildBalancedTierGroups(
   world: World,
-  humans: { clubId: number; timezone: string | null }[],
+  humans: { clubId: number }[],
   required: number,
-  ref: { year: number; month: number },
   assignmentSeed?: number,
-): { clubId: number; timezone: string | null }[][] {
+): { clubId: number }[][] {
   const baseSize = Math.floor(humans.length / required);
   const extra = humans.length % required;
   const capacities = Array.from({ length: required }, (_, i) => baseSize + (i < extra ? 1 : 0));
-  const at = Date.UTC(ref.year, ref.month - 1, 1, 12);
   const sorted = [...humans].sort((a, b) => {
-    const normalizedA = ((timezoneOffsetMinutes(a.timezone, at) % 1440) + 1440) % 1440;
-    const normalizedB = ((timezoneOffsetMinutes(b.timezone, at) % 1440) + 1440) % 1440;
-    if (normalizedA !== normalizedB) return normalizedA - normalizedB;
+    // Seed rotations from the circular centroid of each club's preferred
+    // windows so every candidate starts window-contiguous; unconstrained
+    // clubs (null preferences) sort last and only contribute tie-breaks.
+    const centroidA = preferredCentroid(clubById(world, a.clubId)?.preferredHours ?? null);
+    const centroidB = preferredCentroid(clubById(world, b.clubId)?.preferredHours ?? null);
+    if (centroidA === null || centroidB === null) {
+      if (centroidA !== null) return -1;
+      if (centroidB !== null) return 1;
+    } else if (Math.abs(centroidA - centroidB) > 1e-9) {
+      return centroidA - centroidB;
+    }
     const tieA = assignmentSeed === undefined ? a.clubId : seededTieBreak(assignmentSeed, a.clubId);
     const tieB = assignmentSeed === undefined ? b.clubId : seededTieBreak(assignmentSeed, b.clubId);
     return tieA - tieB || a.clubId - b.clubId;
   });
-  let best: { groups: { clubId: number; timezone: string | null }[][]; social: { direct: number; friendsOfFriends: number }; tz: number; elo: number; tieRank: number } | null = null;
-  for (let rotation = 0; rotation < sorted.length; rotation++) {
-    const rotated = sorted.map((_, i) => sorted[(i + rotation) % sorted.length]);
-    const groups: { clubId: number; timezone: string | null }[][] = [];
-    let cursor = 0;
-    for (const capacity of capacities) {
-      groups.push(rotated.slice(cursor, cursor + capacity));
-      cursor += capacity;
-    }
-    improveSocialAssignment(groups, world);
-    const social = calculateSocialScore(groups, world);
-    const tz = calculateTimezoneCost(groups, at);
-    const elo = calculateEloBalanceCost(groups, world);
-    const tieRank = assignmentSeed === undefined ? rotation : seededTieBreak(assignmentSeed, rotation);
-    if (!best || social.direct > best.social.direct ||
-      (social.direct === best.social.direct && (social.friendsOfFriends > best.social.friendsOfFriends ||
-        (social.friendsOfFriends === best.social.friendsOfFriends && (tz < best.tz ||
-          (tz === best.tz && (elo < best.elo - ELO_CONFIG.costEpsilon ||
-            (Math.abs(elo - best.elo) <= ELO_CONFIG.costEpsilon && tieRank < best.tieRank)))))))) {
-      best = { groups, social, tz, elo, tieRank };
+  const graph = buildSocialGraph(world);
+  // Objectives 2–3 (plan 9 §2): solve the friendship packing EXACTLY when the
+  // search fits its node budget; only oversized tiers fall back to the
+  // rotation heuristic below. Either way, availability is then descended at
+  // fixed social score before Elo gets its guarded improvement pass.
+  const exactGroups = bestExactSocialGroups(humans, capacities, sorted, graph);
+  let best: GroupCandidate | null = null;
+  if (exactGroups) {
+    improveAvailabilityAtFixedSocial(exactGroups, world);
+    best = measureGroups(exactGroups, world, 0);
+  } else {
+    for (let rotation = 0; rotation < sorted.length; rotation++) {
+      const rotated = sorted.map((_, i) => sorted[(i + rotation) % sorted.length]);
+      const groups: { clubId: number }[][] = [];
+      let cursor = 0;
+      for (const capacity of capacities) {
+        groups.push(rotated.slice(cursor, cursor + capacity));
+        cursor += capacity;
+      }
+      improveAssignment(groups, world);
+      const candidate = measureGroups(groups, world, assignmentSeed === undefined ? rotation : seededTieBreak(assignmentSeed, rotation));
+      if (!best || lexBetter(candidate, best)) best = candidate;
     }
   }
   if (!best) return [];
@@ -1238,7 +1251,7 @@ function buildBalancedTierGroups(
           for (let rightMember = 0; rightMember < best.groups[rightIndex].length; rightMember++) {
             const candidate = best.groups.map((group) => [...group]);
             [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
-            if (calculateTimezoneCost(candidate, at) !== best.tz) continue;
+            if (calculatePreferredTimeCost(candidate, world) !== best.avail) continue;
             const social = calculateSocialScore(candidate, world);
             if (social.direct !== best.social.direct || social.friendsOfFriends !== best.social.friendsOfFriends) continue;
             const candidateElo = calculateEloBalanceCost(candidate, world);
@@ -1267,11 +1280,124 @@ function seededTieBreak(seed: number, value: number): number {
   return (x ^ (x >>> 16)) >>> 0;
 }
 
-function improveSocialAssignment(groups: { clubId: number; timezone: string | null }[][], world: World): void {
+/** One evaluated grouping candidate, compared lexicographically (plan 9 §2). */
+interface GroupCandidate {
+  groups: { clubId: number }[][];
+  social: { direct: number; friendsOfFriends: number };
+  avail: number;
+  elo: number;
+  tieRank: number;
+}
+
+function measureGroups(groups: { clubId: number }[][], world: World, tieRank: number): GroupCandidate {
+  return {
+    groups,
+    social: calculateSocialScore(groups, world),
+    avail: calculatePreferredTimeCost(groups, world),
+    elo: calculateEloBalanceCost(groups, world),
+    tieRank,
+  };
+}
+
+/** Lexicographic preference: direct friends → friends-of-friends → overlap → Elo → seeded rank. */
+function lexBetter(a: GroupCandidate, b: GroupCandidate): boolean {
+  if (a.social.direct !== b.social.direct) return a.social.direct > b.social.direct;
+  if (a.social.friendsOfFriends !== b.social.friendsOfFriends) return a.social.friendsOfFriends > b.social.friendsOfFriends;
+  if (a.avail !== b.avail) return a.avail < b.avail;
+  if (Math.abs(a.elo - b.elo) > ELO_CONFIG.costEpsilon) return a.elo < b.elo;
+  return a.tieRank < b.tieRank;
+}
+
+class SearchBudgetExceeded extends Error {}
+
+/**
+ * Deterministic branch-and-bound over every capacity-respecting assignment,
+ * maximizing the packed social key `direct * (totalPairs + 1) + fof` exactly
+ * (plan 9 §2 objectives 2–3). A node budget keeps worst-case tiers bounded —
+ * when it is exhausted the caller falls back to the rotation heuristic below.
+ * Empty groups of equal capacity are interchangeable, so only the first is
+ * explored (symmetry break); this preserves completeness.
+ */
+function bestExactSocialGroups(
+  humans: { clubId: number }[],
+  capacities: number[],
+  order: { clubId: number }[],
+  graph: { direct: Set<string>; neighbors: Map<number, Set<number>> },
+  nodeBudget = 250_000,
+): { clubId: number }[][] | null {
+  const required = capacities.length;
+  const totalPairs = capacities.reduce((sum, size) => sum + (size * (size - 1)) / 2, 0);
+  const weight = totalPairs + 1;
+  const maxCapacity = Math.max(...capacities);
+  let nodes = 0;
+  let bestKey = -1;
+  let best: { clubId: number }[][] | null = null;
+  const groups: { clubId: number }[][] = Array.from({ length: required }, () => []);
+  try {
+    const recurse = (index: number, directSoFar: number, fofSoFar: number): void => {
+      if (++nodes > nodeBudget) throw new SearchBudgetExceeded();
+      const remaining = order.length - index;
+      if (remaining === 0) {
+        const key = directSoFar * weight + fofSoFar;
+        if (key > bestKey) {
+          bestKey = key;
+          best = groups.map((group) => [...group]);
+        }
+        return;
+      }
+      // Upper bound on any completion: each remaining member adds at most one
+      // pair per co-member; max capacity bounds that tightly enough to prune.
+      const slack = remaining * (maxCapacity - 1);
+      if (bestKey >= 0 && (directSoFar + slack) * weight + fofSoFar + slack <= bestKey) return;
+      const entry = order[index];
+      for (let g = 0; g < required; g++) {
+        if (groups[g].length >= capacities[g]) continue;
+        if (groups[g].length === 0) {
+          let duplicateEmpty = false;
+          for (let h = 0; h < g; h++) {
+            if (groups[h].length === 0 && capacities[h] === capacities[g]) {
+              duplicateEmpty = true;
+              break;
+            }
+          }
+          if (duplicateEmpty) continue;
+        }
+        let d = 0;
+        let f = 0;
+        for (const member of groups[g]) {
+          if (graph.direct.has(pairKey(entry.clubId, member.clubId))) d++;
+          else {
+            const mine = graph.neighbors.get(entry.clubId);
+            const theirs = graph.neighbors.get(member.clubId);
+            if (mine && theirs && [...mine].some((mid) => theirs.has(mid))) f++;
+          }
+        }
+        groups[g].push(entry);
+        recurse(index + 1, directSoFar + d, fofSoFar + f);
+        groups[g].pop();
+      }
+    };
+    recurse(0, 0, 0);
+  } catch (error) {
+    if (!(error instanceof SearchBudgetExceeded)) throw error;
+    return null;
+  }
+  return best;
+}
+
+/**
+ * Hill-climb one candidate toward the lexicographic optimum (direct friends →
+ * friends-of-friends → window overlap) with single member swaps. Used by the
+ * heuristic fallback for worlds too large for the exact search; a swap is only
+ * adopted when it improves a higher objective or keeps them identical while
+ * strictly reducing availability cost.
+ */
+function improveAssignment(groups: { clubId: number }[][], world: World): void {
   let improved = true;
   while (improved) {
     improved = false;
     const current = calculateSocialScore(groups, world);
+    const currentAvail = calculatePreferredTimeCost(groups, world);
     for (let leftIndex = 0; leftIndex < groups.length && !improved; leftIndex++) {
       for (let rightIndex = leftIndex + 1; rightIndex < groups.length && !improved; rightIndex++) {
         for (let leftMember = 0; leftMember < groups[leftIndex].length && !improved; leftMember++) {
@@ -1279,7 +1405,42 @@ function improveSocialAssignment(groups: { clubId: number; timezone: string | nu
             const candidate = groups.map((group) => [...group]);
             [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
             const score = calculateSocialScore(candidate, world);
-            if (score.direct > current.direct || (score.direct === current.direct && score.friendsOfFriends > current.friendsOfFriends)) {
+            const socialGain = score.direct > current.direct ||
+              (score.direct === current.direct && score.friendsOfFriends > current.friendsOfFriends);
+            const socialNeutral = score.direct === current.direct && score.friendsOfFriends === current.friendsOfFriends;
+            if (socialGain || (socialNeutral && calculatePreferredTimeCost(candidate, world) < currentAvail)) {
+              groups[leftIndex] = candidate[leftIndex];
+              groups[rightIndex] = candidate[rightIndex];
+              improved = true;
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Swap members between groups while both social objectives stay EXACTLY
+ * identical, strictly reducing window-overlap cost. Higher-priority objectives
+ * are never traded away (plan 9 §2: overlap sits below both social scores).
+ */
+function improveAvailabilityAtFixedSocial(groups: { clubId: number }[][], world: World): void {
+  const base = calculateSocialScore(groups, world);
+  let improved = true;
+  while (improved) {
+    improved = false;
+    const currentAvail = calculatePreferredTimeCost(groups, world);
+    for (let leftIndex = 0; leftIndex < groups.length && !improved; leftIndex++) {
+      for (let rightIndex = leftIndex + 1; rightIndex < groups.length && !improved; rightIndex++) {
+        for (let leftMember = 0; leftMember < groups[leftIndex].length && !improved; leftMember++) {
+          for (let rightMember = 0; rightMember < groups[rightIndex].length; rightMember++) {
+            const candidate = groups.map((group) => [...group]);
+            [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
+            const score = calculateSocialScore(candidate, world);
+            if (score.direct !== base.direct || score.friendsOfFriends !== base.friendsOfFriends) continue;
+            if (calculatePreferredTimeCost(candidate, world) < currentAvail) {
               groups[leftIndex] = candidate[leftIndex];
               groups[rightIndex] = candidate[rightIndex];
               improved = true;

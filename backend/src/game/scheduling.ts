@@ -5,9 +5,10 @@ import { MP_CONFIG } from "../config";
  *
  * Game days and rounds are fixed by the season calendar; only the intra-day
  * kickoff varies. The day is divided into `MP_CONFIG.slotsPerDay` half-hour
- * slots on a UTC grid; each club's preferences are half-hour buckets of its
- * local wall clock. Distances are circular (midnight wraps), so 23:30 is one
- * slot away from 00:00.
+ * slots on a UTC grid; each club's preferences are half-hour buckets on that
+ * same UTC grid (clients convert from/to the user's browser timezone at the
+ * edges — the server never stores a timezone). Distances are circular
+ * (midnight wraps), so 23:30 is one slot away from 00:00.
  *
  * Objective per fixture (lexicographic):
  *   1. minimize the home club's distance to its preferred windows;
@@ -31,42 +32,26 @@ import { MP_CONFIG } from "../config";
 
 /** Scheduling flexibility of one club. */
 export interface PreferenceInput {
-  timezone: string | null;
-  /** Selected half-hour slot indices (0 = 00:00–00:30 local). */
+  /** Selected half-hour slot indices on the UTC grid (0 = 00:00–00:30 UTC). */
   preferredSlots: number[] | null | undefined;
 }
 
 const MS_PER_SLOT = MP_CONFIG.preferredSlotMinutes * 60 * 1000;
 
-function tzOffsetMinutesAt(timeZone: string | null, at: number): number {
-  if (!timeZone) return 0;
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" }).formatToParts(new Date(at));
-    const value = parts.find((part) => part.type === "timeZoneName")?.value ?? "GMT";
-    const match = /^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/.exec(value);
-    if (!match) return 0;
-    const minutes = Number(match[2]) * 60 + Number(match[3] ?? "0");
-    return match[1] === "-" ? -minutes : minutes;
-  } catch {
-    return 0;
-  }
-}
-
-/** Half-hour bucket (0..47) of the local wall-clock time of `at`. */
-export function localSlotAt(at: number, timeZone: string | null): number {
+/** Half-hour bucket (0..47) of the UTC wall-clock time of `at`. */
+export function utcSlotAt(at: number): number {
   const date = new Date(at);
   const utcMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
-  const localMinutes = ((utcMinutes + tzOffsetMinutesAt(timeZone, at)) % 1440 + 1440) % 1440;
-  return Math.floor(localMinutes / MP_CONFIG.preferredSlotMinutes);
+  return Math.floor(utcMinutes / MP_CONFIG.preferredSlotMinutes);
 }
 
 /**
- * Circular distance in half-hour slots from `at`'s local slot to the nearest
+ * Circular distance in half-hour slots from `at`'s UTC slot to the nearest
  * preferred slot. Unconstrained preferences (null/empty) score 0 everywhere.
  */
-export function preferenceDistance(preferredSlots: PreferenceInput["preferredSlots"], at: number, timeZone: string | null): number {
+export function preferenceDistance(preferredSlots: PreferenceInput["preferredSlots"], at: number): number {
   if (!preferredSlots || preferredSlots.length === 0) return 0;
-  const slot = localSlotAt(at, timeZone);
+  const slot = utcSlotAt(at);
   let best = Infinity;
   for (const p of preferredSlots) {
     const raw = Math.abs(slot - p);
@@ -105,8 +90,8 @@ interface ScoredCandidate {
 function scoreCandidates(dayStartMs: number, seedKey: string, pairs: { home: PreferenceInput; away: PreferenceInput }[]): ScoredCandidate[] {
   return candidateKickoffs(dayStartMs).map((at, slot) => ({
     slot,
-    home: pairs.reduce((sum, pair) => sum + preferenceDistance(pair.home.preferredSlots, at, pair.home.timezone), 0),
-    away: pairs.reduce((sum, pair) => sum + preferenceDistance(pair.away.preferredSlots, at, pair.away.timezone), 0),
+    home: pairs.reduce((sum, pair) => sum + preferenceDistance(pair.home.preferredSlots, at), 0),
+    away: pairs.reduce((sum, pair) => sum + preferenceDistance(pair.away.preferredSlots, at), 0),
     // Per-slot pseudo-random priority: among equally-preferred slots the
     // winner is uniform over them, unique per fixture identity.
     jitter: stableHash(`${seedKey}:${slot}`),

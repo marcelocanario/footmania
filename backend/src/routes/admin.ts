@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
-import { simulateThroughRound, divisionsInSeason, isFillerAI, timezoneCoordinate } from "../game/multiplayer";
+import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
 import { ROUNDS_PER_SEASON } from "../game/multiplayer";
 import { budgetSettings, setBudgetSettings } from "../game/budget";
@@ -184,7 +184,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const activeDivisionsByTier = new Map<number, number>();
     const sizes: number[] = [];
     let avgHumansPerDivision = 0;
-    const timezoneSpreads: { divisionId: number; spreadHours: number }[] = [];
+    const availabilityOverlaps: { divisionId: number; averageOverlapHours: number; averagePairCost: number }[] = [];
     if (divisions.length > 0) {
       let totalHumans = 0;
       for (const d of divisions) {
@@ -192,11 +192,26 @@ export async function adminRoutes(app: FastifyInstance) {
         sizes.push(members);
         activeDivisionsByTier.set(d.tier ?? 1, (activeDivisionsByTier.get(d.tier ?? 1) ?? 0) + 1);
         totalHumans += Object.values(d.standings).filter((r) => world.clubs.find((c) => c.id === r.clubId)?.ownerUserId != null).length;
-        const coordinates = Object.values(d.standings)
-          .map((r) => world.clubs.find((c) => c.id === r.clubId)?.timezone)
-          .filter((tz): tz is string => !!tz)
-          .map(timezoneCoordinate);
-        timezoneSpreads.push({ divisionId: d.id, spreadHours: coordinates.length > 1 ? Math.max(...coordinates) - Math.min(...coordinates) : 0 });
+        // Window-overlap telemetry (plan 9): mean pairwise shared preferred
+        // hours between constrained humans, plus the raw grouping cost.
+        const prefs = Object.values(d.standings)
+          .map((r) => world.clubs.find((c) => c.id === r.clubId)?.preferredHours)
+          .filter((hours): hours is number[] => !!hours && hours.length > 0);
+        let overlapSum = 0;
+        let costSum = 0;
+        let pairCount = 0;
+        for (let i = 0; i < prefs.length; i++) {
+          for (let j = i + 1; j < prefs.length; j++) {
+            overlapSum += prefs[i].filter((slot) => prefs[j].includes(slot)).length / 2;
+            costSum += preferredTimeDistance(prefs[i], prefs[j]);
+            pairCount++;
+          }
+        }
+        availabilityOverlaps.push({
+          divisionId: d.id,
+          averageOverlapHours: pairCount > 0 ? Number((overlapSum / pairCount).toFixed(2)) : 0,
+          averagePairCost: pairCount > 0 ? Number((costSum / pairCount).toFixed(2)) : 0,
+        });
       }
       avgHumansPerDivision = totalHumans / divisions.length;
     }
@@ -241,7 +256,7 @@ export async function adminRoutes(app: FastifyInstance) {
         liveMatchCount: world.liveMatches.length,
         joinState: world.mp.joinState,
         seasonStatus: world.mp.seasonStatus,
-        timezoneSpreadByDivision: timezoneSpreads,
+        availabilityOverlapByDivision: availabilityOverlaps,
         alerts: [
           ...sizes.filter((size) => size !== 8).map((size, i) => `division ${i + 1} has ${size} clubs (expected 8)`),
           ...(world.transferAuctions.some((a) => a.status === "ACTIVE" && a.deadline < Date.now()) ? ["transfer listing overdue"] : []),

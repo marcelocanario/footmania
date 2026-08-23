@@ -39,7 +39,6 @@ function makeClub(id: number, overrides: Partial<Club> = {}): Club {
     // Human by default: market participants are always human clubs
     // (invariant #28 — filler-AI clubs cannot list, bid or claim).
     ownerUserId: 1000 + id,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,

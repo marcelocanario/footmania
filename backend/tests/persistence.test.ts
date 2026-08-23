@@ -6,8 +6,9 @@ process.env.NODE_ENV = "test";
 import { PrismaClient } from "@prisma/client";
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
 import { createHumanClub } from "../src/game/worldgen";
-import { loadGlobalWorld, persistLiveMatchState, persistWorld, ensureGlobalSave, StaleWorldError } from "../src/services/saveService";
+import { loadGlobalWorld, loadGlobalWorldMutable, persistLiveMatchState, persistWorld, ensureGlobalSave, invalidateWorldCache, StaleWorldError } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
+import { readMpStatus } from "../src/services/readService";
 import { applyDevelopment } from "../src/game/player";
 import { initSeason, createDivision, ensureDivisionFull, generateDivisionFixtures, rebuildTierDivisions, highestRankedReplaceableAI, placeNewClub } from "../src/game/multiplayer";
 import { applyMaxBid, createTransferAuction } from "../src/game/market";
@@ -73,6 +74,93 @@ describe("global multiplayer world persistence", () => {
     expect(reloaded!.world.clubEloEvents).toHaveLength(1);
     expect(reloaded!.world.clubEloEvents![0].matchId).toBe(880000);
     expect(reloaded!.world.nextId).toBeGreaterThan(880001);
+  });
+
+  it("round-trips friend-grouping consent and converts legacy local preferred hours once", async () => {
+    const { saveId } = await freshGlobalWorld(4711);
+    const { world } = await withSeason(saveId);
+    // Club.ownerUserId has a real FK: back the human club with a User row.
+    await prisma.user.deleteMany({ where: { id: 4700 } });
+    await prisma.user.create({ data: { id: 4700, username: "persist-consent", passwordHash: "test" } });
+    const club = createHumanClub(world, { userId: 4700, clubName: "Consent FC", country: "BRA" });
+    club.friendGroupingOptIn = false;
+    await persistWorld(prisma, saveId, saveId, world);
+
+    // Simulate a legacy row (plan 9): timezone marker still present and
+    // preferredHours stored as LOCAL wall-clock slots.
+    await prisma.club.update({
+      where: { saveId_id: { saveId, id: club.id } },
+      data: { timezone: "Asia/Tokyo", preferredHoursJson: JSON.stringify([38, 39, 2]) },
+    });
+
+    const firstLoad = await loadGlobalWorld(prisma);
+    expect(firstLoad).not.toBeNull();
+    const migrated = firstLoad!.world.clubs.find((c) => c.id === club.id)!;
+    // Tokyo is UTC+9 year-round: 19:00 local -> 10:00 UTC (slot 20),
+    // 19:30 -> slot 21, 01:00 -> 16:00 UTC of the previous day (slot 32).
+    expect(migrated.preferredHours).toEqual([20, 21, 32]);
+    expect(migrated.friendGroupingOptIn).toBe(false);
+
+    // Read paths share the same one-time conversion so an un-migrated row can
+    // never serve its local wall-clock slots mislabeled as UTC (plan 9).
+    const status = await readMpStatus(prisma, 4700);
+    expect(status.ready).toBe(true);
+    if (status.ready) expect(status.club?.preferredHours).toEqual([20, 21, 32]);
+
+    // Persisting the converted world clears the legacy marker; reloading no
+    // longer shifts anything (idempotent conversion).
+    await persistWorld(prisma, saveId, saveId, firstLoad!.world);
+    const row = await prisma.club.findUnique({ where: { saveId_id: { saveId, id: club.id } } });
+    expect(row?.timezone ?? null).toBeNull();
+    const secondLoad = await loadGlobalWorld(prisma);
+    const stable = secondLoad!.world.clubs.find((c) => c.id === club.id)!;
+    expect(stable.preferredHours).toEqual([20, 21, 32]);
+  });
+
+  it("keeps :45-offset zones stable and clears the marker on partial club updates", async () => {
+    const { saveId } = await freshGlobalWorld(4713);
+    const { world } = await withSeason(saveId);
+    await prisma.user.deleteMany({ where: { id: 4701 } });
+    await prisma.user.create({ data: { id: 4701, username: "persist-nepal", passwordHash: "test" } });
+    const club = createHumanClub(world, { userId: 4701, clubName: "Nepal FC", country: "BRA" });
+    await persistWorld(prisma, saveId, saveId, world);
+
+    // Legacy row: local wall-clock slots under Asia/Kathmandu (+05:45).
+    await prisma.club.update({
+      where: { saveId_id: { saveId, id: club.id } },
+      data: { timezone: "Asia/Kathmandu", preferredHoursJson: JSON.stringify([34, 35, 0]) },
+    });
+
+    const loaded = await loadGlobalWorld(prisma);
+    const migrated = loaded!.world.clubs.find((c) => c.id === club.id)!;
+    // Offset quantizes to a whole-slot shift (+05:45 = 345 min -> 11.5 ->
+    // rounds to 12 slots): local 17:00 -> 10:00 UTC (22), 17:30 -> 23,
+    // 00:00 -> previous day 12:00 (36). The same quantized shift in both
+    // directions keeps round trips exact.
+    expect(migrated.preferredHours).toEqual([22, 23, 36]);
+
+    // Regression: the per-club UPDATE delta path must clear the legacy marker
+    // too. clubRow previously omitted timezone, so a cached-world partial
+    // write kept the row convertible forever and slots were re-shifted once
+    // per server restart. Enable the production cache to drive that path.
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const mutable = await loadGlobalWorldMutable(prisma);
+      if (!mutable) throw new Error("world did not load");
+      mutable.world.clubs.find((candidate) => candidate.id === club.id)!.cash += 1;
+      await persistWorld(prisma, mutable.save.id, mutable.save.id, mutable.world, mutable.save.revision);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+    const rowAfterDelta = await prisma.club.findUnique({ where: { saveId_id: { saveId, id: club.id } } });
+    expect(rowAfterDelta?.timezone ?? null).toBeNull();
+    expect(JSON.parse(rowAfterDelta?.preferredHoursJson ?? "null")).toEqual([22, 23, 36]);
+    // And the conversion stays idempotent across the next reload.
+    const afterDelta = (await loadGlobalWorld(prisma))!.world.clubs.find((candidate) => candidate.id === club.id)!;
+    expect(afterDelta.preferredHours).toEqual([22, 23, 36]);
   });
 
   it("round-trips retained player values without regeneration", async () => {
@@ -277,7 +365,7 @@ describe("global multiplayer world persistence", () => {
     const { MP_CONFIG } = await import("../src/config");
     const division = world.competitions.find((candidate) => candidate.kind === "division" && candidate.seasonId === seasonId)!;
     const makeTrader = (userId: number, name: string) => {
-      const club = createHumanClub(world, { userId, clubName: name, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId, clubName: name, country: "BRA" });
       club.competitionState = "ACTIVE";
       for (let round = 0; round < MP_CONFIG.newClubSellLockMatches; round++) {
         world.fixtures.push({ id: world.nextId++, competitionId: division.id, round, homeClubId: club.id, awayClubId: -club.id, dayIndex: round, played: true });
@@ -469,7 +557,7 @@ describe("global multiplayer world persistence", () => {
     };
     world.transferAuctions.push(listing);
     void ai;
-    const bidder = createHumanClub(world, { userId: 9051, clubName: "Bidder FC", country: "BRA", timezone: "UTC" });
+    const bidder = createHumanClub(world, { userId: 9051, clubName: "Bidder FC", country: "BRA" });
     bidder.cash = Math.max(bidder.cash, listing.openingPrice + 1_000_000);
     const bid = applyMaxBid(world, {
       listing,
@@ -483,7 +571,7 @@ describe("global multiplayer world persistence", () => {
     expect(bid.ok).toBe(true);
 
     // A human takes the AI's slot; the leading bidder must keep the player.
-    const joiner = createHumanClub(world, { userId: 9052, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const joiner = createHumanClub(world, { userId: 9052, clubName: "Joiner FC", country: "BRA" });
     const result = placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 });
     if (result.kind !== "active") throw new Error("expected active placement");
     expect(result.replacedClubId).toBe(aiId);

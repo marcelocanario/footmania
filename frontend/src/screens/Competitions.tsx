@@ -10,11 +10,7 @@ import { api, type FixtureView, type LiveEvent, type MatchEvents, type MatchStat
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { ClubCrest } from "../components/ClubCrest";
-
-function kickoffLabel(kickoffAt: number | null): string {
-  if (!kickoffAt) return "";
-  return new Date(kickoffAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
+import { formatKickoff as kickoffLabel } from "../utils/time";
 
 /** Groups are numbered (1-based): the pyramid grows exponentially, so letters run out. */
 function groupLabel(groupIndex: number): string {

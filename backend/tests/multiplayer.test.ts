@@ -43,7 +43,7 @@ function seasonWorld(seed = 1): { world: World; seasonId: number } {
 }
 
 function addHuman(world: World, userId: number, name: string, tier: number): number {
-  const club = createHumanClub(world, { userId, clubName: name, country: "BRA", timezone: "America/Sao_Paulo" });
+  const club = createHumanClub(world, { userId, clubName: name, country: "BRA" });
   const comp = divisionsInSeason(world, world.mp.seasonId).find((d) => tierOf(d) === tier && Object.keys(d.standings).length < 8);
   if (comp) {
     replaceClubInDivision(world, comp, highestRankedReplaceableAI(world, comp)!, club.id);
@@ -66,18 +66,18 @@ describe("pyramid capacity", () => {
     const div1 = world.competitions.find((c) => c.kind === "division")!;
     // Replace the first 7 AIs with humans.
     for (let i = 1; i <= 7; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA", timezone: "America/Sao_Paulo" });
+      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
     // The 8th human fills the last Division 1 slot (still one division).
-    const c8 = createHumanClub(world, { userId: 8, clubName: "Human 8", country: "BRA", timezone: "America/Sao_Paulo" });
+    const c8 = createHumanClub(world, { userId: 8, clubName: "Human 8", country: "BRA" });
     const r8 = placeNewClub(world, c8.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(r8.kind).toBe("active");
     expect(world.competitions.filter((c) => c.kind === "division").length).toBe(1);
     expect(Object.values(div1.standings).every((r) => world.clubs.find((c) => c.id === r.clubId)?.ownerUserId !== null)).toBe(true);
     // The 9th human needs a new division at tier 2.
-    const c9 = createHumanClub(world, { userId: 9, clubName: "Human 9", country: "BRA", timezone: "America/Sao_Paulo" });
+    const c9 = createHumanClub(world, { userId: 9, clubName: "Human 9", country: "BRA" });
     const r9 = placeNewClub(world, c9.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(r9.kind).toBe("active");
     const divs = world.competitions.filter((c) => c.kind === "division");
@@ -108,7 +108,7 @@ describe("pyramid capacity", () => {
       // with 8 AI. Fill humans across divisions via placeNewClub.
       const clubs: number[] = [];
       for (let i = 0; i < numHumans; i++) {
-        const club = createHumanClub(world, { userId: 10_000 + i, clubName: `H${i}`, country: "BRA", timezone: "UTC" });
+        const club = createHumanClub(world, { userId: 10_000 + i, clubName: `H${i}`, country: "BRA" });
         const res = placeNewClub(world, club.id, Date.now(), seasonId, { year: 2026, month: 2 });
         expect(res.kind).toBe("active");
         clubs.push(club.id);
@@ -164,7 +164,7 @@ describe("AI replacement preserves standings identity", () => {
     row.played = 4;
     row.wins = 4;
 
-    const club = createHumanClub(world, { userId: 99, clubName: "Marcelo FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 99, clubName: "Marcelo FC", country: "BRA" });
     replaceClubInDivision(world, div1, aiId, club.id);
     expect(div1.standings[club.id].points).toBe(12);
     expect(div1.standings[club.id].played).toBe(4);
@@ -175,7 +175,7 @@ describe("AI replacement preserves standings identity", () => {
   it("does not copy the replaced AI's club assets", () => {
     const { world, seasonId } = seasonWorld(31);
     const division = world.competitions.find((c) => c.kind === "division")!;
-    const club = createHumanClub(world, { userId: 3131, clubName: "Own Assets FC", country: "BRA", timezone: "UTC" });
+    const club = createHumanClub(world, { userId: 3131, clubName: "Own Assets FC", country: "BRA" });
     const ownCash = club.cash;
     const result = placeNewClub(world, club.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(result.kind).toBe("active");
@@ -190,13 +190,13 @@ describe("mid-season placement", () => {
     // Fill Division 1 with 8 humans so a new tier-2 division is required.
     const div1 = world.competitions.find((c) => c.kind === "division")!;
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA", timezone: "Europe/London" });
+      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
     // Simulate that we're at round 3 of the season.
     world.mp.completedRounds = 3;
-    const club = createHumanClub(world, { userId: 9, clubName: "Joiner FC", country: "BRA", timezone: "Asia/Tokyo" });
+    const club = createHumanClub(world, { userId: 9, clubName: "Joiner FC", country: "BRA" });
     const result = placeNewClub(world, club.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(result.kind).toBe("active");
     const newDiv = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 2)!;
@@ -216,7 +216,7 @@ describe("provisional joining after lock", () => {
     const { world, seasonId } = seasonWorld(5);
     world.mp.joinState = "LOCKED";
     world.mp.completedRounds = 8;
-    const club = createHumanClub(world, { userId: 50, clubName: "Late FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 50, clubName: "Late FC", country: "BRA" });
     const result = placeNewClub(world, club.id, Date.now(), seasonId, { year: 2026, month: 2 });
     expect(result.kind).toBe("provisional");
     expect(club.competitionState).toBe("PROVISIONAL");
@@ -228,14 +228,14 @@ describe("promotion / relegation", () => {
     const { world, seasonId } = seasonWorld(60);
     const parent = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `Parent-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `Parent-${i}`, country: "BRA" });
       replaceClubInDivision(world, parent, highestRankedReplaceableAI(world, parent)!, club.id);
       club.competitionState = "ACTIVE";
     }
     const child = createDivision(world, { tier: 2, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
     ensureDivisionFull(world, child);
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: 100 + i, clubName: `Child-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: 100 + i, clubName: `Child-${i}`, country: "BRA" });
       replaceClubInDivision(world, child, highestRankedReplaceableAI(world, child)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -250,7 +250,7 @@ describe("promotion / relegation", () => {
     // Tier 1: 8 humans. Tier 2.1 + 2.2 each with 8 humans.
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -259,10 +259,10 @@ describe("promotion / relegation", () => {
     const d22 = createDivision(world, { tier: 2, groupIndex: 1, seasonId, ref: { year: 2026, month: 1 } });
     ensureDivisionFull(world, d22);
     for (let i = 1; i <= 8; i++) {
-      const c1 = createHumanClub(world, { userId: 100 + i, clubName: `D21-${i}`, country: "BRA", timezone: null });
+      const c1 = createHumanClub(world, { userId: 100 + i, clubName: `D21-${i}`, country: "BRA" });
       replaceClubInDivision(world, d21, highestRankedReplaceableAI(world, d21)!, c1.id);
       c1.competitionState = "ACTIVE";
-      const c2 = createHumanClub(world, { userId: 200 + i, clubName: `D22-${i}`, country: "BRA", timezone: null });
+      const c2 = createHumanClub(world, { userId: 200 + i, clubName: `D22-${i}`, country: "BRA" });
       replaceClubInDivision(world, d22, highestRankedReplaceableAI(world, d22)!, c2.id);
       c2.competitionState = "ACTIVE";
     }
@@ -292,7 +292,7 @@ describe("promotion / relegation", () => {
     const parent = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     // 7 humans in Division 1 (leaving 1 AI filler at the bottom edge).
     for (let i = 1; i <= 7; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, parent, highestRankedReplaceableAI(world, parent)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -311,7 +311,7 @@ describe("promotion / relegation", () => {
     const child = createDivision(world, { tier: 2, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
     ensureDivisionFull(world, child);
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: 100 + i, clubName: `Child-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: 100 + i, clubName: `Child-${i}`, country: "BRA" });
       replaceClubInDivision(world, child, highestRankedReplaceableAI(world, child)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -334,7 +334,7 @@ describe("promotion / relegation", () => {
     const { world, seasonId } = seasonWorld(73);
     const div = world.competitions.find((c) => c.kind === "division")!;
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `H-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `H-${i}`, country: "BRA" });
       replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -354,14 +354,14 @@ describe("extinct lower tier (invariant 29)", () => {
     const { world, seasonId } = seasonWorld(seed);
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= tier1Humans; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
     const div2 = createDivision(world, { tier: 2, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
     ensureDivisionFull(world, div2);
     for (let i = 1; i <= tier2Humans; i++) {
-      const club = createHumanClub(world, { userId: 100 + i, clubName: `D2-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: 100 + i, clubName: `D2-${i}`, country: "BRA" });
       replaceClubInDivision(world, div2, highestRankedReplaceableAI(world, div2)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -434,21 +434,21 @@ describe("extinct lower tier (invariant 29)", () => {
     const { world, seasonId } = seasonWorld(85);
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 5; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
     const div2 = createDivision(world, { tier: 2, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
     ensureDivisionFull(world, div2);
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: 100 + i, clubName: `D2-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: 100 + i, clubName: `D2-${i}`, country: "BRA" });
       replaceClubInDivision(world, div2, highestRankedReplaceableAI(world, div2)!, club.id);
       club.competitionState = "ACTIVE";
     }
     const div3 = createDivision(world, { tier: 3, groupIndex: 0, seasonId, ref: { year: 2026, month: 1 } });
     ensureDivisionFull(world, div3);
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: 200 + i, clubName: `D3-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: 200 + i, clubName: `D3-${i}`, country: "BRA" });
       replaceClubInDivision(world, div3, highestRankedReplaceableAI(world, div3)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -473,7 +473,7 @@ describe("extinct lower tier (invariant 29)", () => {
     const { world, seasonId } = seasonWorld(86);
     const div1 = world.competitions.find((c) => c.kind === "division")!;
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `Lone-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `Lone-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -518,7 +518,7 @@ describe("admin manual round advance", () => {
     const div = world.competitions.find((c) => c.kind === "division")!;
     // Replace 2 AIs with humans.
     for (let i = 1; i <= 2; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA" });
       replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -543,7 +543,7 @@ describe("admin manual round advance", () => {
     const { world } = seasonWorld(43);
     const div = world.competitions.find((c) => c.kind === "division")!;
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA", timezone: "America/Sao_Paulo" });
+      const club = createHumanClub(world, { userId: i, clubName: `Human ${i}`, country: "BRA" });
       replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -551,11 +551,11 @@ describe("admin manual round advance", () => {
     // Rollover into a new season id (2).
     const nextRef = { year: 2026, month: 2 };
     const { assignments } = computeNextTierAssignments(world, world.mp.seasonId);
-    const byTier = new Map<number, { clubId: number; timezone: string | null }[]>();
+    const byTier = new Map<number, { clubId: number }[]>();
     for (const [clubId, tier] of assignments) {
       if (!byTier.has(tier)) byTier.set(tier, []);
       const club = world.clubs.find((c) => c.id === clubId)!;
-      byTier.get(tier)!.push({ clubId, timezone: club.timezone });
+      byTier.get(tier)!.push({ clubId });
     }
     for (const [tier, humans] of byTier.entries()) {
       rebuildTierDivisions(world, 2, tier, humans, nextRef);
@@ -569,37 +569,56 @@ describe("admin manual round advance", () => {
   });
 });
 
-describe("timezone clustering", () => {
-  it("balances 19 humans across 3 same-tier divisions while minimizing timezone spread", () => {
-    // 19 humans spread across timezones -> near-even groups of 7/6/6 from
-    // buildBalancedTierGroups (plan §36: density first, then timezone cost).
+describe("availability clustering", () => {
+  // Three disjoint two-hour-wide (in hours: four-hour) window families on the
+  // UTC grid; same-family pairs overlap fully, cross-family pairs not at all.
+  const WINDOW_A = Array.from({ length: 8 }, (_, i) => 8 + i);  // 04:00–08:00
+  const WINDOW_B = Array.from({ length: 8 }, (_, i) => 24 + i); // 12:00–16:00
+  const WINDOW_C = Array.from({ length: 8 }, (_, i) => 40 + i); // 20:00–24:00
+
+  it("balances 19 humans across 3 same-tier divisions while maximizing window overlap", () => {
+    // 19 humans in three disjoint window families sized exactly like the
+    // balanced capacities -> the only arrangement without a cross-family pair
+    // puts one family per division (plan §36: density first, plan 9: overlap).
     const { world } = seasonWorld(190);
-    const humans = Array.from({ length: 19 }, (_, i) => {
-      const club = createHumanClub(world, { userId: i + 1, clubName: `Cluster-${i + 1}`, country: "BRA", timezone: ["Asia/Tokyo", "Europe/London", "America/Sao_Paulo", "UTC"][i % 4] });
+    const windows = [
+      ...Array.from({ length: 7 }, () => WINDOW_A),
+      ...Array.from({ length: 6 }, () => WINDOW_B),
+      ...Array.from({ length: 6 }, () => WINDOW_C),
+    ];
+    const humans = windows.map((preferredHours, i) => {
+      const club = createHumanClub(world, { userId: i + 1, clubName: `Cluster-${i + 1}`, country: "BRA", preferredHours });
       club.competitionState = "ACTIVE";
-      return { clubId: club.id, timezone: club.timezone };
+      return { clubId: club.id };
     });
     // Tier 3 allows up to 4 divisions, enough for 19 humans in 3 groups.
     const divisions = rebuildTierDivisions(world, world.mp.seasonId, 3, humans, { year: 2026, month: 2 }, { generateFixtures: false });
     expect(divisions).toHaveLength(3);
     const sizes = divisions.map((division) => Object.keys(division.standings).map(Number).filter((id) => humans.some((human) => human.clubId === id)).length);
     expect(sizes).toEqual([7, 6, 6]);
-    // Timezone affinity: each group's members are timezone-contiguous after
-    // the swap optimization (same-timezone clubs end up together).
+    // Window affinity: after the swap optimization every division's humans
+    // share a single preferred-time family.
+    const familyOf = (clubId: number): "A" | "B" | "C" => {
+      const first = world.clubs.find((c) => c.id === clubId)!.preferredHours![0];
+      if (first === WINDOW_A[0]) return "A";
+      if (first === WINDOW_B[0]) return "B";
+      return "C";
+    };
     for (const division of divisions) {
-      const timezones = Object.keys(division.standings)
+      const families = Object.keys(division.standings)
         .map(Number)
-        .map((id) => humans.find((human) => human.clubId === id)?.timezone);
-      expect(new Set(timezones).size).toBeLessThanOrEqual(4);
+        .filter((id) => humans.some((human) => human.clubId === id))
+        .map(familyOf);
+      expect(new Set(families).size).toBe(1);
     }
   });
 
-  it("keeps direct friends together before timezone and Elo objectives", () => {
+  it("keeps direct friends together before availability and Elo objectives", () => {
     const { world } = seasonWorld(191);
     const humans = Array.from({ length: 8 }, (_, index) => {
-      const club = createHumanClub(world, { userId: index + 1, clubName: `Friend-${index + 1}`, country: "BRA", timezone: "UTC" });
+      const club = createHumanClub(world, { userId: index + 1, clubName: `Friend-${index + 1}`, country: "BRA" });
       club.competitionState = "ACTIVE";
-      return { clubId: club.id, timezone: club.timezone };
+      return { clubId: club.id };
     });
     world.friendships = [
       { userAId: 1, userBId: 5 },
@@ -615,13 +634,66 @@ describe("timezone clustering", () => {
     expect(calculateSocialScore(groups, world).direct).toBe(4);
   });
 
+  it("only counts a friendship when both owners opted in", () => {
+    // Bilateral consent (plan 9): an edge influences grouping only while BOTH
+    // owners keep friend-grouping enabled.
+    const { world } = seasonWorld(196);
+    const clubByUser = new Map<number, number>();
+    const humans = Array.from({ length: 4 }, (_, index) => {
+      const club = createHumanClub(world, { userId: index + 1, clubName: `Consent-${index + 1}`, country: "BRA" });
+      club.competitionState = "ACTIVE";
+      clubByUser.set(index + 1, club.id);
+      return { clubId: club.id };
+    });
+    world.friendships = [{ userAId: 1, userBId: 2 }];
+    const groups = [
+      humans.filter((h) => h.clubId === clubByUser.get(1) || h.clubId === clubByUser.get(2)),
+      humans.filter((h) => h.clubId === clubByUser.get(3) || h.clubId === clubByUser.get(4)),
+    ];
+    expect(calculateSocialScore(groups, world).direct).toBe(1);
+
+    // One side opting out removes the pair effect entirely.
+    world.clubs.find((c) => c.id === clubByUser.get(2))!.friendGroupingOptIn = false;
+    expect(calculateSocialScore(groups, world).direct).toBe(0);
+    // Both opted out stays at zero.
+    world.clubs.find((c) => c.id === clubByUser.get(1))!.friendGroupingOptIn = false;
+    expect(calculateSocialScore(groups, world).direct).toBe(0);
+    // Both opting back in restores it.
+    world.clubs.find((c) => c.id === clubByUser.get(1))!.friendGroupingOptIn = true;
+    world.clubs.find((c) => c.id === clubByUser.get(2))!.friendGroupingOptIn = true;
+    expect(calculateSocialScore(groups, world).direct).toBe(1);
+  });
+
+  it("packs the maximum friend pairs where rotation hill-climbing alone stalls", () => {
+    // Adversarial layout (verified against brute force over all 5/4 splits):
+    // every centroid/rotation start converges to only 4 co-grouped friendships
+    // under pure swap hill-climbing, while the optimal split keeps all five
+    // edges inside groups. Guards the exact-assignment pass in plan 9 grouping.
+    const { world } = seasonWorld(197);
+    const edges: [number, number][] = [[0, 5], [0, 7], [3, 4], [3, 7], [6, 8]];
+    const humans = Array.from({ length: 9 }, (_, index) => {
+      const club = createHumanClub(world, { userId: index + 1, clubName: `Pack-${index + 1}`, country: "BRA" });
+      club.competitionState = "ACTIVE";
+      return { clubId: club.id };
+    });
+    world.friendships = edges.map(([a, b]) => ({ userAId: a + 1, userBId: b + 1 }));
+    const divisions = rebuildTierDivisions(world, world.mp.seasonId, 3, humans, { year: 2026, month: 2 }, { generateFixtures: false });
+    expect(divisions).toHaveLength(2);
+    const groups = divisions.map((division) => Object.keys(division.standings)
+      .map(Number)
+      .filter((clubId) => humans.some((human) => human.clubId === clubId))
+      .map((clubId) => ({ clubId })));
+    expect(groups.flat()).toHaveLength(9);
+    expect(calculateSocialScore(groups, world).direct).toBe(5);
+  });
+
   it("reproduces seeded group tie-breaks across retries", () => {
     const makeWorld = () => {
       const { world } = seasonWorld(192);
       const humans = Array.from({ length: 16 }, (_, index) => {
-        const club = createHumanClub(world, { userId: index + 1, clubName: `Seeded-${index + 1}`, country: "BRA", timezone: "UTC" });
+        const club = createHumanClub(world, { userId: index + 1, clubName: `Seeded-${index + 1}`, country: "BRA" });
         club.competitionState = "ACTIVE";
-        return { clubId: club.id, timezone: club.timezone };
+        return { clubId: club.id };
       });
       return { world, humans };
     };
@@ -638,7 +710,7 @@ describe("abandonment / returning clubs", () => {
   it("flags an inactive club as abandonment-eligible, then returns it", () => {
     const { world, seasonId } = seasonWorld(70);
     const div = world.competitions.find((c) => c.kind === "division")!;
-    const club = createHumanClub(world, { userId: 900, clubName: "Absent FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 900, clubName: "Absent FC", country: "BRA" });
     replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
     club.competitionState = "ACTIVE";
     // The club joined now; move its activity anchor far into the past so it is
@@ -670,7 +742,7 @@ describe("abandonment / returning clubs", () => {
   it("sends a dormant club returning after the lock to the provisional queue", () => {
     const { world, seasonId } = seasonWorld(71);
     const div = world.competitions.find((c) => c.kind === "division")!;
-    const club = createHumanClub(world, { userId: 901, clubName: "Late Return FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 901, clubName: "Late Return FC", country: "BRA" });
     replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
     club.competitionState = "DORMANT";
     world.mp.joinState = "LOCKED";
@@ -685,7 +757,7 @@ describe("abandonment / returning clubs", () => {
 describe("provisional practice matches", () => {
   it("does not persist match-engine player mutations", () => {
     const { world } = seasonWorld(74);
-    const club = createHumanClub(world, { userId: 902, clubName: "Practice FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 902, clubName: "Practice FC", country: "BRA" });
     club.competitionState = "PROVISIONAL";
     const before = world.players.map((player) => ({
       id: player.id,
@@ -725,7 +797,7 @@ describe("provisional practice matches", () => {
 describe("provisional economics", () => {
   it("keeps contracts frozen", () => {
     const { world } = seasonWorld(78);
-    const club = createHumanClub(world, { userId: 903, clubName: "Waiting FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 903, clubName: "Waiting FC", country: "BRA" });
     club.competitionState = "PROVISIONAL";
     const player = world.players.find((candidate) => candidate.clubId === club.id && !candidate.isYouth)!;
     player.contractDays = 0;
@@ -738,7 +810,7 @@ describe("provisional economics", () => {
 
   it("does not charge salaries while provisional", () => {
     const { world } = seasonWorld(79);
-    const club = createHumanClub(world, { userId: 904, clubName: "Salary FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 904, clubName: "Salary FC", country: "BRA" });
     club.competitionState = "PROVISIONAL";
     const player = world.players.find((candidate) => candidate.clubId === club.id && !candidate.isYouth)!;
     const cashBefore = club.cash;
@@ -750,7 +822,7 @@ describe("provisional economics", () => {
 
   it("reserves the next-season allocation exactly once (idempotent)", async () => {
     const { world, seasonId } = seasonWorld(80);
-    const club = createHumanClub(world, { userId: 905, clubName: "Reserved FC", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 905, clubName: "Reserved FC", country: "BRA" });
     club.competitionState = "PROVISIONAL";
     const nextSeasonId = seasonId + 100;
 
@@ -768,7 +840,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     ensureDivisionFull(world, comp);
     const rows = Object.values(comp.standings);
     rows.forEach((r, i) => {
-      const club = createHumanClub(world, { userId: userIdBase + i, clubName: `${prefix}-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: userIdBase + i, clubName: `${prefix}-${i}`, country: "BRA" });
       replaceClubInDivision(world, comp, r.clubId, club.id);
       club.competitionState = "ACTIVE";
       if (points[i] !== undefined) comp.standings[club.id].points = points[i];
@@ -780,7 +852,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const { world, seasonId } = seasonWorld(500);
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -804,7 +876,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const { world, seasonId } = seasonWorld(501);
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -821,7 +893,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const { world, seasonId } = seasonWorld(502);
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -835,7 +907,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
         d21.standings[r.clubId].points = 30;
         return;
       }
-      const club = createHumanClub(world, { userId: 300 + i, clubName: `C-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: 300 + i, clubName: `C-${i}`, country: "BRA" });
       replaceClubInDivision(world, d21, r.clubId, club.id);
       club.competitionState = "ACTIVE";
       d21.standings[club.id].points = 28 - i; // human 1: 28, human 2: 27...
@@ -855,7 +927,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const { world, seasonId } = seasonWorld(503);
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -865,7 +937,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const rows = Object.values(d21.standings);
     rows.forEach((r, i) => {
       if (i === 0) {
-        const club = createHumanClub(world, { userId: 400, clubName: "Solo", country: "BRA", timezone: null });
+        const club = createHumanClub(world, { userId: 400, clubName: "Solo", country: "BRA" });
         replaceClubInDivision(world, d21, r.clubId, club.id);
         club.competitionState = "ACTIVE";
         d21.standings[club.id].points = 25;
@@ -884,7 +956,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     // Fill Division 1 with 8 humans.
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -907,7 +979,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     // Fill Division 1 with 8 humans.
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -935,7 +1007,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const { world, seasonId } = seasonWorld(506);
     const div1 = world.competitions.find((c) => c.kind === "division")!;
     for (let i = 1; i <= 3; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -943,11 +1015,11 @@ describe("promotion / rollover test matrix (plan §7)", () => {
 
     // Rebuild tier divisions for the same season twice: must be idempotent.
     const { assignments } = computeNextTierAssignments(world, seasonId);
-    const byTier = new Map<number, { clubId: number; timezone: string | null }[]>();
+    const byTier = new Map<number, { clubId: number }[]>();
     for (const [clubId, tier] of assignments) {
       if (!byTier.has(tier)) byTier.set(tier, []);
       const club = world.clubs.find((c) => c.id === clubId)!;
-      byTier.get(tier)!.push({ clubId, timezone: club.timezone });
+      byTier.get(tier)!.push({ clubId });
     }
     for (const [tier, humans] of byTier.entries()) {
       rebuildTierDivisions(world, 2, tier, humans, { year: 2026, month: 2 });
@@ -979,7 +1051,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
     const div1 = world.competitions.find((c) => c.kind === "division" && tierOf(c) === 1)!;
     // Leave 8 humans in Division 1.
     for (let i = 1; i <= 8; i++) {
-      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA", timezone: null });
+      const club = createHumanClub(world, { userId: i, clubName: `D1-${i}`, country: "BRA" });
       replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, club.id);
       club.competitionState = "ACTIVE";
     }
@@ -1001,7 +1073,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
   it("returning before the cutoff places the club in the pyramid", () => {
     const { world, seasonId } = seasonWorld(508);
     const div = world.competitions.find((c) => c.kind === "division")!;
-    const club = createHumanClub(world, { userId: 600, clubName: "Returner", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 600, clubName: "Returner", country: "BRA" });
     replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
     club.competitionState = "DORMANT";
 
@@ -1013,7 +1085,7 @@ describe("promotion / rollover test matrix (plan §7)", () => {
   it("returning after the cutoff sends the club to the provisional queue", () => {
     const { world, seasonId } = seasonWorld(509);
     const div = world.competitions.find((c) => c.kind === "division")!;
-    const club = createHumanClub(world, { userId: 601, clubName: "Late Returner", country: "BRA", timezone: null });
+    const club = createHumanClub(world, { userId: 601, clubName: "Late Returner", country: "BRA" });
     replaceClubInDivision(world, div, highestRankedReplaceableAI(world, div)!, club.id);
     club.competitionState = "DORMANT";
     world.mp.joinState = "LOCKED";
@@ -1125,11 +1197,11 @@ describe("filler retirement market reconciliation", () => {
     const div1 = world.competitions.find((c) => c.kind === "division")!;
     const aiId = highestRankedReplaceableAI(world, div1)!;
     const { player, listing } = listAiPlayer(world, aiId);
-    const bidder = createHumanClub(world, { userId: 9001, clubName: "Bidder FC", country: "BRA", timezone: "UTC" });
+    const bidder = createHumanClub(world, { userId: 9001, clubName: "Bidder FC", country: "BRA" });
     legacyBidOnListing(world, bidder, listing, listing.openingPrice);
     const cashBefore = bidder.cash;
 
-    const joiner = createHumanClub(world, { userId: 9002, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const joiner = createHumanClub(world, { userId: 9002, clubName: "Joiner FC", country: "BRA" });
     const replacedClubId = expectActive(placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 }));
 
     expect(replacedClubId).toBe(aiId);
@@ -1148,15 +1220,15 @@ describe("filler retirement market reconciliation", () => {
     const div1 = world.competitions.find((c) => c.kind === "division")!;
     const aiId = highestRankedReplaceableAI(world, div1)!;
     const { player, listing } = listAiPlayer(world, aiId);
-    const low = createHumanClub(world, { userId: 9011, clubName: "Low FC", country: "BRA", timezone: "UTC" });
-    const high = createHumanClub(world, { userId: 9012, clubName: "High FC", country: "BRA", timezone: "UTC" });
+    const low = createHumanClub(world, { userId: 9011, clubName: "Low FC", country: "BRA" });
+    const high = createHumanClub(world, { userId: 9012, clubName: "High FC", country: "BRA" });
     legacyBidOnListing(world, low, listing, listing.openingPrice);
     // The division-gap cap (150% same-division) bounds any private maximum.
     const highMax = Math.floor(listing.openingPrice * 1.4);
     legacyBidOnListing(world, high, listing, highMax);
     const highCashBefore = high.cash;
 
-    const joiner = createHumanClub(world, { userId: 9013, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const joiner = createHumanClub(world, { userId: 9013, clubName: "Joiner FC", country: "BRA" });
     placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 });
 
     expect(listing.status).toBe("COMPLETED");
@@ -1174,7 +1246,7 @@ describe("filler retirement market reconciliation", () => {
     const aiId = highestRankedReplaceableAI(world, div1)!;
     const { player, listing } = listAiPlayer(world, aiId);
 
-    const joiner = createHumanClub(world, { userId: 9021, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const joiner = createHumanClub(world, { userId: 9021, clubName: "Joiner FC", country: "BRA" });
     const replacedClubId = expectActive(placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 }));
 
     expect(replacedClubId).toBe(aiId);
@@ -1195,7 +1267,7 @@ describe("filler retirement market reconciliation", () => {
     legacyBidOnListing(world, targetAi, otherListing, otherListing.openingPrice);
     expect(otherListing.leadingClubId).toBe(targetAiId);
 
-    const joiner = createHumanClub(world, { userId: 9031, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const joiner = createHumanClub(world, { userId: 9031, clubName: "Joiner FC", country: "BRA" });
     const replacedClubId = expectActive(placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 }));
 
     expect(replacedClubId).toBe(targetAiId);
@@ -1216,13 +1288,13 @@ describe("filler retirement market reconciliation", () => {
     const otherAi = world.clubs.find((c) => c.ownerUserId === null && c.isHuman === false && c.id !== targetAiId)!;
     const { player: otherPlayer, listing: otherListing } = listAiPlayer(world, otherAi.id);
     void otherPlayer;
-    const human = createHumanClub(world, { userId: 9041, clubName: "Underbidder FC", country: "BRA", timezone: "UTC" });
+    const human = createHumanClub(world, { userId: 9041, clubName: "Underbidder FC", country: "BRA" });
     legacyBidOnListing(world, human, otherListing, otherListing.openingPrice);
     const targetAi = world.clubs.find((c) => c.id === targetAiId)!;
     legacyBidOnListing(world, targetAi, otherListing, Math.floor(otherListing.openingPrice * 1.4));
     expect(otherListing.leadingClubId).toBe(targetAiId);
 
-    const joiner = createHumanClub(world, { userId: 9042, clubName: "Joiner FC", country: "BRA", timezone: "UTC" });
+    const joiner = createHumanClub(world, { userId: 9042, clubName: "Joiner FC", country: "BRA" });
     placeNewClub(world, joiner.id, Date.now(), seasonId, { year: 2026, month: 2 });
 
     expect(otherListing.status).toBe("ACTIVE");
@@ -1236,13 +1308,13 @@ describe("filler retirement market reconciliation", () => {
   it("applies the same reconciliation when a dormant club returns via returnDormantClub", () => {
     const { world, seasonId } = seasonWorld(905);
     const div1 = world.competitions.find((c) => c.kind === "division")!;
-    const returning = createHumanClub(world, { userId: 9051, clubName: "Returner FC", country: "BRA", timezone: "UTC" });
+    const returning = createHumanClub(world, { userId: 9051, clubName: "Returner FC", country: "BRA" });
     replaceClubInDivision(world, div1, highestRankedReplaceableAI(world, div1)!, returning.id);
     returning.competitionState = "DORMANT";
     // The AI that the returning club will replace is whichever ranks highest now.
     const aiId = highestRankedReplaceableAI(world, div1)!;
     const { player, listing } = listAiPlayer(world, aiId);
-    const bidder = createHumanClub(world, { userId: 9052, clubName: "Bidder FC", country: "BRA", timezone: "UTC" });
+    const bidder = createHumanClub(world, { userId: 9052, clubName: "Bidder FC", country: "BRA" });
     legacyBidOnListing(world, bidder, listing, listing.openingPrice);
 
     const result = returnDormantClub(world, returning.id, Date.now(), seasonId, { year: 2026, month: 2 });

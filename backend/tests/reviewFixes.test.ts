@@ -223,7 +223,7 @@ describe("senior roster cap", () => {
 describe("new-club starting cash and sell lock", () => {
   it("creates new human clubs with zero starting cash", () => {
     const world = makeWorld([], []);
-    const fresh = createHumanClub(world, { userId: 42, clubName: "Fresh FC", country: "BRA", timezone: null });
+    const fresh = createHumanClub(world, { userId: 42, clubName: "Fresh FC", country: "BRA" });
     expect(fresh.cash).toBe(MP_CONFIG.newClubStartingCash);
   });
 

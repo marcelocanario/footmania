@@ -37,33 +37,7 @@ import { PREVIEW_NUMBERS, type ClubKits } from "../components/kit/types";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { PageLoading } from "../components/PageLoading";
-
-const TIMEZONES = [
-  "America/Los_Angeles",
-  "America/Denver",
-  "America/Chicago",
-  "America/New_York",
-  "America/Sao_Paulo",
-  "Europe/London",
-  "Europe/Lisbon",
-  "Europe/Paris",
-  "Europe/Madrid",
-  "Europe/Berlin",
-  "Europe/Rome",
-  "Europe/Amsterdam",
-  "Europe/Athens",
-  "Africa/Cairo",
-  "Asia/Dubai",
-  "Asia/Karachi",
-  "Asia/Kolkata",
-  "Asia/Bangkok",
-  "Asia/Singapore",
-  "Asia/Shanghai",
-  "Asia/Tokyo",
-  "Asia/Seoul",
-  "Australia/Sydney",
-  "Pacific/Auckland",
-];
+import { localSlotsToUtc } from "../utils/time";
 
 /** Default club identity colors (Classic Red over White). */
 const DEFAULT_PRIMARY = "#d40000";
@@ -96,7 +70,6 @@ export function Join() {
   const [loading, setLoading] = useState(true);
   const [clubName, setClubName] = useState("");
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
-  const [timezone, setTimezone] = useState<string>("America/Sao_Paulo");
   const [teamPrimary, setTeamPrimary] = useState(DEFAULT_PRIMARY);
   const [teamSecondary, setTeamSecondary] = useState(DEFAULT_SECONDARY);
   const [kits, setKits] = useState<ClubKits>(() =>
@@ -223,13 +196,13 @@ export function Join() {
       await api.join({
         clubName: clubName.trim(),
         country: selectedCountry,
-        timezone,
         primaryColor: teamPrimary,
         secondaryColor: teamSecondary,
         kits,
         stadiumName: stadiumName.trim(),
         coachName: coachNameTrim,
-        preferredHours,
+        // The server grid is UTC; the picker works in the browser's timezone.
+        preferredHours: localSlotsToUtc(preferredHours),
       });
       setLiveMatch(null);
       await loadStatus();
@@ -626,25 +599,8 @@ export function Join() {
 
                   <div className="jm-field">
                     <label className="jm-label">
-                      <Globe2 size={13} /> Timezone
-                      <FieldHelp text="Choose your local timezone so we can find opponents who play at similar hours." />
-                    </label>
-                    <span className="p-input-icon-left jm-input-wrap">
-                      <Globe2 size={15} />
-                      <Dropdown
-                        value={timezone}
-                        options={TIMEZONES.map((t) => ({ label: t, value: t }))}
-                        onChange={(e) => setTimezone(e.value)}
-                        style={{ width: "100%" }}
-                        aria-label="Timezone"
-                      />
-                    </span>
-                  </div>
-
-                  <div className="jm-field">
-                    <label className="jm-label">
                       <Clock size={13} /> Preferred match times
-                      <FieldHelp text="Mark at least 8 hours when you can play. We use these windows to place your fixtures at a time you can enjoy them." />
+                      <FieldHelp text="Mark at least 8 hours when you can play, in your local time. We use these windows to group you with players on similar schedules and to place your fixtures at a time you can enjoy." />
                       <span className="jm-req">*</span>
                     </label>
                     <div className="jm-availability-card">
@@ -743,8 +699,8 @@ export function Join() {
                       <span className="jm-preview-v">{coachNameTrim || "Name your manager"}</span>
                     </div>
                     <div className="jm-preview-row">
-                      <span className="jm-preview-k">Timezone</span>
-                      <span className="jm-preview-v" style={{ fontSize: "0.82rem" }}>{timezone}</span>
+                      <span className="jm-preview-k">Availability</span>
+                      <span className="jm-preview-v" style={{ fontSize: "0.82rem" }}>{preferredHours.length / 2} h/week</span>
                     </div>
                   </div>
 

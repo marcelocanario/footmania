@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import type { SeasonHistoryEntry } from "../game/types";
 import { seasonKey } from "../game/clock";
 import { calendarValues, phaseForSeasonDayIndex, seasonSchedulePreview } from "./seasonCalendar";
+import { preferredHoursFromClubRow } from "./saveService";
 
 type MpStateView = {
   seasonId?: number;
@@ -49,8 +50,11 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
       highestDivision: true,
       cash: true,
       competitionState: true,
-      timezone: true,
+      friendGroupingOptIn: true,
       preferredHoursJson: true,
+      // Read with the legacy marker so read paths can apply the same one-time
+      // local→UTC slot conversion as rebuildWorld (plan 9).
+      timezone: true,
       abandonmentEligibleAt: true,
     },
   });
@@ -157,8 +161,8 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
           highestDivision: club.highestDivision,
           cash: club.cash,
           competitionState: club.competitionState,
-          timezone: club.timezone,
-          preferredHours: parseJson<number[] | null>(club.preferredHoursJson, null),
+          friendGroupingOptIn: club.friendGroupingOptIn !== false,
+          preferredHours: preferredHoursFromClubRow(club.timezone, club.preferredHoursJson),
           reservedNextSeasonAllocation: reservedAllocation
             ? { seasonId: reservedAllocation.seasonId, amount: reservedAllocation.amount, issuedAt: reservedAllocation.issuedAt.getTime() }
             : null,

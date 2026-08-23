@@ -47,7 +47,6 @@ export function makeClub(overrides: Partial<Club> = {}): Club {
     name: "Test FC",
     shortName: "TFC",
     ownerUserId: 1,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,

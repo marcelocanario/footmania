@@ -20,7 +20,6 @@ function makeClub(overall: number, overrides: Partial<Club> = {}): Club {
     name: "Test",
     shortName: "TST",
     ownerUserId: null,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { InputText } from "primereact/inputtext";
 import { Password } from "primereact/password";
 import { Toast } from "primereact/toast";
@@ -14,13 +14,17 @@ export function Login() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+  // Invite links (/login?invite=<token>): registering through the link
+  // auto-creates the friendship with the inviter (backend/src/routes/auth.ts).
+  const inviteToken = new URLSearchParams(location.search).get("invite") ?? undefined;
   const setUser = useGame((s) => s.setUser);
   const toast = useRef<Toast>(null);
 
   const submit = async () => {
     setBusy(true);
     try {
-      const res = mode === "login" ? await api.login(username, password) : await api.register(username, password);
+      const res = mode === "login" ? await api.login(username, password) : await api.register(username, password, inviteToken);
       setUser(res.user);
       navigate("/");
     } catch (e) {
@@ -50,6 +54,12 @@ export function Login() {
             ]}
           />
         </div>
+
+        {inviteToken && mode === "register" && (
+          <div style={{ marginTop: 16, padding: "8px 12px", border: "1px solid var(--grass-2)", borderRadius: 8, color: "var(--grass-2)", fontSize: "0.88rem" }}>
+            You are registering through a friend's invite link — you'll become friends automatically.
+          </div>
+        )}
 
         <div style={{ marginTop: 20 }}>
           <div className="form-group">
