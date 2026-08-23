@@ -3,7 +3,7 @@ import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, updateStand
 import { simulateMatch } from "./match";
 import { seasonKey, joinLockRound } from "./clock";
 import { calendarValues, roundDayIndex } from "../services/seasonCalendar";
-import { pickFixtureKickoff, pickSynchronizedKickoff, type PreferenceInput } from "./scheduling";
+import { pickFixtureKickoff, pickSynchronizedKickoff, stableHash, type PreferenceInput } from "./scheduling";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
@@ -372,7 +372,11 @@ export function setDivisionState(world: World, divisionId: number, state: "CREAT
 export function generateDivisionFixtures(world: World, comp: Competition, ref: { year: number; month: number }): Fixture[] {
   void ref;
   const clubIds = Object.keys(comp.standings).map(Number);
-  const fixtures = createLeagueFixtures(world.rng, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
+  // Calendar order is seeded from stable competition identity (season +
+  // division), never from shared world RNG streams, so regeneration retries
+  // reproduce the same tournament calendar.
+  const orderSeed = stableHash(`${comp.seasonId}:${comp.id}`);
+  const fixtures = createLeagueFixtures(orderSeed, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
   const seasonStart = world.mp.seasonStartAt ?? Date.now();
   const prefOf = (clubId: number): PreferenceInput => {
     const club = clubById(world, clubId);

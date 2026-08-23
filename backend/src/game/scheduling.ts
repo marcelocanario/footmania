@@ -68,9 +68,10 @@ export function candidateKickoffs(dayStartMs: number): number[] {
 /**
  * Stable 32-bit FNV-1a hash. Deterministic "noise" for tie-breaks: seeded
  * from stable identity strings so a restart or regeneration retry cannot
- * reroll a different kickoff.
+ * reroll a different kickoff. Also exported for other modules that need a
+ * seed derived from stable identity (e.g. fixture ordering).
  */
-function stableHash(value: string): number {
+export function stableHash(value: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < value.length; i++) {
     hash ^= value.charCodeAt(i);
