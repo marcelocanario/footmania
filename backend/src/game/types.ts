@@ -482,6 +482,10 @@ export interface LiveMatchState {
   halftimeStartedAt?: number | null;
   /** Per-side ready flags to skip the wall-clock halftime early (both humans must be ready in human vs human). */
   halftimeReady?: [boolean, boolean];
+  /** Match-minute of each side's last tactics change (manual or automation).
+   *  Drives the liveMatch.tacticsCooldownMatchMinutes lock; null = not yet
+   *  changed this match, so the first change is always free. */
+  tacticsChangedAtMinute?: [number | null, number | null];
 
   // -------------------------------------------------------------------------
   // Possession-state engine runtime (plans/6. match-simulator-overhaul.md §2).

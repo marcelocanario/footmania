@@ -109,6 +109,7 @@ const gameConfigSchema = z
       .object({
         matchDurationMinutes: z.number().int().min(1).max(60),
         halftimePauseMinutes: z.number().int().min(0).max(30),
+        tacticsCooldownMatchMinutes: z.number().int().min(0).max(90),
       })
       .partial()
       .optional(),
@@ -403,6 +404,13 @@ export const MP_CONFIG = {
     const raw = (gameConfig as unknown as { liveMatch?: { halftimePauseMinutes?: number } })?.liveMatch;
     return raw?.halftimePauseMinutes ?? 5;
   },
+  // Live-match tactics lock: after a side changes style/pressing/direction
+  // (manually or via automation), it must wait this many match-minutes before
+  // changing tactics again. 0 disables the cooldown.
+  get liveMatchTacticsCooldownMatchMinutes(): number {
+    const raw = (gameConfig as unknown as { liveMatch?: { tacticsCooldownMatchMinutes?: number } })?.liveMatch;
+    return raw?.tacticsCooldownMatchMinutes ?? 10;
+  },
   // How often (ms) the worker loop wakes up.
   workerIntervalMs: 5000,
   // How often (ms) the server advances and broadcasts live matches.
@@ -642,6 +650,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   liveMatch: {
     matchDurationMinutes: 30,
     halftimePauseMinutes: 5,
+    tacticsCooldownMatchMinutes: 10,
   },
   energy: { matchLossScale: 1, recoveryScale: 1 },
   injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 },

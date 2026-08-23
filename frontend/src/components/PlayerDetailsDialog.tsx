@@ -3,6 +3,7 @@ import { Dialog } from "primereact/dialog";
 import { api, type PlayerHistoryView } from "../api/client";
 import { useGame } from "../store/game";
 import { countryFlag } from "../countryFlags";
+import { ClubNameLink } from "./ClubNameLink";
 import { PlayerSkillsRadar } from "./PlayerSkillsRadar";
 
 export function PlayerDetailsDialog({ target, onClose }: { target: { id: number; name: string } | null; onClose: () => void }) {
@@ -37,7 +38,11 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
               <div>
                 <div style={{ fontWeight: 800, fontSize: "1.1rem" }}>{player.displayName ?? player.name}</div>
-                <div style={{ color: "var(--text-2)", fontSize: "0.84rem", marginTop: 3 }}>{player.clubName ?? "Free agent"}</div>
+                <div style={{ color: "var(--text-2)", fontSize: "0.84rem", marginTop: 3 }}>
+                  {player.clubId != null
+                    ? <ClubNameLink clubId={player.clubId} name={player.clubName ?? ""} showCrest={false} />
+                    : player.clubName ?? "Free agent"}
+                </div>
                 <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 2 }}>
                   {player.positionName} · {player.age} yrs · <span title={player.country} aria-label={`Country: ${player.country}`}>{country ? `${country} ` : ""}{player.country}</span>
                 </div>

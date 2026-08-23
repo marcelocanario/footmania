@@ -5,6 +5,7 @@ import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
 import { money } from "../format";
 import { ClubCrest } from "../components/ClubCrest";
+import { ClubNameLink } from "../components/ClubNameLink";
 import { formatKickoff } from "../utils/time";
 
 /** Accent color per news kind; unknown kinds fall back to a neutral tone. */
@@ -181,7 +182,15 @@ export function Dashboard() {
           <div className="stat" style={{ border: "none", background: "transparent", padding: 0 }}>
             <div className="label"><CalendarDays size={12} /> {strings.dashboard.nextFixture}</div>
             <div className="value" style={{ fontSize: "1.15rem" }}>
-              {snapshot.nextFixture ? `${snapshot.nextFixture.home} vs ${snapshot.nextFixture.away}` : strings.dashboard.noNextFixture}
+              {snapshot.nextFixture ? (
+                <>
+                  <ClubNameLink clubId={snapshot.nextFixture.homeClubId} name={snapshot.nextFixture.home} showCrest={false} />
+                  {" vs "}
+                  <ClubNameLink clubId={snapshot.nextFixture.awayClubId} name={snapshot.nextFixture.away} showCrest={false} />
+                </>
+              ) : (
+                strings.dashboard.noNextFixture
+              )}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>

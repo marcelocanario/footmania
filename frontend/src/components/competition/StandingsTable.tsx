@@ -42,17 +42,24 @@ function statusBadge(row: StandingsRow, position: number, isTopDivision: boolean
  * League table shared by the player Competitions screen and the admin
  * drill-down. Rows are already-sorted standings plus a 1-based display
  * position. When `onClubClick` is set, team cells become clickable.
+ * `compact` drops the per-result columns so the table fits narrow side-by-side
+ * cards without horizontal scrolling; `highlightClubId` tints the row of the
+ * club currently being inspected (independent of the viewer's own `isMine`).
  */
 export function StandingsTable({
   rows,
   isTopDivision,
   seasonComplete,
   onClubClick,
+  compact = false,
+  highlightClubId,
 }: {
   rows: StandingsRow[];
   isTopDivision: boolean;
   seasonComplete: boolean;
   onClubClick?: (row: StandingsRow) => void;
+  compact?: boolean;
+  highlightClubId?: number;
 }) {
   const tableRows = rows.map((row, index) => ({ ...row, displayPosition: index + 1 }));
   return (
@@ -61,6 +68,7 @@ export function StandingsTable({
         value={tableRows}
         rowClassName={(r) => [
           r.isHuman ? "human-row" : "",
+          r.clubId === highlightClubId ? "my-row" : "",
           r.displayPosition === 1 && seasonComplete ? "standings-champion" : "",
           !isTopDivision && r.promotionStatus === "POSSIBLE" ? "standings-promotion-possible" : "",
           !isTopDivision && r.promotionStatus === "PROMOTED" ? "standings-promoted" : "",
@@ -73,7 +81,7 @@ export function StandingsTable({
           key="pos"
           header="#"
           body={(r) => <span className={`rank-pill${r.displayPosition === 1 ? " champion-rank" : ""}`}>{r.displayPosition}</span>}
-          style={{ width: 56 }}
+          style={{ width: compact ? 44 : 56 }}
         />
         <Column key="team" header="Team" body={(r: StandingsRowWithPosition) => (
           <span
@@ -91,13 +99,17 @@ export function StandingsTable({
             {r.isMine && <span className="flag-chip fc-accent">YOU</span>}
             {statusBadge(r, r.displayPosition, isTopDivision, seasonComplete)}
           </span>
-        )} style={{ minWidth: 260 }} />
-        <Column key="p" field="played" header="P" style={{ width: 44 }} />
-        <Column key="w" field="wins" header="W" style={{ width: 44 }} />
-        <Column key="d" field="draws" header="D" style={{ width: 44 }} />
-        <Column key="l" field="losses" header="L" style={{ width: 44 }} />
-        <Column key="gd" header="GD" body={(r: StandingsRow) => r.goalsFor - r.goalsAgainst} style={{ width: 52 }} />
-        <Column key="pts" field="points" header="Pts" style={{ width: 64 }} body={(r: StandingsRow) => <b style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem" }}>{r.points}</b>} />
+        )} style={{ minWidth: compact ? 0 : 260 }} />
+        {!compact && (
+          <>
+            <Column key="p" field="played" header="P" style={{ width: 44 }} />
+            <Column key="w" field="wins" header="W" style={{ width: 44 }} />
+            <Column key="d" field="draws" header="D" style={{ width: 44 }} />
+            <Column key="l" field="losses" header="L" style={{ width: 44 }} />
+            <Column key="gd" header="GD" body={(r: StandingsRow) => r.goalsFor - r.goalsAgainst} style={{ width: 52 }} />
+          </>
+        )}
+        <Column key="pts" field="points" header="Pts" style={{ width: compact ? 48 : 64 }} body={(r: StandingsRow) => <b style={{ fontFamily: "var(--font-display)", fontSize: "1.05rem" }}>{r.points}</b>} />
       </DataTable>
     </div>
   );

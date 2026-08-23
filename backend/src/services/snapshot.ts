@@ -222,6 +222,9 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
       ? {
           leagueChampion: world.seasonSummary.leagueChampionId !== null ? clubById.get(world.seasonSummary.leagueChampionId)?.name ?? null : null,
           leagueRunnerUp: world.seasonSummary.leagueRunnerUpId !== null ? clubById.get(world.seasonSummary.leagueRunnerUpId)?.name ?? null : null,
+          // IDs so clients can link to the team screen.
+          leagueChampionId: world.seasonSummary.leagueChampionId,
+          leagueRunnerUpId: world.seasonSummary.leagueRunnerUpId,
         }
       : null,
     club: club
@@ -282,6 +285,9 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
           id: nextFixture.id,
           home: world.clubs.find((c) => c.id === nextFixture.homeClubId)?.name ?? "",
           away: world.clubs.find((c) => c.id === nextFixture.awayClubId)?.name ?? "",
+          // IDs so clients can link both teams to the team screen.
+          homeClubId: nextFixture.homeClubId,
+          awayClubId: nextFixture.awayClubId,
           dayLabel: dayLabel(nextFixture.dayIndex),
           dayIndex: nextFixture.dayIndex,
           isHome: nextFixture.homeClubId === clubId,

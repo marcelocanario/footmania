@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { History as HistoryIcon } from "lucide-react";
 import { api, type SeasonHistoryView } from "../api/client";
+import { ClubNameLink } from "../components/ClubNameLink";
 
 export function History() {
   const [seasons, setSeasons] = useState<SeasonHistoryView[] | null>(null);
@@ -63,7 +64,7 @@ export function History() {
                         {div.standings.map((row, i) => (
                           <tr key={row.clubId} className={row.isMine ? "my-row" : ""}>
                             <td>{i + 1}</td>
-                            <td>{row.clubName}{row.isMine ? " ·" : ""}</td>
+                            <td><ClubNameLink clubId={row.clubId} name={row.clubName} showCrest={false} />{row.isMine ? " ·" : ""}</td>
                             <td>{row.played}</td>
                             <td>{row.wins}</td>
                             <td>{row.draws}</td>

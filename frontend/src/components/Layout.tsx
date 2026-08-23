@@ -40,6 +40,7 @@ interface MyMatch {
   dayIndex: number;
   round: number;
   opponent: string;
+  opponentClubId: number;
   isHome: boolean;
   played: boolean;
   goalsFor: number | null;
@@ -119,6 +120,7 @@ function matchTitle(day: SeasonDayEntry, match: MyMatch | undefined): string {
 }
 
 function SeasonCalendar({ days, today, matches }: { days: SeasonDayEntry[]; today: number; matches: MyMatch[] }) {
+  const navigate = useNavigate();
   const matchByDay = new Map(matches.map((m) => [m.dayIndex, m]));
   return (
     <>
@@ -132,7 +134,15 @@ function SeasonCalendar({ days, today, matches }: { days: SeasonDayEntry[]; toda
             dayIndex === today ? "today" : "",
           ].filter(Boolean).join(" ");
           return (
-            <div key={d.day} className={cls} title={matchTitle(d, match)}>
+            // A fixture day cell opens the opponent's team screen.
+            <div
+              key={d.day}
+              className={cls}
+              title={matchTitle(d, match)}
+              role={match ? "button" : undefined}
+              style={match ? { cursor: "pointer" } : undefined}
+              onClick={match && match.opponentClubId ? () => navigate(`/team/${match.opponentClubId}`) : undefined}
+            >
               <span>{d.day}</span>
               {match ? (match.played
                 ? <span className="cal-score">{match.goalsFor}-{match.goalsAgainst}</span>
@@ -363,7 +373,7 @@ export function Layout({ children }: { children: ReactNode }) {
             )}
           </div>
           {club && (
-            <span className="club-chip" onClick={() => navigate("/dashboard")} title={club.name}>
+            <span className="club-chip" onClick={() => navigate(`/team/${club.id}`)} title={`${club.name} — team profile`}>
               <FootballKit
                 {...(club.kits?.home ?? deriveKitDefaults(club.primaryColor, club.secondaryColor).home)}
                 size={26}

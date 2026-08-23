@@ -1,5 +1,5 @@
 import type { LiveMatchState, World } from "../game/types";
-import { livePhase } from "../game/match";
+import { livePhase, tacticsCooldownMinutesRemaining } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
 import { EVENT_CODES, FORMATION_NAMES } from "../game/constants";
 import { resolveClubKits } from "../game/kits";
@@ -117,6 +117,9 @@ export interface LiveStateView {
   awayFormationId: number;
   homeTactics: LiveTacticView;
   awayTactics: LiveTacticView;
+  /** Live-match tactics lock: match-minutes remaining per side (0 = unlocked). */
+  homeTacticsCooldownMinutes: number;
+  awayTacticsCooldownMinutes: number;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
   // New: match progress + halftime + added time
@@ -145,6 +148,8 @@ export interface LiveStateDeltaView {
   automationFiredCount: number;
   progressPct: number;
   currentAddedTime: number | null;
+  homeTacticsCooldownMinutes: number;
+  awayTacticsCooldownMinutes: number;
   ball: LiveBallView;
 }
 
@@ -247,6 +252,10 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayFormationId: away?.tactics?.formation ?? 4,
     homeTactics: tacticView(st.homeTactics),
     awayTactics: tacticView(st.awayTactics),
+    // Live-match tactics lock (match-minutes left per side) so clients can
+    // disable Apply and show a countdown.
+    homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),
+    awayTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 1),
     automationDisabled: st.automationDisabled ?? [false, false],
     automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
     progressPct,
@@ -355,6 +364,8 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
     progressPct,
     currentAddedTime,
+    homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),
+    awayTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 1),
     ball: ballView(st),
   };
 }

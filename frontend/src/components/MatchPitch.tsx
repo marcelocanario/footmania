@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { KitDesign, LiveBall, LiveEvent, LivePlayer } from "../api/client";
 import { FootballKit } from "./kit/FootballKit";
+import { ClubNameLink } from "./ClubNameLink";
 import {
   BALL_CENTER_POINT,
   cueForEvent,
@@ -235,11 +236,11 @@ export function MatchPitch({ home, away, events, phase, minute, reducedMotion = 
         <div className="match-pitch-teams">
           <span className="match-pitch-team">
             <FootballKit {...home.kit} size={34} flat />
-            <span><b>{home.name}</b><small>{formationLabel(home.formationId)}</small></span>
+            <span><b><ClubNameLink clubId={home.clubId} name={home.name} showCrest={false} /></b><small>{formationLabel(home.formationId)}</small></span>
           </span>
           <span className="match-pitch-team">
             <FootballKit {...away.kit} size={34} flat />
-            <span><b>{away.name}</b><small>{formationLabel(away.formationId)}</small></span>
+            <span><b><ClubNameLink clubId={away.clubId} name={away.name} showCrest={false} /></b><small>{formationLabel(away.formationId)}</small></span>
           </span>
         </div>
       </div>

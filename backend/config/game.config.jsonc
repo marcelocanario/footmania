@@ -243,9 +243,12 @@
   // Real minutes a live league match takes to play out (authoritative server
   // pacing; clients derive tick delay from this). Halftime pause is real time
   // shown only when a human team is involved; AI vs AI and instant sims skip it.
+  // tacticsCooldownMatchMinutes locks style/pressing/direction changes per side
+  // after each change (manual or automation), in match-minutes.
   "liveMatch": {
     "matchDurationMinutes": 30,
-    "halftimePauseMinutes": 5
+    "halftimePauseMinutes": 5,
+    "tacticsCooldownMatchMinutes": 10
   },
 
   "energy": {

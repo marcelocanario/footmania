@@ -6,6 +6,7 @@ export default defineConfig({
     exclude: [
       "tests/integration.test.ts",
       "tests/adminFeatures.integration.test.ts",
+      "tests/teamProfile.integration.test.ts",
       "tests/live.test.ts",
       "tests/namePoolService.test.ts",
       "tests/persistence.test.ts",

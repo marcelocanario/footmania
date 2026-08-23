@@ -12,6 +12,7 @@ import {
   type AttributeCenters,
 } from "./matchSim";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
+import { MP_CONFIG } from "../config";
 
 // ---------------------------------------------------------------------------
 // Public match-engine facade (plans/6. match-simulator-overhaul.md).
@@ -44,7 +45,23 @@ export interface LiveTacticsUpdate {
   direction?: number;
 }
 
-/** Apply the tactics that can be changed without rebuilding the lineup. */
+/**
+ * Live-match tactics cooldown (config: liveMatch.tacticsCooldownMatchMinutes).
+ * Returns the match-minutes a side must still wait before its next
+ * style/pressing/direction change; 0 when unlocked. The first change of the
+ * match is always free.
+ */
+export function tacticsCooldownMinutesRemaining(st: LiveMatchState, side: 0 | 1): number {
+  if (st.ended) return 0;
+  const lastChange = st.tacticsChangedAtMinute?.[side] ?? null;
+  if (lastChange === null) return 0;
+  const cooldown = MP_CONFIG.liveMatchTacticsCooldownMatchMinutes;
+  return Math.max(0, Math.ceil(cooldown - (st.minute - lastChange)));
+}
+
+/** Apply the tactics that can be changed without rebuilding the lineup.
+ *  Enforces the per-side tactics cooldown for every caller (REST, WebSocket
+ *  and automation rules alike) so no pathway can bypass the lock. */
 export function applyLiveTacticsUpdate(st: LiveMatchState, side: 0 | 1, input: LiveTacticsUpdate): string | null {
   if (st.ended) return "Match already finished";
   if (input.style === undefined && input.pressing === undefined && input.direction === undefined) return "At least one tactic is required";
@@ -52,10 +69,16 @@ export function applyLiveTacticsUpdate(st: LiveMatchState, side: 0 | 1, input: L
   if (input.pressing !== undefined && (!Number.isInteger(input.pressing) || input.pressing < 0 || input.pressing >= PRESSING_NAMES.length)) return "Invalid pressing";
   if (input.direction !== undefined && (!Number.isInteger(input.direction) || input.direction < 0 || input.direction >= DIRECTION_NAMES.length)) return "Invalid direction";
 
+  const remaining = tacticsCooldownMinutesRemaining(st, side);
+  if (remaining > 0) return `Tactics are locked for ${remaining} more minute${remaining === 1 ? "" : "s"}`;
+
   const tactics = side === 0 ? st.homeTactics : st.awayTactics;
   if (input.style !== undefined) tactics.style = engineStyle(input.style);
   if (input.pressing !== undefined) tactics.pressing = enginePressing(input.pressing);
   if (input.direction !== undefined) tactics.direction = engineDirection(input.direction);
+  // Record the change so the cooldown survives persistence and reloads.
+  st.tacticsChangedAtMinute ??= [null, null];
+  st.tacticsChangedAtMinute[side] = st.minute;
   return null;
 }
 

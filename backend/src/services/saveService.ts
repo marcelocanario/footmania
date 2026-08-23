@@ -1889,6 +1889,9 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
   st.secondHalfAddedMinutes ??= 0;
   st.halftimeStartedAt ??= null;
   st.halftimeReady ??= [false, false];
+  // Live-match tactics cooldown: legacy live states predate the lock and start
+  // with both sides unchanged (first change free).
+  st.tacticsChangedAtMinute ??= [null, null];
   // Backfill coin-toss event for old saves that predate it (minute 0, half 0).
   if (!st.events.some((e) => e.type === 9)) {
     const winnerId = st.coinTossWinner === 0 ? st.homeClubId : st.awayClubId;

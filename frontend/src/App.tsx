@@ -27,6 +27,7 @@ const History = lazyNamed(() => import("./screens/History"), "History");
 const SettingsScreen = lazyNamed(() => import("./screens/Settings"), "SettingsScreen");
 const FriendsScreen = lazyNamed(() => import("./screens/Friends"), "FriendsScreen");
 const MyClub = lazyNamed(() => import("./screens/MyClub"), "MyClub");
+const TeamScreen = lazyNamed(() => import("./screens/TeamScreen"), "TeamScreen");
 const Admin = lazyNamed(() => import("./screens/Admin"), "Admin");
 
 function Gate({ children }: { children: React.ReactNode }) {
@@ -144,6 +145,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/join" element={<Join />} />
       <Route path="/my-club" element={<ClubGuard><MyClub /></ClubGuard>} />
+      <Route path="/team/:clubId" element={<ClubGuard><TeamScreen /></ClubGuard>} />
       <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
       <Route path="/squad" element={<ClubGuard><Squad /></ClubGuard>} />
       <Route path="/competitions" element={<ClubGuard><Competitions /></ClubGuard>} />

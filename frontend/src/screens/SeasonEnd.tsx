@@ -2,6 +2,7 @@ import { useNavigate } from "react-router-dom";
 import { Trophy, PartyPopper, Medal } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
+import { ClubNameLink } from "../components/ClubNameLink";
 
 export function SeasonEnd() {
   const { snapshot } = useGame();
@@ -28,8 +29,8 @@ export function SeasonEnd() {
   }
 
   const champions = [
-    { label: strings.seasonEnd.champion, value: summary.leagueChampion, icon: <Trophy size={18} /> },
-    { label: strings.seasonEnd.runnerUp, value: summary.leagueRunnerUp, icon: <Medal size={18} /> },
+    { label: strings.seasonEnd.champion, value: summary.leagueChampion, clubId: summary.leagueChampionId ?? null, icon: <Trophy size={18} /> },
+    { label: strings.seasonEnd.runnerUp, value: summary.leagueRunnerUp, clubId: summary.leagueRunnerUpId ?? null, icon: <Medal size={18} /> },
   ];
 
   return (
@@ -71,7 +72,9 @@ export function SeasonEnd() {
             <div style={{ color: "var(--gold-2)", marginBottom: 8, display: "flex", justifyContent: "center" }}>{c.icon}</div>
             <div style={{ color: "var(--text-3)", fontSize: "0.72rem", textTransform: "uppercase", letterSpacing: "0.12em", fontWeight: 700 }}>{c.label}</div>
             <div style={{ fontFamily: "var(--font-display)", fontSize: "1.35rem", fontWeight: 700, marginTop: 6 }}>
-              {c.value ?? "—"}
+              {c.value && c.clubId != null
+                ? <ClubNameLink clubId={c.clubId} name={c.value} showCrest={false} />
+                : c.value ?? "—"}
             </div>
           </div>
         ))}

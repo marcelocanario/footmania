@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { Link2, Trash2, UserPlus, Users, Copy, Check } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
+import { ClubNameLink } from "../components/ClubNameLink";
 
 interface FriendRow {
   userId: number;
   username: string;
+  clubId: number | null;
   clubName: string | null;
   competitionState: string | null;
   since: string;
@@ -155,7 +157,10 @@ export function FriendsScreen() {
                 <span>
                   <b style={{ fontSize: "0.92rem" }}>{friend.username}</b>
                   <span style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>
-                    {" "}· {friend.clubName ?? "no club"}
+                    {" "}·{" "}
+                    {friend.clubName && friend.clubId != null
+                      ? <ClubNameLink clubId={friend.clubId} name={friend.clubName} showCrest={false} />
+                      : friend.clubName ?? "no club"}
                     {friend.competitionState === "DORMANT" ? " (dormant)" : ""} · friend since {relativeTime(friend.since)}
                   </span>
                 </span>

@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import type { FixtureView } from "../../api/client";
-import { ClubCrest } from "../ClubCrest";
+import { ClubNameLink } from "../ClubNameLink";
 import { formatKickoff as kickoffLabel } from "../../utils/time";
 
 /**
@@ -56,15 +56,13 @@ export function FixturesList({
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
                   <div className="side">
-                    <ClubCrest name={f.home} kit={f.homeKit} size={24} clubId={f.homeClubId} hasCustomLogo={f.homeHasCustomLogo} />
-                    {f.home}
+                    <ClubNameLink clubId={f.homeClubId} name={f.home} kit={f.homeKit} hasCustomLogo={f.homeHasCustomLogo} size={24} />
                   </div>
                   <div className="score">
                     {isLive || f.played ? `${f.homeScore ?? 0} - ${f.awayScore ?? 0}` : "vs"}
                   </div>
                   <div className="side right">
-                    {f.away}
-                    <ClubCrest name={f.away} kit={f.awayKit} size={24} clubId={f.awayClubId} hasCustomLogo={f.awayHasCustomLogo} />
+                    <ClubNameLink clubId={f.awayClubId} name={f.away} kit={f.awayKit} hasCustomLogo={f.awayHasCustomLogo} size={24} />
                   </div>
                 </div>
                 {/* Kickoff date/time and stadium, shown for every match (finished ones too). */}

@@ -98,13 +98,15 @@ export async function authRoutes(app: FastifyInstance) {
     const usernameById = new Map(users.map((u) => [u.id, u.username]));
     const save = await app.prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
     const clubRows = save
-      ? await app.prisma.club.findMany({ where: { saveId: save.id, ownerUserId: { in: friendIds } }, select: { ownerUserId: true, name: true, competitionState: true } })
+      ? await app.prisma.club.findMany({ where: { saveId: save.id, ownerUserId: { in: friendIds } }, select: { ownerUserId: true, id: true, name: true, competitionState: true } })
       : [];
     const clubByUser = new Map(clubRows.filter((c) => c.ownerUserId !== null).map((c) => [c.ownerUserId!, c]));
     return {
       friends: friendIds.map((userId) => ({
         userId,
         username: usernameById.get(userId) ?? `#${userId}`,
+        // Club id so clients can link the friend's team to the team screen.
+        clubId: clubByUser.get(userId)?.id ?? null,
         clubName: clubByUser.get(userId)?.name ?? null,
         competitionState: clubByUser.get(userId)?.competitionState ?? null,
         since: sinceByFriend.get(userId)!.toISOString(),

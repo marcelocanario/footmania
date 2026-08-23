@@ -35,7 +35,7 @@ export default async function setup(): Promise<void> {
       }]),
     ),
   };
-  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db", "test-scheduler.db", "test-season-archive.db"]) {
+  for (const name of ["test.db", "test-live.db", "test-persist.db", "test-worker.db", "test-scheduler.db", "test-season-archive.db", "test-team-profile.db"]) {
     const url = `file:${join(cwd, "prisma", name).replaceAll("\\", "/")}`;
     const prisma = new PrismaClient({ datasourceUrl: url, log: [] });
     try {

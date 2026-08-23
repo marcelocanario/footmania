@@ -6,15 +6,14 @@ import { createHumanClub } from "../game/worldgen";
 import { withGlobalLock } from "../services/lock";
 import { seasonKey } from "../game/clock";
 import { gameConfig, MP_CONFIG } from "../config";
-import { clubKitsSchema, resolveClubKits } from "../game/kits";
+import { clubKitsSchema } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
-import { standingsTiebreak } from "../game/league";
 import { hasPro } from "../services/pro";
-import { readMpStatus, readSeasonHistory, readUserLiveMatch } from "../services/readService";
+import { readMpStatus, readSeasonHistory, readUserLiveMatch, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 
 const joinSchema = z.object({
@@ -226,29 +225,7 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     const world = loaded.world;
     const comp = world.competitions.find((c) => c.id === Number((req.params as { id: string }).id));
     if (!comp) return reply.code(404).send({ error: "Division not found" });
-    const clubById = new Map(world.clubs.map((club) => [club.id, club]));
-    const seasonByClubId = new Map(world.mpClubSeasons.filter((entry) => entry.seasonId === world.mp.seasonId && entry.divisionId === comp.id).map((entry) => [entry.clubId, entry]));
-    const rows = standingsTiebreak(Object.values(comp.standings))
-      .map((row) => {
-        const club = clubById.get(row.clubId);
-        const seasonEntry = seasonByClubId.get(row.clubId);
-        return {
-          ...row,
-          clubId: row.clubId,
-          clubName: club?.name ?? "",
-          clubShort: club?.shortName ?? "",
-          colors: { primary: club?.primaryColor ?? "", secondary: club?.secondaryColor ?? "" },
-          // Identity badge data: home jersey design + custom-logo flag.
-          kit: club ? resolveClubKits(club).home : null,
-          hasCustomLogo: Boolean(club?.customLogo && club.customLogo.status === "ACTIVE"),
-          isHuman: club?.ownerUserId !== null,
-          clubType: club?.ownerUserId !== null ? "HUMAN" : "AI",
-          isMine: club?.ownerUserId === req.user!.id,
-          promotionStatus: seasonEntry?.promotionStatus ?? "NONE",
-          relegationStatus: seasonEntry?.relegationStatus ?? "NONE",
-        };
-      });
-    return { competition: { id: comp.id, name: comp.name, tier: tierOf(comp), groupIndex: groupIndexOf(comp) }, standings: rows };
+    return { competition: { id: comp.id, name: comp.name, tier: tierOf(comp), groupIndex: groupIndexOf(comp) }, standings: divisionStandingsView(world, comp, req.user!.id) };
   });
 
   app.get("/mp/divisions/:id/fixtures", async (req, reply) => {
@@ -257,43 +234,20 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     const world = loaded.world;
     const comp = world.competitions.find((c) => c.id === Number((req.params as { id: string }).id));
     if (!comp) return reply.code(404).send({ error: "Division not found" });
-    const clubById = new Map(world.clubs.map((club) => [club.id, club]));
-    const matchByFixtureId = new Map(world.matches.map((match) => [match.fixtureId, match]));
     const myClubId = world.clubs.find((c) => c.ownerUserId === req.user!.id)?.id ?? null;
-    const fixtures = world.fixtures
-      .filter((f) => f.competitionId === comp.id)
-      .sort((a, b) => a.round - b.round)
-      .map((f) => {
-        const home = clubById.get(f.homeClubId);
-        const away = clubById.get(f.awayClubId);
-        const m = matchByFixtureId.get(f.id);
-        // Live right now? Spectators can jump into any in-progress match.
-        const liveMatch = world.liveMatches.find((s) => s.fixtureId === f.id);
-        return {
-          id: f.id,
-          round: f.round,
-          home: home?.name ?? "",
-          away: away?.name ?? "",
-          homeClubId: f.homeClubId,
-          awayClubId: f.awayClubId,
-          // Fixture jerseys: the home side wears its home design, the away
-          // side wears its away design.
-          homeKit: home ? resolveClubKits(home).home : null,
-          awayKit: away ? resolveClubKits(away).away : null,
-          homeHasCustomLogo: Boolean(home?.customLogo && home.customLogo.status === "ACTIVE"),
-          awayHasCustomLogo: Boolean(away?.customLogo && away.customLogo.status === "ACTIVE"),
-          // Venue: the home club's ground.
-        venue: home?.stadiumName ?? "",
-          kickoffAt: f.kickoffAt ?? null,
-          played: f.played,
-          matchId: m?.id ?? null,
-          liveMatchId: liveMatch && !liveMatch.ended ? liveMatch.matchId : null,
-          homeScore: liveMatch && !liveMatch.ended ? liveMatch.scores[0] : m?.homeScore ?? null,
-          awayScore: liveMatch && !liveMatch.ended ? liveMatch.scores[1] : m?.awayScore ?? null,
-          isHuman: myClubId !== null && (f.homeClubId === myClubId || f.awayClubId === myClubId),
-        };
-      });
-    return { fixtures };
+    return { fixtures: divisionFixturesView(world, comp, myClubId) };
+  });
+
+  // --- Team screen (public club profile) -----------------------------------
+  // Any authenticated manager may inspect any club; the view builder enforces
+  // the privacy rule (identity + results only, no cash/ledger/Elo).
+  app.get("/mp/clubs/:id", async (req, reply) => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!loaded) return reply.code(404).send({ error: "World not found" });
+    const clubId = Number((req.params as { id: string }).id);
+    const profile = buildTeamProfile(loaded.world, clubId);
+    if (!profile) return reply.code(404).send({ error: "Club not found" });
+    return profile;
   });
 
   // --- My live match ------------------------------------------------------

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Dropdown } from "primereact/dropdown";
 import { TabView, TabPanel } from "primereact/tabview";
 import { ArrowUp, ArrowDown } from "lucide-react";
@@ -12,6 +13,7 @@ import { MatchResultDialog } from "../components/competition/MatchResultDialog";
 
 export function Competitions() {
   const { status } = useGame();
+  const navigate = useNavigate();
   const [pyramid, setPyramid] = useState<PyramidResponse | null>(null);
   const [selectedTier, setSelectedTier] = useState<number | null>(null);
   const [selectedDiv, setSelectedDiv] = useState<number | null>(null);
@@ -100,7 +102,12 @@ export function Competitions() {
       <TabView activeIndex={tab} onTabChange={(e) => setTab(e.index)}>
         <TabPanel header="Standings">
           <div className="card" style={{ padding: 20 }}>
-            <StandingsTable rows={table} isTopDivision={isTopDivision} seasonComplete={seasonComplete} />
+            <StandingsTable
+              rows={table}
+              isTopDivision={isTopDivision}
+              seasonComplete={seasonComplete}
+              onClubClick={(row) => navigate(`/team/${row.clubId}`)}
+            />
           </div>
         </TabPanel>
 
