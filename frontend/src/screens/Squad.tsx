@@ -5,7 +5,8 @@ import { Dialog } from "primereact/dialog";
 import { Dropdown } from "primereact/dropdown";
 import { MultiSelect } from "primereact/multiselect";
 import { Toast } from "primereact/toast";
-import { AlertTriangle, Dumbbell, ShieldCheck, Users, Clapperboard } from "lucide-react";
+import { Tooltip } from "primereact/tooltip";
+import { Activity, AlertTriangle, BatteryLow, BatteryMedium, Dumbbell, HeartPulse, ShieldAlert, ShieldCheck, Sparkles, Users, Clapperboard } from "lucide-react";
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -30,6 +31,17 @@ const POSITION_OPTIONS = ["GK", "FB", "CB", "MF", "FW"].map((label, value) => ({
 function energyColor(value: number): string {
   const pct = Math.max(0, Math.min(100, value));
   return `hsl(${pct * 1.2}, 72%, 48%)`;
+}
+
+function conditionIcon(condition: string) {
+  switch (condition) {
+    case "Injured": return HeartPulse;
+    case "Needs rest": return BatteryLow;
+    case "Tired": return BatteryMedium;
+    case "Heavy recent workload": return Dumbbell;
+    case "Fresh": return Sparkles;
+    default: return Activity;
+  }
 }
 
 export function Squad() {
@@ -230,9 +242,15 @@ export function Squad() {
   );
 
   const contractBody = (p: PlayerView & { contractSeasons: number }) => (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }} title={p.contractSeasons <= 1 ? "Contract expires this season" : undefined}>
+    <span
+      className={`squad-contract${p.contractSeasons <= 1 ? " squad-tooltip-trigger" : ""}`}
+      data-pr-tooltip={p.contractSeasons <= 1 ? "Contract expires this season" : undefined}
+      aria-label={p.contractSeasons <= 1 ? `${p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} S`}. Contract expires this season` : undefined}
+      tabIndex={p.contractSeasons <= 1 ? 0 : undefined}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+    >
       {p.contractSeasons <= 1 && <AlertTriangle size={14} style={{ color: "var(--gold-2)" }} aria-label="Expiring contract" />}
-      {p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} ${p.contractSeasons === 1 ? "season" : "seasons"}`}
+      {p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} S`}
     </span>
   );
 
@@ -388,6 +406,7 @@ export function Squad() {
         <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
           <div className="card" style={{ padding: isMobile ? 10 : 20 }}>
             <div className="table-wrap squad-table-wrap">
+              <Tooltip target=".squad-tooltip-trigger" event="both" position="top" className="squad-tooltip" />
               <DataTable
                 value={filteredRows}
                 selectionMode="single"
@@ -423,16 +442,54 @@ export function Squad() {
                   </div>
                 }
               >
-                <Column field="position" header="Pos" body={(p) => <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`}>{p.positionName}</span>} sortable style={{ width: isMobile ? 70 : "8%" }} frozen={isMobile} />
-                <Column field="squadNumber" header="#" body={(p) => <span style={{ fontFamily: "var(--font-display)", fontWeight: 700 }}>{p.squadNumber ?? "–"}</span>} sortable style={{ width: isMobile ? 44 : "5%" }} />
-                <Column field="name" header={strings.squad.player} body={(p) => <span className="squad-player-cell"><PlayerName player={p} showPosition={false} /></span>} sortable style={isMobile ? { width: 160 } : { width: "25%" }} frozen={isMobile} />
-                <Column field="overall" header={strings.squad.overall} body={ratingBody} sortable style={{ width: "8%" }} />
-                <Column field="age" header={strings.squad.age} sortable style={{ width: "7%" }} />
-                <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} color={energyColor(p.energy)} />} sortable style={{ width: "14%" }} />
-                <Column field="conditionLabel" header={strings.squad.condition} body={(p) => <span style={{ color: p.conditionLabel === "Needs rest" || p.conditionLabel === "Injured" ? "var(--red-2)" : "var(--text-2)" }}>{p.conditionLabel ?? "Normal workload"}{p.injuryDaysRemaining > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}</span>} style={{ width: "16%" }} />
-                {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} sortable style={{ width: "11%" }} />}
-                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => money(p.salary)} sortable style={{ width: "11%" }} />}
-                <Column field="contractSeasons" header={strings.squad.contract} body={contractBody} sortable style={{ width: isMobile ? 105 : "16%" }} />
+                <Column field="position" header="Pos" body={(p) => <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`}>{p.positionName}</span>} sortable style={{ width: isMobile ? "10%" : "7%" }} />
+                <Column field="squadNumber" header="#" body={(p) => <span style={{ fontFamily: "var(--font-display)", fontWeight: 700 }}>{p.squadNumber ?? "–"}</span>} sortable style={{ width: "7%" }} />
+                <Column field="name" header={strings.squad.player} body={(p) => <span className="squad-player-cell"><PlayerName player={p} showPosition={false} preferNickname showSuspended={false} /></span>} sortable style={isMobile ? { width: "25%" } : { width: "18%" }} />
+                <Column field="overall" header={strings.squad.overall} body={ratingBody} sortable style={{ width: isMobile ? "9%" : "7%" }} />
+                <Column field="age" header={strings.squad.age} sortable style={{ width: isMobile ? "8%" : "6%" }} />
+                <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} color={energyColor(p.energy)} />} sortable style={{ width: isMobile ? "15%" : "11%" }} />
+                <Column
+                  field="conditionLabel"
+                  header={strings.squad.condition}
+                  body={(p) => {
+                    const condition = p.conditionLabel ?? "Normal workload";
+                    const injuryDays = p.injuryDaysRemaining ?? p.injuryDays;
+                    const conditionText = condition === "Injured"
+                      ? `${condition} · returns in ${injuryDays} day${injuryDays === 1 ? "" : "s"}`
+                      : `${condition}${p.injuryDaysRemaining > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}`;
+                    const suspensionText = `Suspended for ${p.suspendedGames} match${p.suspendedGames === 1 ? "" : "es"}`;
+                    const Icon = conditionIcon(condition);
+                    return (
+                      <span className="squad-condition-icons">
+                        <button
+                          type="button"
+                          className="squad-condition squad-tooltip-trigger"
+                          data-pr-tooltip={conditionText}
+                          title={conditionText}
+                          aria-label={conditionText}
+                          style={{ color: condition === "Needs rest" || condition === "Injured" ? "var(--red-2)" : "var(--text-2)" }}
+                        >
+                          <Icon size={16} aria-hidden="true" />
+                        </button>
+                        {p.suspended && (
+                          <button
+                            type="button"
+                            className="squad-suspension squad-tooltip-trigger"
+                            data-pr-tooltip={suspensionText}
+                            title={suspensionText}
+                            aria-label={suspensionText}
+                          >
+                            <ShieldAlert size={16} aria-hidden="true" />
+                          </button>
+                        )}
+                      </span>
+                    );
+                  }}
+                  style={{ width: isMobile ? "10%" : "10%" }}
+                />
+                {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} sortable style={{ width: "9%" }} />}
+                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => money(p.salary)} sortable style={{ width: "9%" }} />}
+                <Column field="contractSeasons" header={strings.squad.contract} body={contractBody} sortable style={{ width: "16%" }} />
               </DataTable>
             </div>
           </div>

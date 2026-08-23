@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useGame } from "../store/game";
 
 /**
- * Live-match flow used by the Dashboard and mobile resume button: checks for an
+ * Live-match flow used by the Dashboard and mobile match shortcut: checks for an
  * in-progress live match and navigates to it if one exists.
  */
 export function useLiveMatch() {

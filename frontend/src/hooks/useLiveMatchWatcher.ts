@@ -4,7 +4,7 @@ import { useMpSocket } from "./useMpSocket";
 
 /**
  * Keeps the global "a match is live right now" flag in sync so the whole UI
- * can swap the dashboard "Continue" button for "Resume match" while a match
+ * can show a dashboard "Go to match" action while a match
  * is in progress.
  *
  * Previously this polled `/api/mp/live-match` every 8 seconds. Now it mounts

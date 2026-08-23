@@ -574,6 +574,8 @@ export interface LiveEvent {
   player: string;
   player2: string;
   addedTime?: number | null;
+  /** Injury events carry the estimated days out here. */
+  goalType?: number;
 }
 
 export interface TeamMatchStats {

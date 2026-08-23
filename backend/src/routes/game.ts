@@ -148,6 +148,8 @@ export async function gameRoutes(app: FastifyInstance) {
         player: e.playerId ? loaded.world.players.find((p) => p.id === e.playerId)?.name ?? "" : "",
       player2: e.player2Id ? loaded.world.players.find((p) => p.id === e.player2Id)?.name ?? "" : "",
       addedTime: (e as { addedTime?: number }).addedTime ?? null,
+      // Injury events carry the estimated days out in goalType.
+      goalType: e.goalType,
     }));
     return {
       match: {
@@ -294,7 +296,6 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((c) => c.id === clubId)!;
       const err = applySavedLineup(club, world.players, parsed.data);
       if (err) return { error: { code: 400, body: { error: err } } };
-      world.news.push({ dayIndex: world.dayIndex, text: `${club.name} confirmed the lineup`, kind: "tactics" });
       return { value: { ok: true } };
     });
     return replyFrom(res, reply);

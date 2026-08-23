@@ -6,7 +6,26 @@ export interface PitchPoint {
 }
 
 export type PitchSide = "home" | "away";
-export type PitchCueKind = "goal" | "miss" | "yellow" | "red" | "injury" | "sub" | "assist";
+/**
+ * Pitch cue kinds for notable live moments. Neutral boundary events (coin
+ * toss, half-time/second-half/full-time whistles, shootout announcement) map
+ * to no cue at all — they have no pitch location to highlight.
+ */
+export type PitchCueKind = "goal" | "miss" | "yellow" | "red" | "injury" | "sub" | "corner" | "save" | "woodwork";
+
+/** Event types (EVENT_CODES) that produce a pitch cue; everything else is neutral. */
+const CUE_TYPES: Record<number, PitchCueKind> = {
+  1: "goal",
+  2: "yellow",
+  3: "red",
+  4: "red",
+  5: "injury",
+  6: "sub",
+  7: "miss",
+  14: "corner",
+  15: "save",
+  16: "woodwork",
+};
 
 export interface PitchCue {
   kind: PitchCueKind;
@@ -244,14 +263,8 @@ export function eventKey(event: LiveEvent): string {
   return [event.minute, event.addedTime ?? "", event.half, event.type, event.subtype, event.clubId, event.playerId ?? event.player, event.player2Id ?? event.player2].join(":");
 }
 
-function cueKind(event: LiveEvent): PitchCueKind {
-  if (event.type === 1) return "goal";
-  if (event.type === 2) return "yellow";
-  if (event.type === 3 || event.type === 4) return "red";
-  if (event.type === 5) return "injury";
-  if (event.type === 6) return "sub";
-  if (event.type === 7) return "miss";
-  return "assist";
+function cueKind(event: LiveEvent): PitchCueKind | null {
+  return CUE_TYPES[event.type] ?? null;
 }
 
 function pointForPlayer(playerId: number | null | undefined, players: LivePlayer[], remembered: Map<number, PitchPoint>): PitchPoint {
@@ -261,7 +274,9 @@ function pointForPlayer(playerId: number | null | undefined, players: LivePlayer
   return { x: 50, y: 50 };
 }
 
-export function cueForEvent(event: LiveEvent, homeClubId: number, homePlayers: LivePlayer[], awayPlayers: LivePlayer[], remembered = new Map<number, PitchPoint>()): PitchCue {
+export function cueForEvent(event: LiveEvent, homeClubId: number, homePlayers: LivePlayer[], awayPlayers: LivePlayer[], remembered = new Map<number, PitchPoint>()): PitchCue | null {
+  const kind = cueKind(event);
+  if (!kind) return null;
   const side: PitchSide = event.clubId === homeClubId ? "home" : "away";
   const actorSide: PitchSide = event.subtype === 2 && event.playerId !== null && event.playerId !== undefined
     ? (homePlayers.some((player) => player.id === event.playerId) ? "home" : "away")
@@ -269,7 +284,6 @@ export function cueForEvent(event: LiveEvent, homeClubId: number, homePlayers: L
   const players = actorSide === "home" ? homePlayers : awayPlayers;
   const actorPoint = pointForPlayer(event.playerId, players, remembered);
   const secondaryPoint = event.player2Id === null || event.player2Id === undefined ? null : pointForPlayer(event.player2Id, players, remembered);
-  const kind = cueKind(event);
   const targetPoint = kind === "goal" || kind === "miss" ? (side === "home" ? { x: 96, y: 50 } : { x: 4, y: 50 }) : actorPoint;
   return { kind, event, side, actorSide, actorPoint, secondaryPoint, targetPoint };
 }

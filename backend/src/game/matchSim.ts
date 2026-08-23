@@ -1657,6 +1657,27 @@ function stepPossession(eng: Engine): void {
       beginPossession(eng, "KICK_OFF");
       return;
     }
+    // Curated timeline events for notable non-goal shots: goalkeeper saves and
+    // woodwork hits. Blocked/off-target misses stay unrecorded to keep feeds
+    // readable. A save credits the defending goalkeeper with the shooter as
+    // the secondary player ("GK saved shot by shooter" in the feed); WOODWORK
+    // stays attributed to the shooter who hit it. The WOODWORK subtype marks
+    // an on-target hit so goals + saves + on-target woodwork reconciles
+    // exactly with shotsOnTarget (saves counted for the defending side).
+    if (result.saved || result.woodwork) {
+      const shotClubId = sideOf(eng, attSide).club.id;
+      const gk = def.on.find((ps) => ps.tacPos === 1) ?? null;
+      eng.events.push({
+        minute: displayMinute, half: eventHalf,
+        type: result.saved ? EVENT_CODES.SAVE : EVENT_CODES.WOODWORK,
+        subtype: !result.saved && result.onTarget ? 1 : 0,
+        clubId: result.saved ? def.club.id : shotClubId,
+        playerId: result.saved ? (gk?.id ?? null) : (result.shooter?.id ?? null),
+        player2Id: result.saved ? (result.shooter?.id ?? null) : null,
+        goalType: 0,
+        ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
+      });
+    }
     // Non-goal shot resolution
     if (result.saved) {
       // Goalkeeper begins possession.
@@ -1768,6 +1789,13 @@ function stepPossession(eng: Engine): void {
     const restart = weightedPick(eng.rng, labels, weights) as RestartType;
     if (restart === "CORNER") {
       stats.corners++;
+      // Curated timeline: corner awards mirror the stat counter exactly and
+      // name a (deterministically chosen) taker for the feed.
+      eng.events.push({
+        minute: displayMinute, half: eng.period as number, type: EVENT_CODES.CORNER, subtype: 0,
+        clubId: sideOf(eng, attSide).club.id, playerId: cornerTakerId(eng, attSide, stats.corners), player2Id: null, goalType: 0,
+        ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
+      });
     }
     if (restart === "THROW_IN" || restart === "FREE_KICK" || restart === "GOAL_KICK" || restart === "CORNER") {
       eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
@@ -1792,6 +1820,72 @@ function periodEndSeconds(eng: Engine): number {
   return MS.timing.regulationSeconds + (firstAdded + secondAdded) * 60;
 }
 
+// ---------------------------------------------------------------------------
+// Boundary timeline events
+//
+// Whistles/announcements are synthesized once per structural transition. They
+// must never consume RNG draws (outcome neutrality) and must be idempotent:
+// a live state paused at half-time is rebuilt from `st` on resume, and
+// `st.events` is shared with the engine, so existence checks against the
+// persisted event list guard against double emission across reloads.
+// ---------------------------------------------------------------------------
+
+function hasEvent(eng: Engine, type: number): boolean {
+  return eng.events.some((e) => e.type === type);
+}
+
+function pushBoundaryEvent(eng: Engine, type: number, minute: number, addedMinutes: number): void {
+  if (hasEvent(eng, type)) return;
+  eng.events.push({
+    minute,
+    half: eng.period === 2 ? 2 : 1,
+    type,
+    subtype: 0,
+    clubId: eng.home.club.id,
+    playerId: null,
+    player2Id: null,
+    goalType: 0,
+    ...(addedMinutes > 0 ? { addedTime: addedMinutes } : {}),
+  });
+}
+
+/** End of the first half ("45+X'"), emitted when the clock first reaches the
+ *  first-half boundary — including the pause path for human broadcasts. */
+function pushHalfTimeWhistle(eng: Engine): void {
+  pushBoundaryEvent(eng, EVENT_CODES.HALF_TIME, 45, eng.st.firstHalfAddedMinutes ?? 0);
+}
+
+/** Start of the second half (display minute 46). Emitted at the period flip. */
+function pushSecondHalfKickoff(eng: Engine): void {
+  const disp = displayMinuteForClock(eng, eng.clockSeconds);
+  pushBoundaryEvent(eng, EVENT_CODES.SECOND_HALF_START, disp.minute, 0);
+}
+
+/** A drawn decider goes straight to penalties from full time in this engine
+ *  (no played extra-time periods); announce before the shootout kicks. */
+function pushShootoutAnnouncement(eng: Engine): void {
+  pushBoundaryEvent(eng, EVENT_CODES.SHOOTOUT, 90, eng.st.secondHalfAddedMinutes ?? 0);
+}
+
+/** Full time ("90+X'"). Emitted on both ended=true paths of runMatch. */
+function pushFullTimeWhistle(eng: Engine): void {
+  pushBoundaryEvent(eng, EVENT_CODES.FULL_TIME, 90, eng.st.secondHalfAddedMinutes ?? 0);
+}
+
+/**
+ * Deterministic corner-taker attribution for the event feed — never consumes
+ * RNG draws, so match outcomes stay untouched. Prefers wide/advanced roles,
+ * falling back to any outfielder, cycling by the team's corner ordinal so
+ * repeated corners rotate plausible takers within a match.
+ */
+function cornerTakerId(eng: Engine, attSide: 0 | 1, cornerOrdinal: number): number | null {
+  const outfield = sideOf(eng, attSide).on.filter((ps) => ps.tacPos !== 1);
+  if (outfield.length === 0) return null;
+  const preferred = outfield.filter((ps) => ["LW", "RW", "LM", "RM", "ST"].includes(tacPosRole(ps.tacPos)));
+  const pool = preferred.length > 0 ? preferred : outfield;
+  return pool[(cornerOrdinal - 1) % pool.length].id;
+}
+
 function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalftime?: boolean }): void {
   // console.log(`[runMatch start] clock ${eng.clockSeconds} target ${targetClockSeconds} firstAdded ${eng.st.firstHalfAddedMinutes} secondAdded ${eng.st.secondHalfAddedMinutes} period ${eng.period} pause ${opts?.pauseAtHalftime}`);
   let guard = 0;
@@ -1803,6 +1897,7 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
     if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
     if (eng.clockSeconds >= boundary) {
       if (eng.period === 1) {
+        pushHalfTimeWhistle(eng);
         if (opts?.pauseAtHalftime) {
           // Pause at halftime (first half + its added time) — do not flip period yet.
           // console.log(`[runMatch pause] clock ${eng.clockSeconds} boundary ${boundary}`);
@@ -1814,12 +1909,15 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
         eng.possessionSide = winner === 0 ? 1 : 0;
         eng.st.withBall = eng.possessionSide;
         beginPossession(eng, "KICK_OFF");
+        pushSecondHalfKickoff(eng);
         continue;
       }
       if (eng.st.decider && eng.st.scores[0] === eng.st.scores[1] && !eng.extraTimePlayed) {
         eng.extraTimePlayed = true;
+        pushShootoutAnnouncement(eng);
         doShootout(eng);
       }
+      pushFullTimeWhistle(eng);
       eng.ended = true;
       break;
     }
@@ -1832,8 +1930,10 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
   if (!eng.ended && eng.clockSeconds >= totalEnd) {
     if (eng.st.decider && eng.scores[0] === eng.scores[1] && !eng.extraTimePlayed) {
       eng.extraTimePlayed = true;
+      pushShootoutAnnouncement(eng);
       doShootout(eng);
     }
+    pushFullTimeWhistle(eng);
     eng.ended = true;
   }
 }

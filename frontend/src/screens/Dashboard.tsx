@@ -66,11 +66,6 @@ export function Dashboard() {
             )}
           </div>
         </div>
-        {liveMatchId && (
-          <button className="btn gold" style={{ fontSize: "1.05rem", minHeight: 50, padding: "14px 34px" }} onClick={() => run()} disabled={busy}>
-            <Radio size={19} /> {strings.dashboard.resume}
-          </button>
-        )}
       </div>
 
       {provisional && (
@@ -139,15 +134,19 @@ export function Dashboard() {
       )}
 
       {liveMatchId && (
-        <div className="card" style={{ borderColor: "rgba(61,220,132,0.5)", marginBottom: 16, textAlign: "center", padding: "22px 18px" }}>
-          <div className="live-tag" style={{ marginBottom: 8 }}>
-            <span className="pulse-dot" /> {strings.dashboard.liveMatch}
+        <div className="live-match-alert" role="status" aria-labelledby="live-match-alert-title">
+          <div className="live-match-alert-icon" aria-hidden="true">
+            <Radio size={22} />
           </div>
-          <div style={{ color: "var(--text-2)", fontSize: "0.95rem" }}>
-            A match is being played right now. Watch it live and make substitutions.
+          <div className="live-match-alert-copy">
+            <div className="live-match-alert-eyebrow">
+              <span className="pulse-dot" /> {strings.dashboard.liveMatch}
+            </div>
+            <h2 id="live-match-alert-title">Your match is underway</h2>
+            <p>{strings.dashboard.liveMatchHint}</p>
           </div>
-          <button className="btn gold" style={{ marginTop: 12 }} onClick={() => navigate("/live-match")}>
-            <Radio size={16} /> {strings.dashboard.resume}
+          <button className="btn gold live-match-alert-action" onClick={() => void run()} disabled={busy}>
+            <Radio size={16} /> {strings.dashboard.goToMatch} <ArrowRight size={15} />
           </button>
         </div>
       )}

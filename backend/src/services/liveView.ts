@@ -1,7 +1,7 @@
 import type { LiveMatchState, World } from "../game/types";
 import { livePhase } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
-import { FORMATION_NAMES } from "../game/constants";
+import { EVENT_CODES, FORMATION_NAMES } from "../game/constants";
 import { resolveClubKits } from "../game/kits";
 import { displayName } from "../game/displayName";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
@@ -20,6 +20,8 @@ export interface LiveEventView {
   player: string;
   player2: string;
   addedTime?: number;
+  /** Injury events carry the estimated days out here. */
+  goalType?: number;
 }
 
 export interface LivePlayerView {
@@ -188,6 +190,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     player: e.playerId ? (byId.get(e.playerId) ? displayName(byId.get(e.playerId)!) : "") : "",
     player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
     ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
+    ...(e.type === EVENT_CODES.INJURY ? { goalType: e.goalType } : {}),
   }));
   const { progressPct, currentAddedTime } = clockProgress(st);
   // Determine which side the viewer controls (if any).
@@ -337,6 +340,7 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     player: e.playerId ? (byId.get(e.playerId) ? displayName(byId.get(e.playerId)!) : "") : "",
     player2: e.player2Id ? (byId.get(e.player2Id) ? displayName(byId.get(e.player2Id)!) : "") : "",
     ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
+    ...(e.type === EVENT_CODES.INJURY ? { goalType: e.goalType } : {}),
   }));
   const { progressPct, currentAddedTime } = clockProgress(st);
   return {

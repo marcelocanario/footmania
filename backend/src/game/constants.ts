@@ -94,6 +94,16 @@ export const EVENT_CODES = {
   MISSED_PENALTY: 7,
   ASSIST: 8,
   COIN_TOSS: 9,
+  // Boundary/curated timeline events (§match-timeline). Structural codes, not
+  // balance tunables. They must be pushed without consuming RNG draws so match
+  // outcomes stay byte-identical to the pre-timeline engine.
+  HALF_TIME: 10,
+  SECOND_HALF_START: 11,
+  FULL_TIME: 12,
+  SHOOTOUT: 13,
+  CORNER: 14,
+  SAVE: 15,
+  WOODWORK: 16,
 };
 
 export const GOAL_SUBTYPES = {

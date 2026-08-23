@@ -229,9 +229,9 @@ export function Layout({ children }: { children: ReactNode }) {
   };
 
   const inMatch = location.pathname === "/live-match" || location.pathname === "/season-end";
-  const showResume = isMobile && snapshot && !inMatch && liveMatchId;
+  const showMatchShortcut = isMobile && snapshot && !inMatch && location.pathname !== "/dashboard" && liveMatchId;
 
-  const resume = () => {
+  const goToMatch = () => {
     void checkLiveMatch().then((id) => {
       if (id) navigate("/live-match");
     });
@@ -415,12 +415,12 @@ export function Layout({ children }: { children: ReactNode }) {
         </nav>
       )}
 
-      {showResume && (
+      {showMatchShortcut && (
         <button
           className="fab"
-          onClick={resume}
-          title={strings.dashboard.resume}
-          aria-label={strings.dashboard.resume}
+          onClick={goToMatch}
+          title={strings.dashboard.goToMatch}
+          aria-label={strings.dashboard.goToMatch}
         >
           <Radio size={22} fill="currentColor" />
         </button>
