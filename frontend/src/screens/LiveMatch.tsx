@@ -1,26 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Flag, RefreshCw, Subscript, Users } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
-
-const EVENT_LABELS: Record<number, string> = {
-  1: "Goal!",
-  2: "Yellow card",
-  3: "Red card",
-  5: "Injury",
-  6: "Substitution",
-  7: "Missed penalty",
-  8: "Assist",
-  9: "Coin toss",
-};
-
-function formatMinute(e: LiveEvent): string {
-  if (e.addedTime) return `${e.minute}+${e.addedTime}'`;
-  return `${e.minute}'`;
-}
+import { MatchHistory } from "../components/MatchHistory";
+import { MatchStatsPanel } from "../components/MatchStatsPanel";
+import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
+import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
 
 const PHASE_LABEL: Record<string, string> = {
   pregame: "Lineups",
@@ -33,17 +21,28 @@ const PHASE_LABEL: Record<string, string> = {
   fulltime: "Full time",
 };
 
-function EventIcon({ type, subtype }: { type: number; subtype: number }) {
-  let cls = "event-ico event-miss";
-  let glyph = "⚽";
-  if (type === 1) { cls = "event-ico event-goal"; glyph = subtype === 2 ? "🥅" : "⚽"; }
-  else if (type === 2) { cls = "event-ico event-yellow"; glyph = "🟨"; }
-  else if (type === 3) { cls = "event-ico event-red"; glyph = "🟥"; }
-  else if (type === 5) { cls = "event-ico event-inj"; glyph = "🩹"; }
-  else if (type === 6) { cls = "event-ico event-sub"; glyph = "🔄"; }
-  else if (type === 7) { cls = "event-ico event-miss"; glyph = "❌"; }
-  else if (type === 9) { cls = "event-ico event-miss"; glyph = "🪙"; }
-  return <span className={cls}>{glyph}</span>;
+const TACTICAL_POSITION_LABELS: Record<number, string> = {
+  1: "GK", 2: "LB", 3: "CB", 4: "CB", 5: "CB", 6: "RB", 7: "CB", 8: "CB", 9: "RB",
+  10: "LM", 11: "CDM", 12: "CM", 13: "CM", 14: "CM", 15: "CAM", 16: "CM", 17: "RM",
+  18: "ST", 19: "LW", 20: "LB", 21: "CB", 22: "CB", 23: "CB", 24: "CB", 25: "ST",
+};
+
+function playerPosition(player: LivePlayer): string {
+  return TACTICAL_POSITION_LABELS[player.tacPos] ?? ["GK", "FB", "CB", "MF", "FW"][player.position] ?? "PLAYER";
+}
+
+function matchContextLabel(state: LiveState): string {
+  const parts: string[] = [];
+  if (state.seasonNumber !== null) parts.push(`Season ${state.seasonNumber}`);
+  if (state.divisionTier !== null) {
+    parts.push(`Division ${state.divisionTier}`);
+    if (state.groupNumber !== null) parts.push(`Group ${state.groupNumber}`);
+  } else if (state.competitionName) {
+    parts.push(state.competitionName);
+  }
+  if (state.roundNumber !== null) parts.push(`Round ${state.roundNumber}`);
+  if (state.stadiumName) parts.push(state.stadiumName);
+  return parts.join(" · ") || "Matchday";
 }
 
 interface WsMessage {
@@ -75,9 +74,20 @@ export function LiveMatch() {
   const [liveId, setLiveId] = useState<number | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
   const [halftimeBusy, setHalftimeBusy] = useState(false);
+  const [sideTab, setSideTab] = useState<"events" | "stats" | "tactics">("events");
+  const [tacticDraft, setTacticDraft] = useState({ style: 0, pressing: 0, direction: 0 });
+  const [tacticsBusy, setTacticsBusy] = useState(false);
+  const [tacticsStatus, setTacticsStatus] = useState("");
+  const [playerTarget, setPlayerTarget] = useState<{ id: number; name: string } | null>(null);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef<LiveState | null>(null);
+
+  const liveTactics = state ? (state.humanSide === 0 ? state.homeTactics : state.awayTactics) : null;
+
+  useEffect(() => {
+    if (liveTactics) setTacticDraft(liveTactics);
+  }, [liveTactics?.style, liveTactics?.pressing, liveTactics?.direction]);
 
   const matchId = liveId;
 
@@ -193,6 +203,10 @@ export function LiveMatch() {
           setSubOut(null);
           setSubIn(null);
         }
+      } else if (msg.type === "tactics" && msg.state) {
+        applyState(msg.state);
+        setTacticsBusy(false);
+        setTacticsStatus(msg.error ?? "Tactics updated");
       } else if (msg.type === "automation" && msg.state) {
         applyState(msg.state);
         setAutoBusy(false);
@@ -204,6 +218,7 @@ export function LiveMatch() {
       } else if (msg.type === "error") {
         setReconnecting(false);
         setWsMode(false);
+        setTacticsBusy(false);
         if (String(msg.message ?? "").includes("No live match")) setNoLive(true);
       }
     };
@@ -286,6 +301,22 @@ export function LiveMatch() {
     }
   };
 
+  const doTactics = async () => {
+    if (!matchId || tacticsBusy || state?.isParticipant === false || state?.ended) return;
+    setTacticsBusy(true);
+    setTacticsStatus("");
+    try {
+      if (send({ type: "tactics", ...tacticDraft })) return;
+      const res = await api.liveTactics(matchId, tacticDraft);
+      applyState(res.state);
+      setTacticsStatus("Tactics updated");
+    } catch (e) {
+      setTacticsStatus((e as Error).message);
+    } finally {
+      setTacticsBusy(false);
+    }
+  };
+
   const humanSide = state?.humanSide ?? 1;
   // Spectator: watching someone else's match — read-only UI.
   const isSpectator = state?.isParticipant === false;
@@ -293,14 +324,6 @@ export function LiveMatch() {
   const bench = humanSide === 0 ? state?.homeBench ?? [] : state?.awayBench ?? [];
   const usedSubs = state ? state.usedSubs[humanSide] : 0;
   const subsLeft = 5 - usedSubs;
-
-  const visibleEvents = useMemo(() => {
-    if (!state) return [];
-    return state.events
-      .slice()
-      .sort((a, b) => a.minute - b.minute || (a.addedTime ?? 0) - (b.addedTime ?? 0) || a.type - b.type)
-      .filter((e) => e.type !== 8);
-  }, [state?.events]);
 
   if (!state) {
     return (
@@ -318,41 +341,18 @@ export function LiveMatch() {
     );
   }
 
-  const stats = state.stats;
   const isDone = state.ended;
   const scoreKey = `${state.homeScore}-${state.awayScore}`;
 
-  const barRow = (label: string, h: number, a: number) => {
-    const total = h + a || 1;
-    const hp = (h / total) * 100;
-    return (
-      <div className="stat-bar">
-        <span className="side-num">{h}</span>
-        <div className="track">
-          <div className="fill-h" style={{ width: `${hp}%` }} />
-          <div className="fill-a" style={{ width: `${100 - hp}%` }} />
-        </div>
-        <span className="side-num right">{a}</span>
-        <span className="bar-label">{label}</span>
-      </div>
-    );
-  };
-
-  const possession = (() => {
-    const total = stats.home.controlledBallSeconds + stats.away.controlledBallSeconds;
-    if (total <= 0) return [50, 50] as [number, number];
-    const home = Math.round((stats.home.controlledBallSeconds / total) * 100);
-    return [home, 100 - home] as [number, number];
-  })();
-
   const phaseLabel = PHASE_LABEL[state.phase] ?? state.phase;
+  const canChangeTactics = !isSpectator && !isDone && state.phase !== "shootout";
 
   if (state.phase === "pregame") {
     return (
       <div>
         <div className="page-head">
           <div>
-            <div className="kicker">{state.competitionName || "Matchday"}</div>
+            <div className="kicker">{matchContextLabel(state)}</div>
             <h1>{state.home} vs {state.away}</h1>
           </div>
         </div>
@@ -395,7 +395,7 @@ export function LiveMatch() {
       <div className="page-head">
         <div>
           <div className="kicker">
-            {state.competitionName || "Matchday"}
+             {matchContextLabel(state)}
             {isSpectator ? " · Watching as spectator" : ""}
           </div>
           <h1>{state.home} vs {state.away}</h1>
@@ -415,26 +415,17 @@ export function LiveMatch() {
         )}
 
         <div className="live-score" key={scoreKey}>
+          <span className="score-team">{state.home}</span>
           <span className="score-num">{state.homeScore}</span>
           <span className="sep">—</span>
           <span className="score-num">{state.awayScore}</span>
+          <span className="score-team">{state.away}</span>
         </div>
         {state.shootout && (
           <div style={{ color: "var(--gold-2)", fontWeight: 700, marginBottom: 6 }}>
             Pens {state.shootout.scores[0]} - {state.shootout.scores[1]} · {state.shootout.winner} win
           </div>
         )}
-        <div className="live-teams">
-          <span>{state.home} <span style={{ color: "var(--text-3)", fontSize: "0.72rem" }}>{state.homeFormation}</span></span>
-          <span style={{ color: "var(--text-3)" }}>vs</span>
-          <span>{state.away} <span style={{ color: "var(--text-3)", fontSize: "0.72rem" }}>{state.awayFormation}</span></span>
-        </div>
-
-        <div className="stat-bars">
-          {barRow("Possession", possession[0], possession[1])}
-          {barRow("Shots", stats.home.shots, stats.away.shots)}
-          {barRow("On target", stats.home.shotsOnTarget, stats.away.shotsOnTarget)}
-        </div>
       </div>
 
       {/* Match progress 0–90 (clamped, not stretched by added time) */}
@@ -442,14 +433,59 @@ export function LiveMatch() {
         <div className="match-progress-fill" style={{ width: `${Math.min(100, state.progressPct)}%`, height: "100%", background: "linear-gradient(90deg, var(--grass), var(--grass-2))", transition: "width 0.6s ease" }} />
       </div>
 
-      <MatchPitch
-        home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
-        away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
-        events={state.events}
-        phase={state.phase}
-        minute={state.minute}
-        addedTime={state.currentAddedTime ?? null}
-      />
+      <div className="live-columns">
+        <div className="live-pitch-column">
+          <MatchPitch
+            home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
+            away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
+            events={state.events}
+            phase={state.phase}
+            minute={state.minute}
+            addedTime={state.currentAddedTime ?? null}
+          />
+        </div>
+        <aside className="card live-side">
+          <div className="live-side-head">
+            <span className="live-tag" style={{ fontSize: "0.68rem", padding: "3px 9px" }}>
+              {wsMode && !reconnecting ? <><span className="pulse-dot" /> Live</> : <><RefreshCw size={10} /> {reconnecting ? "Reconnecting" : "Fallback"}</>}
+            </span>
+            <div className="live-side-tabs" role="tablist" aria-label="Live match sidebar">
+              {(["events", "stats", "tactics"] as const).map((tab) => (
+                <button key={tab} type="button" role="tab" aria-selected={sideTab === tab} className={`live-side-tab${sideTab === tab ? " active" : ""}`} onClick={() => setSideTab(tab)}>
+                  {tab === "events" ? "Match history" : tab[0].toUpperCase() + tab.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {sideTab === "events" && (
+            <div className="live-side-content">
+              <MatchHistory events={state.events} homeClubId={state.homeClubId} homeName={state.home} awayName={state.away} emptyText={isDone ? "No goals, cards or injuries to report." : "The match is about to start..."} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
+            </div>
+          )}
+
+          {sideTab === "stats" && (
+            <div className="live-side-content live-stats">
+              <MatchStatsPanel stats={state.stats} usedSubs={state.usedSubs} />
+            </div>
+          )}
+
+          {sideTab === "tactics" && (
+            <div className="live-side-content live-tactics">
+              <div className="live-tactics-hint">
+                {isSpectator ? "You are watching these tactics as a spectator." : "Style, pressing and direction apply from the next simulation tick."}
+              </div>
+              <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{PRESSING.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              {!isSpectator && <button className="btn gold" onClick={() => void doTactics()} disabled={!canChangeTactics || tacticsBusy}>{tacticsBusy ? "Applying..." : "Apply tactics"}</button>}
+              {!isSpectator && !isDone && <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}><Subscript size={15} /> Substitutions ({subsLeft})</button>}
+              {tacticsStatus && <div className="live-tactics-status">{tacticsStatus}</div>}
+              {!isSpectator && state.phase === "halftime" && <div className="live-tactics-hint">Formation and lineup changes are available in the interval controls.</div>}
+            </div>
+          )}
+        </aside>
+      </div>
 
       {state.phase === "halftime" && (() => {
         const pauseSec = (state.halftimePauseMinutes ?? 5) * 60;
@@ -468,7 +504,7 @@ export function LiveMatch() {
             <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 6 }}>
               {isSpectator
                 ? "You are watching as a spectator."
-                : `You may change your formation or make substitutions (${subsLeft} left).`}
+                 : `You may change your formation here and make substitutions from the Tactics tab (${subsLeft} left).`}
             </div>
             <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 12 }}>
               {bothHumans ? (
@@ -478,16 +514,11 @@ export function LiveMatch() {
               )}
             </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
-              {!isSpectator && (
-                <>
-                  <button className="btn" onClick={() => setShowLineup((v) => !v)}>
-                    <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
-                  </button>
-                  <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
-                    <Subscript size={15} /> Substitutions
-                  </button>
-                </>
-              )}
+               {!isSpectator && (
+                 <button className="btn" onClick={() => setShowLineup((v) => !v)}>
+                   <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
+                 </button>
+               )}
               {canReady && (
                 <button className={`btn ${myReady ? "ghost" : "gold"}`} onClick={() => void doHalftimeReady()} disabled={halftimeBusy || myReady}>
                   {myReady ? "✓ Ready" : "I'm Ready — Resume"}
@@ -511,66 +542,6 @@ export function LiveMatch() {
           </div>
         );
       })()}
-
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h2 className="card-title">
-          <span className="live-tag" style={{ fontSize: "0.72rem", padding: "3px 10px" }}>
-            {wsMode && !reconnecting ? <><span className="pulse-dot" /> Live</> : <><RefreshCw size={11} /> {reconnecting ? "Reconnecting" : "Fallback"}</>}
-          </span>{" "}
-          Events
-        </h2>
-        <div className="event-feed">
-          {visibleEvents.length === 0 && (
-            <div className="empty-state" style={{ padding: 14 }}>
-              {isDone ? "No goals, cards or injuries to report." : "The match is about to start..."}
-            </div>
-          )}
-          {visibleEvents.map((e, i) => {
-            const coinWinner = e.type === 9 ? (e.clubId === state?.homeClubId ? state?.home : state?.away) : "";
-            return (
-              <div className="event-row" key={i}>
-                <span className="min">{formatMinute(e)}</span>
-                <EventIcon type={e.type} subtype={e.subtype} />
-                {e.type === 9 ? (
-                  <>
-                    <span className="ev-label">{EVENT_LABELS[e.type]}</span>
-                    <span className="ev-name">{coinWinner} won toss — kicks off</span>
-                  </>
-                ) : e.type === 1 && e.subtype !== 2 && e.player2 ? (
-                  <>
-                    <span className="ev-label">{EVENT_LABELS[e.type]}</span>
-                    <span className="ev-name">{e.player}</span>
-                    <span className="ev-label">assist {e.player2}</span>
-                  </>
-                ) : e.type === 6 ? (
-                  <>
-                    <span className="ev-label">{EVENT_LABELS[e.type]}</span>
-                    <span className="ev-name">{e.player}</span>
-                    <span className="ev-label">↔ {e.player2}</span>
-                  </>
-                ) : (
-                  <>
-                    <span className="ev-label">{EVENT_LABELS[e.type] ?? "Event"}</span>
-                    <span className="ev-name">{e.player}</span>
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="card">
-        <h2 className="card-title">Match stats</h2>
-        {barRow("Fouls", stats.home.fouls, stats.away.fouls)}
-        {barRow("Corners", stats.home.corners, stats.away.corners)}
-        {barRow("xG", Number(stats.home.xG.toFixed(2)), Number(stats.away.xG.toFixed(2)))}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <span className="chip">🟨 {stats.home.yellows} : {stats.away.yellows}</span>
-          <span className="chip">🟥 {stats.home.reds} : {stats.away.reds}</span>
-          <span className="chip">Subs {state.usedSubs[0]} : {state.usedSubs[1]}</span>
-        </div>
-      </div>
 
       {!isSpectator && !isDone && state.automationDisabled !== undefined && (
         <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
@@ -604,11 +575,6 @@ export function LiveMatch() {
               <button className="btn ghost" onClick={() => void refreshLiveState()}>
                 <RefreshCw size={15} /> Refresh
               </button>
-              {!isSpectator && (
-                <button className="btn ghost" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}>
-                  <Subscript size={15} /> Subs ({subsLeft})
-                </button>
-              )}
             </>
           )
         )}
@@ -631,9 +597,12 @@ export function LiveMatch() {
                       className={`sub-row${subOut?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubOut(p)}
                     >
-                      <span className="pos-tag">{p.tacPos}</span>
+                      <span className="pos-tag">{playerPosition(p)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
-                      <span style={{ color: "var(--text-3)" }}>{Math.round(p.energy)}</span>
+                      <span className="sub-energy">
+                        <span>EN {Math.round(p.energy)}</span>
+                        <span className="sub-energy-track"><span className="sub-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} /></span>
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -648,9 +617,13 @@ export function LiveMatch() {
                       onClick={() => setSubIn(p)}
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
-                      <span className="pos-tag">{p.position === 0 ? "GK" : ""}</span>
+                      <span className="pos-tag">{playerPosition(p)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
-                      <span style={{ color: "var(--text-3)" }}>{p.overall}</span>
+                      <span className="sub-energy">
+                        <span>EN {Math.round(p.energy)}</span>
+                        <span className="sub-energy-track"><span className="sub-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} /></span>
+                      </span>
+                      <strong className="sub-rating">{p.overall}</strong>
                     </button>
                   ))}
                 </div>
@@ -665,6 +638,7 @@ export function LiveMatch() {
           </div>
         </div>
       )}
+      <PlayerDetailsDialog target={playerTarget} onClose={() => setPlayerTarget(null)} />
     </div>
   );
 }

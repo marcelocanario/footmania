@@ -92,6 +92,7 @@ Technical/housekeeping:
 		[DONE] consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
 	implement a message of the day (MOTD) system - admins can send messages through admin panel and those show in the home of the users, in the News section
 	check if there are any scalability improvements that can be proposed
+	add an option for admins to reset the whole game (erase teams, players, groups, etc. - start game from scratch. keeps only accounts, forces everyone to recreate team)
 
 Tuning:
 	validate game engine, loan rules, economy, etc. and see if the game is fair and balanced, look for player exploits that need to be patched. also check if the economy is broken or can cause too much infaltion overtime

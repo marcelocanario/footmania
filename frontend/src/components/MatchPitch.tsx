@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import type { KitDesign, LiveEvent, LivePlayer } from "../api/client";
 import { FootballKit } from "./kit/FootballKit";
 import { cueForEvent, eventKey, teamPitchPoints, type PitchCue, type PitchPoint, type PitchSide } from "./matchPitchUtils";
+import { formationLabel } from "../tacticsOptions";
 
 interface PitchTeam {
   clubId: number;
@@ -113,8 +114,10 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
     }
   }, [players, home.players, homePoints, awayPoints]);
 
+  const pitchEvents = useMemo(() => events.filter((event) => event.type !== 8), [events]);
+
   useEffect(() => {
-    const fresh = events.filter((event) => !seenRef.current.has(eventKey(event)));
+    const fresh = pitchEvents.filter((event) => !seenRef.current.has(eventKey(event)));
     for (const event of fresh) seenRef.current.add(eventKey(event));
     if (!mountedRef.current) {
       mountedRef.current = true;
@@ -123,7 +126,7 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
     if (fresh.length > 0) {
       setQueue((current) => [...current, ...fresh].sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0)));
     }
-  }, [events]);
+  }, [pitchEvents]);
 
   useEffect(() => {
     if (activeEvent || queue.length === 0) return;
@@ -137,7 +140,7 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
     return () => window.clearTimeout(timer);
   }, [activeEvent, motionReduced]);
 
-  const displayedEvent = activeEvent ?? events[events.length - 1] ?? null;
+  const displayedEvent = activeEvent && activeEvent.type !== 8 ? activeEvent : pitchEvents[pitchEvents.length - 1] ?? null;
   const cue = displayedEvent
     ? cueForEvent(displayedEvent, home.clubId, home.players, away.players, rememberedRef.current)
     : null;
@@ -155,9 +158,15 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
           <div className="card-title">Live pitch</div>
           <div className="match-pitch-status"><span className="pulse-dot" /> {status}</div>
         </div>
-        <div className="match-pitch-teams" aria-hidden="true">
-          <span><i style={{ background: home.kit.primary }} />{home.name}</span>
-          <span><i style={{ background: away.kit.primary }} />{away.name}</span>
+        <div className="match-pitch-teams">
+          <span className="match-pitch-team">
+            <FootballKit {...home.kit} size={34} flat />
+            <span><b>{home.name}</b><small>{formationLabel(home.formationId)}</small></span>
+          </span>
+          <span className="match-pitch-team">
+            <FootballKit {...away.kit} size={34} flat />
+            <span><b>{away.name}</b><small>{formationLabel(away.formationId)}</small></span>
+          </span>
         </div>
       </div>
       <div className={`pitch-surface${cue && activeEvent ? ` pitch-${cue.kind}-active` : ""}${motionReduced ? " pitch-reduced-motion" : ""}`}>

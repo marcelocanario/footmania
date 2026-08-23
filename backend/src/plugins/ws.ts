@@ -2,7 +2,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorldMutable, persistLiveMatchState, persistWorld } from "../services/saveService";
 import { liveStateView, liveStateDeltaView } from "../services/liveView";
-import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
+import { applyLiveTacticsUpdate, performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
 import { StaleWorldError } from "../services/saveService";
@@ -185,7 +185,7 @@ async function handleMessage(
   meta: { matchId: number; userId: number },
   raw: string
 ) {
-  let msg: { type?: string; minutes?: number; outId?: number; inId?: number; resume?: boolean; formation?: number; starters?: number[]; subs?: number[]; penaltyTakerId?: number | null; freeKickTakerId?: number | null; enabled?: boolean };
+  let msg: { type?: string; minutes?: number; outId?: number; inId?: number; resume?: boolean; formation?: number; starters?: number[]; subs?: number[]; penaltyTakerId?: number | null; freeKickTakerId?: number | null; enabled?: boolean; style?: number; pressing?: number; direction?: number };
   try {
     msg = JSON.parse(raw);
   } catch {
@@ -200,7 +200,7 @@ async function handleMessage(
     send(ws, { type: "pong" });
     return;
   }
-  if (msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "automation" && msg.type !== "halftimeReady") {
+  if (msg.type !== "sub" && msg.type !== "state" && msg.type !== "lineup" && msg.type !== "tactics" && msg.type !== "automation" && msg.type !== "halftimeReady") {
     send(ws, { type: "error", message: "Unknown message type" });
     return;
   }
@@ -232,7 +232,7 @@ async function handleMessage(
           send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
           return;
         }
-        if (msg.type === "sub") {
+      if (msg.type === "sub") {
         if (st.ended) {
           send(ws, { type: "error", message: "Match already finished" });
           return;
@@ -249,6 +249,26 @@ async function handleMessage(
         }
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "sub", event: res.event, state: liveStateView(world, st, meta.userId) });
+        broadcastState(world, meta.matchId);
+        return;
+      }
+      if (msg.type === "tactics") {
+        if (msg.formation !== undefined) {
+          send(ws, { type: "tactics", error: "Formation can only be changed before kickoff or at half-time", state: liveStateView(world, st, meta.userId) });
+          return;
+        }
+        if (!humanClub || (st.homeClubId !== humanClub.id && st.awayClubId !== humanClub.id)) {
+          send(ws, { type: "error", message: "You are not a participant in this match" });
+          return;
+        }
+        const side = st.homeClubId === humanClub.id ? 0 : 1;
+        const error = applyLiveTacticsUpdate(st, side, { style: msg.style, pressing: msg.pressing, direction: msg.direction });
+        if (error) {
+          send(ws, { type: "tactics", error, state: liveStateView(world, st, meta.userId) });
+          return;
+        }
+        await persistLiveMatchState(app.prisma, loaded.save.id, loaded.save.id, st, world.rng.state, loaded.save.revision);
+        send(ws, { type: "tactics", state: liveStateView(world, st, meta.userId) });
         broadcastState(world, meta.matchId);
         return;
       }

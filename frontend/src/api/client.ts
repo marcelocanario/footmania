@@ -339,6 +339,55 @@ export interface FixtureView {
   isHuman: boolean;
 }
 
+/** Admin analytics: per-division real vs projected quality (adminAnalytics.ts). */
+export interface AdminAnalyticsDivision {
+  divisionId: number;
+  name: string;
+  tier: number;
+  groupIndex: number;
+  clubCount: number;
+  humanCount: number;
+  /** Mean senior overall in the division; null when no senior players exist. */
+  realAvgOverall: number | null;
+  /** Canonical divisionMean(tier, depth) expectation. */
+  projectedAvgOverall: number;
+  deltaOverall: number | null;
+  clubsInFinancialDistress: number;
+}
+
+export interface AdminAnalytics {
+  seasonId: number;
+  totalDivisions: number;
+  divisions: AdminAnalyticsDivision[];
+  summary: {
+    divisionCount: number;
+    clubCount: number;
+    realAvgOverall: number | null;
+    projectedAvgOverall: number | null;
+    clubsInFinancialDistress: number;
+  };
+}
+
+/** Admin club moderation context (GET /api/admin/clubs/:id). */
+export interface AdminClubDetail {
+  id: number;
+  name: string;
+  shortName: string;
+  stadiumName: string;
+  competitionState: string;
+  country: string;
+  ownerUserId: number | null;
+  ownerUsername: string | null;
+  ownerBannedAt: string | null;
+  cash: number;
+  financialCushion: number;
+  hasCustomLogo: boolean;
+  division: { id: number; name: string; tier: number; groupIndex: number } | null;
+  squadSize: number;
+  avgOverall: number | null;
+  nicknamedPlayers: { id: number; name: string; nickname: string }[];
+}
+
 export interface Snapshot {
   save: {
     year: number;
@@ -549,11 +598,23 @@ export interface MatchStats {
   away: TeamMatchStats;
 }
 
+export interface LiveTactics {
+  style: number;
+  pressing: number;
+  direction: number;
+}
+
 export interface LiveState {
   matchId: number;
   fixtureId: number;
   competitionId: number;
   competitionName: string;
+  competitionKind: string;
+  seasonNumber: number | null;
+  divisionTier: number | null;
+  groupNumber: number | null;
+  roundNumber: number | null;
+  stadiumName: string;
   dateLabel: string;
   homeClubId: number;
   awayClubId: number;
@@ -587,6 +648,8 @@ export interface LiveState {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
+  homeTactics: LiveTactics;
+  awayTactics: LiveTactics;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
   progressPct: number;
@@ -911,6 +974,8 @@ export const api = {
   liveState: (matchId: number) => request<{ state: LiveState }>(`/api/matches/${matchId}/live`),
   liveSub: (matchId: number, outId: number, inId: number) =>
     request<{ event: LiveEvent | null; state: LiveState }>(`/api/matches/${matchId}/sub`, { method: "POST", body: JSON.stringify({ outId, inId }) }),
+  liveTactics: (matchId: number, tactics: LiveTactics) =>
+    request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/tactics`, { method: "POST", body: JSON.stringify(tactics) }),
   halftimeReady: (matchId: number) =>
     request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/halftime/ready`, { method: "POST" }),
   liveWsUrl: (matchId: number) =>
@@ -1060,8 +1125,16 @@ export const api = {
   adminUnbanUser: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/unban`, { method: "POST" }),
   adminWarnUser: (userId: number, reason: string) => request<{ ok: boolean; warningId: number }>(`/api/admin/users/${userId}/warn`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminListUserWarnings: (userId: number) => request<{ warnings: { id: number; reason: string; issuedByAdminUserId: number; createdAt: string; acknowledgedAt: string | null }[] }>(`/api/admin/users/${userId}/warnings`),
-  adminResetClubName: (clubId: number, name: string, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-club-name`, { method: "POST", body: JSON.stringify({ clubId, name, reason }) }),
+  adminResetClubName: (clubId: number, name: string | undefined, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-club-name`, { method: "POST", body: JSON.stringify({ clubId, ...(name ? { name } : {}), reason }) }),
   adminResetStadiumName: (clubId: number, stadiumName: string, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-stadium-name`, { method: "POST", body: JSON.stringify({ clubId, stadiumName, reason }) }),
   adminClearNickname: (playerId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/clear-nickname`, { method: "POST", body: JSON.stringify({ playerId, reason }) }),
   adminRemoveLogo: (clubId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/remove-logo`, { method: "POST", body: JSON.stringify({ clubId, reason }) }),
+
+  // Admin analytics / world browsing / MOTD
+  adminAnalytics: () => request<{ analytics: AdminAnalytics | null }>("/api/admin/analytics"),
+  adminClubDetail: (clubId: number) => request<{ club: AdminClubDetail }>(`/api/admin/clubs/${clubId}`),
+  adminSuggestedClubName: (attempt = 0) => request<{ name: string }>(`/api/admin/suggested-club-name?attempt=${attempt}`),
+  adminGetMotd: () => request<{ messages: { dayIndex: number; dayLabel: string; text: string }[] }>("/api/admin/motd"),
+  adminPostMotd: (text: string) => request<{ ok: boolean; text: string; dayIndex: number }>("/api/admin/motd", { method: "POST", body: JSON.stringify({ text }) }),
+  adminDeleteMotd: () => request<{ ok: boolean; removed: number }>("/api/admin/motd", { method: "DELETE" }),
 };

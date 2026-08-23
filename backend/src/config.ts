@@ -121,6 +121,11 @@ const gameConfigSchema = z
       trainingTargetPerClubSeason: z.number().positive(),
       severityScale: z.number().positive(),
     }).default({ matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 }),
+    // Admin "message of the day" broadcast. Optional with a default so
+    // older/custom config objects keep parsing without a migration.
+    motd: z.object({
+      maxLength: z.number().int().min(1).max(2000).default(280),
+    }).default({ maxLength: 280 }),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
@@ -640,6 +645,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   },
   energy: { matchLossScale: 1, recoveryScale: 1 },
   injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1 },
+  motd: { maxLength: 280 },
   roundsPerSeason: 14,
   matchSpacingDays: 2,
   lastLeagueMatchDayIndex: 27,

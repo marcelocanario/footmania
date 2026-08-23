@@ -2,7 +2,7 @@ import type { World } from "../game/types";
 import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
-import { FORMATION_NAMES, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
+import { FORMATION_NAMES, MOTD_NEWS_KIND, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 import { resolveClubKits } from "../game/kits";
@@ -138,10 +138,21 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   // Loaned-out players appear in the senior roster (greyed out in the UI).
   const squadAll = [...squad, ...loanedOut].sort((a, b) => b.overall - a.overall);
 
-  const news = world.news
+  // Admin announcements ("motd") are pinned ahead of the chronological feed
+  // from the FULL history — an older announcement must stay visible no matter
+  // how much match news follows it. At most one exists at a time (posting
+  // replaces the previous one), so the pinned section stays size-bounded.
+  const pinnedNews = world.news.filter((n) => n.kind === MOTD_NEWS_KIND);
+  const chronological = world.news
+    .filter((n) => n.kind !== MOTD_NEWS_KIND)
     .slice(-(compact ? 12 : 30))
-    .reverse()
-    .map((n) => ({ dayIndex: n.dayIndex, dayLabel: dayLabel(n.dayIndex), text: n.text, kind: n.kind }));
+    .reverse();
+  const news = [...pinnedNews, ...chronological].map((n) => ({
+    dayIndex: n.dayIndex,
+    dayLabel: dayLabel(n.dayIndex),
+    text: n.text,
+    kind: n.kind,
+  }));
 
   const auctions = includeMarket ? (() => {
     const bidsByListing = new Map<number, typeof world.marketBids>();

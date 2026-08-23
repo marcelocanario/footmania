@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Toast } from "primereact/toast";
-import { CalendarClock, CalendarRange, Gauge, RefreshCw, ScrollText, Trophy, Users } from "lucide-react";
+import { BarChart3, CalendarClock, CalendarRange, Gauge, ListTree, Megaphone, RefreshCw, ScrollText, Trophy, Users } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { Segmented } from "../components/Segmented";
@@ -11,8 +11,11 @@ import { MatchesAuctionsTab } from "./admin/MatchesAuctionsTab";
 import { SeasonTab } from "./admin/SeasonTab";
 import { UsersTab } from "./admin/UsersTab";
 import { AuditTab } from "./admin/AuditTab";
+import { CompetitionsTab } from "./admin/CompetitionsTab";
+import { AnalyticsTab } from "./admin/AnalyticsTab";
+import { MotdTab } from "./admin/MotdTab";
 
-type TabId = "overview" | "events" | "liveops" | "season" | "users" | "audit";
+type TabId = "overview" | "events" | "liveops" | "season" | "competitions" | "analytics" | "motd" | "users" | "audit";
 
 export function Admin() {
   const { user } = useGame();
@@ -73,6 +76,9 @@ export function Admin() {
             { value: "events", label: "Events", icon: <CalendarClock size={14} />, count: eventBadge },
             { value: "liveops", label: "Matches & Auctions", icon: <Trophy size={14} /> },
             { value: "season", label: "Season", icon: <CalendarRange size={14} /> },
+            { value: "competitions", label: "World Browser", icon: <ListTree size={14} /> },
+            { value: "analytics", label: "Analytics", icon: <BarChart3 size={14} /> },
+            { value: "motd", label: "MOTD", icon: <Megaphone size={14} /> },
             { value: "users", label: "Users", icon: <Users size={14} /> },
             { value: "audit", label: "Audit", icon: <ScrollText size={14} /> },
           ]}
@@ -111,6 +117,9 @@ export function Admin() {
       {tab === "events" && <EventsTab key={eventStatusPreset ?? "all"} version={version} notify={notify} statusPreset={eventStatusPreset} />}
       {tab === "liveops" && <MatchesAuctionsTab version={version} notify={notify} />}
       {tab === "season" && <SeasonTab version={version} notify={notify} />}
+      {tab === "competitions" && <CompetitionsTab version={version} notify={notify} />}
+      {tab === "analytics" && <AnalyticsTab version={version} notify={notify} />}
+      {tab === "motd" && <MotdTab version={version} notify={notify} />}
       {tab === "users" && <UsersTab version={version} notify={notify} />}
       {tab === "audit" && <AuditTab version={version} notify={notify} />}
 

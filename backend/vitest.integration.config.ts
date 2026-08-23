@@ -10,6 +10,7 @@ export default defineConfig({
       "tests/scheduler.test.ts",
       "tests/worker.test.ts",
       "tests/seasonArchive.test.ts",
+      "tests/adminFeatures.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 90000,

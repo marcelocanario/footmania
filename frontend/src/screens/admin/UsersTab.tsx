@@ -1,32 +1,15 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
-import { Dialog } from "primereact/dialog";
 import { InputText } from "primereact/inputtext";
 import { Ban, ShieldCheck, ShieldOff, Sparkles, Users, Wrench } from "lucide-react";
 import { api } from "../../api/client";
 import { AdminCard, useAdminFetch, type TabProps } from "./adminShared";
 import { StatusChip } from "./StatusChip";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
+import { ModerationDialog, WarningsDialog, type ModerationRequest } from "./moderationShared";
 
 type AdminUser = { id: number; username: string; isAdmin: boolean; isPro: boolean; bannedAt: string | null; banReason: string | null; createdAt: string };
-
-interface ModField {
-  key: string;
-  label: string;
-  type?: "text" | "number";
-  placeholder?: string;
-  optional?: boolean;
-}
-
-/** Descriptor for a moderation action rendered as a small form dialog. */
-interface ModerationRequest {
-  title: string;
-  description: React.ReactNode;
-  fields: ModField[];
-  submitLabel: string;
-  run: (values: Record<string, string>) => Promise<void>;
-}
 
 export function UsersTab({ version, notify }: TabProps) {
   const [searchInput, setSearchInput] = useState("");
@@ -245,97 +228,5 @@ export function UsersTab({ version, notify }: TabProps) {
         </div>
       </AdminCard>
     </div>
-  );
-}
-
-function ModerationDialog({ request, onClose }: { request: ModerationRequest | null; onClose: () => void }) {
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setValues({});
-    setBusy(false);
-    setError(null);
-  }, [request]);
-
-  if (!request) return null;
-
-  const complete =
-    request.fields.every((field) => field.optional || String(values[field.key] ?? "").trim().length > 0) &&
-    String(values.reason ?? "").trim().length >= 10;
-
-  const submit = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await request.run(values);
-      onClose();
-    } catch (e) {
-      setError((e as Error).message);
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Dialog header={request.title} visible onHide={onClose} style={{ width: 430 }}>
-      <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{request.description}</div>
-      <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
-        {request.fields.map((field) => (
-          <div className="form-group" key={field.key} style={{ marginBottom: 0 }}>
-            <label htmlFor={`mod-${field.key}`}>{field.label}</label>
-            <input
-              id={`mod-${field.key}`}
-              type={field.type ?? "text"}
-              value={values[field.key] ?? ""}
-              disabled={busy}
-              placeholder={field.placeholder}
-              onChange={(e) => setValues({ ...values, [field.key]: e.target.value })}
-              style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
-            />
-          </div>
-        ))}
-      </div>
-      <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 8 }}>A reason of at least 10 characters is required — this action is audit-logged.</div>
-      {error && <div style={{ color: "#ff6b6b", fontSize: "0.85rem", marginTop: 10 }}>{error}</div>}
-      <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-        <button className="btn ghost" style={{ flex: 1 }} disabled={busy} onClick={onClose}>Cancel</button>
-        <button className="btn red" style={{ flex: 1 }} disabled={busy || !complete} onClick={() => void submit()}>{busy ? "Working…" : request.submitLabel}</button>
-      </div>
-    </Dialog>
-  );
-}
-
-function WarningsDialog({ user, onClose }: { user: AdminUser | null; onClose: () => void }) {
-  const [warnings, setWarnings] = useState<{ id: number; reason: string; issuedByAdminUserId: number; createdAt: string; acknowledgedAt: string | null }[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!user) return;
-    setWarnings(null);
-    setError(null);
-    api.adminListUserWarnings(user.id)
-      .then((res) => setWarnings(res.warnings))
-      .catch((e) => setError((e as Error).message));
-  }, [user]);
-
-  return (
-    <Dialog header={user ? `Warnings · ${user.username}` : "Warnings"} visible={user !== null} onHide={onClose} style={{ width: 480 }}>
-      {error && <div style={{ color: "#ff6b6b" }}>{error}</div>}
-      {!error && warnings === null && <div className="empty-state" style={{ padding: 20 }}>Loading…</div>}
-      {warnings !== null && warnings.length === 0 && <div className="empty-state" style={{ padding: 20 }}>No warnings issued.</div>}
-      {warnings !== null && warnings.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {warnings.map((warning) => (
-            <div key={warning.id} className="news-item">
-              <div style={{ fontWeight: 600 }}>{warning.reason}</div>
-              <div style={{ color: "var(--text-3)", fontSize: "0.8rem" }}>
-                {new Date(warning.createdAt).toLocaleString()} · by admin #{warning.issuedByAdminUserId} · {warning.acknowledgedAt ? `acknowledged ${new Date(warning.acknowledgedAt).toLocaleDateString()}` : "not acknowledged"}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </Dialog>
   );
 }

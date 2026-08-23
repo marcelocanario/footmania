@@ -256,6 +256,16 @@ function pickCity(rng: ReturnType<typeof createRng>): string {
   return cities[nextInt(rng, cities.length)];
 }
 
+/**
+ * Deterministic clean club-name suggestion for moderation resets. Uses the
+ * same city + "FC" pattern as filler AI clubs so a reset name always fits the
+ * pyramid; `attempt` varies the outcome deterministically (no hidden reroll).
+ */
+export function suggestedModerationClubName(attempt: number): string {
+  const seed = Math.imul(Math.max(0, attempt) + 1, 0x9e3779b1) >>> 0;
+  return `${pickCity(createRng(seed))} FC`;
+}
+
 function randomTactics(rng: ReturnType<typeof createRng>) {
   const roll = nextInt(rng, 100);
   return {

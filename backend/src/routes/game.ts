@@ -11,7 +11,7 @@ import { cancelLoanListing, claimLoan, claimableInSeconds, offerPlayerForLoan } 
 import { getCommitmentTotals, getImmediateAvailableCash, financialState, remainingSeasonFraction } from "../game/finance";
 import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from "../game/economy";
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
-import { performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
+import { applyLiveTacticsUpdate, performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { recordActivity } from "../game/multiplayer";
 import { hasPro } from "../services/pro";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
@@ -46,6 +46,12 @@ const tacticsSchema = z.object({
   pressing: z.number().int().min(0).max(2),
   direction: z.number().int().min(0).max(1),
 });
+
+const liveTacticsSchema = z.object({
+  style: z.number().int().min(0).max(2).optional(),
+  pressing: z.number().int().min(0).max(2).optional(),
+  direction: z.number().int().min(0).max(1).optional(),
+}).strict().refine((value) => value.style !== undefined || value.pressing !== undefined || value.direction !== undefined, "At least one tactic is required");
 
 const academyActionSchema = z.object({ action: z.enum(["promote", "dismiss"]) });
 
@@ -134,10 +140,12 @@ export async function gameRoutes(app: FastifyInstance) {
     const events = match.events.map((e) => ({
       minute: e.minute,
       half: e.half,
-      type: e.type,
-      subtype: e.subtype,
-      clubId: e.clubId,
-      player: e.playerId ? loaded.world.players.find((p) => p.id === e.playerId)?.name ?? "" : "",
+        type: e.type,
+        subtype: e.subtype,
+        clubId: e.clubId,
+        playerId: e.playerId ?? null,
+        player2Id: e.player2Id ?? null,
+        player: e.playerId ? loaded.world.players.find((p) => p.id === e.playerId)?.name ?? "" : "",
       player2: e.player2Id ? loaded.world.players.find((p) => p.id === e.player2Id)?.name ?? "" : "",
       addedTime: (e as { addedTime?: number }).addedTime ?? null,
     }));
@@ -181,6 +189,24 @@ export async function gameRoutes(app: FastifyInstance) {
       const result = performLiveSub(world.rng, home, away, world.players, st, side, parsed.data.outId, parsed.data.inId);
       if (result.error) return { error: { code: 400, body: { error: result.error } } };
       return { value: { event: result.event, state: liveStateView(world, st, req.user!.id) } };
+    });
+    return replyFrom(res, reply);
+  });
+
+  app.post("/matches/:id/tactics", async (req, reply) => {
+    const matchId = Number((req.params as { id: string }).id);
+    const parsed = liveTacticsSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid tactics" });
+    const res = await withWorld(app, req.user!.id, "match_tactics", async (world, clubId) => {
+      const st = world.liveMatches.find((candidate) => candidate.matchId === matchId);
+      if (!st) return { error: { code: 404, body: { error: "No live match in progress" } } };
+      if (st.homeClubId !== clubId && st.awayClubId !== clubId) {
+        return { error: { code: 403, body: { error: "You are not a participant in this match" } } };
+      }
+      const side = st.homeClubId === clubId ? 0 : 1;
+      const error = applyLiveTacticsUpdate(st, side, parsed.data);
+      if (error) return { error: { code: 400, body: { error } } };
+      return { value: { ok: true, state: liveStateView(world, st, req.user!.id) } };
     });
     return replyFrom(res, reply);
   });

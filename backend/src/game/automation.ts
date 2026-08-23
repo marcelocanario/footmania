@@ -1,11 +1,10 @@
 import { z } from "zod";
 import { AUTOMATION_CONFIG } from "../config";
 import type { AutomationAction, AutomationCondition, AutomationPreset, AutomationRule, AutomationTriggerKind, Club, LiveMatchState, World } from "./types";
-import { performLiveSub } from "./match";
-import { isHalftime } from "./match";
+import { applyLiveTacticsUpdate, performLiveSub } from "./match";
+import { isHalftime, isPregame } from "./match";
 import { DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
-import { engineStyle, enginePressing, engineDirection } from "./matchSim";
 
 // Real tactic ranges (backend/src/game/constants.ts); presets may only ever
 // target values a club tactic could legitimately hold.
@@ -258,23 +257,23 @@ export function evaluateAutomationForMatch(params: {
         st.automationFiredRuleIds = Array.from(fired);
         if (!res.error) mutated = true;
       } else if (rule.action.kind === "TACTICS") {
-        // TACTICS: mutate live tactics only (not club.tactics — that would persist beyond the match)
+        // TACTICS: mutate live tactics only (not club.tactics — that would persist beyond the match).
         const target = side === 0 ? st.homeTactics : st.awayTactics;
-        if (rule.action.style !== undefined) {
-          target.style = engineStyle(rule.action.style);
-        }
-        if (rule.action.pressing !== undefined) {
-          target.pressing = enginePressing(rule.action.pressing);
-        }
-        if (rule.action.direction !== undefined) {
-          target.direction = engineDirection(rule.action.direction);
-        }
-        if (rule.action.formation !== undefined) {
+        const tacticError = applyLiveTacticsUpdate(st, side as 0 | 1, {
+          style: rule.action.style,
+          pressing: rule.action.pressing,
+          direction: rule.action.direction,
+        });
+        // Formation changes require the pregame/halftime lineup rebuild. Keep
+        // automation from changing formation during live play as well.
+        if (rule.action.formation !== undefined && (isPregame(st) || isHalftime(st))) {
           target.formation = rule.action.formation;
         }
         fired.add(firedKey);
         st.automationFiredRuleIds = Array.from(fired);
-        mutated = true;
+        if (!tacticError && (rule.action.style !== undefined || rule.action.pressing !== undefined || rule.action.direction !== undefined || (rule.action.formation !== undefined && (isPregame(st) || isHalftime(st))))) {
+          mutated = true;
+        }
       }
     }
   }

@@ -2,18 +2,21 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
-import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance } from "../game/multiplayer";
+import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
 import { ROUNDS_PER_SEASON } from "../game/multiplayer";
 import { budgetSettings, setBudgetSettings } from "../game/budget";
 import { readNumberSetting } from "../game/budget";
 import { getCommitmentTotals } from "../game/finance";
+import { divisionAnalytics } from "../game/adminAnalytics";
 import { gameConfig } from "../config";
 import { advanceGameDay, ensureGameClock } from "../services/gameClockService";
 import { cancelScheduledEvent, executeScheduledEvent, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
 import { calendarValues, seasonSchedulePreview } from "../services/seasonCalendar";
-import { publishUserWorldEvent } from "../services/worldEvents";
-import { EVENT_CODES } from "../game/constants";
+import { publishUserWorldEvent, publishWorldEventToUsers, type UserWorldEvent } from "../services/worldEvents";
+import { EVENT_CODES, MOTD_NEWS_KIND } from "../game/constants";
+import { multiplayerDayLabel } from "../game/calendar";
+import type { World } from "../game/types";
 
 const advanceSchema = z.object({
   // Target round to simulate through (1..14). Rounds already played are
@@ -337,6 +340,14 @@ export async function adminRoutes(app: FastifyInstance) {
   // Durable scheduler controls. Every endpoint remains behind the admin hook
   // above; the frontend is never the authorization boundary.
   // -------------------------------------------------------------------------
+
+  // World analytics (read-only, no lock — mirrors /admin/status precedent):
+  // real vs projected player quality per division plus financial distress.
+  app.get("/admin/analytics", async () => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!loaded) return { analytics: null };
+    return { analytics: divisionAnalytics(loaded.world) };
+  });
 
   app.get("/admin/scheduler/clock", async (req, reply) => {
     const loaded = await loadGlobalWorldReadOnly(app.prisma);
@@ -662,17 +673,20 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // Moderation resets: club name/stadium, player nickname, logo takedown
   app.post("/admin/moderation/reset-club-name", async (req, reply) => {
-    const parsed = z.object({ clubId: z.number().int().min(1), name: z.string().trim().min(1).max(60), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
+    const parsed = z.object({ clubId: z.number().int().min(1), name: z.string().trim().max(60).optional(), reason: z.string().trim().min(1).max(500) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const reason = parsed.data.reason;
+    // Empty/omitted name restores a deterministic generated default so the
+    // "reset" semantics hold without the admin inventing a replacement.
+    const newName = parsed.data.name && parsed.data.name.length > 0 ? parsed.data.name : suggestedModerationClubName(parsed.data.clubId);
     const res = await withGlobalLock(async () => {
     const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const club = loaded.world.clubs.find((c) => c.id === parsed.data.clubId);
       if (!club) return { error: { code: 404, body: { error: "Club not found" } } };
       const before = club.name;
-      club.name = parsed.data.name;
-      club.shortName = parsed.data.name;
+      club.name = newName;
+      club.shortName = newName;
       if (club.ownerUserId !== null) {
         await app.prisma.warning.create({ data: { userId: club.ownerUserId, reason: `Club name reset: ${reason}`, issuedByAdminUserId: req.user!.id } });
       }
@@ -762,6 +776,127 @@ export async function adminRoutes(app: FastifyInstance) {
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;
   });
+
+  // --- Message of the day (single active admin announcement) ---------------
+  // The MOTD is a news item with the reserved "motd" kind. Posting replaces
+  // the previous announcement, and the snapshot pins it ahead of the feed so
+  // it never scrolls away. News ids are only stable after a reload, which is
+  // why replacement — not delete-by-id — is the mutation primitive here.
+  const motdSchema = z.object({ text: z.string().trim().min(1).max(gameConfig.motd.maxLength) });
+
+  app.get("/admin/motd", async () => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!loaded) return { messages: [] };
+    const messages = loaded.world.news
+      .filter((n) => n.kind === MOTD_NEWS_KIND)
+      .slice(-20)
+      .reverse()
+      .map((n) => ({ dayIndex: n.dayIndex, dayLabel: multiplayerDayLabel(n.dayIndex), text: n.text }));
+    return { messages };
+  });
+
+  app.post("/admin/motd", async (req, reply) => {
+    const parsed = motdSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: `Text must be 1-${gameConfig.motd.maxLength} characters` });
+    const res = await withGlobalLock(async () => {
+      await ensureCurrentSeason(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const world = loaded.world;
+      world.news = world.news.filter((n) => n.kind !== MOTD_NEWS_KIND);
+      world.news.push({ dayIndex: world.dayIndex, text: parsed.data.text, kind: MOTD_NEWS_KIND });
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      publishToHumanUsers(world, { type: "invalidate", scope: "club" });
+      return { value: { ok: true, text: parsed.data.text, dayIndex: world.dayIndex } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  app.delete("/admin/motd", async (req, reply) => {
+    const res = await withGlobalLock(async () => {
+      await ensureCurrentSeason(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const world = loaded.world;
+      const removed = world.news.filter((n) => n.kind === MOTD_NEWS_KIND).length;
+      if (removed === 0) return { value: { ok: true, removed: 0 } };
+      world.news = world.news.filter((n) => n.kind !== MOTD_NEWS_KIND);
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      publishToHumanUsers(world, { type: "invalidate", scope: "club" });
+      return { value: { ok: true, removed } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  // --- Club moderation context ---------------------------------------------
+  // Everything the drill-down needs to run the existing moderation actions on
+  // one club: identity, pyramid placement, owner, finances and the nicknames
+  // that can be cleared. Read-only.
+  app.get("/admin/clubs/:id", async (req, reply) => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!loaded) return reply.code(404).send({ error: "World unavailable" });
+    const world = loaded.world;
+    const club = world.clubs.find((c) => c.id === Number((req.params as { id: string }).id));
+    if (!club) return reply.code(404).send({ error: "Club not found" });
+    // Current-season division placement; null for NEW/DORMANT clubs.
+    const division = world.competitions.find(
+      (c) => c.kind === "division" && c.seasonId === world.mp.seasonId && c.status !== "ARCHIVED" && c.standings[club.id] !== undefined,
+    );
+    const squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+    const owner = club.ownerUserId !== null
+      ? await app.prisma.user.findUnique({ where: { id: club.ownerUserId }, select: { username: true, bannedAt: true } })
+      : null;
+    return {
+      club: {
+        id: club.id,
+        name: club.name,
+        shortName: club.shortName,
+        stadiumName: club.stadiumName,
+        competitionState: club.competitionState,
+        country: club.country,
+        ownerUserId: club.ownerUserId,
+        ownerUsername: owner?.username ?? null,
+        ownerBannedAt: owner?.bannedAt?.toISOString() ?? null,
+        cash: club.cash,
+        financialCushion: getCommitmentTotals(world, club).financialCushion,
+        hasCustomLogo: Boolean(club.customLogo && club.customLogo.status === "ACTIVE"),
+        division: division ? { id: division.id, name: division.name, tier: tierOf(division), groupIndex: groupIndexOf(division) } : null,
+        squadSize: squad.length,
+        avgOverall: squad.length > 0 ? Math.round((squad.reduce((sum, p) => sum + p.overall, 0) / squad.length) * 100) / 100 : null,
+        nicknamedPlayers: world.players
+          .filter((p) => p.clubId === club.id && (p.nickname ?? "").trim().length > 0)
+          .slice(0, 100)
+          .map((p) => ({ id: p.id, name: p.name, nickname: p.nickname! })),
+      },
+    };
+  });
+
+  // Deterministic clean-name suggestion for moderation resets. `attempt`
+  // varies the outcome so admins can reroll without hidden randomness.
+  app.get("/admin/suggested-club-name", async (req) => {
+    const attempt = Math.max(0, Math.min(999, Number((req.query as { attempt?: string }).attempt ?? 0) || 0));
+    return { name: suggestedModerationClubName(attempt) };
+  });
+}
+
+/** Wake every connected human client (same pattern as routes/multiplayer.ts). */
+function publishToHumanUsers(world: World, event: UserWorldEvent): void {
+  publishWorldEventToUsers(
+    world.clubs.flatMap((c) => (c.ownerUserId !== null ? [c.ownerUserId] : [])),
+    event,
+  );
 }
 
 function jsonSafe(value: unknown): string {

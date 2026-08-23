@@ -173,6 +173,35 @@ describe("live match over REST", () => {
     await app.close();
   });
 
+  it("allows live style changes but rejects formation changes through the tactics endpoint", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie, clubId } = await setupClub(app, "resttactics");
+    const { matchId } = await makeLiveMatch(app, cookie, clubId);
+
+    const live = await app.inject({ method: "GET", url: `/api/matches/${matchId}/live`, headers: { cookie } });
+    const before = live.json().state as { humanSide: 0 | 1; homeTactics: { style: number }; awayTactics: { style: number } };
+    const update = await app.inject({
+      method: "POST",
+      url: `/api/matches/${matchId}/tactics`,
+      headers: { cookie },
+      payload: { style: 1, pressing: 2, direction: 1 },
+    });
+    expect(update.statusCode).toBe(200);
+    const updated = update.json().state;
+    const tactics = updated[before.humanSide === 0 ? "homeTactics" : "awayTactics"];
+    expect(tactics).toMatchObject({ style: 1, pressing: 2, direction: 1 });
+
+    const formation = await app.inject({
+      method: "POST",
+      url: `/api/matches/${matchId}/tactics`,
+      headers: { cookie },
+      payload: { formation: 7, style: 1 },
+    });
+    expect(formation.statusCode).toBe(400);
+    await app.close();
+  });
+
   it("lets the manager set the roster before kickoff, then locks it", async () => {
     const app = buildServer();
     await app.ready();

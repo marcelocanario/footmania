@@ -5,6 +5,7 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     exclude: [
       "tests/integration.test.ts",
+      "tests/adminFeatures.integration.test.ts",
       "tests/live.test.ts",
       "tests/namePoolService.test.ts",
       "tests/persistence.test.ts",

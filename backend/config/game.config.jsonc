@@ -257,5 +257,11 @@
     "matchTargetPerMatch": 0.35,
     "trainingTargetPerClubSeason": 1.5,
     "severityScale": 1.0
+  },
+
+  // --- Admin message of the day ---
+  // Single pinned announcement shown at the top of every user's News feed.
+  "motd": {
+    "maxLength": 280
   }
 }

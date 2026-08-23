@@ -10,6 +10,13 @@ export const DAYS_PER_YEAR = gameConfig.seasonDays;
  */
 export const SENIOR_SQUAD_LIMIT = 35;
 
+/**
+ * News kind reserved for the admin "message of the day". At most one exists at
+ * a time (posting replaces the previous one) and the snapshot pins it ahead of
+ * the chronological feed so it never scrolls out of view.
+ */
+export const MOTD_NEWS_KIND = "motd";
+
 export const POSITION_NAMES = ["GK", "FB", "CB", "MF", "FW"];
 
 export const FORMATION_POSITIONS: number[][] = [

@@ -12,6 +12,7 @@ import { displayName } from "../game/displayName";
 import { StaleWorldError } from "../services/saveService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 import { injuryDaysRemaining } from "../game/energyInjury";
+import { playerView } from "../services/snapshot";
 
 const nicknameBodySchema = z.object({
   nickname: z.string().nullable().optional(),
@@ -220,8 +221,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const matchIds = Array.from(new Set(events.map((e) => e.matchId)));
     const matches = matchIds.length > 0 ? await app.prisma.match.findMany({ where: { saveId: globalSave.id, id: { in: matchIds } } }) : [];
     const matchById = new Map(matches.map((m) => [m.id, m]));
-    const byIdPlayers = new Map(worldLoaded.world.players.map((p) => [p.id, p]));
-    const gameDay = worldLoaded.world.mp.absoluteGameDay ?? worldLoaded.world.dayIndex;
+     const gameDay = worldLoaded.world.mp.absoluteGameDay ?? worldLoaded.world.dayIndex;
     const historyEvents = events.map((e) => {
       const m = matchById.get(e.matchId);
       return {
@@ -240,25 +240,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     });
 
     return {
-      player: {
-        id: player.id,
-        name: player.name,
-        nickname: player.nickname ?? null,
-        displayName: displayName(player),
-        clubId: player.clubId,
-        age: player.age,
-        position: player.position,
-        overall: player.overall,
-        careerGoals: player.careerGoals,
-        careerAssists: player.careerAssists,
-        seasonGoals: player.seasonGoals,
-        seasonAssists: player.seasonAssists,
-        yellows: player.yellows,
-        reds: player.reds,
-        injuryDays: injuryDaysRemaining(player, gameDay),
-        injuryDaysRemaining: injuryDaysRemaining(player, gameDay),
-        injuryCause: player.injuryCause ?? null,
-      },
+       player: playerView(player, undefined, gameDay),
       seasons: seasons.map((s) => ({ seasonId: s.seasonId, seasonKey: s.seasonKey, clubId: s.clubId, clubName: s.clubName, appearances: s.appearances, goals: s.goals, assists: s.assists, yellows: s.yellows, reds: s.reds, minutes: s.minutes })),
       transfers: transfers.map((t) => ({ id: t.id, type: t.type, fromClubId: t.fromClubId, toClubId: t.toClubId, price: t.price, seasonKey: t.seasonKey, contractSeasons: t.contractSeasons, contractSalary: t.contractSalary, timestamp: Number(t.timestamp) })),
       matches: historyEvents,

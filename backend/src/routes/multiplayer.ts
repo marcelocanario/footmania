@@ -283,13 +283,13 @@ export async function multiplayerRoutes(app: FastifyInstance) {
           homeHasCustomLogo: Boolean(home?.customLogo && home.customLogo.status === "ACTIVE"),
           awayHasCustomLogo: Boolean(away?.customLogo && away.customLogo.status === "ACTIVE"),
           // Venue: the home club's ground.
-          venue: home?.stadiumName ?? "",
+        venue: home?.stadiumName ?? "",
           kickoffAt: f.kickoffAt ?? null,
           played: f.played,
           matchId: m?.id ?? null,
           liveMatchId: liveMatch && !liveMatch.ended ? liveMatch.matchId : null,
-          homeScore: m?.homeScore ?? null,
-          awayScore: m?.awayScore ?? null,
+          homeScore: liveMatch && !liveMatch.ended ? liveMatch.scores[0] : m?.homeScore ?? null,
+          awayScore: liveMatch && !liveMatch.ended ? liveMatch.scores[1] : m?.awayScore ?? null,
           isHuman: myClubId !== null && (f.homeClubId === myClubId || f.awayClubId === myClubId),
         };
       });

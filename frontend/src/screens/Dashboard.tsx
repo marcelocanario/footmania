@@ -17,6 +17,7 @@ const NEWS_KIND_COLORS: Record<string, string> = {
   finance: "var(--red-2)",
   tactics: "var(--blue)",
   academy: "var(--blue)",
+  motd: "var(--gold-2)",
 };
 
 export function Dashboard() {
@@ -210,7 +211,10 @@ export function Dashboard() {
                 <div className="news-feed-item" key={i}>
                   <span className="kind-dot" style={{ background: NEWS_KIND_COLORS[n.kind] ?? "var(--text-3)" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div>{n.text}</div>
+                    <div>
+                      {n.kind === "motd" && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.5)", color: "var(--gold-2)", marginRight: 6, fontSize: "0.68rem", padding: "1px 6px" }}>ADMIN</span>}
+                      {n.text}
+                    </div>
                   </div>
                   <span className="day">{n.dayLabel}</span>
                 </div>

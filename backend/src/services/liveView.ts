@@ -49,11 +49,23 @@ export interface LiveKitView {
   pattern: string;
 }
 
+export interface LiveTacticView {
+  style: number;
+  pressing: number;
+  direction: number;
+}
+
 export interface LiveStateView {
   matchId: number;
   fixtureId: number;
   competitionId: number;
   competitionName: string;
+  competitionKind: string;
+  seasonNumber: number | null;
+  divisionTier: number | null;
+  groupNumber: number | null;
+  roundNumber: number | null;
+  stadiumName: string;
   dateLabel: string;
   homeClubId: number;
   awayClubId: number;
@@ -87,6 +99,8 @@ export interface LiveStateView {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
+  homeTactics: LiveTacticView;
+  awayTactics: LiveTacticView;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
   // New: match progress + halftime + added time
@@ -122,6 +136,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
   const comp = world.competitions.find((c) => c.id === st.competitionId);
   const home = club(st.homeClubId);
   const away = club(st.awayClubId);
+  const fixture = world.fixtures.find((candidate) => candidate.id === st.fixtureId);
+  const isDivision = comp?.kind === "division";
   const pv = (id: number): LivePlayerView | null => {
     const p = byId.get(id);
     if (!p) return null;
@@ -168,6 +184,12 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     fixtureId: st.fixtureId,
     competitionId: st.competitionId,
     competitionName: comp?.name ?? "",
+    competitionKind: comp?.kind ?? st.compKind,
+    seasonNumber: world.mp.seasonNumber ?? null,
+    divisionTier: isDivision ? (comp?.tier ?? 1) : null,
+    groupNumber: isDivision ? ((comp?.groupIndex ?? 0) + 1) : null,
+    roundNumber: fixture ? fixture.round + 1 : null,
+    stadiumName: home?.stadiumName ?? "",
     dateLabel: multiplayerDayLabel(world.dayIndex),
     homeClubId: st.homeClubId,
     awayClubId: st.awayClubId,
@@ -204,6 +226,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     awayFormation: formationName(away),
     homeFormationId: home?.tactics?.formation ?? 4,
     awayFormationId: away?.tactics?.formation ?? 4,
+    homeTactics: tacticView(st.homeTactics),
+    awayTactics: tacticView(st.awayTactics),
     automationDisabled: st.automationDisabled ?? [false, false],
     automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
     progressPct,
@@ -216,6 +240,14 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     currentAddedTime,
     homeIsHuman: !!home?.ownerUserId,
     awayIsHuman: !!away?.ownerUserId,
+  };
+}
+
+function tacticView(tactics: LiveMatchState["homeTactics"]): LiveTacticView {
+  return {
+    style: tactics.style === "COUNTER" ? 2 : tactics.style === "PRESS" ? 1 : 0,
+    pressing: Math.max(0, Math.min(2, Math.round(tactics.pressing * 2))),
+    direction: tactics.direction === "WIDE" ? 1 : 0,
   };
 }
 

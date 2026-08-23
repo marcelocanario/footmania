@@ -1,7 +1,7 @@
 import type { Club, LiveMatchState, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
 import { nextInt } from "./rng";
 import { lineupForMatch } from "./club";
-import { DEVELOPMENT, EVENT_CODES } from "./constants";
+import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import {
   advancePossessionMatch,
   computeAttributeCenters,
@@ -36,6 +36,27 @@ export interface MatchSetup {
   homeSubs: Player[];
   awaySubs: Player[];
   positions: number[];
+}
+
+export interface LiveTacticsUpdate {
+  style?: number;
+  pressing?: number;
+  direction?: number;
+}
+
+/** Apply the tactics that can be changed without rebuilding the lineup. */
+export function applyLiveTacticsUpdate(st: LiveMatchState, side: 0 | 1, input: LiveTacticsUpdate): string | null {
+  if (st.ended) return "Match already finished";
+  if (input.style === undefined && input.pressing === undefined && input.direction === undefined) return "At least one tactic is required";
+  if (input.style !== undefined && (!Number.isInteger(input.style) || input.style < 0 || input.style >= STYLE_NAMES.length)) return "Invalid style";
+  if (input.pressing !== undefined && (!Number.isInteger(input.pressing) || input.pressing < 0 || input.pressing >= PRESSING_NAMES.length)) return "Invalid pressing";
+  if (input.direction !== undefined && (!Number.isInteger(input.direction) || input.direction < 0 || input.direction >= DIRECTION_NAMES.length)) return "Invalid direction";
+
+  const tactics = side === 0 ? st.homeTactics : st.awayTactics;
+  if (input.style !== undefined) tactics.style = engineStyle(input.style);
+  if (input.pressing !== undefined) tactics.pressing = enginePressing(input.pressing);
+  if (input.direction !== undefined) tactics.direction = engineDirection(input.direction);
+  return null;
 }
 
 export function setupMatch(home: Club, away: Club, allPlayers: Player[], options: { homeFutureFixtures?: boolean; awayFutureFixtures?: boolean } = {}): MatchSetup {
