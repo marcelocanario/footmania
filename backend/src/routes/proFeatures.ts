@@ -13,6 +13,7 @@ import { StaleWorldError } from "../services/saveService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 import { injuryDaysRemaining } from "../game/energyInjury";
 import { playerView } from "../services/snapshot";
+import { matchNotificationKey } from "../services/notifications";
 
 const nicknameBodySchema = z.object({
   nickname: z.string().nullable().optional(),
@@ -373,8 +374,34 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const limit = Math.max(1, Math.min(100, Number((req.query as { limit?: string }).limit ?? 20) || 20));
     const unreadOnly = (req.query as { unread?: string }).unread === "1";
     const where: { userId: number; readAt?: null } = unreadOnly ? { userId: req.user.id, readAt: null } : { userId: req.user.id };
-    const items = await app.prisma.userNotification.findMany({ where, orderBy: { createdAt: "desc" }, take: limit });
-    return { notifications: items.map((n) => ({ id: n.id, type: n.type, payload: JSON.parse(n.payloadJson ?? "{}"), createdAt: n.createdAt.toISOString(), readAt: n.readAt?.toISOString() ?? null })) };
+    // Fetch a small window before limiting so retries that left duplicate
+    // match rows do not consume visible inbox slots. The key is deterministic
+    // and also makes the feed safe for legacy duplicates already in the DB.
+    const items = await app.prisma.userNotification.findMany({ where, orderBy: [{ occurredAt: "desc" }, { createdAt: "desc" }, { id: "desc" }], take: Math.min(500, Math.max(limit * 5, limit)) });
+    const seenMatchEvents = new Set<string>();
+    const uniqueItems = items.filter((item) => {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(item.payloadJson ?? "{}");
+      } catch {
+        payload = {};
+      }
+      const key = matchNotificationKey(item.type, payload);
+      if (key === null) return true;
+      const scopedKey = `${item.userId}:${key}`;
+      if (seenMatchEvents.has(scopedKey)) return false;
+      seenMatchEvents.add(scopedKey);
+      return true;
+    }).slice(0, limit);
+    return { notifications: uniqueItems.map((n) => {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(n.payloadJson ?? "{}");
+      } catch {
+        payload = {};
+      }
+      return { id: n.id, type: n.type, payload, createdAt: n.createdAt.toISOString(), readAt: n.readAt?.toISOString() ?? null };
+    }) };
   });
 
   app.post("/notifications/:id/read", async (req, reply) => {

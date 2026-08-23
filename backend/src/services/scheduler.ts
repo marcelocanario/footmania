@@ -591,7 +591,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
         idempotencyKey: `MATCH_COMPLETE:${fixtureId}`,
       });
       // Inbox notification for both participants (best-effort, non-fatal)
-       try { await notifyMatchStarted(prisma, world, fixtureId); } catch {}
+        try { await notifyMatchStarted(prisma, world, fixtureId, context.ignoreDueTime ? now : undefined); } catch {}
        const started = world.liveMatches.find((match) => match.fixtureId === fixtureId);
        const participants = [home?.ownerUserId, away?.ownerUserId].filter((id): id is number => id !== null && id !== undefined);
        return {
@@ -611,7 +611,7 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       // now", not "pretend the clock has reached the future due time".
       const advanceAt = context.ignoreDueTime ? now.getTime() : Math.max(now.getTime(), completionAt);
       const finished = advanceLiveMatches(world, advanceAt);
-      return { userEvents: await notifyFinishedMatches(prisma, world, finished) };
+      return { userEvents: await notifyFinishedMatches(prisma, world, finished, now) };
     }
     case ScheduledEventType.AUCTION_END: {
       if (payload.marketType === "FREE_AGENT") {

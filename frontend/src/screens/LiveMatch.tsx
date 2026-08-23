@@ -136,6 +136,7 @@ export function LiveMatch() {
       automationFiredCount: delta.automationFiredCount,
       progressPct: delta.progressPct,
       currentAddedTime: delta.currentAddedTime,
+      ball: delta.ball ?? current.ball,
     });
   }, [applyState]);
 
@@ -385,6 +386,7 @@ export function LiveMatch() {
           phase={state.phase}
           minute={state.minute}
           addedTime={state.currentAddedTime ?? null}
+          ball={state.ball ?? null}
         />
       </div>
     );
@@ -442,6 +444,7 @@ export function LiveMatch() {
             phase={state.phase}
             minute={state.minute}
             addedTime={state.currentAddedTime ?? null}
+            ball={state.ball ?? null}
           />
         </div>
         <aside className="card live-side">

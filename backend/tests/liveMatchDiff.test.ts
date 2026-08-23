@@ -7,7 +7,7 @@ import { EVENT_CODES, GOAL_SUBTYPES } from "../src/game/constants";
 import type { Club, LiveMatchState, Match, MatchEvent, Player } from "../src/game/types";
 import { makeClub, makeWorld } from "./helpers";
 import { diffLiveMatchAdvances, snapshotLiveMatches } from "../src/services/liveMatchDiff";
-import { notifyMatchGoal } from "../src/services/notifications";
+import { notifyMatchFinished, notifyMatchGoal } from "../src/services/notifications";
 
 let nextPlayerId = 1;
 function squad(club: Club, rng: ReturnType<typeof createRng>, size = 16): Player[] {
@@ -101,12 +101,17 @@ describe("diffLiveMatchAdvances", () => {
 
 describe("notifyMatchGoal", () => {
   function stubPrisma(proUserIds: Set<number>, created: { userId: number; type: string; payload: unknown }[]): PrismaClient {
+    const dedupeKeys = new Set<string>();
     return {
       user: {
         findUnique: async ({ where }: { where: { id: number } }) => (proUserIds.has(where.id) ? { id: where.id, isPro: true } : null),
       },
       userNotification: {
-        create: async ({ data }: { data: { userId: number; type: string; payloadJson: string } }) => {
+        create: async ({ data }: { data: { userId: number; type: string; payloadJson: string; dedupeKey?: string | null } }) => {
+          if (data.dedupeKey && dedupeKeys.has(`${data.userId}:${data.dedupeKey}`)) {
+            throw new Error("Unique constraint failed");
+          }
+          if (data.dedupeKey) dedupeKeys.add(`${data.userId}:${data.dedupeKey}`);
           created.push({ userId: data.userId, type: data.type, payload: JSON.parse(data.payloadJson) });
           return data;
         },
@@ -162,5 +167,29 @@ describe("notifyMatchGoal", () => {
     await notifyMatchGoal(prisma, world, 504, 1, 90);
 
     expect(created).toHaveLength(0);
+  });
+
+  it("does not recreate the same goal notification when a finishing retry replays it", async () => {
+    const created: { userId: number; type: string; payload: unknown }[] = [];
+    const prisma = stubPrisma(new Set([7]), created);
+    const { world, home } = worldWithFinishedMatch(7, null);
+
+    await notifyMatchGoal(prisma, world, 504, home.id, 90);
+    await notifyMatchGoal(prisma, world, 504, home.id, 90);
+
+    expect(created).toHaveLength(1);
+  });
+
+  it("does not recreate the same full-time notification on a scheduler retry", async () => {
+    const created: { userId: number; type: string; payload: unknown }[] = [];
+    const prisma = stubPrisma(new Set(), created);
+    const { world } = worldWithFinishedMatch(7, null);
+    const match = world.matches[0];
+    if (!match) throw new Error("test match was not created");
+
+    await notifyMatchFinished(prisma, world, match);
+    await notifyMatchFinished(prisma, world, match);
+
+    expect(created).toHaveLength(1);
   });
 });

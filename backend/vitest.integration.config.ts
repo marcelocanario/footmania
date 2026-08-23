@@ -17,6 +17,8 @@ export default defineConfig({
     // These files select their SQLite database through process.env at module
     // load time; concurrent file execution can cross-contaminate integration state.
     fileParallelism: false,
+    pool: "forks",
+    maxWorkers: 1,
     globalSetup: ["tests/global-setup.ts"],
     setupFiles: ["tests/setup.ts"],
     testNamePattern: /^(?!.*\[calibration\])/,

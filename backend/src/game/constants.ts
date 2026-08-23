@@ -11,9 +11,8 @@ export const DAYS_PER_YEAR = gameConfig.seasonDays;
 export const SENIOR_SQUAD_LIMIT = 35;
 
 /**
- * News kind reserved for the admin "message of the day". At most one exists at
- * a time (posting replaces the previous one) and the snapshot pins it ahead of
- * the chronological feed so it never scrolls out of view.
+ * News kind reserved for admin "messages of the day". Multiple durable items
+ * may exist, and the snapshot pins them ahead of the chronological feed.
  */
 export const MOTD_NEWS_KIND = "motd";
 

@@ -55,6 +55,20 @@ export interface LiveTacticView {
   direction: number;
 }
 
+/**
+ * Possession projection for the live pitch ball (read straight off the
+ * possession-state engine's persisted runtime fields). The client anchors the
+ * ball to a representative on-pitch player from side + zone.
+ */
+export interface LiveBallView {
+  /** Possessing team index: 0 = home, 1 = away. */
+  side: 0 | 1;
+  zone: string;
+  phase: string;
+  startType: string;
+  counter: boolean;
+}
+
 export interface LiveStateView {
   matchId: number;
   fixtureId: number;
@@ -114,6 +128,7 @@ export interface LiveStateView {
   currentAddedTime?: number | null;
   homeIsHuman: boolean;
   awayIsHuman: boolean;
+  ball: LiveBallView;
 }
 
 export interface LiveStateDeltaView {
@@ -128,6 +143,7 @@ export interface LiveStateDeltaView {
   automationFiredCount: number;
   progressPct: number;
   currentAddedTime: number | null;
+  ball: LiveBallView;
 }
 
 export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: number | null): LiveStateView {
@@ -240,6 +256,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     currentAddedTime,
     homeIsHuman: !!home?.ownerUserId,
     awayIsHuman: !!away?.ownerUserId,
+    ball: ballView(st),
   };
 }
 
@@ -254,6 +271,20 @@ function tacticView(tactics: LiveMatchState["homeTactics"]): LiveTacticView {
 function formationName(club: { tactics?: { formation: number } } | undefined): string {
   if (!club?.tactics) return "";
   return FORMATION_NAMES[club.tactics.formation] ?? "";
+}
+
+/** Possession projection shared by the full view and deltas. Falls back to a
+ * neutral kickoff state for live states persisted before the possession-state
+ * engine runtime existed. */
+function ballView(st: LiveMatchState): LiveBallView {
+  const side = (st.withBall === 1 ? 1 : 0) as 0 | 1;
+  return {
+    side,
+    zone: st.zone ?? "DEF_CENTRAL",
+    phase: st.phase ?? "BUILD_UP",
+    startType: st.possessionStartType ?? "KICK_OFF",
+    counter: !!st.isCounter,
+  };
 }
 
 /** Project a stored design onto the live view, with placeholders for missing clubs. */
@@ -320,5 +351,6 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
     progressPct,
     currentAddedTime,
+    ball: ballView(st),
   };
 }

@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { KitDesign, LiveEvent, LivePlayer } from "../api/client";
+import type { KitDesign, LiveBall, LiveEvent, LivePlayer } from "../api/client";
 import { FootballKit } from "./kit/FootballKit";
-import { cueForEvent, eventKey, teamPitchPoints, type PitchCue, type PitchPoint, type PitchSide } from "./matchPitchUtils";
+import {
+  BALL_CENTER_POINT,
+  cueForEvent,
+  eventKey,
+  isSetPieceStart,
+  placeLiveBall,
+  teamPitchPoints,
+  type PitchCue,
+  type PitchPoint,
+  type PitchSide,
+} from "./matchPitchUtils";
 import { formationLabel } from "../tacticsOptions";
 
 interface PitchTeam {
@@ -22,6 +32,8 @@ export interface MatchPitchProps {
   minute: number;
   addedTime?: number | null;
   reducedMotion?: boolean;
+  /** Possession snapshot streamed per match-minute; drives the live ball. */
+  ball?: LiveBall | null;
 }
 
 const EVENT_COPY: Record<string, string> = {
@@ -33,6 +45,9 @@ const EVENT_COPY: Record<string, string> = {
   sub: "Substitution",
   assist: "Assist",
 };
+
+/** Phases in which the live ball follows possession; other phases park it at the centre spot. */
+const LIVE_PLAY_PHASES = new Set(["first", "second", "et1", "et2"]);
 
 function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer; point: PitchPoint; side: PitchSide; kit: PitchTeam["kit"]; highlighted: boolean }) {
   const style = {
@@ -57,7 +72,7 @@ function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer;
   );
 }
 
-function CueOverlay({ cue, reducedMotion }: { cue: PitchCue; reducedMotion: boolean }) {
+function CueOverlay({ cue, active, reducedMotion }: { cue: PitchCue; active: boolean; reducedMotion: boolean }) {
   const { actorPoint, secondaryPoint, targetPoint } = cue;
   const activeClass = reducedMotion ? " pitch-cue-reduced" : "";
   const ballEvent = cue.kind === "goal" || cue.kind === "miss";
@@ -65,12 +80,15 @@ function CueOverlay({ cue, reducedMotion }: { cue: PitchCue; reducedMotion: bool
   const targetY = (targetPoint.y / 100) * 64;
   return (
     <>
-      {(cue.kind === "assist" || cue.kind === "goal") && secondaryPoint && (
+      {/* Ball layers only render while the cue plays out; afterwards the
+          persistent possession ball takes over so the pitch never shows two
+          balls (e.g. one frozen in the net plus the kickoff ball). */}
+      {active && (cue.kind === "assist" || cue.kind === "goal") && secondaryPoint && (
         <svg className="pitch-trail" viewBox="0 0 100 64" aria-hidden="true">
           <line x1={secondaryPoint.x} y1={(secondaryPoint.y / 100) * 64} x2={actorPoint.x} y2={actorY} />
         </svg>
       )}
-      {ballEvent && (
+      {active && ballEvent && (
         <svg className={`pitch-ball-layer${cue.event.subtype === 3 || cue.event.subtype === 4 ? " pitch-ball-set-piece" : ""}${activeClass}`} viewBox="0 0 100 64" aria-hidden="true">
           <circle cx={actorPoint.x} cy={actorY} r="1.3" className="pitch-ball">
             {!reducedMotion && <animate attributeName="cx" from={actorPoint.x} to={targetPoint.x} dur="0.9s" fill="freeze" />}
@@ -85,7 +103,7 @@ function CueOverlay({ cue, reducedMotion }: { cue: PitchCue; reducedMotion: bool
   );
 }
 
-export function MatchPitch({ home, away, events, phase, minute, addedTime, reducedMotion = false }: MatchPitchProps) {
+export function MatchPitch({ home, away, events, phase, minute, addedTime, reducedMotion = false, ball = null }: MatchPitchProps) {
   const [activeEvent, setActiveEvent] = useState<LiveEvent | null>(null);
   const [queue, setQueue] = useState<LiveEvent[]>([]);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
@@ -116,6 +134,36 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
 
   const pitchEvents = useMemo(() => events.filter((event) => event.type !== 8), [events]);
 
+  // Live possession ball: anchored to the possessing side's nearest supporting
+  // player during play; parked at the centre spot whenever play is stopped.
+  const liveBall = useMemo(() => {
+    if (!ball) return null;
+    if (!LIVE_PLAY_PHASES.has(phase)) {
+      return { idle: true as const, carrierId: null, point: BALL_CENTER_POINT };
+    }
+    const homePossesses = ball.side === 0;
+    const players = homePossesses ? home.players : away.players;
+    const points = homePossesses ? homePoints : awayPoints;
+    return { idle: false as const, ...placeLiveBall(ball, minute, players, points) };
+  }, [ball, phase, minute, home.players, away.players, homePoints, awayPoints]);
+
+  const lastBallPointRef = useRef<PitchPoint | null>(null);
+  const trailSeqRef = useRef(0);
+  const [trail, setTrail] = useState<{ from: PitchPoint; to: PitchPoint; key: number } | null>(null);
+  useEffect(() => {
+    if (!liveBall || liveBall.idle || motionReduced) {
+      lastBallPointRef.current = null;
+      setTrail(null);
+      return;
+    }
+    const prev = lastBallPointRef.current;
+    lastBallPointRef.current = liveBall.point;
+    if (!prev) return;
+    if (Math.abs(prev.x - liveBall.point.x) < 0.4 && Math.abs(prev.y - liveBall.point.y) < 0.4) return;
+    trailSeqRef.current += 1;
+    setTrail({ from: prev, to: liveBall.point, key: trailSeqRef.current });
+  }, [liveBall, motionReduced]);
+
   useEffect(() => {
     const fresh = pitchEvents.filter((event) => !seenRef.current.has(eventKey(event)));
     for (const event of fresh) seenRef.current.add(eventKey(event));
@@ -144,12 +192,22 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
   const cue = displayedEvent
     ? cueForEvent(displayedEvent, home.clubId, home.players, away.players, rememberedRef.current)
     : null;
+  const cueActive = !!activeEvent;
+  const shotCueActive = cueActive && !!cue && (cue.kind === "goal" || cue.kind === "miss");
   const homeHighlighted = cue?.actorSide === "home" ? cue.event.playerId : null;
   const awayHighlighted = cue?.actorSide === "away" ? cue.event.playerId : null;
   const homeSecondaryHighlighted = cue?.actorSide === "home" ? cue.event.player2Id : null;
   const awaySecondaryHighlighted = cue?.actorSide === "away" ? cue.event.player2Id : null;
   const fmtMinute = (m: number, a?: number | null) => (a ? `${m}+${a}'` : `${m}'`);
   const status = cue ? `${EVENT_COPY[cue.kind]} · ${fmtMinute(cue.event.minute, cue.event.addedTime)}` : phase === "pregame" ? "Lineups" : fmtMinute(minute, addedTime);
+  const showLiveBall = !!liveBall && !shotCueActive;
+  const liveBallClass = [
+    "pitch-live-ball",
+    liveBall?.idle ? "pitch-live-ball-idle" : "",
+    !liveBall?.idle && ball && isSetPieceStart(ball.startType) ? "pitch-live-ball-setpiece" : "",
+    !liveBall?.idle && ball?.counter && ball.phase === "TRANSITION" ? "pitch-live-ball-counter" : "",
+    motionReduced ? "pitch-live-ball-reduced" : "",
+  ].filter(Boolean).join(" ");
 
   return (
     <section className="match-pitch-card" aria-label="Live match pitch">
@@ -183,7 +241,15 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
           <circle cx="50" cy="32" r="8" fill="none" stroke="rgba(238,246,239,0.72)" strokeWidth="0.45" />
           <circle cx="50" cy="32" r="0.7" fill="rgba(238,246,239,0.8)" />
         </svg>
-        {cue && <CueOverlay cue={cue} reducedMotion={motionReduced} />}
+        {trail && !motionReduced && (
+          <svg className="pitch-trail pitch-live-trail" viewBox="0 0 100 64" aria-hidden="true">
+            <line key={trail.key} x1={trail.from.x} y1={(trail.from.y / 100) * 64} x2={trail.to.x} y2={(trail.to.y / 100) * 64} />
+          </svg>
+        )}
+        {showLiveBall && liveBall && (
+          <span className={liveBallClass} style={{ left: `${liveBall.point.x}%`, top: `${liveBall.point.y}%` }} aria-hidden="true" />
+        )}
+        {cue && <CueOverlay cue={cue} active={cueActive} reducedMotion={motionReduced} />}
         <div className="pitch-players">
           {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} />)}
           {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} />)}

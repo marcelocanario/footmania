@@ -604,6 +604,16 @@ export interface LiveTactics {
   direction: number;
 }
 
+/** Possession projection for the live pitch ball (see backend liveView.ts). */
+export interface LiveBall {
+  /** Possessing team index: 0 = home, 1 = away. */
+  side: 0 | 1;
+  zone: string;
+  phase: string;
+  startType: string;
+  counter: boolean;
+}
+
 export interface LiveState {
   matchId: number;
   fixtureId: number;
@@ -662,6 +672,7 @@ export interface LiveState {
   currentAddedTime?: number | null;
   homeIsHuman: boolean;
   awayIsHuman: boolean;
+  ball?: LiveBall;
 }
 
 export interface LiveStateDelta {
@@ -676,6 +687,7 @@ export interface LiveStateDelta {
   automationFiredCount: number;
   progressPct: number;
   currentAddedTime: number | null;
+  ball?: LiveBall;
 }
 
 export interface LineupPlayer {
@@ -1136,5 +1148,6 @@ export const api = {
   adminSuggestedClubName: (attempt = 0) => request<{ name: string }>(`/api/admin/suggested-club-name?attempt=${attempt}`),
   adminGetMotd: () => request<{ messages: { dayIndex: number; dayLabel: string; text: string }[] }>("/api/admin/motd"),
   adminPostMotd: (text: string) => request<{ ok: boolean; text: string; dayIndex: number }>("/api/admin/motd", { method: "POST", body: JSON.stringify({ text }) }),
+  adminDeleteMotdMessage: (dayIndex: number, text: string) => request<{ ok: boolean; removed: number }>(`/api/admin/motd/message?dayIndex=${dayIndex}&text=${encodeURIComponent(text)}`, { method: "DELETE" }),
   adminDeleteMotd: () => request<{ ok: boolean; removed: number }>("/api/admin/motd", { method: "DELETE" }),
 };

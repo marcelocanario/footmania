@@ -139,9 +139,8 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   const squadAll = [...squad, ...loanedOut].sort((a, b) => b.overall - a.overall);
 
   // Admin announcements ("motd") are pinned ahead of the chronological feed
-  // from the FULL history — an older announcement must stay visible no matter
-  // how much match news follows it. At most one exists at a time (posting
-  // replaces the previous one), so the pinned section stays size-bounded.
+  // from the FULL history — older announcements remain visible no matter how
+  // much match news follows them. Admins may retain multiple announcements.
   const pinnedNews = world.news.filter((n) => n.kind === MOTD_NEWS_KIND);
   const chronological = world.news
     .filter((n) => n.kind !== MOTD_NEWS_KIND)

@@ -904,11 +904,15 @@ model UserNotification {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   type        String
   payloadJson String   @default("{}")
+  dedupeKey   String?
+  occurredAt  DateTime @default(now())
   createdAt   DateTime @default(now())
   readAt      DateTime?
 
   @@index([userId, createdAt])
+  @@index([userId, occurredAt])
   @@index([userId, readAt])
+  @@unique([userId, dedupeKey])
 }
 
 model PushSubscription {

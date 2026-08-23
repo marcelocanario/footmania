@@ -199,17 +199,26 @@ export function Layout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user) return;
     void api.myWarnings().then((res) => setWarnings(res.warnings.filter((w) => !w.acknowledgedAt) as never)).catch(() => {});
+    let disposed = false;
+    let requestVersion = 0;
     const loadNotifications = async () => {
+      const version = ++requestVersion;
       try {
         const res = await api.listNotifications(20);
-        setNotifications(res.notifications as never);
+        // Several match events can invalidate the inbox in quick succession.
+        // Do not let a slower response from an older request overwrite the
+        // newer, correctly ordered feed.
+        if (!disposed && version === requestVersion) setNotifications(res.notifications as never);
       } catch {}
     };
     void loadNotifications();
     const unsubscribe = api.cache.subscribe((scope) => {
       if (scope === "notifications") void loadNotifications();
     });
-    return unsubscribe;
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
   }, [user]);
 
   const logout = async () => {

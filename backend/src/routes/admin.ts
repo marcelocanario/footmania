@@ -777,11 +777,9 @@ export async function adminRoutes(app: FastifyInstance) {
     return res.value;
   });
 
-  // --- Message of the day (single active admin announcement) ---------------
-  // The MOTD is a news item with the reserved "motd" kind. Posting replaces
-  // the previous announcement, and the snapshot pins it ahead of the feed so
-  // it never scrolls away. News ids are only stable after a reload, which is
-  // why replacement — not delete-by-id — is the mutation primitive here.
+  // --- Message of the day ---------------------------------------------------
+  // MOTDs are durable news items. Every post is retained; the snapshot pins
+  // them ahead of the chronological feed so announcements remain visible.
   const motdSchema = z.object({ text: z.string().trim().min(1).max(gameConfig.motd.maxLength) });
 
   app.get("/admin/motd", async () => {
@@ -789,7 +787,6 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!loaded) return { messages: [] };
     const messages = loaded.world.news
       .filter((n) => n.kind === MOTD_NEWS_KIND)
-      .slice(-20)
       .reverse()
       .map((n) => ({ dayIndex: n.dayIndex, dayLabel: multiplayerDayLabel(n.dayIndex), text: n.text }));
     return { messages };
@@ -803,7 +800,6 @@ export async function adminRoutes(app: FastifyInstance) {
       const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
-      world.news = world.news.filter((n) => n.kind !== MOTD_NEWS_KIND);
       world.news.push({ dayIndex: world.dayIndex, text: parsed.data.text, kind: MOTD_NEWS_KIND });
       try {
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
@@ -818,6 +814,33 @@ export async function adminRoutes(app: FastifyInstance) {
     return res.value;
   });
 
+  app.delete("/admin/motd/message", async (req, reply) => {
+    const parsedTarget = z.object({ dayIndex: z.coerce.number().int().min(0), text: z.string().min(1) }).safeParse(req.query);
+    if (!parsedTarget.success) return reply.code(400).send({ error: "dayIndex and text are required" });
+    const res = await withGlobalLock(async () => {
+      await ensureCurrentSeason(app.prisma);
+      const loaded = await loadGlobalWorldMutable(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const world = loaded.world;
+      const index = world.news.findIndex(
+        (n) => n.kind === MOTD_NEWS_KIND && n.dayIndex === parsedTarget.data.dayIndex && n.text === parsedTarget.data.text,
+      );
+      if (index < 0) return { error: { code: 404, body: { error: "MOTD not found" } } };
+      world.news.splice(index, 1);
+      try {
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      } catch (e) {
+        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent world update, retry" } } };
+        throw e;
+      }
+      publishToHumanUsers(world, { type: "invalidate", scope: "club" });
+      return { value: { ok: true, removed: 1 } };
+    });
+    if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
+    return res.value;
+  });
+
+  // Bulk clear remains available for housekeeping, but posting never calls it.
   app.delete("/admin/motd", async (req, reply) => {
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);

@@ -19,13 +19,12 @@ export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ change
     if (!loaded || loaded.world.liveMatches.length === 0) return { changed: false };
     const before = snapshotLiveMatches(loaded.world.liveMatches);
 
-    const finished = advanceLiveMatches(loaded.world, Date.now());
+    const advancedAt = Date.now();
+    const finished = advanceLiveMatches(loaded.world, advancedAt);
     const { updates, changedStates, goals } = diffLiveMatchAdvances(before, loaded.world.liveMatches, finished);
 
     if (finished.length > 0) {
       await persistWorld(prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
-      const userEvents = await notifyFinishedMatches(prisma, loaded.world, finished);
-      for (const item of userEvents) publishUserWorldEvent(item.userId, item.event);
     } else {
       for (const state of changedStates) {
         await persistLiveMatchState(prisma, loaded.save.id, loaded.save.id, state, loaded.world.rng.state, loaded.save.revision);
@@ -42,6 +41,14 @@ export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ change
       } catch {
         // Goal inbox notifications are best effort.
       }
+    }
+
+    // Goal notifications have an earlier occurredAt than full-time, so the
+    // feed remains correctly ordered even though the final Match is persisted
+    // and the goal is discovered from that same finishing tick.
+    if (finished.length > 0) {
+      const userEvents = await notifyFinishedMatches(prisma, loaded.world, finished, new Date(advancedAt));
+      for (const item of userEvents) publishUserWorldEvent(item.userId, item.event);
     }
 
     publishLiveMatchUpdates(loaded.world, updates);

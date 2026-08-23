@@ -1,4 +1,4 @@
-import type { LiveEvent, LivePlayer } from "../api/client";
+import type { LiveBall, LiveEvent, LivePlayer } from "../api/client";
 
 export interface PitchPoint {
   x: number;
@@ -272,4 +272,95 @@ export function cueForEvent(event: LiveEvent, homeClubId: number, homePlayers: L
   const kind = cueKind(event);
   const targetPoint = kind === "goal" || kind === "miss" ? (side === "home" ? { x: 96, y: 50 } : { x: 4, y: 50 }) : actorPoint;
   return { kind, event, side, actorSide, actorPoint, secondaryPoint, targetPoint };
+}
+
+// ---------------------------------------------------------------------------
+// Live possession ball
+//
+// The engine models possession at team/zone level (no individual carrier), so
+// the client anchors the ball to the possessing-side player whose formation
+// point best supports the ball zone. Everything here is deterministic from
+// already-persisted state (side/zone/startType + minute) so re-renders and
+// reconnects never reposition the ball differently.
+// ---------------------------------------------------------------------------
+
+/** Zone anchor points for the home side (attacking left -> right). */
+const BALL_ZONE_ANCHORS: Record<string, PitchPoint> = {
+  DEF_WIDE: { x: 12, y: 20 },
+  DEF_CENTRAL: { x: 14, y: 32 },
+  MID_WIDE: { x: 44, y: 20 },
+  MID_CENTRAL: { x: 48, y: 32 },
+  ATT_WIDE: { x: 76, y: 20 },
+  ATT_CENTRAL: { x: 80, y: 32 },
+  BOX: { x: 90, y: 32 },
+};
+
+/** Mirror of the pitch centre used whenever play is stopped. */
+export const BALL_CENTER_POINT: PitchPoint = { x: 50, y: 32 };
+
+const SET_PIECE_STARTS = new Set(["CORNER", "FREE_KICK", "THROW_IN", "PENALTY", "GOAL_KICK"]);
+
+export function isSetPieceStart(startType: string): boolean {
+  return SET_PIECE_STARTS.has(startType);
+}
+
+function clampPitch(p: PitchPoint): PitchPoint {
+  return { x: Math.max(3, Math.min(97, p.x)), y: Math.max(6, Math.min(58, p.y)) };
+}
+
+/** Anchor point of the ball zone for one side. */
+export function pointForBall(side: PitchSide, zone: string): PitchPoint {
+  const anchor = BALL_ZONE_ANCHORS[zone] ?? BALL_ZONE_ANCHORS.MID_CENTRAL;
+  return side === "home" ? { ...anchor } : { x: 100 - anchor.x, y: anchor.y };
+}
+
+/** FNV-1a seeded micro-jitter so consecutive minutes in the same zone still
+ * nudge without ever rerolling between renders. */
+function jitterFor(key: string): PitchPoint {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  const a = ((h >>> 8) % 1000) / 1000;
+  const b = ((h >>> 20) % 1000) / 1000;
+  return { x: (a - 0.5) * 4, y: (b - 0.5) * 3 };
+}
+
+export interface BallPlacement {
+  /** Visual carrier: nearest supporting outfield player (null when none). */
+  carrierId: number | null;
+  point: PitchPoint;
+}
+
+/**
+ * Places the live ball for a possession snapshot. The ball rides the carrier's
+ * marker with a small bias toward the attacked goal; deterministic per
+ * (minute, zone, side).
+ */
+export function placeLiveBall(ball: LiveBall, minute: number, players: LivePlayer[], points: Map<number, PitchPoint>): BallPlacement {
+  const side: PitchSide = ball.side === 0 ? "home" : "away";
+  const anchor = pointForBall(side, ball.zone);
+  const jitter = jitterFor(`${minute}:${ball.zone}:${ball.side}`);
+  // Foot bias toward the goal this side attacks.
+  const attackBias = side === "home" ? 1.7 : -1.7;
+  const target = clampPitch({ x: anchor.x + jitter.x + attackBias, y: anchor.y + jitter.y });
+  const candidates = players
+    .filter((p) => p.tacPos !== 1 || ball.startType === "GOAL_KICK")
+    .map((p) => ({ p, pt: points.get(p.id) }))
+    .filter((c): c is { p: LivePlayer; pt: PitchPoint } => !!c.pt)
+    .sort((a, b) => {
+      const da = (a.pt.x - target.x) ** 2 + (a.pt.y - target.y) ** 2;
+      const db = (b.pt.x - target.x) ** 2 + (b.pt.y - target.y) ** 2;
+      if (da !== db) return da - db;
+      if (a.p.tacPos !== b.p.tacPos) return a.p.tacPos - b.p.tacPos;
+      return a.p.id - b.p.id;
+    });
+  const chosen = candidates[0] ?? null;
+  if (!chosen) return { carrierId: null, point: target };
+  // Ride the carrier's spot, nudged toward the attacked goal.
+  return {
+    carrierId: chosen.p.id,
+    point: clampPitch({ x: chosen.pt.x + jitter.x * 0.6 + attackBias * 0.5, y: chosen.pt.y + jitter.y * 0.6 }),
+  };
 }

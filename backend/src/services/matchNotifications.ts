@@ -7,11 +7,12 @@ export async function notifyFinishedMatches(
   prisma: PrismaClient,
   world: World,
   matches: Match[],
+  occurredAt = new Date(),
 ): Promise<{ userId: number; event: UserWorldEvent }[]> {
   const userEvents: { userId: number; event: UserWorldEvent }[] = [];
   for (const match of matches) {
     try {
-      await notifyMatchFinished(prisma, world, match);
+      await notifyMatchFinished(prisma, world, match, occurredAt);
     } catch {
       // Inbox notifications are best effort; the match result remains durable.
     }
