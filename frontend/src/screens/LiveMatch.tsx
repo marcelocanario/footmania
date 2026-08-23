@@ -83,7 +83,7 @@ export function LiveMatch() {
     if (noLive) {
       setLiveMatch(null);
       void refresh();
-      navigate("/matchday");
+      navigate("/competitions");
     }
   }, [noLive, navigate, refresh, setLiveMatch]);
 

@@ -4,6 +4,7 @@ import { generateSeniorPlayer, generateYouthPlayer, seniorRosterTemplate, player
 import { gameConfig } from "../config";
 import { SENIOR_SQUAD_LIMIT } from "./constants";
 import { retirementProbability } from "./player";
+import { assignInitialSquadNumbers } from "./squadNumbers";
 
 /**
  * Squad-level generation orchestration (plans/4. player-generation.md §70-§73).
@@ -276,6 +277,8 @@ export function generateNewClubRoster(ctx: GenerationContext): { seniors: Player
   }
   const seniors = generateInitialSeniorSquad(ctx);
   const youth = generateInitialAcademy(ctx);
+  // Squad numbers: random, with the GK rule (#1 best goalkeeper, #12 second).
+  assignInitialSquadNumbers(ctx.world.rng, [...seniors, ...youth]);
   if (!ctx.world.generationEvents.includes(creationKey)) ctx.world.generationEvents.push(creationKey);
   return { seniors, youth };
 }
@@ -293,6 +296,8 @@ export function generateFillerRoster(ctx: GenerationContext): Player[] {
     return ctx.world.players.filter((p) => p.clubId === ctx.club.id && !p.isYouth);
   }
   const seniors = generateInitialSeniorSquad(ctx, SENIOR_SQUAD_LIMIT);
+  // Squad numbers: random, with the GK rule (#1 best goalkeeper, #12 second).
+  assignInitialSquadNumbers(ctx.world.rng, seniors);
   if (!ctx.world.generationEvents.includes(creationKey)) ctx.world.generationEvents.push(creationKey);
   return seniors;
 }

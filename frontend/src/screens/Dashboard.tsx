@@ -1,9 +1,22 @@
 import { useNavigate } from "react-router-dom";
-import { Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass, AlertTriangle } from "lucide-react";
+import { Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass, AlertTriangle, ChevronRight, Newspaper } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
 import { money } from "../format";
+import { ClubCrest } from "../components/ClubCrest";
+
+/** Accent color per news kind; unknown kinds fall back to a neutral tone. */
+const NEWS_KIND_COLORS: Record<string, string> = {
+  season: "var(--gold)",
+  mp: "var(--gold)",
+  contract: "var(--grass-2)",
+  loan: "var(--grass-2)",
+  injury: "var(--red-2)",
+  finance: "var(--red-2)",
+  tactics: "var(--blue)",
+  academy: "var(--blue)",
+};
 
 export function Dashboard() {
   const { snapshot, status, liveMatchId } = useGame();
@@ -32,13 +45,21 @@ export function Dashboard() {
       <div className="page-head">
         <div>
           <div className="kicker">
-            Season {season?.key ?? ""} · Round {season?.completedRounds ?? 0}
+            Season {season?.seasonNumber ?? ""}
+            {season && ` · Round ${season.completedRounds}`}
             {season?.joinState === "OPEN" ? " · joining open" : " · joining locked"}
-             {season && ` · Day ${season.seasonDay} / ${season.seasonDays} · ${season.phase.toLowerCase().replace("_", " ")}`}
+            {season && ` · Day ${season.seasonDay} / ${season.seasonDays} · ${season.phase.toLowerCase().replace("_", " ")}`}
           </div>
-          <h1>{club.name}</h1>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 4 }}>
+            <ClubCrest name={club.name} primary={club.primaryColor} secondary={club.secondaryColor} kit={club.kits?.home ?? null} size={48} clubId={club.id} hasCustomLogo={club.hasCustomLogo} />
+            <h1>{club.name}</h1>
+          </div>
           <div className="head-chips">
-            <span className="chip">{strings.team.country} {club.country}</span>
+            {league?.tier != null ? (
+              <span className="chip">Division {league.tier} · Group {(league.groupIndex ?? 0) + 1}</span>
+            ) : (
+              <span className="chip">{strings.team.country} {club.country}</span>
+            )}
           </div>
         </div>
         {liveMatchId && (
@@ -65,7 +86,7 @@ export function Dashboard() {
           <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
             <button className="btn sm" onClick={() => navigate("/squad")}><Users size={14} /> Squad</button>
             <button className="btn sm ghost" onClick={() => navigate("/transfers")}><ArrowRight size={14} /> Transfers</button>
-            <button className="btn sm ghost" onClick={() => navigate("/matchday")}><CalendarDays size={14} /> Matches</button>
+            <button className="btn sm ghost" onClick={() => navigate("/competitions")}><CalendarDays size={14} /> Matches</button>
           </div>
         </div>
       )}
@@ -128,51 +149,71 @@ export function Dashboard() {
       )}
 
       <div className="grid cols-3 stagger">
-        <div className="card">
+        <div className="card hoverable" role="link" tabIndex={0} onClick={() => navigate("/competitions")}
+          onKeyDown={(e) => { if (e.key === "Enter") navigate("/competitions"); }}>
           <div className="stat" style={{ border: "none", background: "transparent", padding: 0 }}>
             <div className="label"><TrendingUp size={12} /> {strings.dashboard.position}</div>
             <div className="value" style={{ fontSize: "2.6rem", color: posClass === "gold" ? "var(--gold-2)" : undefined }}>
               {position ? `#${position}` : "—"}
             </div>
           </div>
-          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>
-            {league?.name ?? "League"}
+          <div style={{ display: "flex", justifyContent: "flex-end", color: "var(--text-3)", marginTop: 8 }}>
+            <ChevronRight size={14} />
           </div>
         </div>
 
-        <div className="card">
+        <div className="card hoverable" role="link" tabIndex={0} onClick={() => navigate("/finances")}
+          onKeyDown={(e) => { if (e.key === "Enter") navigate("/finances"); }}>
           <div className="stat" style={{ border: "none", background: "transparent", padding: 0 }}>
             <div className="label"><Wallet size={12} /> {strings.dashboard.cash}</div>
             <div className="value" style={{ color: (club.cash ?? 0) >= 0 ? "var(--grass-2)" : "var(--red-2)" }}>{money(club.cash ?? 0)}</div>
           </div>
-          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>{club.stadiumName}</div>
+          <div style={{ display: "flex", justifyContent: "flex-end", color: "var(--text-3)", marginTop: 8 }}>
+            <ChevronRight size={14} />
+          </div>
         </div>
 
-        <div className="card">
+        <div className="card hoverable" role="link" tabIndex={0} onClick={() => navigate("/competitions")}
+          onKeyDown={(e) => { if (e.key === "Enter") navigate("/competitions"); }}>
           <div className="stat" style={{ border: "none", background: "transparent", padding: 0 }}>
             <div className="label"><CalendarDays size={12} /> {strings.dashboard.nextFixture}</div>
             <div className="value" style={{ fontSize: "1.15rem" }}>
               {snapshot.nextFixture ? `${snapshot.nextFixture.home} vs ${snapshot.nextFixture.away}` : strings.dashboard.noNextFixture}
             </div>
           </div>
-          <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8, display: "flex", alignItems: "center", gap: 5 }}>
-            {snapshot.nextFixture && <Clock size={12} />} {snapshot.nextFixture ? snapshot.nextFixture.dayLabel : ""}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+              {snapshot.nextFixture && <Clock size={12} />} {snapshot.nextFixture?.dayLabel}
+              {snapshot.nextFixture?.dateLabel && <span style={{ color: "var(--gold-2)", fontWeight: 600 }}>· {snapshot.nextFixture.dateLabel}</span>}
+            </span>
+            {snapshot.nextFixture && <ChevronRight size={14} />}
           </div>
         </div>
       </div>
 
       <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
         <div className="card">
-          <h2 className="card-title"><Activity size={17} /> {strings.dashboard.news}</h2>
-          <div className="news-list">
-            {snapshot.news.length === 0 && <div className="empty-state" style={{ padding: "24px 10px" }}>No news yet.</div>}
-            {snapshot.news.slice(0, 12).map((n, i) => (
-              <div className="news-item" key={i}>
-                <span className="day">{n.dayLabel}</span>
-                {n.text}
-              </div>
-            ))}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+            <h2 className="card-title" style={{ marginBottom: 0 }}><Newspaper size={17} /> {strings.dashboard.news}</h2>
+            <span style={{ color: "var(--text-3)", fontSize: "0.78rem", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+              {snapshot.news.length > 0 ? `last ${Math.min(12, snapshot.news.length)}` : ""}
+            </span>
           </div>
+          {snapshot.news.length === 0 ? (
+            <div className="empty-state" style={{ padding: "24px 10px" }}>No news yet.</div>
+          ) : (
+            <div className="news-feed">
+              {snapshot.news.slice(0, 12).map((n, i) => (
+                <div className="news-feed-item" key={i}>
+                  <span className="kind-dot" style={{ background: NEWS_KIND_COLORS[n.kind] ?? "var(--text-3)" }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div>{n.text}</div>
+                  </div>
+                  <span className="day">{n.dayLabel}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

@@ -17,6 +17,7 @@ import { seniorRosterFullError, isEphemeralAI } from "./club";
 import { createRng, nextDouble } from "./rng";
 import { DEVELOPMENT } from "./constants";
 import { calculateBaseSalary, calculateContractDemand, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
+import { ensureClubSquadNumbers } from "./squadNumbers";
 
 /**
  * Free-agent market (transfer-market-overhaul Phase 7, §41-§54).
@@ -355,6 +356,8 @@ export function settleFreeAgentListing(
   player.contractDays = contractDaysForTerm(contractSeasons);
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   resetPayrollPeriod(player, world.dayIndex);
+  // The signing club may already wear the player's old number.
+  ensureClubSquadNumbers(world, winner.id);
 
   recordTransaction(world, {
     playerId: player.id,

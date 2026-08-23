@@ -51,6 +51,8 @@ export interface PlayerView {
   positionName: string;
   tacPos: number;
   tacPosName: string;
+  /** Squad shirt number; null for legacy players not yet assigned. */
+  squadNumber?: number | null;
   overall: number;
   skills: SkillSet;
   energy: number;
@@ -296,6 +298,7 @@ export interface StandingsRow {
   colors: { primary: string; secondary: string };
   /** Kit Lab: home design for jersey-style badges; null for legacy payloads. */
   kit?: KitDesign | null;
+  hasCustomLogo?: boolean;
   isHuman: boolean;
   clubType: "HUMAN" | "AI";
   isMine: boolean;
@@ -318,6 +321,13 @@ export interface FixtureView {
   away: string;
   homeClubId: number;
   awayClubId: number;
+  /** Home side wears its home design, away side its away design. */
+  homeKit?: KitDesign | null;
+  awayKit?: KitDesign | null;
+  homeHasCustomLogo?: boolean;
+  awayHasCustomLogo?: boolean;
+  /** Venue: the home club's stadium. */
+  venue?: string;
   kickoffAt: number | null;
   played: boolean;
   homeScore: number | null;
@@ -345,8 +355,8 @@ export interface Snapshot {
     leagueRunnerUp: string | null;
   } | null;
   club: ClubView | null;
-  nextFixture: { id: number; home: string; away: string; dayLabel: string; dayIndex: number; isHome: boolean } | null;
-  competitions: { id: number; kind: string; name: string; stage: string; round: number; position: number; winnerId: number | null }[];
+  nextFixture: { id: number; home: string; away: string; dayLabel: string; dayIndex: number; isHome: boolean; dateLabel: string | null } | null;
+  competitions: { id: number; kind: string; name: string; stage: string; round: number; tier: number | null; groupIndex: number | null; position: number; winnerId: number | null }[];
   squad: PlayerView[];
   juniors: PlayerView[];
   loanedOut: PlayerView[];
@@ -356,6 +366,8 @@ export interface Snapshot {
   records: CareerRecord[];
   seasonAwards: SeasonAward[];
 }
+
+export type PyramidResponse = { seasonKey: string | null; tiers: PyramidTier[]; myDivisionId?: number | null };
 
 export interface CareerRecord {
   category: string;
@@ -477,6 +489,8 @@ export interface LivePlayer {
   nickname?: string | null;
   position: number;
   tacPos: number;
+  /** Squad shirt number shown on the pitch marker. */
+  number?: number | null;
   overall: number;
   energy: number;
   injuryDays: number;
@@ -866,7 +880,7 @@ export const api = {
   practice: () =>
     request<{ homeGoals: number; awayGoals: number; events: number; opponentName: string }>("/api/mp/practice", { method: "POST" }),
   myClub: () => request<{ snapshot: Snapshot }>("/api/mp/club"),
-  pyramid: () => request<{ seasonKey: string | null; tiers: PyramidTier[] }>("/api/mp/pyramid"),
+  pyramid: () => request<PyramidResponse>("/api/mp/pyramid"),
   divisionStandings: (id: number) =>
     request<{ competition: { id: number; name: string; tier: number; groupIndex: number }; standings: StandingsRow[] }>(`/api/mp/divisions/${id}/standings`),
   divisionFixtures: (id: number) => request<{ fixtures: FixtureView[] }>(`/api/mp/divisions/${id}/fixtures`),
@@ -892,6 +906,8 @@ export const api = {
   },
   setLineup: (lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
     request<{ ok: boolean }>("/api/club/lineup", { method: "POST", body: JSON.stringify(lineup) }),
+  setPlayerNumber: (playerId: number, number: number) =>
+    request<{ ok: boolean; number: number | null; swappedWithName: string | null }>(`/api/players/${playerId}/number`, { method: "POST", body: JSON.stringify({ number }) }),
   matchLineup: (matchId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
     request<{ ok: boolean; state?: LiveState }>(`/api/matches/${matchId}/lineup`, { method: "POST", body: JSON.stringify(lineup) }),
   sellPlayer: (playerId: number, openingPrice?: number) =>

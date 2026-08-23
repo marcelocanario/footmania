@@ -60,6 +60,8 @@ export interface Player {
   reds: number;
   clubId: number | null;
   tacPos: number;
+  /** Squad shirt number; unique within a club. Null = not yet assigned. */
+  squadNumber?: number | null;
   onSale: boolean;
   suspendedGames: number;
   loanId: number | null;

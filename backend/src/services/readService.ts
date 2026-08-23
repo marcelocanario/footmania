@@ -65,6 +65,22 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
   const year = mp.seasonYear ?? save.year;
   const month = mp.seasonMonth ?? 1;
 
+  // The stored completed-round counter is only advanced by the admin manual
+  // clock; live matchdays never touch it. Derive the real value from the
+  // highest played round in the current season's divisions so the UI reflects
+  // actual progress after every match.
+  const divisionRows = mp.seasonId
+    ? await prisma.competition.findMany({ where: { saveId: save.id, kind: "division", seasonId: mp.seasonId }, select: { id: true } })
+    : [];
+  let playedRoundsCount = 0;
+  if (divisionRows.length > 0) {
+    const playedAgg = await prisma.fixture.aggregate({
+      where: { saveId: save.id, played: true, competitionId: { in: divisionRows.map((c) => c.id) } },
+      _max: { round: true },
+    });
+    playedRoundsCount = (playedAgg._max.round ?? -1) + 1;
+  }
+
   // Season calendar popover data: the authoritative per-day schedule plus the
   // user's own fixtures (with results) keyed by season day index.
   const schedule = seasonSchedulePreview();
@@ -113,7 +129,7 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
       year,
       month,
       status: mp.seasonStatus ?? "ACTIVE",
-      completedRounds: mp.completedRounds ?? 0,
+      completedRounds: Math.max(mp.completedRounds ?? 0, playedRoundsCount),
       joinLockRound: mp.joinLockRound ?? 0,
       joinState: mp.joinState ?? "OPEN",
       seasonDayIndex,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { KitDesign, LiveEvent, LivePlayer } from "../api/client";
-import { kitDotBackground } from "./kit/kitCss";
+import { FootballKit } from "./kit/FootballKit";
 import { cueForEvent, eventKey, teamPitchPoints, type PitchCue, type PitchPoint, type PitchSide } from "./matchPitchUtils";
 
 interface PitchTeam {
@@ -39,7 +39,6 @@ function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer;
     top: `${point.y}%`,
     "--kit": kit.primary,
     "--kit-2": kit.secondary,
-    "--kit-dot": kitDotBackground(kit),
   } as CSSProperties;
   return (
     <span
@@ -49,8 +48,10 @@ function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer;
       aria-label={`${player.name}, ${player.tacPos}`}
       title={`${player.name} · ${player.tacPos}`}
     >
-      <span className="pitch-player-dot">{player.name.slice(0, 1).toUpperCase()}</span>
-      <span className="pitch-player-name">{player.name}</span>
+      <span className="pitch-player-kit" aria-hidden="true">
+        <FootballKit {...kit} number={player.number ?? ""} size="100%" flat />
+      </span>
+      <span className="pitch-player-name">{player.number != null ? `${player.number} · ${player.name}` : player.name}</span>
     </span>
   );
 }

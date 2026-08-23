@@ -7,6 +7,7 @@ import { playerHasActiveListing } from "./market";
 import { settleTransferAuction, cancelTransferAuction, recordTransaction, auctionOpeningRange, resolveOpeningPrice, releaseAllReservations } from "./market";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
+import { ensureClubSquadNumbers } from "./squadNumbers";
 
 /**
  * Financial system (plans/5. financial-control.md).
@@ -587,6 +588,8 @@ export function runFinancialIntervention(
       if (preview) {
         preview.clubId = club.id;
         world.players.push(preview);
+        // Replacement joins with a number no squadmate wears.
+        ensureClubSquadNumbers(world, club.id);
       }
       effectiveRecovered += candidate.effectiveRecovery;
 

@@ -6,7 +6,7 @@ import { createHumanClub } from "../game/worldgen";
 import { withGlobalLock } from "../services/lock";
 import { seasonKey } from "../game/clock";
 import { gameConfig, MP_CONFIG } from "../config";
-import { clubKitsSchema } from "../game/kits";
+import { clubKitsSchema, resolveClubKits } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
@@ -194,6 +194,9 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     if (!world) return { seasonKey: null, tiers: [] };
     const divisions = divisionsInSeason(world, world.mp.seasonId);
     const clubById = new Map(world.clubs.map((club) => [club.id, club]));
+    // The caller's current division so the tables screen can pre-select it.
+    const myClub = world.clubs.find((c) => c.ownerUserId === req.user!.id);
+    const myDivision = myClub ? divisions.find((d) => Object.values(d.standings).some((row) => row.clubId === myClub.id)) : undefined;
     const byTier = new Map<number, { id: number; name: string; tier: number; groupIndex: number; humanCount: number; aiCount: number }[]>();
     for (const d of divisions) {
       const t = tierOf(d);
@@ -203,7 +206,11 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       byTier.get(t)!.push({ id: d.id, name: compDivisionName(d), tier: t, groupIndex: groupIndexOf(d), humanCount: humans, aiCount: members.length - humans });
     }
     const tiers = [...byTier.entries()].sort((a, b) => a[0] - b[0]).map(([tier, divisions]) => ({ tier, divisions }));
-    return { seasonKey: seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth }), tiers };
+    return {
+      seasonKey: seasonKey({ year: world.mp.seasonYear, month: world.mp.seasonMonth }),
+      tiers,
+      myDivisionId: myDivision?.id ?? null,
+    };
   });
 
   app.get("/mp/history", async (req, reply) => {
@@ -233,6 +240,9 @@ export async function multiplayerRoutes(app: FastifyInstance) {
           clubName: club?.name ?? "",
           clubShort: club?.shortName ?? "",
           colors: { primary: club?.primaryColor ?? "", secondary: club?.secondaryColor ?? "" },
+          // Identity badge data: home jersey design + custom-logo flag.
+          kit: club ? resolveClubKits(club).home : null,
+          hasCustomLogo: Boolean(club?.customLogo && club.customLogo.status === "ACTIVE"),
           isHuman: club?.ownerUserId !== null,
           clubType: club?.ownerUserId !== null ? "HUMAN" : "AI",
           isMine: club?.ownerUserId === req.user!.id,
@@ -266,6 +276,14 @@ export async function multiplayerRoutes(app: FastifyInstance) {
           away: away?.name ?? "",
           homeClubId: f.homeClubId,
           awayClubId: f.awayClubId,
+          // Fixture jerseys: the home side wears its home design, the away
+          // side wears its away design.
+          homeKit: home ? resolveClubKits(home).home : null,
+          awayKit: away ? resolveClubKits(away).away : null,
+          homeHasCustomLogo: Boolean(home?.customLogo && home.customLogo.status === "ACTIVE"),
+          awayHasCustomLogo: Boolean(away?.customLogo && away.customLogo.status === "ACTIVE"),
+          // Venue: the home club's ground.
+          venue: home?.stadiumName ?? "",
           kickoffAt: f.kickoffAt ?? null,
           played: f.played,
           homeScore: m?.homeScore ?? null,

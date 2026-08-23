@@ -18,7 +18,6 @@ const Join = lazyNamed(() => import("./screens/Join"), "Join");
 const Dashboard = lazyNamed(() => import("./screens/Dashboard"), "Dashboard");
 const Squad = lazyNamed(() => import("./screens/Squad"), "Squad");
 const Competitions = lazyNamed(() => import("./screens/Competitions"), "Competitions");
-const Matchday = lazyNamed(() => import("./screens/Matchday"), "Matchday");
 const LiveMatch = lazyNamed(() => import("./screens/LiveMatch"), "LiveMatch");
 const Transfers = lazyNamed(() => import("./screens/Transfers"), "Transfers");
 const Finances = lazyNamed(() => import("./screens/Finances"), "Finances");
@@ -147,7 +146,8 @@ function AppRoutes() {
       <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
       <Route path="/squad" element={<ClubGuard><Squad /></ClubGuard>} />
       <Route path="/competitions" element={<ClubGuard><Competitions /></ClubGuard>} />
-      <Route path="/matchday" element={<ClubGuard><Matchday /></ClubGuard>} />
+      {/* Matches screen removed: fixtures live inside Tables. Old links redirect. */}
+      <Route path="/matchday" element={<Navigate to="/competitions" replace />} />
       <Route path="/live-match" element={<ClubGuard><LiveMatch /></ClubGuard>} />
       <Route path="/transfers" element={<ClubGuard><Transfers /></ClubGuard>} />
       <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />

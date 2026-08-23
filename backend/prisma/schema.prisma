@@ -293,6 +293,8 @@ model Player {
   yellows         Int
   reds            Int
   tacPos          Int
+  // Squad shirt number; unique within a club. Null = not yet assigned.
+  squadNumber     Int?
   onSale          Boolean
   suspendedGames  Int
   loanId          Int?

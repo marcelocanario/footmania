@@ -20,7 +20,6 @@ const NAV: NavItem[] = [
   { to: "/dashboard", label: "Home", icon: <Home size={15} /> },
   { to: "/squad", label: "Squad", icon: <Users size={15} /> },
   { to: "/competitions", label: "Tables", icon: <Table2 size={15} /> },
-  { to: "/matchday", label: "Matches", icon: <CalendarDays size={15} /> },
   { to: "/transfers", label: "Transfers", icon: <ArrowLeftRight size={15} /> },
   { to: "/finances", label: "Finances", icon: <Wallet size={15} /> },
   { to: "/my-club", label: "My Club", icon: <Shirt size={15} /> },

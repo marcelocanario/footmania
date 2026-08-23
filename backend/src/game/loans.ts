@@ -6,6 +6,7 @@ import { playerHasActiveListing, recordTransaction } from "./market";
 import { seniorRosterFullError, isEphemeralAI } from "./club";
 import { newClubSellLockError } from "./league";
 import { getImmediateAvailableCash } from "./finance";
+import { ensureClubSquadNumbers } from "./squadNumbers";
 
 /**
  * Loan market (transfer-market-overhaul Phase 9, §55-§63).
@@ -194,6 +195,8 @@ export function claimLoan(
   player.clubId = club.id;
   player.loanId = loan.id;
   player.tacPos = -1;
+  // The borrowing club may already wear the player's number.
+  ensureClubSquadNumbers(world, club.id);
   return { ok: true, loan };
 }
 
@@ -225,6 +228,8 @@ export function returnLoanedPlayer(world: World, loan: Loan): void {
     p.clubId = loan.fromClubId;
     p.loanId = null;
     p.tacPos = -1;
+    // The player's number may clash with a squadmate picked up meanwhile.
+    ensureClubSquadNumbers(world, loan.fromClubId);
   }
   loan.recalled = true;
 }

@@ -1369,6 +1369,40 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   flex-shrink: 0;
 }
 
+/* dashboard news feed: divider rows with kind accent dot and right-aligned day */
+.news-feed { display: flex; flex-direction: column; margin-top: 14px; }
+
+.news-feed-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.news-feed-item:first-child { padding-top: 4px; }
+.news-feed-item:last-child { border-bottom: none; padding-bottom: 0; }
+
+.news-feed-item .kind-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.news-feed-item .day {
+  font-family: var(--font-display);
+  color: var(--text-3);
+  font-weight: 700;
+  white-space: nowrap;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.07em;
+  flex-shrink: 0;
+}
+
 .result-card {
   display: flex;
   align-items: center;
@@ -1641,6 +1675,14 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   font-size: clamp(0.7rem, 1.7vw, 0.95rem);
 }
 
+/* Jersey marker with the player's shirt number (Kit Lab SVG). */
+.pitch-player-kit {
+  display: block;
+  width: clamp(22px, 3.6vw, 34px);
+  height: clamp(22px, 3.6vw, 34px);
+  filter: drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55));
+}
+
 .pitch-player-name {
   max-width: 70px;
   overflow: hidden;
@@ -1648,12 +1690,16 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   white-space: nowrap;
 }
 
-.pitch-player-highlight .pitch-player-dot {
+.pitch-player-highlight .pitch-player-dot,
+.pitch-player-highlight .pitch-player-kit {
   animation: pitchPlayerPulse 0.75s ease-in-out infinite alternate;
   box-shadow: 0 0 0 4px rgba(255, 217, 122, 0.55), 0 0 18px rgba(255, 217, 122, 0.85);
 }
 
+.pitch-player-highlight .pitch-player-kit { box-shadow: none; filter: drop-shadow(0 0 6px rgba(255, 217, 122, 0.9)); }
+
 .pitch-player-injured .pitch-player-dot { filter: saturate(0.55); }
+.pitch-player-injured .pitch-player-kit { filter: saturate(0.55) drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55)); }
 
 .pitch-cue-icon {
   position: absolute;

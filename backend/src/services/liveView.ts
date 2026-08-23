@@ -29,6 +29,8 @@ export interface LivePlayerView {
   nickname: string | null;
   position: number;
   tacPos: number;
+  /** Squad shirt number shown on the pitch marker. */
+  number: number | null;
   overall: number;
   energy: number;
   injuryDays: number;
@@ -128,6 +130,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
       nickname: p.nickname ?? null,
       position: p.position,
       tacPos: p.tacPos,
+      number: p.squadNumber ?? null,
       overall: p.overall,
        energy: st.playerEnergy?.[p.id] ?? p.energy,
        injuryDays: injuryDaysRemaining(p, world.mp.absoluteGameDay ?? world.dayIndex),

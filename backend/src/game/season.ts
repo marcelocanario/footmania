@@ -6,6 +6,7 @@ import {
   shouldRetire,
 } from "./player";
 import { DAYS_PER_YEAR } from "./constants";
+import { ensureClubSquadNumbers } from "./squadNumbers";
 import { gameConfig, scaleReferenceSeasonFlow } from "../config";
 import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from "./payroll";
 import {
@@ -62,6 +63,8 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   player.tacPos = -1;
   player.starter = false;
+  // Promoted youth need a squad number that no senior currently wears.
+  ensureClubSquadNumbers(world, club.id);
   world.news.push({
     dayIndex: world.dayIndex,
     text: reason === "age" ? `${player.name} was automatically promoted from the youth academy at age ${player.age}` : `${player.name} was promoted from the youth academy to the senior squad`,

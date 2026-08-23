@@ -25,6 +25,7 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     positionName: POSITION_NAMES[p.position],
     tacPos: p.tacPos,
     tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
+    squadNumber: p.squadNumber ?? null,
     overall: p.overall,
     skills: p.skills,
     energy: p.energy,
@@ -107,6 +108,9 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
       name: c.name,
       stage: c.stage,
       round: c.round,
+      // Pyramid coordinates (divisions only) so the UI can show "Division X · Group Y".
+      tier: c.tier ?? null,
+      groupIndex: c.groupIndex ?? null,
       position,
       winnerId: c.winners[0] ?? null,
     };
@@ -271,6 +275,17 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
           dayLabel: dayLabel(nextFixture.dayIndex),
           dayIndex: nextFixture.dayIndex,
           isHome: nextFixture.homeClubId === clubId,
+          // Real-life date for UI display. Prefer the scheduled kickoff
+          // instant; fall back to the season-aligned calendar month (the
+          // multiplayer season maps its 1-based day index onto civil days).
+          dateLabel: (() => {
+            const fmt = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" });
+            const instant =
+              nextFixture.kickoffAt !== undefined && nextFixture.kickoffAt !== null
+                ? new Date(nextFixture.kickoffAt)
+                : new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, nextFixture.dayIndex)));
+            return fmt.format(instant);
+          })(),
         }
       : null,
     competitions,

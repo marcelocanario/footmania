@@ -44,7 +44,7 @@ Multiplayer
 UI:
 	[DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
 	[DONE]  pro users can nickname players. nicknames are seen by everyone else as well
-	[DONE] implement creation of club jersey. copy from: https://league-builder.app/kit-lab (you can copy the assets needed as well)
+	[DONE] implement creation of club jersey. copy from: https://league-builder.app/kit-lab (you can copy the assets needed as well) / https://nadchif.github.io/soccer-jersey/
 		in the live match UI, use the appropriate jerseys instead of the circles
 	[DONE] modify the tactics screen. I want something that looks like this: https://league-builder.app/lineup-creator
 	give the ability to hold shift and select multiple time slots at once in the "Matchday schedule" screen
@@ -56,6 +56,7 @@ UI:
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
 	[DONE] prevent people from creating a new disposeable team and ripping that team off in favor of their main team (prevent this through the bidding mechanism somehow, we can't guarante we'll be able to stop multiple accs)
+	plan a fans confidence level. think of a statistical model
 	plan a stadium system (attendance and income tied to fan confidence); stadium upgrades are expensive and have diminishing returns; you only have income from stadium when you play at home. important games have higher attendance (define what important means). stadium has upkeep
 	[DONE] plan formula for newgens (expected starting squad quality for a Division 1 club)
 	[DONE] implement a logic so that, if free agents are unclaimed for too long (configurable amount of days), they are deleted
@@ -100,3 +101,13 @@ Tuning:
 
 Documentation:
 	based on the plans, come up with a topic structure for a business rules document (all the important rules, algorithms and formulas in the system, what they mean and how they are calculated)
+
+Match UX:
+	why do we have a Refresh button? what does it do?
+	live pitch should go on top of the lineup
+	live badge (pill) should be in the Live pitch, not Match lineup
+	the live pitch should show the teams home/away jerseys and the player numbers, not circles
+	live match appears stuck in 0', nothing happens
+	there should be a tab with text updates of the match, all events should show there. make live pitch always show on top and match history and tactics tabs. 
+	players watching the match should be able to toggle between automations ON (autopilot) and OFF (they control the match)
+	add an element above the pitch with the club names, score and a progress bar 

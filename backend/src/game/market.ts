@@ -15,6 +15,7 @@ import { roundForDay } from "./clock";
 import { seniorRosterFullError, isEphemeralAI } from "./club";
 import { newClubSellLockError } from "./league";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
+import { ensureClubSquadNumbers } from "./squadNumbers";
 
 /** Compact currency formatter for news text. */
 function formatMoney(amount: number): string {
@@ -674,6 +675,8 @@ export function settleTransferAuction(
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   // The player's payroll clock continues at the buyer (same contract/salary).
   resetPayrollPeriod(player, world.dayIndex);
+  // The buying club may already wear the player's old number.
+  ensureClubSquadNumbers(world, winner.id);
 
   // Record transaction history (feeds resale anchor + cooldown, §72).
   recordTransaction(world, {

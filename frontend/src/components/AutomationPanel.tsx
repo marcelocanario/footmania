@@ -297,6 +297,7 @@ export function AutomationPanel({ formation }: { formation: number }) {
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [justSaved, setJustSaved] = useState(false);
   const [openOthers, setOpenOthers] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
@@ -334,6 +335,8 @@ export function AutomationPanel({ formation }: { formation: number }) {
     try {
       await api.setAutomation(presets as never);
       setDirty(false);
+      setJustSaved(true);
+      window.setTimeout(() => setJustSaved(false), 3000);
       toast.current?.show({
         severity: "success",
         summary: "Saved",
@@ -369,9 +372,16 @@ export function AutomationPanel({ formation }: { formation: number }) {
           Rules fire automatically while the server simulates your matches — even when you are offline. While watching live you can pause
           them from the Live Match screen. Changes apply once you press <b>Save</b>.
         </div>
-        <button className={`btn ${dirty ? "gold" : ""}`} onClick={() => void save()} disabled={!canSave || busy} title={issues.length > 0 ? issues[0] : undefined}>
-          {busy ? "Saving…" : dirty ? "Save changes" : "Saved"}
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {justSaved && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--grass-2)", fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap" }}>
+              ✓ Automation saved
+            </span>
+          )}
+          <button className={`btn ${dirty ? "gold" : ""}`} onClick={() => void save()} disabled={!canSave || busy} title={issues.length > 0 ? issues[0] : undefined}>
+            {busy ? "Saving…" : dirty ? "Save changes" : "Saved"}
+          </button>
+        </div>
       </div>
 
       <div style={{ margin: "10px 0 14px", fontSize: "0.9rem" }}>

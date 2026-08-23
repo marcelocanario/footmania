@@ -17,6 +17,7 @@ import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants"
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
+import { setPlayerSquadNumber } from "../game/squadNumbers";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { World } from "../game/types";
@@ -468,8 +469,25 @@ export async function gameRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post("/players/:id/academy", async (req, reply) => {
+  // Squad number reassignment. Taking a squadmate's number swaps the two.
+  app.post("/players/:id/number", async (req, reply) => {
     const playerId = Number((req.params as { id: string }).id);
+    const parsed = z.object({ number: z.number().int().min(1).max(99).nullable() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Number must be between 1 and 99" });
+    if (parsed.data.number === null) return reply.code(400).send({ error: "Every player needs a number" });
+    const res = await withWorld(app, req.user!.id, "squad_number", async (world, clubId) => {
+      const player = world.players.find((p) => p.id === playerId);
+      if (!player || player.clubId !== clubId) return { error: { code: 400, body: { error: "Player not in your squad" } } };
+      // A number already worn by a squadmate swaps with this player.
+      const squadmate = world.players.find((p) => p.clubId === clubId && p.squadNumber === parsed.data.number && p.id !== playerId) ?? null;
+      const result = setPlayerSquadNumber(world, playerId, parsed.data.number!);
+      if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
+      return { value: { ok: true, number: player.squadNumber ?? null, swappedWithName: squadmate?.name ?? null } };
+    });
+    return replyFrom(res, reply);
+  });
+
+  app.post("/players/:id/academy", async (req, reply) => {    const playerId = Number((req.params as { id: string }).id);
     const parsed = academyActionSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "academy", async (world, clubId) => {
