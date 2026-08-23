@@ -555,7 +555,7 @@ export function LiveMatch() {
         <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
             <div style={{ fontWeight: 700 }}>Auto-presets</div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{state.automationFiredCount ?? 0} rules fired · {state.automationDisabled?.[humanSide] ? "Automation paused for you" : "Automation active (use presets in My Club > Automation)"}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{state.automationFiredCount ?? 0} rules fired · {state.automationDisabled?.[humanSide] ? "Automation paused for you" : "Automation active (set rules in Squad > Tactics > Match Automation)"}</div>
           </div>
           <button
             className={`btn ${state.automationDisabled?.[humanSide] ? "gold" : "ghost"}`}

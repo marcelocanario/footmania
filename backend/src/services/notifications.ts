@@ -21,7 +21,17 @@ export async function notifyMatchStarted(prisma: PrismaClient, world: import("..
   const home = world.clubs.find((c) => c.id === fixture.homeClubId);
   const away = world.clubs.find((c) => c.id === fixture.awayClubId);
   const comp = world.competitions.find((c) => c.id === fixture.competitionId);
-  const payloadBase = { fixtureId, homeClubId: fixture.homeClubId, awayClubId: fixture.awayClubId, competitionName: comp?.name ?? null, kickoffAt: fixture.kickoffAt ?? null };
+  // Human-readable club names ride along so clients can show friendly copy
+  // without resolving club IDs themselves.
+  const payloadBase = {
+    fixtureId,
+    homeClubId: fixture.homeClubId,
+    awayClubId: fixture.awayClubId,
+    homeName: home?.name ?? null,
+    awayName: away?.name ?? null,
+    competitionName: comp?.name ?? null,
+    kickoffAt: fixture.kickoffAt ?? null,
+  };
   for (const club of [home, away]) {
     if (!club?.ownerUserId) continue;
     await createNotification(prisma, club.ownerUserId, "MATCH_STARTED", { ...payloadBase, clubId: club.id, opponentClubId: club.id === home?.id ? away?.id : home?.id });
@@ -32,7 +42,16 @@ export async function notifyMatchStarted(prisma: PrismaClient, world: import("..
 export async function notifyMatchFinished(prisma: PrismaClient, world: import("../game/types").World, match: Match): Promise<void> {
   const home = world.clubs.find((c) => c.id === match.homeClubId);
   const away = world.clubs.find((c) => c.id === match.awayClubId);
-  const payloadBase = { matchId: match.id, fixtureId: match.fixtureId, homeClubId: match.homeClubId, awayClubId: match.awayClubId, homeScore: match.homeScore, awayScore: match.awayScore };
+  const payloadBase = {
+    matchId: match.id,
+    fixtureId: match.fixtureId,
+    homeClubId: match.homeClubId,
+    awayClubId: match.awayClubId,
+    homeName: home?.name ?? null,
+    awayName: away?.name ?? null,
+    homeScore: match.homeScore,
+    awayScore: match.awayScore,
+  };
   for (const club of [home, away]) {
     if (!club?.ownerUserId) continue;
     await createNotification(prisma, club.ownerUserId, "MATCH_FINISHED", { ...payloadBase, clubId: club.id });
@@ -56,11 +75,14 @@ export async function notifyMatchGoal(prisma: PrismaClient, world: import("../ga
   const scores = st?.scores ?? (finishedMatch ? [finishedMatch.homeScore, finishedMatch.awayScore] as [number, number] : undefined);
   if (!scores) return;
   const fixtureId = st?.fixtureId ?? finishedMatch?.fixtureId ?? null;
+  const homeName = world.clubs.find((c) => c.id === homeClubId)?.name ?? null;
+  const awayName = world.clubs.find((c) => c.id === awayClubId)?.name ?? null;
+  const scoringName = world.clubs.find((c) => c.id === scoringClubId)?.name ?? null;
   for (const clubId of [homeClubId, awayClubId]) {
     const club = world.clubs.find((c) => c.id === clubId);
     if (!club?.ownerUserId) continue;
     const user = await prisma.user.findUnique({ where: { id: club.ownerUserId } });
     if (!user || !hasPro(user)) continue;
-    await createNotification(prisma, club.ownerUserId, "MATCH_GOAL", { matchId, fixtureId, scoringClubId, minute, scores });
+    await createNotification(prisma, club.ownerUserId, "MATCH_GOAL", { matchId, fixtureId, scoringClubId, minute, scores, scoringName, homeName, awayName });
   }
 }

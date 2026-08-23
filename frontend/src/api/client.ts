@@ -125,6 +125,20 @@ export interface MpStatus {
     interseasonStartIndex: number;
     preparationStartIndex: number;
   };
+  calendar: {
+    today: number;
+    days: { day: number; phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON"; label: string }[];
+  };
+  myMatches: {
+    fixtureId: number;
+    dayIndex: number;
+    round: number;
+    opponent: string;
+    isHome: boolean;
+    played: boolean;
+    goalsFor: number | null;
+    goalsAgainst: number | null;
+  }[];
   userClubId: number | null;
   club: {
     id: number;

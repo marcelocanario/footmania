@@ -27,6 +27,7 @@ import { generateWorld } from "../game/worldgen";
 import { createRng } from "../game/rng";
 import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
+import { parseStoredPresets } from "../game/automation";
 import { deserializeClubKits, serializeClubKits } from "../game/kits";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
@@ -1333,7 +1334,7 @@ async function rebuildWorld(
        kits: deserializeClubKits((r as unknown as { kitJson?: string | null }).kitJson),
        logoVariant: r2.logoVariant ?? 0,
        customLogo,
-       automationPresets: jsonOr<Club["automationPresets"]>(r2.automationPresetsJson, null),
+        automationPresets: parseStoredPresets(jsonOr<unknown>(r2.automationPresetsJson, null), r.tacticsFormation),
         coachName: r.coachName,
         coachNameChangedSeasonKey: (r2 as unknown as { coachNameChangedSeasonKey?: string | null }).coachNameChangedSeasonKey ?? null,
        tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },

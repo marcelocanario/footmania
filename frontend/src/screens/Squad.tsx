@@ -15,27 +15,12 @@ import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
 import { TacticsBoard } from "../components/TacticsBoard";
+import { AutomationPanel } from "../components/AutomationPanel";
+import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
 import { countryFlag } from "../countryFlags";
-
-const STYLES = [
-  { label: "Balanced", value: 0 },
-  { label: "Total Attack", value: 1 },
-  { label: "Counter-attack", value: 2 },
-];
-
-const PRESSING = [
-  { label: "Light", value: 0 },
-  { label: "Heavy", value: 1 },
-  { label: "Very Heavy", value: 2 },
-];
-
-const DIRECTIONS = [
-  { label: "Through the middle", value: 0 },
-  { label: "Down the wings", value: 1 },
-];
 
 type Tab = "seniors" | "juniors" | "tactics";
 type TrainingFocus = "assistant" | "primary" | "secondary";
@@ -60,6 +45,8 @@ export function Squad() {
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
+  // Formation currently picked in the tactics board; scopes the automation panel.
+  const [boardFormation, setBoardFormation] = useState<number>(snapshot?.club?.tactics?.formation ?? 4);
   const [tab, setTab] = useState<Tab>("seniors");
   const [trainingFocus, setTrainingFocus] = useState<TrainingFocus>(snapshot?.club?.trainingFocus ?? "assistant");
   const toast = useRef<Toast>(null);
@@ -307,11 +294,12 @@ export function Squad() {
       </div>
 
       {tab === "tactics" ? (
-        <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)", alignItems: "start", gap: 16 }}>
-          <div className="card">
-            <h2 className="card-title"><ShieldCheck size={17} /> {strings.squad.tactics}</h2>
-            <TacticsBoard mode="club" />
-          </div>
+        <>
+          <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)", alignItems: "start", gap: 16 }}>
+            <div className="card">
+              <h2 className="card-title"><ShieldCheck size={17} /> {strings.squad.tactics}</h2>
+              <TacticsBoard mode="club" onFormationChange={setBoardFormation} />
+            </div>
           <div className="card">
             <h2 className="card-title"><Clapperboard size={17} /> Match Strategy</h2>
             <div className="form-group">
@@ -350,7 +338,9 @@ export function Squad() {
               Style, pressing and direction apply to every match. The starting eleven, bench and set-piece takers are saved with the lineup above.
             </div>
           </div>
-        </div>
+          </div>
+          <AutomationPanel formation={boardFormation} />
+        </>
       ) : (
         <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
           <div className="card" style={{ padding: isMobile ? 10 : 20 }}>

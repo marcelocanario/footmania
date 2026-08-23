@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import type { SeasonHistoryEntry } from "../game/types";
 import { seasonKey } from "../game/clock";
-import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
+import { calendarValues, phaseForSeasonDayIndex, seasonSchedulePreview } from "./seasonCalendar";
 
 type MpStateView = {
   seasonId?: number;
@@ -65,6 +65,45 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
   const year = mp.seasonYear ?? save.year;
   const month = mp.seasonMonth ?? 1;
 
+  // Season calendar popover data: the authoritative per-day schedule plus the
+  // user's own fixtures (with results) keyed by season day index.
+  const schedule = seasonSchedulePreview();
+  const myFixtureRows = club
+    ? await prisma.fixture.findMany({
+        where: { saveId: save.id, OR: [{ homeClubId: club.id }, { awayClubId: club.id }] },
+        select: { id: true, round: true, dayIndex: true, homeClubId: true, awayClubId: true, played: true },
+      })
+    : [];
+  const myMatchRows = myFixtureRows.length
+    ? await prisma.match.findMany({
+        where: { saveId: save.id, fixtureId: { in: myFixtureRows.map((f) => f.id) } },
+        select: { fixtureId: true, homeScore: true, awayScore: true },
+      })
+    : [];
+  const opponentIds = [...new Set(myFixtureRows.map((f) => (f.homeClubId === club!.id ? f.awayClubId : f.homeClubId)))];
+  const opponents = opponentIds.length
+    ? await prisma.club.findMany({ where: { saveId: save.id, id: { in: opponentIds } }, select: { id: true, shortName: true, name: true } })
+    : [];
+  const opponentName = new Map(opponents.map((c) => [c.id, c.shortName || c.name]));
+  const scoreByFixture = new Map(myMatchRows.map((m) => [m.fixtureId, m]));
+  const myMatches = myFixtureRows
+    .slice()
+    .sort((a, b) => a.dayIndex - b.dayIndex)
+    .map((f) => {
+      const isHome = f.homeClubId === club!.id;
+      const score = scoreByFixture.get(f.id);
+      return {
+        fixtureId: f.id,
+        dayIndex: f.dayIndex,
+        round: f.round + 1,
+        opponent: opponentName.get(isHome ? f.awayClubId : f.homeClubId) ?? "",
+        isHome,
+        played: f.played,
+        goalsFor: score ? (isHome ? score.homeScore : score.awayScore) : null,
+        goalsAgainst: score ? (isHome ? score.awayScore : score.homeScore) : null,
+      };
+    });
+
   return {
     ready: true as const,
     saveId: save.id,
@@ -87,6 +126,11 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
       interseasonStartIndex: calendar.interseasonStartIndex,
       preparationStartIndex: calendar.preparationStartIndex,
     },
+    calendar: {
+      today: seasonDayIndex,
+      days: schedule.map((d) => ({ day: d.seasonDay, phase: d.phase, label: d.label })),
+    },
+    myMatches,
     userClubId: club?.id ?? null,
     club: club
       ? {

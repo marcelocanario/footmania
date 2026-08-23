@@ -1,6 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, Settings as SettingsIcon, Radio, History as HistoryIcon, Shirt, Zap, Bell, Crown } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Crown, Settings as SettingsIcon } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
@@ -9,7 +9,14 @@ import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
 import { FootballKit } from "./kit/FootballKit";
 import { deriveKitDefaults } from "./kit/defaults";
 
-const NAV = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: ReactNode;
+  admin?: boolean;
+}
+
+const NAV: NavItem[] = [
   { to: "/dashboard", label: "Home", icon: <Home size={15} /> },
   { to: "/squad", label: "Squad", icon: <Users size={15} /> },
   { to: "/competitions", label: "Tables", icon: <Table2 size={15} /> },
@@ -17,11 +24,133 @@ const NAV = [
   { to: "/transfers", label: "Transfers", icon: <ArrowLeftRight size={15} /> },
   { to: "/finances", label: "Finances", icon: <Wallet size={15} /> },
   { to: "/my-club", label: "My Club", icon: <Shirt size={15} /> },
-  { to: "/automation", label: "Automation", icon: <Zap size={15} /> },
   { to: "/history", label: "History", icon: <HistoryIcon size={15} /> },
   { to: "/records", label: "Records", icon: <Medal size={15} /> },
   { to: "/settings", label: "Settings", icon: <SettingsIcon size={15} /> },
 ];
+
+interface SeasonDayEntry {
+  day: number;
+  phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+  label: string;
+}
+
+interface MyMatch {
+  fixtureId: number;
+  dayIndex: number;
+  round: number;
+  opponent: string;
+  isHome: boolean;
+  played: boolean;
+  goalsFor: number | null;
+  goalsAgainst: number | null;
+}
+
+type NotificationItem = { id: string; type: string; payload: unknown; createdAt: string; readAt: string | null };
+
+function relativeTime(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** Human-readable copy for a stored notification. Falls back gracefully for
+ * legacy payloads that predate embedded club names. */
+function describeNotification(n: NotificationItem, matchByFixture: Map<number, MyMatch>): { title: string; detail: string } {
+  const p = (n.payload ?? {}) as Record<string, unknown>;
+  const str = (key: string): string | null => (typeof p[key] === "string" && p[key] ? p[key] as string : null);
+  const num = (key: string): number | null => (typeof p[key] === "number" ? p[key] as number : null);
+
+  let home = str("homeName");
+  let away = str("awayName");
+  // Legacy payloads carry only IDs: resolve through this season's fixture list.
+  if ((!home || !away) && typeof p.fixtureId === "number") {
+    const m = matchByFixture.get(p.fixtureId);
+    if (m && !home && !away) {
+      home = m.isHome ? "You" : m.opponent;
+      away = m.isHome ? m.opponent : "You";
+    }
+  }
+
+  switch (n.type) {
+    case "MATCH_STARTED": {
+      const teams = home && away ? `${home} vs ${away}` : "Your match has kicked off";
+      const comp = str("competitionName");
+      return { title: "Kick-off", detail: comp ? `${teams} · ${comp}` : teams };
+    }
+    case "MATCH_FINISHED": {
+      const hs = num("homeScore");
+      const as = num("awayScore");
+      const clubId = num("clubId");
+      if (hs !== null && as !== null && home && away && clubId !== null) {
+        const userIsHome = clubId === num("homeClubId");
+        const gf = userIsHome ? hs : as;
+        const ga = userIsHome ? as : hs;
+        return { title: gf > ga ? "Full time — you won" : gf === ga ? "Full time — draw" : "Full time — you lost", detail: `${home} ${hs}-${as} ${away}` };
+      }
+      if (hs !== null && as !== null && home && away) return { title: "Full time", detail: `${home} ${hs}-${as} ${away}` };
+      return { title: "Full time", detail: home && away ? `${home} vs ${away}` : "Your match has finished" };
+    }
+    case "MATCH_GOAL": {
+      const minute = num("minute");
+      const scores = Array.isArray(p.scores) && p.scores.length >= 2 && typeof p.scores[0] === "number" ? `${p.scores[0]}-${p.scores[1]}` : null;
+      const scorer = str("scoringName");
+      const parts = [minute !== null ? `${minute}'` : null, scorer, scores].filter(Boolean);
+      return { title: "Goal!", detail: parts.join(" · ") || "A goal has been scored in your match" };
+    }
+    case "LEAGUE_RESULTS":
+      return { title: "League results", detail: "The latest results from your division are in" };
+    default:
+      return { title: n.type.split("_").map((w) => w.charAt(0) + w.slice(1).toLowerCase()).join(" "), detail: "" };
+  }
+}
+
+function matchTitle(day: SeasonDayEntry, match: MyMatch | undefined): string {
+  let title = `Day ${day.day} · ${day.label}`;
+  if (match) title += ` · ${match.isHome ? "vs" : "@"} ${match.opponent}`;
+  if (match?.played) title += ` (${match.goalsFor}-${match.goalsAgainst})`;
+  return title;
+}
+
+function SeasonCalendar({ days, today, matches }: { days: SeasonDayEntry[]; today: number; matches: MyMatch[] }) {
+  const matchByDay = new Map(matches.map((m) => [m.dayIndex, m]));
+  return (
+    <>
+      <div className="cal-grid">
+        {days.map((d) => {
+          const dayIndex = d.day - 1;
+          const match = matchByDay.get(dayIndex);
+          const cls = [
+            "cal-cell",
+            d.phase === "POST_MATCH" ? "post" : d.phase === "INTERSEASON" ? "pre" : "",
+            dayIndex === today ? "today" : "",
+          ].filter(Boolean).join(" ");
+          return (
+            <div key={d.day} className={cls} title={matchTitle(d, match)}>
+              <span>{d.day}</span>
+              {match ? (match.played
+                ? <span className="cal-score">{match.goalsFor}-{match.goalsAgainst}</span>
+                : <span className="cal-dot" />)
+                : null}
+            </div>
+          );
+        })}
+      </div>
+      <div className="cal-legend">
+        <span><i className="lg-swatch" /> League</span>
+        <span><i className="lg-swatch post" /> Post-match</span>
+        <span><i className="lg-swatch pre" /> Pre-season</span>
+        <span><i className="lg-dot" /> Your fixtures · score when played</span>
+      </div>
+    </>
+  );
+}
 
 export function Layout({ children }: { children: ReactNode }) {
   const { snapshot, clear, setUser, status, liveMatchId, checkLiveMatch, user } = useGame();
@@ -33,13 +162,39 @@ export function Layout({ children }: { children: ReactNode }) {
   const teamCreationRequired = status !== null && !status.club;
   const provisional = club?.competitionState === "PROVISIONAL" || status?.club?.competitionState === "PROVISIONAL";
   const dormant = club?.competitionState === "DORMANT" || status?.club?.competitionState === "DORMANT";
-  const [notifications, setNotifications] = useState<{ id: string; type: string; payload: unknown; createdAt: string; readAt: string | null }[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [showNotifs, setShowNotifs] = useState(false);
+  const [showSeasonCal, setShowSeasonCal] = useState(false);
   const [warnings, setWarnings] = useState<{ id: number; reason: string; createdAt: string }[]>([]);
+  const notifPopRef = useRef<HTMLDivElement>(null);
+  const seasonPopRef = useRef<HTMLDivElement>(null);
+  // Fixture-id lookup used to render friendly copy for legacy notification
+  // payloads that only carry club/fixture IDs.
+  const matchByFixture = new Map((status?.myMatches ?? []).map((m) => [m.fixtureId, m]));
 
-  const adminNav = user?.isAdmin
-    ? [...NAV, { to: "/admin", label: "Admin", icon: <SettingsIcon size={15} /> }]
+  const adminNav: NavItem[] = user?.isAdmin
+    ? [...NAV, { to: "/admin", label: "Admin", icon: <ShieldCheck size={15} />, admin: true }]
     : NAV;
+
+  // Close anchored topbar popouts on any click or Escape outside of them.
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (notifPopRef.current && !notifPopRef.current.contains(event.target as Node)) setShowNotifs(false);
+      if (seasonPopRef.current && !seasonPopRef.current.contains(event.target as Node)) setShowSeasonCal(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowNotifs(false);
+        setShowSeasonCal(false);
+      }
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -95,7 +250,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <NavLink
                 key={item.to}
                 to={item.to}
-                className={({ isActive }) => (isActive ? "active" : "")}
+                className={({ isActive }) => (isActive ? "active" : "") + (item.admin ? " admin" : "")}
                 onClick={(event) => {
                   if (teamCreationRequired) event.preventDefault();
                 }}
@@ -110,21 +265,94 @@ export function Layout({ children }: { children: ReactNode }) {
 
         <div className="top-right">
           {status?.season && (
-            <span className="day-chip" title={`Season ${status.season.key} · round ${status.season.completedRounds}`}>
-              <CalendarDays size={13} />
-              <b>{status.season.key}</b>
-              {status.season.joinState === "OPEN" ? " · open" : " · locked"}
-            </span>
+            <div className="top-pop-wrap" ref={seasonPopRef}>
+              <button
+                type="button"
+                className="day-chip as-button"
+                onClick={() => setShowSeasonCal((v) => !v)}
+                title={`Season ${status.season.seasonNumber} · round ${status.season.completedRounds}`}
+                aria-expanded={showSeasonCal}
+              >
+                <CalendarDays size={13} />
+                <b>Season {status.season.seasonNumber}</b>
+                {status.season.joinState === "OPEN" ? " · open" : " · locked"}
+              </button>
+              {showSeasonCal && (
+                <div className="popout season-popout">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 14 }}>
+                    <h3 style={{ margin: 0 }}>Season {status.season.seasonNumber}</h3>
+                    <span style={{ color: "var(--text-3)", fontSize: "0.75rem" }}>
+                      Day {status.season.seasonDay} / {status.season.seasonDays} · round {status.season.completedRounds}
+                    </span>
+                  </div>
+                  <SeasonCalendar days={status.calendar.days} today={status.calendar.today} matches={status.myMatches} />
+                </div>
+              )}
+            </div>
           )}
           {user && (
             <span className="chip" title={user.isPro ? "Pro" : "Regular"} style={user.isPro ? { borderColor: "var(--gold-2)", color: "var(--gold-2)" } : undefined}>
               <Crown size={12} /> {user.isPro ? "PRO" : "REG"} {user.isAdmin && "· ADMIN"}
             </span>
           )}
-          <button className="icon-btn" onClick={() => setShowNotifs((v) => !v)} title="Notifications" aria-label="Notifications" style={{ position: "relative" }}>
-            <Bell size={15} />
-            {notifications.filter((n) => !n.readAt).length > 0 && <span style={{ position: "absolute", top: 2, right: 2, width: 8, height: 8, borderRadius: 999, background: "var(--red-2)", border: "1px solid white" }} />}
-          </button>
+          <div className="top-pop-wrap" ref={notifPopRef}>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setShowNotifs((v) => !v)}
+              title="Notifications"
+              aria-label="Notifications"
+              aria-expanded={showNotifs}
+              style={{ position: "relative" }}
+            >
+              <Bell size={15} />
+              {notifications.filter((n) => !n.readAt).length > 0 && <span style={{ position: "absolute", top: 2, right: 2, width: 8, height: 8, borderRadius: 999, background: "var(--red-2)", border: "1px solid white" }} />}
+            </button>
+            {showNotifs && (
+              <div className="popout notif-popout">
+                <div className="notif-head">
+                  <h3>
+                    Notifications
+                    {notifications.some((n) => !n.readAt) && <span className="chip">{notifications.filter((n) => !n.readAt).length} new</span>}
+                  </h3>
+                  <button
+                    className="btn ghost btn-xs"
+                    disabled={!notifications.some((n) => !n.readAt)}
+                    onClick={() => void api.markAllNotificationsRead().then(() => setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt ?? new Date().toISOString() }))))}
+                  >
+                    Mark all read
+                  </button>
+                </div>
+                {notifications.length === 0 ? (
+                  <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No notifications. Match kick-offs and results appear here; <b>Pro</b> also gets goal pings and league digests.</div>
+                ) : (
+                  <div className="notif-list">
+                    {notifications.slice(0, 20).map((n) => {
+                      const { title, detail } = describeNotification(n, matchByFixture);
+                      return (
+                        <button
+                          key={n.id}
+                          type="button"
+                          className={"notif-row" + (n.readAt ? "" : " unread")}
+                          disabled={Boolean(n.readAt)}
+                          title={n.readAt ? undefined : "Mark as read"}
+                          onClick={() => void api.markNotificationRead(n.id).then(() => setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x)))}
+                        >
+                          <span className="notif-dot" aria-hidden />
+                          <span className="notif-body">
+                            <span className="notif-title">{title}</span>
+                            {detail && <span className="notif-detail">{detail}</span>}
+                          </span>
+                          <span className="notif-time" title={new Date(n.createdAt).toLocaleString()}>{relativeTime(n.createdAt)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div style={{ marginTop: 10, color: "var(--text-3)", fontSize: "0.75rem" }}>Push notifications: enable browser notifications in Settings to receive pushes when the tab is closed (Pro goal pings require Pro).</div>
+              </div>
+            )}
+          </div>
           {club && (
             <span className="club-chip" onClick={() => navigate("/dashboard")} title={club.name}>
               <FootballKit
@@ -153,19 +381,6 @@ export function Layout({ children }: { children: ReactNode }) {
               <button className="btn ghost" onClick={() => void api.ackWarning(w.id).then(() => setWarnings((prev) => prev.filter((x) => x.id !== w.id)))}>Acknowledge</button>
             </div>
           ))}
-        </div>
-      )}
-      {showNotifs && (
-        <div className="card" style={{ margin: "12px auto", maxWidth: 480, position: "relative", zIndex: 5 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-            <h3 style={{ margin: 0 }}>Notifications</h3>
-            <div style={{ display: "flex", gap: 6 }}>
-              <button className="btn ghost" onClick={() => void api.markAllNotificationsRead().then(() => setNotifications((prev) => prev.map((n) => ({ ...n, readAt: new Date().toISOString() }))))}>Mark all read</button>
-              <button className="btn ghost" onClick={() => setShowNotifs(false)}>Close</button>
-            </div>
-          </div>
-          {notifications.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No notifications. Match started/finished pushes appear here; <b>Pro</b> also gets goal pings and league digests.</div> : <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{notifications.slice(0, 20).map((n) => <div key={n.id} className="news-item" style={{ opacity: n.readAt ? 0.6 : 1, display: "flex", justifyContent: "space-between", gap: 10 }}><span><b>{n.type}</b> · {new Date(n.createdAt).toLocaleString()}</span><button className="btn ghost" style={{ padding: "2px 8px", fontSize: "0.75rem" }} disabled={Boolean(n.readAt)} onClick={() => void api.markNotificationRead(n.id).then(() => setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, readAt: new Date().toISOString() } : x)))}>{n.readAt ? "Read" : "Mark read"}</button></div>)}</div>}
-          <div style={{ marginTop: 10, color: "var(--text-3)", fontSize: "0.75rem" }}>Push notifications: enable browser notifications in Settings to receive pushes when the tab is closed (Pro goal pings require Pro).</div>
         </div>
       )}
       <main className="content animate-in">

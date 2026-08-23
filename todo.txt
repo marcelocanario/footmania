@@ -5,12 +5,12 @@ Game engine
 	[DONE] inter-seasons should be carefully calculated when defining the match schedule. ex: we have 8 teams per group, so it's 14 games or 28 days (considering games every other day). most Februarys have exactly 28 days, so we need to plan January and March so that the inter-season leaves at least 1-2 days between last Feb game and first Mar game or last Jan game and first Feb game. all months should be distributed in such a way that we have a little breathing room like that. should we consider making seasons longer, like 45 days and increase each group to 10? maybe keep as is but add a hard 7 days inter-season pause? so we are not following months exactly, we have our own calendar (37 days or so)
 	[DONE] create a pro type of account with some benefits (not pay-to-win)
 		[DONE] admins have cumulative permissions (pro + admin)
-	[PLANNED] plan a stamina system - players getting tired during the game and stamina changes have real effects in the match itself. maybe a logarithmic curve for stamina depletion per age?; stamina should recover as players do not play matches (off days or match days when they do not play, due to not being selected for the squad or being on the bench and not getting called into the pitch). i would like stamina regen to be a bit slower than expenditure, meaning a player that plays 3-4 full games in a row needs to sit out for a game to rest fully. if old player, maybe make this 2-3. if young, make this around. this needs to scale with season length
-	[PLANNED] how are the injuries happening? we need to think of a statistical model to model injuries
-		[PLANNED] how does training/improvement work? check. add very low chance of getting injured training. rare enough that we will have 1-2 players per season
-		[PLANNED] injuries can set back a player's skills (make it rare, logarithmic probability)
-		[PLANNED] model the severity of the injury (aka recovery time); has to scale with season length variables as well. younger players' injuries will generally be less severy, but not drastically
-		[PLANNED] the match simulator engine should incorporate the possibility of injuries (the more tired a player is, the more likely he is to become injured but does not affect severity). do we need to collect real injury data to tune coefficients?
+	[DONE] plan a stamina system - players getting tired during the game and stamina changes have real effects in the match itself. maybe a logarithmic curve for stamina depletion per age?; stamina should recover as players do not play matches (off days or match days when they do not play, due to not being selected for the squad or being on the bench and not getting called into the pitch). i would like stamina regen to be a bit slower than expenditure, meaning a player that plays 3-4 full games in a row needs to sit out for a game to rest fully. if old player, maybe make this 2-3. if young, make this around. this needs to scale with season length
+	[DONE] how are the injuries happening? we need to think of a statistical model to model injuries
+		[DONE] how does training/improvement work? check. add very low chance of getting injured training. rare enough that we will have 1-2 players per season
+		[DONE] injuries can set back a player's skills (make it rare, logarithmic probability)
+		[DONE] model the severity of the injury (aka recovery time); has to scale with season length variables as well. younger players' injuries will generally be less severy, but not drastically
+		[DONE] the match simulator engine should incorporate the possibility of injuries (the more tired a player is, the more likely he is to become injured but does not affect severity). do we need to collect real injury data to tune coefficients?
 	[IN PROGRESS] users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
 		[IN PROGRESS] pro users can save one preset per tactic. regular users can only save one preset for one tactic
 	implement:
@@ -50,6 +50,8 @@ UI:
 	give the ability to hold shift and select multiple time slots at once in the "Matchday schedule" screen
 	add a nationality flag for players (not users, actual players)
 	generate players faces using: https://github.com/zengm-games/facesjs
+	allow users to change player numbers
+	in tactics tab, instead of showing a circle with the player initials, show the team jersey with player number
 
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)

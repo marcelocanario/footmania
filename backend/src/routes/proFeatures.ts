@@ -4,7 +4,7 @@ import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld } from ".
 import { withGlobalLock } from "../services/lock";
 import { hasPro } from "../services/pro";
 import { AUTOMATION_CONFIG, LOGO_CONFIG } from "../config";
-import { presetsSchema, validatePresetQuotas, parsePresets } from "../game/automation";
+import { presetsSchema, validatePresetQuotas } from "../game/automation";
 import { validateNickname, normalizeNickname, nicknameSchema } from "../game/nickname";
 import { validateLogoVariant, validateCustomLogo } from "../game/logo";
 import { logoVariantSchema } from "../game/logo";

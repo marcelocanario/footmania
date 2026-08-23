@@ -5,22 +5,7 @@ import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { kitDotBackground } from "./kit/kitCss";
 import { slotPointsForFormation } from "./matchPitchUtils";
-
-const FORMATIONS = [
-  { label: "5-4-1", value: 0 },
-  { label: "5-4-1 · Wide", value: 1 },
-  { label: "5-3-2", value: 2 },
-  { label: "4-5-1", value: 3 },
-  { label: "4-4-2", value: 4 },
-  { label: "4-4-2 · Diamond", value: 5 },
-  { label: "4-4-2 · Attacking", value: 6 },
-  { label: "4-3-3", value: 7 },
-  { label: "4-3-3 · Holding", value: 8 },
-  { label: "3-5-2", value: 9 },
-  { label: "3-4-3", value: 10 },
-  { label: "4-2-3-1", value: 11 },
-  { label: "4-2-3-1 · Wide", value: 12 },
-];
+import { FORMATIONS } from "../tacticsOptions";
 
 const SLOT_NAMES: Record<number, string> = {
   1: "GK",
@@ -74,6 +59,8 @@ interface Props {
   matchId?: number;
   liveState?: LiveState;
   onSaved?: (state?: LiveState) => void;
+  /** Notified whenever the selected formation changes (initial load or picker), so parents can scope tactic-bound UI. */
+  onFormationChange?: (formation: number) => void;
 }
 
 type BoardArea = "starter" | "bench" | "pool";
@@ -126,7 +113,7 @@ function playerInitials(name: string): string {
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
-export function TacticsBoard({ mode, matchId, liveState, onSaved }: Props) {
+export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange }: Props) {
   const snapshot = useGame((state) => state.snapshot);
   const [data, setData] = useState<LineupView | null>(null);
   const [ed, setEd] = useState<Ed | null>(null);
@@ -158,9 +145,10 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved }: Props) {
           penaltyTakerId: res.penaltyTakerId !== null && starterSet.has(res.penaltyTakerId) ? res.penaltyTakerId : null,
           freeKickTakerId: res.freeKickTakerId !== null && starterSet.has(res.freeKickTakerId) ? res.freeKickTakerId : null,
         });
+        onFormationChange?.(res.formation);
       })
       .catch((error) => setStatus({ kind: "err", text: (error as Error).message }));
-  }, [mode, matchId, liveState?.matchId]);
+  }, [mode, matchId, liveState?.matchId, onFormationChange]);
 
   const byId = useMemo(() => {
     const players = new Map<number, BoardPlayer>();
@@ -354,6 +342,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved }: Props) {
 
   const changeFormation = async (formation: number) => {
     if (!ed) return;
+    onFormationChange?.(formation);
     setSaving(true);
     try {
       const result = await api.getLineup(true, formation);

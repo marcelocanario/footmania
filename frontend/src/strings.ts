@@ -72,6 +72,7 @@ export const strings = {
     newSalary: "New Salary",
     contractDone: "Contract renewed",
     trainingFocus: "Training focus",
+    automationTitle: "Match Automation",
     trainingAssistant: "Assistant",
     trainingPrimary: "Primary",
     trainingSecondary: "Secondary",

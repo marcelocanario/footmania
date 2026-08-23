@@ -1,11 +1,18 @@
 import { z } from "zod";
 import { AUTOMATION_CONFIG } from "../config";
-import type { AutomationCondition, AutomationPreset, AutomationRule, AutomationTriggerKind, Club, LiveMatchState, World } from "./types";
+import type { AutomationAction, AutomationCondition, AutomationPreset, AutomationRule, AutomationTriggerKind, Club, LiveMatchState, World } from "./types";
 import { performLiveSub } from "./match";
 import { isHalftime } from "./match";
-import { EVENT_CODES } from "./constants";
+import { DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { engineStyle, enginePressing, engineDirection } from "./matchSim";
+
+// Real tactic ranges (backend/src/game/constants.ts); presets may only ever
+// target values a club tactic could legitimately hold.
+const MAX_FORMATION = FORMATION_NAMES.length - 1;
+const MAX_STYLE = STYLE_NAMES.length - 1;
+const MAX_PRESSING = PRESSING_NAMES.length - 1;
+const MAX_DIRECTION = DIRECTION_NAMES.length - 1;
 
 export const triggerSchema = z
   .object({
@@ -22,10 +29,10 @@ export const actionSchema = z
     kind: z.enum(AUTOMATION_CONFIG.allowedActions as unknown as [string, ...string[]]),
     outPlayerId: z.number().int().optional(),
     inPlayerId: z.number().int().optional(),
-    formation: z.number().int().min(0).max(20).optional(),
-    style: z.number().int().min(0).max(5).optional(),
-    pressing: z.number().int().min(0).max(5).optional(),
-    direction: z.number().int().min(0).max(5).optional(),
+    formation: z.number().int().min(0).max(MAX_FORMATION).optional(),
+    style: z.number().int().min(0).max(MAX_STYLE).optional(),
+    pressing: z.number().int().min(0).max(MAX_PRESSING).optional(),
+    direction: z.number().int().min(0).max(MAX_DIRECTION).optional(),
   })
   .superRefine((v, ctx) => {
     if (v.kind === "SUB" && (v.outPlayerId === undefined || v.inPlayerId === undefined)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "SUB requires outPlayerId and inPlayerId" });
@@ -39,19 +46,89 @@ export const ruleSchema = z.object({
   action: actionSchema,
 });
 
+// Presets are strictly bound to one formation ("per-tactic" model).
 export const presetSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().trim().min(1).max(40),
-  formationId: z.number().int().min(0).max(20).nullable(),
+  formationId: z.number().int().min(0).max(MAX_FORMATION),
   enabled: z.boolean(),
   rules: z.array(ruleSchema).max(AUTOMATION_CONFIG.maxRulesPerPreset),
 });
 
 export const presetsSchema = z.array(presetSchema);
 
-export function parsePresets(raw: unknown): AutomationPreset[] | null {
-  const r = presetsSchema.safeParse(raw);
-  return r.success ? (r.data as AutomationPreset[]) : null;
+/**
+ * Legacy rows (pre per-tactic migration) allowed `formationId: null` ("any
+ * formation") and looser tactic ranges on TACTICS actions. Stored presets are
+ * parsed leniently (mirroring the OLD PUT schema), then normalized:
+ * - null/out-of-range preset scopes bind to the club's current saved formation;
+ * - impossible TACTICS action values are dropped, and rules left with no
+ *   possible effect are removed.
+ * The result always satisfies the strict presetSchema, so any later PUT round-trips cleanly.
+ */
+const storedActionSchema = z.object({
+  kind: z.enum(AUTOMATION_CONFIG.allowedActions as unknown as [string, ...string[]]),
+  outPlayerId: z.number().int().optional(),
+  inPlayerId: z.number().int().optional(),
+  // Legacy bounds were looser than the real tactic ranges; sanitize below.
+  formation: z.number().int().min(0).max(20).optional(),
+  style: z.number().int().min(0).max(20).optional(),
+  pressing: z.number().int().min(0).max(20).optional(),
+  direction: z.number().int().min(0).max(20).optional(),
+});
+
+const storedRuleSchema = z.object({
+  id: z.string().min(1).max(64),
+  trigger: triggerSchema,
+  condition: z.enum(AUTOMATION_CONFIG.allowedConditions as unknown as [string, ...string[]]),
+  action: storedActionSchema,
+});
+
+const storedPresetsSchema = z.array(
+  z.object({
+    id: z.string().min(1).max(64),
+    name: z.string().trim().min(1).max(40),
+    formationId: z.number().int().min(0).max(20).nullable(),
+    enabled: z.boolean(),
+    rules: z.array(storedRuleSchema).max(AUTOMATION_CONFIG.maxRulesPerPreset),
+  })
+);
+
+function sanitizeTacticsAction(action: AutomationAction): AutomationAction | null {
+  const clean: AutomationAction = { kind: "TACTICS" };
+  if (action.formation !== undefined && action.formation >= 0 && action.formation <= MAX_FORMATION) clean.formation = action.formation;
+  if (action.style !== undefined && action.style >= 0 && action.style <= MAX_STYLE) clean.style = action.style;
+  if (action.pressing !== undefined && action.pressing >= 0 && action.pressing <= MAX_PRESSING) clean.pressing = action.pressing;
+  if (action.direction !== undefined && action.direction >= 0 && action.direction <= MAX_DIRECTION) clean.direction = action.direction;
+  // A TACTICS rule with no surviving field can never do anything.
+  return clean.formation !== undefined || clean.style !== undefined || clean.pressing !== undefined || clean.direction !== undefined ? clean : null;
+}
+
+export function parseStoredPresets(raw: unknown, fallbackFormationId: number): AutomationPreset[] | null {
+  const parsed = storedPresetsSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  // Enum kinds were just validated by the schemas; recover the domain types.
+  const stored = parsed.data as unknown as AutomationPreset[];
+  const migrated: AutomationPreset[] = [];
+  for (const p of stored) {
+    const rules: AutomationRule[] = [];
+    for (const r of p.rules) {
+      if (r.action.kind !== "TACTICS") {
+        rules.push(r);
+        continue;
+      }
+      const clean = sanitizeTacticsAction(r.action);
+      if (clean) rules.push({ ...r, action: clean });
+    }
+    migrated.push({
+      ...p,
+      formationId: p.formationId !== null && p.formationId >= 0 && p.formationId <= MAX_FORMATION ? p.formationId : fallbackFormationId,
+      rules,
+    });
+  }
+  // Final strict validation guarantees every persisted preset satisfies presetSchema.
+  const verified = presetsSchema.safeParse(migrated);
+  return verified.success ? (verified.data as unknown as AutomationPreset[]) : null;
 }
 
 export function validatePresetQuotas(presets: AutomationPreset[], isPro: boolean): string | null {
@@ -146,7 +223,7 @@ export function evaluateAutomationForMatch(params: {
   // AI clubs never have presets (per invariant); still gate.
   if (!club.isHuman) return false;
 
-  // Find enabled preset matching this club's current formation (or any if null)
+  // Presets are per-tactic; the null branch is back-compat for any stale in-memory rows.
   const formation = club.tactics.formation;
   const armed = presets.filter((p) => p.enabled && (p.formationId === null || p.formationId === formation));
   if (armed.length === 0) return false;
