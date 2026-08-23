@@ -82,6 +82,14 @@ export interface PlayerView {
   loanFromName: string | null;
 }
 
+/** Player history omits skills for non-Pro viewers of another club. */
+export type PlayerHistoryView = Omit<PlayerView, "skills"> & {
+  clubId: number | null;
+  skills?: SkillSet;
+  clubName: string | null;
+  isOwnTeam: boolean;
+};
+
 export interface ClubView {
   id: number;
   name: string;
@@ -1115,7 +1123,7 @@ export const api = {
   uploadCustomLogo: (mime: string, data: string) => request<{ ok: boolean }>("/api/mp/club/logo", { method: "POST", body: JSON.stringify({ mime, data }) }),
   deleteCustomLogo: () => request<{ ok: boolean }>("/api/mp/club/logo", { method: "DELETE" }),
   nicknamePlayer: (playerId: number, nickname: string | null) => request<{ ok: boolean; nickname: string | null; displayName: string }>(`/api/mp/players/${playerId}/nickname`, { method: "PUT", body: JSON.stringify({ nickname }) }),
-  playerHistory: (playerId: number) => request<{ player: PlayerView & { displayName: string }; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/players/${playerId}/history`),
+  playerHistory: (playerId: number) => request<{ player: PlayerHistoryView; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/players/${playerId}/history`),
   marketPlayerHistory: (listingId: number, marketType: "TRANSFER" | "FREE_AGENT") => request<{ player: PlayerView & { displayName: string }; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/market/listings/${listingId}/player-history?marketType=${marketType}`),
 
   // Notifications & push

@@ -1665,27 +1665,6 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   margin-bottom: 12px;
 }
 
-.match-pitch-status {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-top: 5px;
-  color: var(--gold-2);
-  font-family: var(--font-display);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.match-pitch-status .pulse-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--grass-2);
-  box-shadow: 0 0 0 4px rgba(61, 220, 132, 0.14);
-}
-
 .match-pitch-teams {
   display: flex;
   flex-wrap: wrap;
@@ -1755,25 +1734,36 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
    delta; gold during dead-ball restarts, pulsing on counter attacks. */
 .pitch-live-ball {
   position: absolute;
-  z-index: 4;
-  width: clamp(9px, 1.35vw, 13px);
-  height: clamp(9px, 1.35vw, 13px);
-  border-radius: 50%;
+  z-index: 7;
+  display: grid;
+  place-items: center;
+  width: clamp(15px, 2.2vw, 22px);
+  height: clamp(15px, 2.2vw, 22px);
   transform: translate(-50%, -50%);
-  border: 1px solid rgba(4, 19, 10, 0.55);
-  background: radial-gradient(circle at 32% 30%, #ffffff 0 45%, #d8dcd8 72%, #b9c0ba 100%);
-  box-shadow: 0 2px 3px rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-family: "Segoe UI Emoji", "Apple Color Emoji", sans-serif;
+  font-size: clamp(14px, 2vw, 20px);
+  line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.65));
   transition: left 1.8s cubic-bezier(0.4, 0, 0.2, 1), top 1.8s cubic-bezier(0.4, 0, 0.2, 1);
   animation: pitchLiveBallIn 0.45s ease-out both;
 }
 .pitch-live-ball-setpiece {
-  background: radial-gradient(circle at 32% 30%, var(--gold-2) 0 45%, #c99a2e 75%, #8c6510 100%);
+  filter: drop-shadow(0 0 5px rgba(240, 180, 41, 0.9)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.65));
 }
 .pitch-live-ball-counter { animation: pitchLiveBallIn 0.45s ease-out both, pitchCounterPulse 1.1s ease-in-out infinite; }
 .pitch-live-ball-idle { opacity: 0.45; transition: none; animation: none; }
 .pitch-live-ball-reduced,
 .pitch-reduced-motion .pitch-live-ball { transition: none; animation-duration: 0.01ms; animation-iteration-count: 1; }
-.pitch-live-trail line { animation-duration: 1.9s; }
+.pitch-live-trail line {
+  stroke: rgba(255, 217, 122, 0.9);
+  stroke-width: 0.75;
+  stroke-linecap: round;
+  stroke-dasharray: 100;
+  stroke-dashoffset: 100;
+  animation: pitchTrajectoryDraw 2.5s linear both;
+}
 
 .pitch-players { z-index: 5; pointer-events: none; }
 
@@ -1891,7 +1881,15 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 @keyframes pitchAssistCue { 0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.15); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(1); } }
 @keyframes pitchTrail { from { opacity: 0; stroke-dashoffset: 12; } to { opacity: 1; stroke-dashoffset: 0; } }
 @keyframes pitchLiveBallIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes pitchCounterPulse { 0%, 100% { box-shadow: 0 2px 3px rgba(0, 0, 0, 0.55); } 50% { box-shadow: 0 0 0 5px rgba(240, 180, 41, 0.35), 0 2px 3px rgba(0, 0, 0, 0.55); } }
+@keyframes pitchCounterPulse {
+  0%, 100% { filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.65)); }
+  50% { filter: drop-shadow(0 0 5px rgba(240, 180, 41, 0.95)) drop-shadow(0 2px 2px rgba(0, 0, 0, 0.65)); }
+}
+@keyframes pitchTrajectoryDraw {
+  0% { opacity: 0.9; stroke-dashoffset: 100; animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
+  72% { opacity: 0.9; stroke-dashoffset: 0; animation-timing-function: ease-out; }
+  100% { opacity: 0; stroke-dashoffset: 0; }
+}
 @keyframes pitchBannerIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 .pitch-reduced-motion *,
@@ -1960,6 +1958,22 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   cursor: pointer;
 }
 .event-player-link:hover { text-decoration: underline; }
+
+.player-skills-panel { position: relative; min-width: 0; }
+.pro-feature-pill {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  padding: 3px 7px;
+  border: 1px solid rgba(240, 180, 41, 0.55);
+  border-radius: 999px;
+  background: rgba(240, 180, 41, 0.14);
+  color: var(--gold-2);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
 
 /* ---------- auth ---------- */
 

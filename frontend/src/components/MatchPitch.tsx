@@ -103,7 +103,7 @@ function CueOverlay({ cue, active, reducedMotion }: { cue: PitchCue; active: boo
   );
 }
 
-export function MatchPitch({ home, away, events, phase, minute, addedTime, reducedMotion = false, ball = null }: MatchPitchProps) {
+export function MatchPitch({ home, away, events, phase, minute, reducedMotion = false, ball = null }: MatchPitchProps) {
   const [activeEvent, setActiveEvent] = useState<LiveEvent | null>(null);
   const [queue, setQueue] = useState<LiveEvent[]>([]);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
@@ -134,6 +134,13 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
 
   const pitchEvents = useMemo(() => events.filter((event) => event.type !== 8), [events]);
 
+  const displayedEvent = activeEvent && activeEvent.type !== 8 ? activeEvent : pitchEvents[pitchEvents.length - 1] ?? null;
+  const cue = displayedEvent
+    ? cueForEvent(displayedEvent, home.clubId, home.players, away.players, rememberedRef.current)
+    : null;
+  const cueActive = !!activeEvent;
+  const shotCueActive = cueActive && !!cue && (cue.kind === "goal" || cue.kind === "miss");
+
   // Live possession ball: anchored to the possessing side's nearest supporting
   // player during play; parked at the centre spot whenever play is stopped.
   const liveBall = useMemo(() => {
@@ -151,7 +158,9 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
   const trailSeqRef = useRef(0);
   const [trail, setTrail] = useState<{ from: PitchPoint; to: PitchPoint; key: number } | null>(null);
   useEffect(() => {
-    if (!liveBall || liveBall.idle || motionReduced) {
+    // While a shot cue plays the live ball is hidden; reset tracking so the
+    // ball re-enters without a stale trajectory (e.g. kickoff after a goal).
+    if (!liveBall || liveBall.idle || motionReduced || shotCueActive) {
       lastBallPointRef.current = null;
       setTrail(null);
       return;
@@ -159,10 +168,12 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
     const prev = lastBallPointRef.current;
     lastBallPointRef.current = liveBall.point;
     if (!prev) return;
-    if (Math.abs(prev.x - liveBall.point.x) < 0.4 && Math.abs(prev.y - liveBall.point.y) < 0.4) return;
+    // Sub-carrier jitter nudges stay below the threshold so the ball can
+    // shift at its feet without spawning a trajectory.
+    if (Math.abs(prev.x - liveBall.point.x) < 1.2 && Math.abs(prev.y - liveBall.point.y) < 1.2) return;
     trailSeqRef.current += 1;
     setTrail({ from: prev, to: liveBall.point, key: trailSeqRef.current });
-  }, [liveBall, motionReduced]);
+  }, [liveBall, motionReduced, shotCueActive]);
 
   useEffect(() => {
     const fresh = pitchEvents.filter((event) => !seenRef.current.has(eventKey(event)));
@@ -188,18 +199,10 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
     return () => window.clearTimeout(timer);
   }, [activeEvent, motionReduced]);
 
-  const displayedEvent = activeEvent && activeEvent.type !== 8 ? activeEvent : pitchEvents[pitchEvents.length - 1] ?? null;
-  const cue = displayedEvent
-    ? cueForEvent(displayedEvent, home.clubId, home.players, away.players, rememberedRef.current)
-    : null;
-  const cueActive = !!activeEvent;
-  const shotCueActive = cueActive && !!cue && (cue.kind === "goal" || cue.kind === "miss");
   const homeHighlighted = cue?.actorSide === "home" ? cue.event.playerId : null;
   const awayHighlighted = cue?.actorSide === "away" ? cue.event.playerId : null;
   const homeSecondaryHighlighted = cue?.actorSide === "home" ? cue.event.player2Id : null;
   const awaySecondaryHighlighted = cue?.actorSide === "away" ? cue.event.player2Id : null;
-  const fmtMinute = (m: number, a?: number | null) => (a ? `${m}+${a}'` : `${m}'`);
-  const status = cue ? `${EVENT_COPY[cue.kind]} · ${fmtMinute(cue.event.minute, cue.event.addedTime)}` : phase === "pregame" ? "Lineups" : fmtMinute(minute, addedTime);
   const showLiveBall = !!liveBall && !shotCueActive;
   const liveBallClass = [
     "pitch-live-ball",
@@ -214,7 +217,6 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
       <div className="match-pitch-head">
         <div>
           <div className="card-title">Live pitch</div>
-          <div className="match-pitch-status"><span className="pulse-dot" /> {status}</div>
         </div>
         <div className="match-pitch-teams">
           <span className="match-pitch-team">
@@ -243,11 +245,11 @@ export function MatchPitch({ home, away, events, phase, minute, addedTime, reduc
         </svg>
         {trail && !motionReduced && (
           <svg className="pitch-trail pitch-live-trail" viewBox="0 0 100 64" aria-hidden="true">
-            <line key={trail.key} x1={trail.from.x} y1={(trail.from.y / 100) * 64} x2={trail.to.x} y2={(trail.to.y / 100) * 64} />
+            <line key={trail.key} pathLength={100} x1={trail.from.x} y1={(trail.from.y / 100) * 64} x2={trail.to.x} y2={(trail.to.y / 100) * 64} />
           </svg>
         )}
         {showLiveBall && liveBall && (
-          <span className={liveBallClass} style={{ left: `${liveBall.point.x}%`, top: `${liveBall.point.y}%` }} aria-hidden="true" />
+          <span className={liveBallClass} style={{ left: `${liveBall.point.x}%`, top: `${liveBall.point.y}%` }} aria-hidden="true">⚽</span>
         )}
         {cue && <CueOverlay cue={cue} active={cueActive} reducedMotion={motionReduced} />}
         <div className="pitch-players">

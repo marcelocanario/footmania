@@ -203,21 +203,21 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const isOwner = player.clubId !== null && worldLoaded.world.clubs.find((c) => c.id === player.clubId)?.ownerUserId === req.user!.id;
     const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user!.id } });
     const pro = hasPro(sessionUser);
-    let allowFull = isOwner || pro;
-    if (!allowFull) {
+    let allowHistory = isOwner || pro;
+    if (!allowHistory) {
       // Auction exception: active listing for this player visible to everyone
       const activeAuction = await app.prisma.transferAuction.findFirst({ where: { saveId: globalSave.id, playerId, status: "ACTIVE" } });
       const activeFA = await app.prisma.freeAgentListing.findFirst({ where: { saveId: globalSave.id, playerId, status: "ACTIVE" } });
-      if (activeAuction || activeFA) allowFull = true;
+      if (activeAuction || activeFA) allowHistory = true;
     }
-    if (!allowFull) return reply.code(403).send({ error: "Pro required to view other users' player history" });
+    const allowSkills = isOwner || pro;
 
     // Past seasons (immutable write-once rows)
-    const seasons = await app.prisma.playerSeasonHistory.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { seasonId: "asc" } });
+    const seasons = allowHistory ? await app.prisma.playerSeasonHistory.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { seasonId: "asc" } }) : [];
     // Market movements
-    const transfers = await app.prisma.playerMarketTransaction.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { timestamp: "desc" }, take: 20 });
+    const transfers = allowHistory ? await app.prisma.playerMarketTransaction.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { timestamp: "desc" }, take: 20 }) : [];
     // Match log: latest 25 events
-    const events = await app.prisma.matchEvent.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: [{ id: "desc" }], take: 25 });
+    const events = allowHistory ? await app.prisma.matchEvent.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: [{ id: "desc" }], take: 25 }) : [];
     // Need match context for each event: fetch matches for those event matchIds
     const matchIds = Array.from(new Set(events.map((e) => e.matchId)));
     const matches = matchIds.length > 0 ? await app.prisma.match.findMany({ where: { saveId: globalSave.id, id: { in: matchIds } } }) : [];
@@ -240,8 +240,15 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
       };
     });
 
+    const view = playerView(player, undefined, gameDay);
+    const clubName = player.clubId === null ? null : worldLoaded.world.clubs.find((club) => club.id === player.clubId)?.name ?? null;
+    const playerPayload = allowSkills ? { ...view, clubName, isOwnTeam: isOwner } : (() => {
+      const { skills: _skills, ...withoutSkills } = view;
+      return { ...withoutSkills, clubName, isOwnTeam: isOwner };
+    })();
+
     return {
-       player: playerView(player, undefined, gameDay),
+       player: playerPayload,
       seasons: seasons.map((s) => ({ seasonId: s.seasonId, seasonKey: s.seasonKey, clubId: s.clubId, clubName: s.clubName, appearances: s.appearances, goals: s.goals, assists: s.assists, yellows: s.yellows, reds: s.reds, minutes: s.minutes })),
       transfers: transfers.map((t) => ({ id: t.id, type: t.type, fromClubId: t.fromClubId, toClubId: t.toClubId, price: t.price, seasonKey: t.seasonKey, contractSeasons: t.contractSeasons, contractSalary: t.contractSalary, timestamp: Number(t.timestamp) })),
       matches: historyEvents,
