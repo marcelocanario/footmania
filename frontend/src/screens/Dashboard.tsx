@@ -58,8 +58,9 @@ export function Dashboard() {
 
   const nextKickoffAt = snapshot.nextFixture?.kickoffAt ?? null;
   const msToKickoff = nextKickoffAt !== null ? nextKickoffAt - now : null;
-  // The live banner wins once a match is actually in progress.
-  const prepOpen = !liveMatchId && msToKickoff !== null && msToKickoff > 0 && msToKickoff <= pregameWindowMinutes * 60_000;
+  // The live banner wins once a match is actually in progress. A paused
+  // season freezes every kickoff, so the prep banner must not open.
+  const prepOpen = !liveMatchId && !status?.paused && msToKickoff !== null && msToKickoff > 0 && msToKickoff <= pregameWindowMinutes * 60_000;
 
   return (
     <div>

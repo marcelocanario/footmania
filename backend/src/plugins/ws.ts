@@ -7,7 +7,7 @@ import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
 import { StaleWorldError } from "../services/saveService";
 import { readUserLiveMatch } from "../services/readService";
-import { registerWorldEventPublisher } from "../services/worldEvents";
+import { registerWorldEventPublisher, registerConnectedUsersProvider } from "../services/worldEvents";
 import { registerLiveMatchBroadcaster, type LiveMatchUpdate } from "../services/liveMatchEvents";
 
 const COOKIE_NAME = "fm_session";
@@ -99,6 +99,8 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
   registerWorldEventPublisher((userId, event) => {
     for (const ws of userConns.get(userId) ?? []) send(ws, event);
   });
+  // World-wide broadcasts (world reset) need the full connected-user set.
+  registerConnectedUsersProvider(() => userConns.keys());
   registerLiveMatchBroadcaster(broadcastLiveMatchUpdates);
 
   app.addHook("onClose", async () => {
@@ -112,6 +114,7 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
     conns.clear();
     userConns.clear();
     registerWorldEventPublisher(null);
+    registerConnectedUsersProvider(null);
     registerLiveMatchBroadcaster(null);
     wss.close();
   });

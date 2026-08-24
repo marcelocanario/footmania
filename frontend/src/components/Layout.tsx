@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Crown, Settings as SettingsIcon, UserPlus } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Crown, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
@@ -397,6 +397,17 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
       </header>
 
+      {status?.paused && (
+        <div className="card" style={{ margin: "12px auto", maxWidth: 960, borderColor: "rgba(240,180,41,0.55)", background: "rgba(240,180,41,0.08)", display: "flex", alignItems: "center", gap: 10 }}>
+          <Hourglass size={16} style={{ color: "var(--gold-2)", flexShrink: 0 }} />
+          <div>
+            <b>Season paused</b>
+            <div style={{ color: "var(--text-2)", fontSize: "0.85rem" }}>
+              An administrator has frozen the world clock. Matches, transfers, loans and contracts are on hold; tactics and squad management stay available.
+            </div>
+          </div>
+        </div>
+      )}
       {warnings.length > 0 && (
         <div className="card" style={{ margin: "12px auto", maxWidth: 960, borderColor: "var(--red-2)", background: "rgba(220,60,60,0.08)" }}>
           <div style={{ fontWeight: 800, marginBottom: 6 }}>Moderation notice</div>

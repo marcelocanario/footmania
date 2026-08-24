@@ -31,6 +31,7 @@ import {
   switchFamiliarity,
 } from "../game/familiarity";
 import { materializeSeasonEvents } from "../services/scheduler";
+import { isPaused, worldPausedError } from "../services/seasonPause";
 import { createNotification } from "../services/notifications";
 import { marketUpdatedEvents } from "../services/marketEvents";
 import { publishUserWorldEvent, type UserWorldEvent } from "../services/worldEvents";
@@ -338,10 +339,12 @@ export async function gameRoutes(app: FastifyInstance) {
     return { auctions: loaded.world.transferAuctions.filter((a) => a.status === "ACTIVE").map((a) => transferAuctionView(loaded.world, a, myClubId)) };
   });
 
+  // Schedule-dependent: blocked while the season is paused.
   app.post("/transfers/auctions", async (req, reply) => {
     const parsed = auctionCreateSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "transfer_auction_create", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = world.players.find((candidate) => candidate.id === parsed.data.playerId);
       if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
@@ -374,6 +377,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const parsed = maxBidSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "transfer_auction_bid", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const listing = world.transferAuctions.find((candidate) => candidate.id === listingId);
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = listing ? world.players.find((candidate) => candidate.id === listing.playerId) : undefined;
@@ -416,6 +420,7 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/transfers/auctions/:id/cancel", async (req, reply) => {
     const listingId = Number((req.params as { id: string }).id);
     const res = await withWorld(app, req.user!.id, "transfer_auction_cancel", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const listing = world.transferAuctions.find((candidate) => candidate.id === listingId);
       if (!listing) return { error: { code: 404, body: { error: "Auction not found" } } };
       if (listing.sellerClubId !== clubId) return { error: { code: 403, body: { error: "Only the seller can cancel this auction" } } };
@@ -438,6 +443,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const parsed = maxBidSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "free_agent_bid", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const listing = world.freeAgentListings.find((candidate) => candidate.id === listingId);
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = listing ? world.players.find((candidate) => candidate.id === listing.playerId) : undefined;
@@ -474,6 +480,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const parsed = contractSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "contract", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const club = world.clubs.find((c) => c.id === clubId)!;
       const player = world.players.find((p) => p.id === playerId);
       if (!player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in squad" } } };
@@ -549,6 +556,7 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/players/:id/release", async (req, reply) => {
     const playerId = Number((req.params as { id: string }).id);
     const res = await withWorld(app, req.user!.id, "release_player", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const club = world.clubs.find((c) => c.id === clubId)!;
       const player = world.players.find((p) => p.id === playerId);
       if (!club || !player) return { error: { code: 404, body: { error: "Player not found" } } };
@@ -662,6 +670,7 @@ export async function gameRoutes(app: FastifyInstance) {
     const parsed = loanCreateSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "loan_offer", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const player = world.players.find((candidate) => candidate.id === parsed.data.playerId);
       if (!player) return { error: { code: 404, body: { error: "Player not found" } } };
@@ -675,6 +684,7 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/transfers/loans/:id/claim", async (req, reply) => {
     const loanId = Number((req.params as { id: string }).id);
     const res = await withWorld(app, req.user!.id, "loan_claim", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const loan = world.loans.find((candidate) => candidate.id === loanId);
       if (!loan) return { error: { code: 404, body: { error: "Loan not found" } } };
@@ -688,6 +698,7 @@ export async function gameRoutes(app: FastifyInstance) {
   app.post("/transfers/loans/:id/cancel", async (req, reply) => {
     const loanId = Number((req.params as { id: string }).id);
     const res = await withWorld(app, req.user!.id, "loan_cancel", async (world, clubId) => {
+      if (isPaused(world)) return { error: worldPausedError };
       const club = world.clubs.find((candidate) => candidate.id === clubId)!;
       const loan = world.loans.find((candidate) => candidate.id === loanId);
       if (!loan) return { error: { code: 404, body: { error: "Loan not found" } } };

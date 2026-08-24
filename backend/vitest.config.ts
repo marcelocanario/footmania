@@ -15,6 +15,7 @@ export default defineConfig({
       "tests/scheduler.test.ts",
       "tests/worker.test.ts",
       "tests/seasonArchive.test.ts",
+      "tests/worldControls.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 60000,

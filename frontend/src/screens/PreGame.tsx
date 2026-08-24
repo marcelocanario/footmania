@@ -21,7 +21,7 @@ function formatCountdown(ms: number): string {
 }
 
 export function PreGame() {
-  const { snapshot, liveMatchId, refresh, setLiveMatch } = useGame();
+  const { snapshot, liveMatchId, refresh, setLiveMatch, status } = useGame();
   const pregameWindowMinutes = useSettings((s) => s.pregameWindowMinutes);
   const navigate = useNavigate();
   const isMobile = useIsMobile();
@@ -38,9 +38,12 @@ export function PreGame() {
   const kickoffAt = fixture?.kickoffAt ?? null;
   const windowMs = pregameWindowMinutes * 60_000;
   const msToKickoff = kickoffAt !== null ? kickoffAt - now : null;
+  // The season pause freezes every kickoff: hold the prep window closed and
+  // keep the countdown from visually expiring while the world is frozen.
+  const paused = status?.paused ?? false;
   // The window includes the post-kickoff side (msToKickoff <= 0): the screen
   // then switches to "waiting for kick-off" until the live match appears.
-  const windowOpen = msToKickoff !== null && msToKickoff <= windowMs;
+  const windowOpen = !paused && msToKickoff !== null && msToKickoff <= windowMs;
   const awaitingKickoff = windowOpen && msToKickoff <= 0;
 
   // The WebSocket watcher pushes liveMatchStarted; flip into the live match.
@@ -121,11 +124,13 @@ export function PreGame() {
         </div>
         <div className="card" style={{ padding: "28px 22px" }}>
           <div className="empty-state" style={{ padding: "12px 8px" }}>
-            {pregameWindowMinutes <= 0
-              ? "Pre-game preparation is currently disabled."
-              : !fixture || kickoffAt === null
-                ? "No scheduled match ahead."
-                : `Pre-game prep opens ${pregameWindowMinutes} minutes before kick-off.`}
+            {paused && fixture && kickoffAt !== null
+              ? "The season is currently paused — kick-off is frozen until an administrator resumes the world."
+              : pregameWindowMinutes <= 0
+                ? "Pre-game preparation is currently disabled."
+                : !fixture || kickoffAt === null
+                  ? "No scheduled match ahead."
+                  : `Pre-game prep opens ${pregameWindowMinutes} minutes before kick-off.`}
           </div>
           {fixture && kickoffAt !== null && (
             <div style={{ textAlign: "center", color: "var(--text-3)", fontSize: "0.9rem" }}>

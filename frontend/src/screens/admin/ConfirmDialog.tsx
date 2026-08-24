@@ -9,26 +9,32 @@ export interface ConfirmRequest {
   /** When set, the dialog shows a reason input that must reach this many characters. */
   minReasonLength?: number;
   reasonHint?: string;
+  /** When set, the dialog also requires typing this exact word (e.g. "RESET"). */
+  confirmWord?: string;
   onConfirm: (reason: string) => Promise<unknown>;
 }
 
 /**
  * Confirmation dialog for admin actions. Mirrors Squad's confirm pattern:
- * PrimeReact Dialog + busy state, with an optional audit-reason field.
+ * PrimeReact Dialog + busy state, with an optional audit-reason field and an
+ * optional type-the-word guard for destructive operations.
  */
 export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest | null; onClose: () => void }) {
   const [reason, setReason] = useState("");
+  const [confirmText, setConfirmText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     setReason("");
+    setConfirmText("");
     setBusy(false);
     setError(null);
   }, [request]);
 
   if (!request) return null;
   const reasonReady = !request.minReasonLength || reason.trim().length >= request.minReasonLength;
+  const wordReady = !request.confirmWord || confirmText.trim() === request.confirmWord;
 
   const run = async () => {
     setBusy(true);
@@ -45,6 +51,23 @@ export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest | 
   return (
     <Dialog header={request.title} visible onHide={onClose} style={{ width: 440 }}>
       <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{request.message}</div>
+      {request.confirmWord && (
+        <div className="form-group" style={{ marginTop: 14 }}>
+          <label htmlFor="admin-confirm-word">
+            Type <b>{request.confirmWord}</b> to confirm
+          </label>
+          <input
+            id="admin-confirm-word"
+            type="text"
+            value={confirmText}
+            autoFocus
+            disabled={busy}
+            onChange={(e) => setConfirmText(e.target.value)}
+            placeholder={request.confirmWord}
+            style={{ width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
+          />
+        </div>
+      )}
       {request.minReasonLength !== undefined && (
         <div className="form-group" style={{ marginTop: 14 }}>
           <label htmlFor="admin-confirm-reason">Audit reason</label>
@@ -52,7 +75,7 @@ export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest | 
             id="admin-confirm-reason"
             type="text"
             value={reason}
-            autoFocus
+            autoFocus={request.confirmWord === undefined}
             disabled={busy}
             onChange={(e) => setReason(e.target.value)}
             placeholder={request.reasonHint ?? `Required — at least ${request.minReasonLength} characters`}
@@ -64,7 +87,7 @@ export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest | 
       {error && <div style={{ color: "#ff6b6b", fontSize: "0.85rem", marginTop: 10 }}>{error}</div>}
       <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
         <button className="btn ghost" style={{ flex: 1 }} disabled={busy} onClick={onClose}>Cancel</button>
-        <button className={`btn ${request.danger ? "red" : ""}`} style={{ flex: 1 }} disabled={busy || !reasonReady} onClick={() => void run()}>{busy ? "Working…" : request.confirmLabel ?? "Confirm"}</button>
+        <button className={`btn ${request.danger ? "red" : ""}`} style={{ flex: 1 }} disabled={busy || !reasonReady || !wordReady} onClick={() => void run()}>{busy ? "Working…" : request.confirmLabel ?? "Confirm"}</button>
       </div>
     </Dialog>
   );

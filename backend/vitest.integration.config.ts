@@ -14,6 +14,7 @@ export default defineConfig({
       "tests/teamProfile.integration.test.ts",
       "tests/settings.integration.test.ts",
       "tests/familiarity.integration.test.ts",
+      "tests/worldControls.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 90000,

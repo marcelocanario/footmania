@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
+import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError, invalidateWorldCache, ensureGlobalSave } from "../services/saveService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
-import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName } from "../game/multiplayer";
+import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
 import { ROUNDS_PER_SEASON } from "../game/multiplayer";
 import { budgetSettings, setBudgetSettings } from "../game/budget";
@@ -11,9 +11,18 @@ import { getCommitmentTotals } from "../game/finance";
 import { divisionAnalytics } from "../game/adminAnalytics";
 import { gameConfig } from "../config";
 import { advanceGameDay, ensureGameClock } from "../services/gameClockService";
-import { cancelScheduledEvent, executeScheduledEvent, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
+import { cancelScheduledEvent, executeScheduledEvent, materializeSeasonEvents, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
+import {
+  isPaused,
+  isWorldPausedGlobally,
+  pausedInstant,
+  pauseSeason,
+  resumeSeason,
+  WORLD_PAUSED_MESSAGE,
+  WORLD_PAUSED_STATUS,
+} from "../services/seasonPause";
 import { calendarValues, seasonSchedulePreview } from "../services/seasonCalendar";
-import { publishUserWorldEvent, publishWorldEventToUsers, type UserWorldEvent } from "../services/worldEvents";
+import { publishUserWorldEvent, publishWorldEventToUsers, publishWorldReset, type UserWorldEvent } from "../services/worldEvents";
 import { EVENT_CODES, MOTD_NEWS_KIND } from "../game/constants";
 import { multiplayerDayLabel } from "../game/calendar";
 import { displayElo } from "../game/elo";
@@ -43,8 +52,16 @@ export async function adminRoutes(app: FastifyInstance) {
     }
   });
 
+  // Gate for schedule-dependent admin controls while the season is paused.
+  const requireRunningWorld = async (reply: import("fastify").FastifyReply): Promise<boolean> => {
+    if (!(await isWorldPausedGlobally(app.prisma))) return true;
+    await reply.code(WORLD_PAUSED_STATUS).send({ error: WORLD_PAUSED_MESSAGE });
+    return false;
+  };
+
   // Simulate every division instantly through the requested round.
   app.post("/admin/advance-round", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const parsed = advanceSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
@@ -74,6 +91,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // Set the manual override to a round without simulating (worker simulates
   // on its next tick). Useful for testing join-lock timing.
   app.post("/admin/set-round", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const parsed = advanceSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withGlobalLock(async () => {
@@ -91,6 +109,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   // Clear the manual override and return to the real schedule.
   app.post("/admin/clear-manual", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
       const loaded = await loadGlobalWorldMutable(app.prisma);
@@ -376,6 +395,8 @@ export async function adminRoutes(app: FastifyInstance) {
         lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
         interseasonStartIndex: calendar.interseasonStartIndex,
         preparationStartIndex: calendar.preparationStartIndex,
+        paused: isPaused(loaded.world),
+        pausedAt: pausedInstant(loaded.world),
         nextAutomaticDayAdvance: await app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" }, orderBy: { dueAt: "asc" }, select: { dueAt: true } }).then((event) => event?.dueAt ?? null),
         lastDayAdvance: clock.lastAdvancedAt,
         health: review?.value === "1" ? "SCHEDULER_REQUIRES_ADMIN_REVIEW" : failedEvents > 0 ? "FAILED_EVENTS" : overdueEvents > 0 ? "OVERDUE" : "HEALTHY",
@@ -416,6 +437,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/events/:id/execute", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const eventId = (req.params as { id: string }).id;
     const body = (req.body ?? {}) as { reason?: string };
     const before = await app.prisma.scheduledEvent.findUnique({ where: { id: eventId } });
@@ -450,12 +472,14 @@ export async function adminRoutes(app: FastifyInstance) {
 
   const dayAdvanceSchema = z.object({ reason: z.string().optional() });
   app.post("/admin/scheduler/day/advance", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const parsed = dayAdvanceSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     return { clock: await advanceGameDay(app.prisma, { source: "ADMIN", adminUserId: req.user!.id, reason: parsed.data.reason }) };
   });
 
   app.post("/admin/scheduler/day/advance-many", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const parsed = z.object({ days: z.number().int().min(1).max(35), reason: z.string().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "days must be between 1 and 35" });
     const clocks = [];
@@ -464,12 +488,14 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/day/force-advance", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const parsed = z.object({ confirmation: z.literal("FORCE"), reason: z.string().min(10) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Typed confirmation FORCE and a reason of at least 10 characters are required" });
     return { clock: await advanceGameDay(app.prisma, { source: "ADMIN", adminUserId: req.user!.id, force: true, reason: parsed.data.reason }) };
   });
 
-  app.post("/admin/scheduler/scan", async (req) => {
+  app.post("/admin/scheduler/scan", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { executed: 0 };
     const { executeDueEvents } = await import("../services/scheduler");
@@ -477,6 +503,7 @@ export async function adminRoutes(app: FastifyInstance) {
   });
 
   app.post("/admin/scheduler/rollover", async (req, reply) => {
+    if (!(await requireRunningWorld(reply))) return;
     const parsed = z.object({ reason: z.string().min(10) }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "A reason of at least 10 characters is required" });
     const loaded = await loadGlobalWorldMutable(app.prisma);
@@ -492,6 +519,160 @@ export async function adminRoutes(app: FastifyInstance) {
     const after = await loadGlobalWorldMutable(app.prisma);
     await writeSchedulerAudit(app.prisma, loaded.save.id, req.user!.id, "SEASON_ROLLOVER_OVERRIDE", "SEASON", String(season.seasonId), before, after?.world.mp ?? season, parsed.data.reason);
     return { season };
+  });
+
+  // -------------------------------------------------------------------------
+  // Season pause / resume ("freeze timers"). While paused, workers, automatic
+  // day advancement and schedule-dependent mutations are gated; resume shifts
+  // every real-time anchor forward by the frozen interval (see seasonPause.ts).
+  // -------------------------------------------------------------------------
+
+  const pauseControlSchema = z.object({ reason: z.string().optional() });
+  app.post("/admin/scheduler/pause", async (req, reply) => {
+    const parsed = pauseControlSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await pauseSeason(app.prisma, { adminUserId: req.user!.id, reason: parsed.data.reason });
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (loaded) publishToHumanUsers(loaded.world, { type: "invalidate", scope: "mp" });
+    return res;
+  });
+
+  app.post("/admin/scheduler/resume", async (req, reply) => {
+    const parsed = pauseControlSchema.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    try {
+      const res = await resumeSeason(app.prisma, { adminUserId: req.user!.id, reason: parsed.data.reason });
+      const loaded = await loadGlobalWorldReadOnly(app.prisma);
+      if (loaded) publishToHumanUsers(loaded.world, { type: "invalidate", scope: "mp" });
+      return res;
+    } catch (error) {
+      if (error instanceof Error && error.message === "The season is not paused") return reply.code(400).send({ error: error.message });
+      throw error;
+    }
+  });
+
+  /**
+   * Regenerate the current season's division schedules from the untouched
+   * standings. Only legal while NO match of the season has taken place —
+   * completed fixtures and matches are immutable (INVARIANTS).
+   */
+  app.post("/admin/scheduler/fixtures/recalculate", async (req, reply) => {
+    const parsed = z.object({ reason: z.string().min(10) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "A reason of at least 10 characters is required" });
+    const result = await withGlobalLock(() =>
+      withGlobalLease(app.prisma, async () => {
+        const loaded = await loadGlobalWorldMutable(app.prisma);
+        if (!loaded) return { error: { code: 404, body: { error: "World unavailable" } } };
+        const world = loaded.world;
+        const seasonId = world.mp.seasonId;
+        const divisions = world.competitions.filter(
+          (competition) =>
+            competition.kind === "division" &&
+            competition.seasonId === seasonId &&
+            competition.status !== "ARCHIVED" &&
+            Object.keys(competition.standings).length > 0,
+        );
+        if (divisions.length === 0) return { error: { code: 400, body: { error: "No active divisions to recalculate" } } };
+        const divisionIds = new Set(divisions.map((division) => division.id));
+        const oldFixtures = world.fixtures.filter((fixture) => divisionIds.has(fixture.competitionId));
+        if (oldFixtures.length === 0) return { error: { code: 400, body: { error: "The current season has no fixtures to recalculate" } } };
+
+        // Immutability guard: any played fixture, recorded match, running live
+        // match or in-flight match event forbids regeneration.
+        const oldIds = new Set(oldFixtures.map((fixture) => fixture.id));
+        if (oldFixtures.some((fixture) => fixture.played)) {
+          return { error: { code: 409, body: { error: "A fixture of this season has already been played" } } };
+        }
+        if (world.matches.some((match) => oldIds.has(match.fixtureId))) {
+          return { error: { code: 409, body: { error: "A match of this season has already been recorded" } } };
+        }
+        if (world.liveMatches.some((match) => oldIds.has(match.fixtureId))) {
+          return { error: { code: 409, body: { error: "A match of this season is currently live" } } };
+        }
+        const staleMatchEvents = await app.prisma.scheduledEvent.findMany({
+          where: {
+            saveId: loaded.save.id,
+            type: { in: [ScheduledEventType.MATCH_START, ScheduledEventType.MATCH_COMPLETE] },
+            entityType: "MATCH",
+            entityId: { in: [...oldIds].map(String) },
+            status: { in: ["PENDING", "FAILED", "RUNNING"] },
+          },
+          select: { id: true, status: true },
+        });
+        if (staleMatchEvents.some((event) => event.status === "RUNNING")) {
+          return { error: { code: 409, body: { error: "A match event of this season is currently executing" } } };
+        }
+
+        const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
+        let generated = 0;
+        for (const division of divisions) {
+          world.fixtures = world.fixtures.filter((fixture) => fixture.competitionId !== division.id);
+          // Deterministic calendar seeded from stable competition identity, so
+          // a retry reproduces the same schedule (no hidden rerolls).
+          const fixtures = generateDivisionFixtures(world, division, ref);
+          world.fixtures.push(...fixtures);
+          generated += fixtures.length;
+        }
+
+        await app.prisma.scheduledEvent.updateMany({
+          where: { id: { in: staleMatchEvents.map((event) => event.id) }, status: { in: ["PENDING", "FAILED"] } },
+          data: { status: "CANCELLED", version: { increment: 1 } },
+        });
+        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        // Materialize MATCH_START events for the new kickoffs (idempotent keys).
+        await materializeSeasonEvents(app.prisma, loaded.save.id, world);
+        await writeSchedulerAudit(app.prisma, loaded.save.id, req.user!.id, "RECALCULATE_FIXTURES", "SEASON", String(seasonId), { fixtures: oldFixtures.length }, { fixtures: generated }, parsed.data.reason);
+        publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
+        return { value: { ok: true, divisions: divisions.length, fixturesBefore: oldFixtures.length, fixturesAfter: generated } };
+      }),
+    );
+    if ("error" in result && result.error) return reply.code(result.error.code).send(result.error.body);
+    return result.value;
+  });
+
+  /**
+   * Destroy the entire multiplayer world and bootstrap a fresh one. User
+   * accounts, sessions, friendships, invitations, moderation records, settings
+   * and name pools are preserved; clubs, players, competitions, fixtures,
+   * matches, market, histories, scheduler rows and notifications are wiped.
+   * The delete + recreate sequence is retry-safe: if recreation fails, the
+   * next call (or any ensure-current-season path) rebuilds from scratch.
+   */
+  app.post("/admin/world/reset", async (req, reply) => {
+    const parsed = z.object({ confirmation: z.literal("RESET"), reason: z.string().min(10) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Typed confirmation RESET and a reason of at least 10 characters are required" });
+    const previous = await loadGlobalWorldReadOnly(app.prisma);
+    if (!previous) return reply.code(404).send({ error: "World unavailable" });
+    const oldSaveId = previous.save.id;
+    const result = await withGlobalLock(async () => {
+      // Unscoped multiplayer tables are NOT covered by the Save cascade.
+      // Notifications reference clubs/fixtures that are about to disappear, so
+      // they are wiped too; device push subscriptions survive (they are not
+      // world data).
+      await app.prisma.$transaction(async (tx) => {
+        await tx.mpMembership.deleteMany({});
+        await tx.mpClubSeason.deleteMany({});
+        await tx.mpQueue.deleteMany({});
+        await tx.mpAllocation.deleteMany({});
+        await tx.mpActivity.deleteMany({});
+        await tx.mpAudit.deleteMany({});
+        await tx.mpSeason.deleteMany({});
+        await tx.userNotification.deleteMany({});
+        await tx.save.delete({ where: { id: oldSaveId } });
+      });
+      invalidateWorldCache(app.prisma);
+      await ensureGlobalSave(app.prisma);
+      await ensureCurrentSeason(app.prisma);
+      const fresh = await loadGlobalWorldMutable(app.prisma);
+      if (!fresh) throw new Error("World reset failed: fresh world unavailable");
+      await ensureGameClock(app.prisma, fresh.save.id, fresh.world);
+      await materializeSeasonEvents(app.prisma, fresh.save.id, fresh.world);
+      await writeSchedulerAudit(app.prisma, fresh.save.id, req.user!.id, "WORLD_RESET", "WORLD", "GLOBAL", { saveId: oldSaveId }, { saveId: fresh.save.id, seasonId: fresh.world.mp.seasonId }, parsed.data.reason);
+      // Everyone keeps their account but loses their club; wake all clients.
+      publishWorldReset();
+      return { value: { ok: true, oldSaveId, newSaveId: fresh.save.id, seasonId: fresh.world.mp.seasonId } };
+    });
+    return result.value;
   });
 
   app.get("/admin/scheduler/matches", async () => {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { CalendarClock, Clock, FastForward, Gauge, RefreshCw, ScrollText, Undo2 } from "lucide-react";
+import { CalendarClock, Clock, FastForward, Gauge, Pause, Play, RefreshCw, ScrollText, Trash2, Undo2, CalendarX } from "lucide-react";
 import { api, type SchedulerClockView } from "../../api/client";
 import { AdminCard, useAdminFetch, type AdminFetchResult, type TabProps } from "./adminShared";
 import { StatusChip, type ChipTone } from "./StatusChip";
@@ -138,7 +138,16 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
           <div style={{ borderTop: "1px solid var(--line)", margin: "16px 0 14px" }} />
           <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginBottom: 10 }}>Manual controls — each action is written to the audit log.</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <button className="btn gold" onClick={() => void runAction(() => api.adminSchedulerAdvanceDay(reason || undefined), "Game day advanced")}>
+            {c.paused ? (
+              <button className="btn gold" onClick={() => void runAction(() => api.adminSchedulerResume(reason || undefined), "Season resumed — timers shifted by the paused interval")}>
+                <Play size={15} /> Resume season
+              </button>
+            ) : (
+              <button className="btn gold" onClick={() => void runAction(() => api.adminSchedulerPause(reason || undefined), "Season paused — world clock frozen")}>
+                <Pause size={15} /> Pause season
+              </button>
+            )}
+            <button className="btn gold" disabled={c.paused} onClick={() => void runAction(() => api.adminSchedulerAdvanceDay(reason || undefined), "Game day advanced")}>
               <FastForward size={15} /> Advance day
             </button>
             <input
@@ -150,7 +159,7 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
               aria-label="Days to advance"
               style={{ width: 70, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
             />
-            <button className="btn" onClick={() => void runAction(() => api.adminSchedulerAdvanceMany(advanceDays, reason || undefined), `${advanceDays} game day(s) advanced`)}>
+            <button className="btn" disabled={c.paused} onClick={() => void runAction(() => api.adminSchedulerAdvanceMany(advanceDays, reason || undefined), `${advanceDays} game day(s) advanced`)}>
               Advance many
             </button>
             <input
@@ -161,11 +170,12 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
               aria-label="Audit reason for manual controls"
               style={{ flex: "1 1 190px", minWidth: 160, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
             />
-            <button className="btn" onClick={() => void runAction(() => api.adminSchedulerScan().then((r) => notify("success", `${r.executed} due event(s) executed`)), "Scan complete")}>
+            <button className="btn" disabled={c.paused} onClick={() => void runAction(() => api.adminSchedulerScan().then((r) => notify("success", `${r.executed} due event(s) executed`)), "Scan complete")}>
               <RefreshCw size={15} /> Scan due events
             </button>
             <button
               className="btn ghost danger"
+              disabled={c.paused}
               onClick={() =>
                 setConfirm({
                   title: "Force advance",
@@ -186,8 +196,64 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
               Force advance…
             </button>
           </div>
+          {c.paused && (
+            <div style={{ color: "var(--gold-2)", fontSize: "0.8rem", marginTop: 10 }}>
+              Season is paused since {new Date(c.pausedAt ?? Date.now()).toLocaleString()}. Resuming shifts every deadline, kickoff and live-match clock by the frozen interval — nothing expires while paused.
+            </div>
+          )}
         </AdminCard>
       )}
+
+      <AdminCard
+        icon={<CalendarX size={17} />}
+        title="Season maintenance"
+        subtitle="Schedule regeneration before the first kickoff and the full world reset. Both are audited."
+      >
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            className="btn"
+            onClick={() =>
+              setConfirm({
+                title: "Recalculate fixtures",
+                message: "Regenerates every current-season division schedule from the untouched standings. Kickoffs are re-timed; standings and results are unchanged. Only possible before any match of the season has been played.",
+                confirmLabel: "Recalculate fixtures",
+                minReasonLength: 10,
+                reasonHint: "Why is the schedule being regenerated? (min 10 characters)",
+                onConfirm: async (r) => {
+                  const res = await api.adminRecalculateFixtures(r);
+                  notify("success", `Fixtures recalculated (${res.fixturesAfter} across ${res.divisions} divisions)`);
+                  world.reload();
+                  clock.reload();
+                },
+              })
+            }
+          >
+            <CalendarX size={15} /> Recalculate fixtures…
+          </button>
+          <button
+            className="btn ghost danger"
+            onClick={() =>
+              setConfirm({
+                title: "Reset the world",
+                danger: true,
+                message: "Destroys EVERYTHING: clubs, squads, matches, history, markets, notifications. User accounts, friendships, bans and settings are kept. Every player must recreate a club via Join. This cannot be undone.",
+                confirmLabel: "Reset world",
+                confirmWord: "RESET",
+                minReasonLength: 10,
+                reasonHint: "Why is the world being reset? (min 10 characters)",
+                onConfirm: async (r) => {
+                  await api.adminWorldReset("RESET", r);
+                  notify("success", "World reset — a fresh season has started");
+                  world.reload();
+                  clock.reload();
+                },
+              })
+            }
+          >
+            <Trash2 size={15} /> Reset world…
+          </button>
+        </div>
+      </AdminCard>
 
       <AdminCard
         icon={<CalendarClock size={17} />}
@@ -208,17 +274,18 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
             aria-label="Target round"
             style={{ width: 90, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--line)", background: "var(--bg-2)", color: "var(--text-1)" }}
           />
-          <button className="btn gold" onClick={() => void runAction(() => api.adminAdvanceRound(targetRound), `Advanced to round ${targetRound}`)}>
+          <button className="btn gold" disabled={Boolean(c?.paused)} onClick={() => void runAction(() => api.adminAdvanceRound(targetRound), `Advanced to round ${targetRound}`)}>
             <FastForward size={15} /> Advance to round
           </button>
-          <button className="btn" onClick={() => void runAction(() => api.adminSetRound(targetRound), `Manual round set to ${targetRound}`)}>
+          <button className="btn" disabled={Boolean(c?.paused)} onClick={() => void runAction(() => api.adminSetRound(targetRound), `Manual round set to ${targetRound}`)}>
             Set manual round
           </button>
-          <button className="btn" onClick={() => void runAction(() => api.adminClearManual(), "Manual mode cleared — real schedule resumed")}>
+          <button className="btn" disabled={Boolean(c?.paused)} onClick={() => void runAction(() => api.adminClearManual(), "Manual mode cleared — real schedule resumed")}>
             <Undo2 size={15} /> Clear manual mode
           </button>
           <button
             className="btn ghost danger"
+            disabled={Boolean(c?.paused)}
             onClick={() =>
               setConfirm({
                 title: "Force season rollover",
@@ -238,6 +305,11 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
             <ScrollText size={15} /> Force rollover…
           </button>
         </div>
+        {c?.paused && (
+          <div style={{ color: "var(--gold-2)", fontSize: "0.8rem", marginTop: 10 }}>
+            These controls are unavailable while the season is paused. Resume the season first.
+          </div>
+        )}
       </AdminCard>
     </div>
   );

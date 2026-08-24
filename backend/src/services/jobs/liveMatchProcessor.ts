@@ -7,8 +7,11 @@ import { notifyFinishedMatches } from "../matchNotifications";
 import { publishLiveMatchUpdates } from "../liveMatchEvents";
 import { publishUserWorldEvent } from "../worldEvents";
 import { diffLiveMatchAdvances, snapshotLiveMatches } from "../liveMatchDiff";
+import { isWorldPausedGlobally, isPaused } from "../seasonPause";
 
 export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ changed: boolean }> {
+  // Season pause: matches are frozen mid-state and must not tick.
+  if (await isWorldPausedGlobally(prisma)) return { changed: false };
   const save = await prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
   if (!save) return { changed: false };
   const active = await prisma.liveMatch.findFirst({ where: { saveId: save.id }, select: { matchId: true } });
@@ -17,6 +20,9 @@ export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ change
   return withGlobalLock(() => withGlobalLease(prisma, async () => {
     const loaded = await loadGlobalWorldMutable(prisma);
     if (!loaded || loaded.world.liveMatches.length === 0) return { changed: false };
+    // Belt-and-braces inside the lock: another process may have paused between
+    // the cheap pre-check above and this load.
+    if (isPaused(loaded.world)) return { changed: false };
     const before = snapshotLiveMatches(loaded.world.liveMatches);
 
     const advancedAt = Date.now();

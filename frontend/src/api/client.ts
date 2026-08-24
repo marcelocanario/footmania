@@ -116,6 +116,8 @@ export interface ClubView {
 export interface MpStatus {
   ready: boolean;
   saveId: number | null;
+  /** Season pause (admin freeze): countdowns hold and market/loan actions are disabled. */
+  paused: boolean;
   season: {
     seasonNumber: number;
     key: string;
@@ -194,6 +196,9 @@ export interface SchedulerClockView {
   lastAdvancedAt: string;
   nextAutomaticDayAdvance: string | null;
   lastDayAdvance: string;
+  /** Season pause state (freeze-timers semantics). */
+  paused: boolean;
+  pausedAt: number | null;
   health: "HEALTHY" | "OVERDUE" | "FAILED_EVENTS" | "SCHEDULER_REQUIRES_ADMIN_REVIEW";
   pendingEvents: number;
   overdueEvents: number;
@@ -1314,6 +1319,17 @@ export const api = {
     request<{ audit: SchedulerAuditView[] }>("/api/admin/scheduler/audit?limit=100"),
   adminSchedulerPreview: (seasonId: number) =>
     request<{ seasonId: number; season: SchedulerPreviewEntry[] }>(`/api/admin/scheduler/season/${seasonId}`),
+  // Season pause / resume (freeze timers; resume shifts every real-time anchor).
+  adminSchedulerPause: (reason?: string) =>
+    request<{ pausedAt: number }>("/api/admin/scheduler/pause", { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerResume: (reason?: string) =>
+    request<{ resumedAt: number; shiftMs: number }>("/api/admin/scheduler/resume", { method: "POST", body: JSON.stringify({ reason }) }),
+  // Rebuild the current season's schedules — only before any match has been played.
+  adminRecalculateFixtures: (reason: string) =>
+    request<{ ok: boolean; divisions: number; fixturesBefore: number; fixturesAfter: number }>("/api/admin/scheduler/fixtures/recalculate", { method: "POST", body: JSON.stringify({ reason }) }),
+  // Destructive: wipes the world, keeps user accounts. Requires typed confirmation.
+  adminWorldReset: (confirmation: "RESET", reason: string) =>
+    request<{ ok: boolean; oldSaveId: number; newSaveId: number; seasonId: number }>("/api/admin/world/reset", { method: "POST", body: JSON.stringify({ confirmation, reason }) }),
 
   // Pro features
   getAutomation: () => request<{ presets: unknown[] }>("/api/mp/automation"),

@@ -3,11 +3,14 @@ import { withGlobalLease, withGlobalLock } from "../lock";
 import { advanceGameDayInLock, ensureGameClock, schedulerRolloverHourUtc } from "../gameClockService";
 import { executeDueEventsInLock, executeGameDayEventsInLock, materializeSeasonEvents, scheduleEvent, ScheduledEventType } from "../scheduler";
 import { loadGlobalWorldMutable } from "../saveService";
+import { isWorldPausedGlobally } from "../seasonPause";
 
 /** Durable scheduler loop. It owns materialization and real-time event claims;
  * domain handlers remain in their respective game services. */
 export async function schedulerProcessor(ctx: Pick<JobContext, "prisma"> & Partial<Pick<JobContext, "now">>): Promise<JobResult> {
   const now = new Date(ctx.now ?? Date.now());
+  // Season pause: the world clock is frozen — no events, no day advancement.
+  if (await isWorldPausedGlobally(ctx.prisma)) return { changed: false };
   const save = await ctx.prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
   if (!save) return { changed: false };
   const clockSnapshot = await ctx.prisma.gameClock.findUnique({ where: { saveId: save.id } });

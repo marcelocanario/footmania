@@ -19,6 +19,7 @@ type MpStateView = {
   joinState?: "OPEN" | "LOCKED";
   seasonDayIndex?: number;
   phase?: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+  pausedAt?: number | null;
 };
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -145,6 +146,9 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
   return {
     ready: true as const,
     saveId: save.id,
+    // Season pause flag (admin freeze): clients use it to hold countdowns and
+    // disable schedule-dependent actions.
+    paused: typeof mp.pausedAt === "number" && Number.isFinite(mp.pausedAt),
     season: {
       seasonNumber: mp.seasonNumber ?? 1,
       key: seasonKey({ year, month }),

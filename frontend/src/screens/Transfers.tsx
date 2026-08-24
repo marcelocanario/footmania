@@ -18,14 +18,19 @@ import { auctionOpeningRange } from "../market";
 
 type Tab = "auctions" | "free" | "loans" | "sell";
 
-function AuctionCountdown({ deadline }: { deadline: number }) {
+function AuctionCountdown({ deadline, paused }: { deadline: number; paused?: boolean }) {
   const remaining = useCountdown(deadline);
+  if (paused) return <span style={{ color: "var(--gold-2)", fontWeight: 700 }}>Paused</span>;
   if (remaining <= 0) return <span style={{ color: "var(--danger, #d66)" }}>Closing</span>;
   return <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatDuration(remaining)}</span>;
 }
 
+/** Hover hint for every market action the season pause gates server-side. */
+const SEASON_PAUSED_TITLE = "The season is paused by an administrator — bids, listings and loans are frozen.";
+
 export function Transfers() {
   const snapshot = useGame((s) => s.snapshot);
+  const status = useGame((s) => s.status);
   const refresh = useGame((s) => s.refresh);
   const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
   const [auctions, setAuctions] = useState<AuctionView[]>([]);
@@ -202,6 +207,9 @@ export function Transfers() {
   const squad = snapshot?.squad ?? [];
   const myClubId = snapshot?.club?.id ?? null;
   const myActiveListings = auctions.filter((a) => a.sellerClubId === myClubId && a.status === "ACTIVE");
+  // Spread onto every schedule-dependent action button: while paused the
+  // button is disabled and hovering explains why (server also enforces 409).
+  const pauseLock: { disabled?: boolean; title?: string } = status?.paused ? { disabled: true, title: SEASON_PAUSED_TITLE } : {};
 
   // Financial-cushion projection for a proposed maximum bid (financial-control
   // §56). The new bid reserves `maxBid` immediately and adds a contingent
@@ -292,7 +300,7 @@ export function Transfers() {
                         {a.age} yrs · Salary <b style={{ color: "var(--text-2)" }}>{money(a.salary)}/season</b> · Opening <b style={{ color: "var(--text-2)" }}>{money(a.openingPrice)}</b> · Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · Bidders {a.bidderCount}
                       </div>
                       <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>
-                        Ends in <AuctionCountdown deadline={a.deadline} />
+                        Ends in <AuctionCountdown deadline={a.deadline} paused={status?.paused} />
                       </div>
                       {a.amILeading && (
                         <span className="chip" style={{ marginTop: 4, color: "var(--grass-2)", borderColor: "var(--grass-2)" }}>You are leading</span>
@@ -306,7 +314,7 @@ export function Transfers() {
                     </div>
                     <div style={{ display: "flex", gap: 8 }}>
                       <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>History</button>
-                      <button className="btn" onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
+                      <button className="btn" {...pauseLock} onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
                         {a.myMaxBid !== null ? "Increase Max" : strings.transfers.bid}
                       </button>
                     </div>
@@ -337,7 +345,7 @@ export function Transfers() {
                   </div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button className="btn ghost" onClick={() => void openAuctionHistory(fa as never, "FREE_AGENT")}>History</button>
-                    <button className="btn" onClick={() => { setFreeAgentTarget(fa); setFreeAgentContractSeasons(fa.myContractSeasons ?? 1); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
+                    <button className="btn" {...pauseLock} onClick={() => { setFreeAgentTarget(fa); setFreeAgentContractSeasons(fa.myContractSeasons ?? 1); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
                       {strings.transfers.sign}
                     </button>
                   </div>
@@ -361,7 +369,7 @@ export function Transfers() {
                       <ClubNameLink clubId={loan.fromClubId} name={loan.fromClub} showCrest={false} />
                     </div>
                   </div>
-                  {loan.available && <button className="btn" title={strings.transfers.borrowLoanHint} onClick={() => setLoanTarget(loan)}>View profile & take</button>}
+                  {loan.available && <button className="btn" title={strings.transfers.borrowLoanHint} {...pauseLock} onClick={() => setLoanTarget(loan)}>View profile & take</button>}
                   {!loan.available && loan.claimableIn > 0 && !loan.toClub && <span className="chip">Claimable in {formatDuration(loan.claimableIn * 1000)}</span>}
                   {!loan.available && loan.toClub && (
                     <span className="chip">
@@ -384,10 +392,10 @@ export function Transfers() {
                 <div className="card" key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                   <div>
                     <div style={{ fontWeight: 700 }}>{a.playerName} · {a.overall} OVR</div>
-                    <div className="hint">Current {money(a.currentPrice)} · {a.bidderCount} bidders · Ends in <AuctionCountdown deadline={a.deadline} /></div>
+                    <div className="hint">Current {money(a.currentPrice)} · {a.bidderCount} bidders · Ends in <AuctionCountdown deadline={a.deadline} paused={status?.paused} /></div>
                   </div>
                   {a.bidderCount === 0 && (
-                    <button className="btn ghost" onClick={() => cancelListing(a)}>Cancel listing</button>
+                    <button className="btn ghost" {...pauseLock} onClick={() => cancelListing(a)}>Cancel listing</button>
                   )}
                   {a.bidderCount > 0 && <span className="chip">Bids received — cannot cancel</span>}
                 </div>
@@ -409,7 +417,7 @@ export function Transfers() {
                       OVR <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · Value {money(p.value)}
                     </div>
                   </div>
-                  <button className="btn ghost" onClick={() => openSellDialog(p)}>
+                  <button className="btn ghost" {...pauseLock} onClick={() => openSellDialog(p)}>
                     {strings.transfers.sell}
                   </button>
                 </div>
@@ -447,7 +455,7 @@ export function Transfers() {
         )}
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setSellPlayer(null); setSellPreview(null); setSellPrice(0); }}>{strings.common.cancel}</button>
-          <button className="btn" style={{ flex: 1 }} disabled={!sellPreview || !!sellPreview.cooldownError || sellPreview.alreadyListed || sellPrice < sellPreview.openingPriceRange.min || sellPrice > sellPreview.openingPriceRange.max} onClick={sell}>{strings.common.confirm}</button>
+          <button className="btn" style={{ flex: 1 }} disabled={status?.paused || !sellPreview || !!sellPreview.cooldownError || sellPreview.alreadyListed || sellPrice < sellPreview.openingPriceRange.min || sellPrice > sellPreview.openingPriceRange.max} title={status?.paused ? SEASON_PAUSED_TITLE : undefined} onClick={sell}>{strings.common.confirm}</button>
         </div>
       </Dialog>
 
@@ -466,7 +474,7 @@ export function Transfers() {
               <div>Exact salary demand: <b>{money(freeAgentTarget.contractDemandsBySeason?.[freeAgentContractSeasons] ?? freeAgentTarget.salary)}/season</b></div>
               <div>Contract: <b>Current season + {freeAgentContractSeasons} full season{freeAgentContractSeasons === 1 ? "" : "s"}</b></div>
               <div style={{ marginTop: 4 }}>
-                Current signing fee: <b style={{ color: "var(--gold-2)" }}>{money(freeAgentTarget.currentPrice)}</b> · Bidders: {freeAgentTarget.bidderCount} · Ends in <AuctionCountdown deadline={freeAgentTarget.deadline} />
+                Current signing fee: <b style={{ color: "var(--gold-2)" }}>{money(freeAgentTarget.currentPrice)}</b> · Bidders: {freeAgentTarget.bidderCount} · Ends in <AuctionCountdown deadline={freeAgentTarget.deadline} paused={status?.paused} />
               </div>
               {freeAgentTarget.myMaxBid !== null && (
                 <div style={{ marginTop: 4 }}>
@@ -498,7 +506,7 @@ export function Transfers() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={() => setFreeAgentTarget(null)}>{strings.common.cancel}</button>
-          <button className="btn" style={{ flex: 1 }} onClick={submitFreeAgentBid}>{strings.common.confirm}</button>
+          <button className="btn" style={{ flex: 1 }} {...pauseLock} onClick={submitFreeAgentBid}>{strings.common.confirm}</button>
         </div>
       </Dialog>
 
@@ -517,7 +525,7 @@ export function Transfers() {
               <div>Exact salary demand: <b>{money(auctionBidTarget.contractDemandsBySeason?.[auctionContractSeasons] ?? auctionBidTarget.salary)}/season</b></div>
               <div>Contract: <b>Current season + {auctionContractSeasons} full season{auctionContractSeasons === 1 ? "" : "s"}</b></div>
               <div style={{ marginTop: 4 }}>
-                Current price: <b style={{ color: "var(--gold-2)" }}>{money(auctionBidTarget.currentPrice)}</b> · Bidders: {auctionBidTarget.bidderCount} · Ends in <AuctionCountdown deadline={auctionBidTarget.deadline} />
+                Current price: <b style={{ color: "var(--gold-2)" }}>{money(auctionBidTarget.currentPrice)}</b> · Bidders: {auctionBidTarget.bidderCount} · Ends in <AuctionCountdown deadline={auctionBidTarget.deadline} paused={status?.paused} />
               </div>
               {auctionBidTarget.myMaxBid !== null && (
                 <div style={{ marginTop: 4 }}>
@@ -549,7 +557,7 @@ export function Transfers() {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="btn ghost" style={{ flex: 1 }} onClick={() => setAuctionBidTarget(null)}>{strings.common.cancel}</button>
-          <button className="btn" style={{ flex: 1 }} onClick={submitAuctionBid}>{strings.common.confirm}</button>
+          <button className="btn" style={{ flex: 1 }} {...pauseLock} onClick={submitAuctionBid}>{strings.common.confirm}</button>
         </div>
       </Dialog>
 
@@ -579,7 +587,7 @@ export function Transfers() {
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
               <button className="btn ghost" style={{ flex: 1 }} onClick={() => setLoanTarget(null)}>{strings.common.cancel}</button>
-              <button className="btn" style={{ flex: 1 }} title={strings.transfers.borrowLoanHint} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>
+              <button className="btn" style={{ flex: 1 }} title={strings.transfers.borrowLoanHint} {...pauseLock} onClick={() => takeLoan(loanTarget)}>{strings.transfers.loan}</button>
             </div>
           </>
         )}

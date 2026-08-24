@@ -15,6 +15,7 @@ import type { World } from "../game/types";
 import { hasPro } from "../services/pro";
 import { readMpStatus, readSeasonHistory, readUserLiveMatch, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
+import { isPaused, worldPausedError } from "../services/seasonPause";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -80,6 +81,8 @@ export async function multiplayerRoutes(app: FastifyInstance) {
        const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
+      // Schedule-dependent: joining places the club into the live season.
+      if (isPaused(world)) return { error: worldPausedError };
       const existing = world.clubs.find((c) => c.ownerUserId === user.id);
       if (existing) return { error: { code: 409, body: { error: "You already have a club" } } };
 
@@ -134,6 +137,8 @@ export async function multiplayerRoutes(app: FastifyInstance) {
        const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
+      // Schedule-dependent: returning re-enters the live season.
+      if (isPaused(world)) return { error: worldPausedError };
       const existing = world.clubs.find((c) => c.ownerUserId === user.id);
       if (!existing) return { error: { code: 400, body: { error: "You have no club" } } };
       if (existing.competitionState !== "DORMANT") return { error: { code: 400, body: { error: "Your club is not dormant" } } };

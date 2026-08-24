@@ -85,6 +85,13 @@ export function useMpSocket() {
         case "dayAdvanced":
           void refresh();
           break;
+        case "worldReset":
+          // The whole world was wiped by an admin: drop every cached read
+          // model and the club snapshot; App routes club-less users to /join.
+          setLiveMatch(null);
+          api.cache.invalidate();
+          void refresh();
+          break;
         case "marketUpdated": {
           if (msg.marketType && msg.listingId !== undefined && msg.status) {
             api.cache.emitMarketUpdated({

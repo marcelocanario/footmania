@@ -857,6 +857,13 @@ export interface MpState {
   pendingSeasonRetirees?: number | null;
   /** Population health snapshots, one per season, for admin analytics trends. */
   populationHistory?: PopulationHistoryEntry[];
+  /**
+   * Season pause (admin control). While set, this is the frozen world instant:
+   * workers, day advancement and schedule-dependent mutations are gated, and
+   * resume shifts every real-time anchor forward by (resume - pausedAt) so no
+   * timer silently expires during the freeze. Null/undefined = running.
+   */
+  pausedAt?: number | null;
 }
 
 /**
