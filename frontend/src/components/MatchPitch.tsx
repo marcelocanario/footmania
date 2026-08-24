@@ -12,6 +12,7 @@ import {
   hasPitchCue,
   isSetPieceStart,
   placeLiveBall,
+  resolveColumnCollisions,
   slotPointsFor,
   teamPitchPoints,
   turnoverIntent,
@@ -112,6 +113,18 @@ interface BallSeq {
 /** Clamp a scratch point to the pitch's visible playing area. */
 function clampToPitch(p: PitchPoint): PitchPoint {
   return { x: Math.max(3, Math.min(97, p.x)), y: Math.max(6, Math.min(58, p.y)) };
+}
+
+/** Renders a trail segment as a straight line, or a quadratic-Bezier path when
+ * a curve control point is given (crosses, corner deliveries, wide shots). */
+function TrailShape({ from, to, control, className, style }: { from: PitchPoint; to: PitchPoint; control?: PitchPoint | null; className?: string; style?: CSSProperties }) {
+  const y1 = (from.y / 100) * 64;
+  const y2 = (to.y / 100) * 64;
+  if (control) {
+    const cy = (control.y / 100) * 64;
+    return <path className={className} style={style} pathLength={100} fill="none" d={`M ${from.x} ${y1} Q ${control.x} ${cy} ${to.x} ${y2}`} />;
+  }
+  return <line className={className} style={style} pathLength={100} x1={from.x} y1={y1} x2={to.x} y2={y2} />;
 }
 
 /** Quick deflection off the frame after a woodwork "kiss", back into play. */
@@ -260,8 +273,17 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   }, []);
 
   const players = useMemo(() => [...home.players, ...away.players], [home.players, away.players]);
-  const homePoints = useMemo(() => teamPitchPoints(home.players, "home", home.formationId), [home.players, home.formationId]);
-  const awayPoints = useMemo(() => teamPitchPoints(away.players, "away", away.formationId), [away.players, away.formationId]);
+  // Computed together (not as two independent memos) because two
+  // independently-authored formations can otherwise place a home line and a
+  // mirrored away line at nearly the same x purely by coincidence, rendering
+  // both teams' markers on top of each other — resolveColumnCollisions nudges
+  // any such pair apart, so it needs both sides' points at once.
+  const { homePoints, awayPoints } = useMemo(() => {
+    const home_ = teamPitchPoints(home.players, "home", home.formationId);
+    const away_ = teamPitchPoints(away.players, "away", away.formationId);
+    resolveColumnCollisions(home_, away_);
+    return { homePoints: home_, awayPoints: away_ };
+  }, [home.players, home.formationId, away.players, away.formationId]);
   // Missing-player ghosts: red cards and unreplaced injuries leave vacated
   // tactical slots; each marker sits where the player used to stand.
   const homeMissing = useMemo(() => missing.filter((entry) => entry.side === 0), [missing]);
@@ -559,7 +581,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     if (prevMeta && attemptedAction && attemptedZone && prevMeta.side !== ballSide) {
       const lostPlayers = prevMeta.side === "home" ? home.players : away.players;
       const lostPoints = prevMeta.side === "home" ? homePoints : awayPoints;
-      intent = turnoverIntent(prev, attemptedZone, prevMeta.side, attemptedAction, lostPlayers, lostPoints, action?.targetPlayerId ?? null);
+      intent = turnoverIntent(prev, attemptedZone, prevMeta.side, lostPlayers, lostPoints, action?.targetPlayerId ?? null);
       intentColor = prevMeta.side === "home" ? home.kit.primary : away.kit.primary;
       solidColor = ballSide === "home" ? home.kit.primary : away.kit.primary;
     }
@@ -694,7 +716,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
           <circle cx="50" cy="32" r="0.7" fill="rgba(238,246,239,0.8)" />
         </svg>
         {trail && !motionReduced && !shotCueActive && !seq && (
-          <svg className="pitch-trail pitch-live-trail" viewBox="0 0 100 64" aria-hidden="true">
+          <svg className={`pitch-trail pitch-live-trail pitch-trail-${trail.style}`} viewBox="0 0 100 64" aria-hidden="true">
             {trail.intent && (
               <line
                 className="pitch-trail-intent"
@@ -703,13 +725,28 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
                 y1={(trail.intent.from.y / 100) * 64}
                 x2={trail.intent.to.x}
                 y2={(trail.intent.to.y / 100) * 64}
+                style={trail.intentColor ? { stroke: trail.intentColor } : undefined}
               />
             )}
-            <line key={trail.key} pathLength={100} x1={trail.from.x} y1={(trail.from.y / 100) * 64} x2={trail.to.x} y2={(trail.to.y / 100) * 64} />
+            {/* Counter-attack "comet": faint offset echoes of the same shape,
+                staggered to suggest speed behind the lead line. */}
+            {ball?.counter && ball.phase === "TRANSITION" && (
+              <>
+                <TrailShape from={trail.from} to={trail.to} control={trail.control} className="pitch-trail-comet pitch-trail-comet-2" />
+                <TrailShape from={trail.from} to={trail.to} control={trail.control} className="pitch-trail-comet pitch-trail-comet-1" />
+              </>
+            )}
+            <TrailShape
+              key={trail.key}
+              from={trail.from}
+              to={trail.to}
+              control={trail.control}
+              style={trail.solidColor ? { stroke: trail.solidColor } : undefined}
+            />
           </svg>
         )}
         {seq && seq.stage !== "start" && !motionReduced && (
-          <svg className="pitch-trail pitch-live-trail pitch-shot-trail" viewBox="0 0 100 64" aria-hidden="true">
+          <svg className={`pitch-trail pitch-live-trail pitch-shot-trail${seq.stage === "leg" || seq.stage === "hold" ? " pitch-shot-trail-danger" : ""}${seq.stage === "rebound" ? " pitch-shot-trail-rebound" : ""}`} viewBox="0 0 100 64" aria-hidden="true">
             <line
               key={`${seq.key}-${seq.stage}`}
               pathLength={100}
@@ -720,8 +757,13 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
             />
           </svg>
         )}
+        {foulPing && !motionReduced && (
+          <svg className="pitch-foul-ping" viewBox="0 0 100 64" aria-hidden="true">
+            <circle key={foulPing.key} cx={foulPing.point.x} cy={(foulPing.point.y / 100) * 64} r="1.6" />
+          </svg>
+        )}
         {showLiveBall && (
-          <span className={liveBallClass} style={{ left: `${ballRenderPoint.x}%`, top: `${ballRenderPoint.y}%` }} aria-hidden="true">⚽</span>
+          <span ref={ballElRef} className={liveBallClass} style={{ left: `${ballRenderPoint.x}%`, top: `${ballRenderPoint.y}%` }} aria-hidden="true">⚽</span>
         )}
         {cueActive && cue && <CueOverlay cue={cue} active={cueActive} reducedMotion={motionReduced} />}
         <div className="pitch-players">

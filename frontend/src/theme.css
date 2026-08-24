@@ -1950,6 +1950,10 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 }
 
 .pitch-surface {
+  /* Derived once here so every trail rule can just consume --trail-glide-ms —
+     see the comment on .pitch-live-trail line/path for why the 0.72 divisor
+     matters (it's where pitchTrajectoryDraw finishes drawing). */
+  --trail-glide-ms: calc(var(--ball-glide-ms, 2.5s) / 0.72);
   position: relative;
   width: 100%;
   max-width: 820px;
@@ -2026,7 +2030,12 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   stroke-linecap: round;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  animation: pitchTrajectoryDraw var(--ball-glide-ms, 2.5s) linear both;
+  /* pitchTrajectoryDraw finishes drawing (dashoffset:0) at the 72% mark, then
+     lingers/fades for the rest — so the total duration here must be the
+     ball's own glide time divided by 0.72, or the line reads as "fully drawn"
+     well before the ball (which travels for the *full* --ball-glide-ms)
+     actually gets there. --trail-glide-ms carries that scaled value. */
+  animation: pitchTrajectoryDraw var(--trail-glide-ms, 2.5s) linear both;
 }
 
 /* Shot trajectories (goal/miss overlay line, save/woodwork's shooter→frame
@@ -2067,10 +2076,13 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   transition-duration: 0.35s;
 }
 .pitch-shot-trail line {
-  animation-duration: 0.9s;
+  /* Same 0.72 divisor as --trail-glide-ms, applied to this stage's own fixed
+     ball-transition duration (see .pitch-live-ball-seq) instead of the shared
+     variable, since this leg doesn't participate in the distance-scaled glide. */
+  animation-duration: calc(0.9s / 0.72);
 }
 .pitch-shot-trail-rebound line {
-  animation-duration: 0.35s;
+  animation-duration: calc(0.35s / 0.72);
 }
 
 /* Turnover intent: dotted line toward where the dispossessed move was
@@ -2094,7 +2106,7 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .pitch-live-trail line.pitch-trail-comet,
 .pitch-live-trail path.pitch-trail-comet {
   animation-name: pitchTrajectoryDraw;
-  animation-duration: var(--ball-glide-ms, 2.5s);
+  animation-duration: var(--trail-glide-ms, 2.5s);
   animation-timing-function: linear;
   animation-fill-mode: both;
 }

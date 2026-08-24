@@ -204,6 +204,50 @@ export function teamPitchPoints(players: LivePlayer[], side: PitchSide, formatio
   return points;
 }
 
+/** Minimum x-separation (pitch percentage units) kept between a home column
+ * and an away column once mirrored into the same shared coordinate space. */
+const MIN_COLUMN_GAP = 7;
+
+/**
+ * Two independently-authored formations can put a line at nearly the same x
+ * purely by chance once the away side's is mirrored (e.g. a 3-4-3's midfield
+ * line at x=45 vs a 4-2-3-1 Wide line that mirrors to x=46) — rendering both
+ * teams' markers on top of each other. Groups each side's points by their
+ * (rounded) x column and nudges any home/away column pair closer than
+ * MIN_COLUMN_GAP apart, splitting the correction so neither side moves more
+ * than necessary. Mutates both maps in place.
+ */
+export function resolveColumnCollisions(homePoints: Map<number, PitchPoint>, awayPoints: Map<number, PitchPoint>): void {
+  const groupByColumn = (points: Map<number, PitchPoint>) => {
+    const groups = new Map<number, number[]>();
+    for (const [id, p] of points) {
+      const col = Math.round(p.x);
+      const arr = groups.get(col) ?? [];
+      arr.push(id);
+      groups.set(col, arr);
+    }
+    return groups;
+  };
+  const homeGroups = groupByColumn(homePoints);
+  const awayGroups = groupByColumn(awayPoints);
+  for (const hx of homeGroups.keys()) {
+    for (const ax of awayGroups.keys()) {
+      const gap = ax - hx;
+      if (Math.abs(gap) >= MIN_COLUMN_GAP) continue;
+      const push = (MIN_COLUMN_GAP - Math.abs(gap)) / 2;
+      const dir = gap >= 0 ? 1 : -1;
+      for (const id of homeGroups.get(hx)!) {
+        const p = homePoints.get(id)!;
+        homePoints.set(id, { ...p, x: p.x - dir * push });
+      }
+      for (const id of awayGroups.get(ax)!) {
+        const p = awayPoints.get(id)!;
+        awayPoints.set(id, { ...p, x: p.x + dir * push });
+      }
+    }
+  }
+}
+
 /**
  * Pitch points for formation slots that have no on-pitch player — used to
  * place missing-player ghost markers at the vacated tactical position. Keyed
@@ -505,7 +549,6 @@ export function turnoverIntent(
   sourcePoint: PitchPoint,
   prevZone: string,
   prevSide: PitchSide,
-  attemptedAction: string | null | undefined,
   players: LivePlayer[],
   points: Map<number, PitchPoint>,
   targetPlayerId: number | null = null,
@@ -514,7 +557,12 @@ export function turnoverIntent(
   const authoritativeTarget = targetPlayerId == null ? null : points.get(targetPlayerId);
   if (authoritativeTarget) return { from, to: clampPitch(authoritativeTarget) };
   const to = clampPitch(pointForBall(prevSide, nextZoneTowardAttack(prevZone)));
-  if (attemptedAction !== "PASS" && attemptedAction !== "CROSS") return { from, to };
+  // A carry/dribble/clearance has no "intended receiver" the way a pass does,
+  // but a raw zone anchor with no player-snapping still reads as a stray line
+  // to nowhere in particular (it can coincidentally land right next to the
+  // goalkeeper for a deep zone). Snapping to the nearest actual teammate — a
+  // real marker the eye can anchor to — reads better regardless of action,
+  // even though a pass/cross's target is still the more meaningful of the two.
   const candidates = players
     .filter((p) => p.tacPos !== 1)
     .map((p) => ({ p, pt: points.get(p.id) }))
