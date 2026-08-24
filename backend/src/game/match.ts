@@ -1,4 +1,4 @@
-import type { Club, LiveMatchState, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
+import type { Club, LiveMatchState, LiveTactics, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
 import { nextInt } from "./rng";
 import { lineupForMatch } from "./club";
 import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
@@ -82,6 +82,24 @@ export function tacticsCooldownMinutesRemaining(st: LiveMatchState, side: 0 | 1)
  *  setup also applies the plans/6 §17 switch penalty to that side's in-match
  *  familiarity: the new setup executes from max(start floor, its decayed
  *  stored progress) plus partial credit from the abandoned setup. */
+/** §17 switch transfer on the live snapshot itself: any change of setup
+ *  (style/pressing/direction/formation) trades execution quality immediately;
+ *  the club's persistent map is only READ for the destination's stored
+ *  progress, never written. Shared by every setup-change pathway so none can
+ *  bypass the pricing. */
+function priceLiveSetupSwitch(previous: LiveTactics, next: LiveTactics, context?: LiveTacticsContext): number {
+  const prevCanonical = canonicalFromLive(previous);
+  const nextCanonical = canonicalFromLive(next);
+  const unchanged =
+    prevCanonical.style === nextCanonical.style &&
+    prevCanonical.pressing === nextCanonical.pressing &&
+    prevCanonical.direction === nextCanonical.direction &&
+    prevCanonical.formation === nextCanonical.formation;
+  if (unchanged) return previous.familiarity;
+  const dstDecayed = decayedStoredFamiliarity(context?.familiarityMap, setupKeyFromCanonical(nextCanonical), context?.absoluteGameDay);
+  return switchFamiliarity(previous.familiarity, prevCanonical, nextCanonical, dstDecayed);
+}
+
 export function applyLiveTacticsUpdate(
   st: LiveMatchState,
   side: 0 | 1,
@@ -102,20 +120,7 @@ export function applyLiveTacticsUpdate(
   if (input.style !== undefined) tactics.style = engineStyle(input.style);
   if (input.pressing !== undefined) tactics.pressing = enginePressing(input.pressing);
   if (input.direction !== undefined) tactics.direction = engineDirection(input.direction);
-
-  // §17 switch transfer on the live snapshot itself: mid-match switches trade
-  // execution quality immediately; the club's persistent map is untouched.
-  const prevCanonical = canonicalFromLive(previous);
-  const nextCanonical = canonicalFromLive(tactics);
-  if (
-    prevCanonical.style !== nextCanonical.style ||
-    prevCanonical.pressing !== nextCanonical.pressing ||
-    prevCanonical.direction !== nextCanonical.direction ||
-    prevCanonical.formation !== nextCanonical.formation
-  ) {
-    const dstDecayed = decayedStoredFamiliarity(context?.familiarityMap, setupKeyFromCanonical(nextCanonical), context?.absoluteGameDay);
-    tactics.familiarity = switchFamiliarity(previous.familiarity, prevCanonical, nextCanonical, dstDecayed);
-  }
+  tactics.familiarity = priceLiveSetupSwitch(previous, tactics, context);
 
   // Record the change so the cooldown survives persistence and reloads.
   st.tacticsChangedAtMinute ??= [null, null];
@@ -138,11 +143,8 @@ export function applyLiveFormationChange(
   if (!Number.isInteger(formation) || formation < 0 || formation >= FORMATION_NAMES.length) return "Invalid formation";
   const tactics = side === 0 ? st.homeTactics : st.awayTactics;
   const previous = { ...tactics };
-  if (previous.formation === formation) return null;
-  const prevCanonical = canonicalFromLive(previous);
-  const nextCanonical = { ...prevCanonical, formation };
-  const dstDecayed = decayedStoredFamiliarity(context?.familiarityMap, setupKeyFromCanonical(nextCanonical), context?.absoluteGameDay);
-  tactics.familiarity = switchFamiliarity(previous.familiarity, prevCanonical, nextCanonical, dstDecayed);
+  const candidate = { ...previous, formation };
+  tactics.familiarity = priceLiveSetupSwitch(previous, candidate, context);
   tactics.formation = formation;
   return null;
 }
@@ -303,6 +305,7 @@ export function createLiveMatchState(
 
     // Possession-state engine runtime
     matchClockSeconds: 0,
+    targetMatchClockSeconds: 0,
     period: 1,
     rngState: { seed: rng.seed, state: rng.state },
     controlledBallSeconds: [0, 0],
@@ -450,9 +453,15 @@ export function tickLiveMatch(
   }
   const atPeriod1 = st.period === 1;
   const startClock = st.matchClockSeconds ?? 0;
+  // Advance a nominal timeline, not the already-overshot simulated clock. A
+  // possession action may finish after the requested target; using the actual
+  // clock as the next tick's starting point would compound that overrun and
+  // make streamed matches consume a different RNG path from instant matches.
+  const targetClock = (st.targetMatchClockSeconds ?? startClock) + minutes * 60;
+  st.targetMatchClockSeconds = targetClock;
   // Total regulation end including any already-frozen added time (first + second).
   const totalRegSeconds = MS.timing.regulationSeconds + (st.firstHalfAddedMinutes ?? 0) * 60 + (st.secondHalfAddedMinutes ?? 0) * 60;
-  const target = Math.min(totalRegSeconds, startClock + minutes * 60);
+  const target = Math.min(totalRegSeconds, targetClock);
   const rawFirst = MS.timing.firstHalfEndSeconds;
   const pauseAtHalftime = atPeriod1 && !opts?.ignoreHalfTime && !opts?.resume && target >= rawFirst;
 
@@ -676,36 +685,40 @@ export function rebuildLiveHumanLineup(
     }
   }
   const remaining = setup.subs.filter((player) => !used.has(player.id) && !sentOffIds.has(player.id)).map((player) => player.id);
-  // An interval formation change is a real setup switch: price the §17
-  // transfer before the tactics object below carries the (possibly reduced)
-  // familiarity forward. Same-formation rebuilds are a no-op inside.
-  const side: 0 | 1 = home ? 0 : 1;
-  applyLiveFormationChange(st, side, humanClub.tactics.formation, {
+  // An interval rebuild picks up whatever setup the manager saved on the club
+  // (formation AND style/pressing/direction). Any actual delta against the
+  // snapshot the side has been executing pays the §17 transfer; an unchanged
+  // rebuild is free. This closes the last free-pickup pathway.
+  const context = {
     familiarityMap: humanClub.tacticFamiliarity,
     absoluteGameDay: opts.absoluteGameDay,
-  });
+  };
   if (home) {
     st.homeXI = newOn.slice();
     st.homeOn = newOn.slice();
     st.homeSubs = remaining;
-    st.homeTactics = {
+    const previous = st.homeTactics;
+    const next = {
       formation: humanClub.tactics.formation,
       style: engineStyle(humanClub.tactics.style),
       pressing: enginePressing(humanClub.tactics.pressing),
       direction: engineDirection(humanClub.tactics.direction),
-      familiarity: st.homeTactics?.familiarity ?? 50,
+      familiarity: previous?.familiarity ?? 50,
     };
+    st.homeTactics = { ...next, familiarity: previous ? priceLiveSetupSwitch(previous, next, context) : next.familiarity };
   } else {
     st.awayXI = newOn.slice();
     st.awayOn = newOn.slice();
     st.awaySubs = remaining;
-    st.awayTactics = {
+    const previous = st.awayTactics;
+    const next = {
       formation: humanClub.tactics.formation,
       style: engineStyle(humanClub.tactics.style),
       pressing: enginePressing(humanClub.tactics.pressing),
       direction: engineDirection(humanClub.tactics.direction),
-      familiarity: st.awayTactics?.familiarity ?? 50,
+      familiarity: previous?.familiarity ?? 50,
     };
+    st.awayTactics = { ...next, familiarity: previous ? priceLiveSetupSwitch(previous, next, context) : next.familiarity };
   }
 }
 

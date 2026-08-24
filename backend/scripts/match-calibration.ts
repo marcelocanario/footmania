@@ -39,7 +39,9 @@ function applyOverrides(): void {
 type Sample = { goals: number; shots: number; shotsOnTarget: number; xg: number; corners: number; fouls: number; yellows: number; reds: number; straightReds: number; secondYellowReds: number; passes: number; injuries: number; homePossession: number; homeGoals: number; awayGoals: number; homeXg: number; awayXg: number; homeShots: number; awayShots: number; homeTurnovers: number; awayTurnovers: number; homeCorners: number; awayCorners: number; diagnostics?: MatchSimulationDiagnostics | null };
 type Summary = { name: string; count: number; means: Record<string, number>; percentiles: Record<string, [number, number, number]>; result: { home: number; draw: number; away: number }; goalHistogram: Record<number, number> };
 const ROOT = dirname(fileURLToPath(import.meta.url));
-const REPORT_JSON = join(ROOT, "..", "..", "plans", "match-calibration-report.json");
+// Legacy harness retained for reproducing the previous report only. Never let
+// an exploratory run overwrite the last reviewed/authoritative artifact.
+const REPORT_JSON = join(ROOT, "..", "..", "plans", "match-calibration-legacy-candidate.json");
 const SEED = 0x51a7c0de;
 const POSITIONS: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 2, 3, 1, 4];
 

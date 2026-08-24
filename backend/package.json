@@ -12,7 +12,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:all": "npm test && npm run test:integration && npm run test:calibration",
     "test:watch": "vitest",
-    "calibrate:match": "tsx scripts/match-calibration.ts",
+    "calibrate:match": "tsx scripts/match-calibration-next.ts",
     "regenerate:match-golden": "tsx scripts/regenerate-match-golden.mts",
     "db:generate": "prisma generate",
     "db:upgrade": "prisma db push && tsx scripts/migrate-contract-market.ts",

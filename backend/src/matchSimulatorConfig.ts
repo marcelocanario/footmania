@@ -163,6 +163,12 @@ const actionQualitySchema = z.object({
   defensiveResistanceWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
 });
 
+const numericalDisadvantageSchema = z.object({
+  referencePlayers: z.number().int().positive(),
+  remainingPlayerWorkloadExponent: nonNegativeNumber,
+  maxRemainingPlayerWorkloadMultiplier: z.number().min(1),
+});
+
 const formationSupportSchema = z.record(z.string(), z.record(z.string(), nonNegativeNumber));
 
 const tacticalFamiliaritySchema = z.object({
@@ -173,7 +179,7 @@ const tacticalFamiliaritySchema = z.object({
   executionCeiling: z.number().min(0).max(1),
   // Starting point for a setup that has never been drilled; switching into a
   // previously-drilled setup uses max(floor, its decayed stored value).
-  switchStartFloor: nonNegativeNumber,
+  switchStartFloor: z.number().min(0).max(100),
   // Relative contribution of each tactic dimension to switch similarity.
   switchSimilarityWeights: z.object({
     formation: nonNegativeNumber,
@@ -306,6 +312,7 @@ const matchSimulatorSchema = z
     homeAdvantage: homeAdvantageSchema,
     normalization: normalizationSchema,
     actionQuality: actionQualitySchema,
+    numericalDisadvantage: numericalDisadvantageSchema,
     formationSupport: formationSupportSchema,
     tacticalFamiliarity: tacticalFamiliaritySchema,
     tacticalActionMix: tacticalActionMixSchema,

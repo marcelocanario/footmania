@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "status": "pre-run calibration contract",
+  "neutralPopulationBands": {
+    "goals": [2.4, 3.0],
+    "shots": [22, 27],
+    "shotsOnTarget": [7.5, 10],
+    "xg": [2.3, 2.8],
+    "corners": [8.5, 11.5],
+    "fouls": [22, 31],
+    "yellows": [3.5, 4.7],
+    "reds": [0.04, 0.1],
+    "passes": [900, 1050],
+    "injuries": [0.5, 0.8]
+  },
+  "tacticalFamiliarity": {
+    "latentInfluenceContract": {
+      "team": 0.4,
+      "tactics": 0.35,
+      "luck": 0.25,
+      "rule": "Familiarity scales the tactical component only; it is not an independent team-strength or result modifier."
+    },
+    "equalFamiliarityLevels": [25, 50, 75, 90, 100],
+    "equalSideNeutrality": {
+      "maxHomeAwayWinRateDifference": 0.02,
+      "maxAbsoluteXgDifference": 0.05,
+      "maxAbsolutePossessionDifferencePercentagePoints": 1.0,
+      "rule": "At a neutral venue, identical teams with equal familiarity remain symmetric at every tested familiarity value. Every equal-familiarity row must also remain inside the neutral population bands."
+    },
+    "relativeGapChecks": {
+      "gaps": [25, 40],
+      "maxMirroredWinRateDifference": 0.025,
+      "maxMirroredXgDifferenceResidual": 0.06,
+      "rule": "A larger familiarity gap must not produce a smaller absolute response, and reversing the gap must reverse the measured effect without side bias."
+    }
+  },
+  "permanentPlayerLoss": {
+    "zeroLossControl": {
+      "pairedSeedExactNoOp": true,
+      "rule": "Segmenting a match at a nominal loss minute without removing a player must be bit-identical to the paired segmented control and remain within the normal baseline."
+    },
+    "onePlayerOutcomeTargets": [
+      { "minute": 15, "elevenPlayerWin": 0.62, "draw": 0.18, "tenPlayerWin": 0.2 },
+      { "minute": 30, "elevenPlayerWin": 0.58, "draw": 0.2, "tenPlayerWin": 0.22 },
+      { "minute": 45, "elevenPlayerWin": 0.54, "draw": 0.21, "tenPlayerWin": 0.25 },
+      { "minute": 60, "elevenPlayerWin": 0.49, "draw": 0.23, "tenPlayerWin": 0.28 },
+      { "minute": 75, "elevenPlayerWin": 0.44, "draw": 0.24, "tenPlayerWin": 0.32 }
+    ],
+    "onePlayerTechnicalGuardrails": {
+      "disadvantagedPossessionRelativeChange": [-0.12, -0.02],
+      "disadvantagedPassesRelativeChange": [-0.28, -0.08],
+      "disadvantagedShotsRelativeChange": [-0.2, 0],
+      "minute60DisadvantagedXgDifferenceShift": [-0.65, -0.35]
+    },
+    "multiplePlayerHeuristic": {
+      "empiricalTargetAvailable": false,
+      "twoPlayerSeverityRelativeToOnePlayer": [1.5, 2.5],
+      "threePlayerSeverityRelativeToOnePlayer": [2.0, 3.5],
+      "rule": "Use the same role- and zone-local mechanism for every missing player. Possession, xG and win impact must worsen monotonically with each additional loss; no score or win-probability modifier is permitted."
+    },
+    "workload": {
+      "empiricalDirection": "Remaining players cover more distance and have shorter recovery between high-intensity efforts after an early dismissal.",
+      "numericTargetAvailable": false,
+      "rule": "Apply only a capped compensatory workload multiplier. Treat its magnitude as a heuristic and validate that 11 players is an exact 1.0 multiplier."
+    },
+    "causalPathways": {
+      "possessionAndPasses": "formation support and local action execution",
+      "shotsAndXg": "progression, local attacking density and defensive coverage",
+      "fatigue": "capped workload redistribution over remaining players",
+      "winProbability": "emergent only; never modified directly",
+      "injuryWithoutSubstitutes": "same permanent on-field player-loss mechanism after departure; no separate empirical target"
+    }
+  },
+  "sources": [
+    {
+      "name": "Ridder, Cramer and Hopstaken (1994), Down to Ten",
+      "url": "https://www.tandfonline.com/doi/abs/10.1080/01621459.1994.10476850",
+      "use": "one-player result probabilities by dismissal minute"
+    },
+    {
+      "name": "García-Rubio et al. (2022), Influence of Red and Yellow Cards on Team Performance",
+      "url": "https://link.springer.com/article/10.1007/s10479-022-04733-0",
+      "use": "scoring-rate and xG-difference response around minute 60"
+    },
+    {
+      "name": "Lago-Peñas et al. (2016), Effects of Player Dismissal on Technical Match Performance",
+      "url": "https://ideas.repec.org/a/taf/rpanxx/v16y2016i3p792-800.html",
+      "use": "directional possession, passing and shooting guardrails"
+    },
+    {
+      "name": "Carling and Bloomfield (2010), Effect of an Early Dismissal on Player Work-rate",
+      "url": "https://pubmed.ncbi.nlm.nih.gov/19027360/",
+      "use": "direction of compensatory workload; no numeric multiplier"
+    }
+  ]
+}

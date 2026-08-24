@@ -4,6 +4,8 @@ import { nextDouble, nextInt, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
 import { ENERGY_INJURY_MODEL, energyLoss, injuryRiskMultiplier, loadIncrement, physicalSkill, readiness, recordInjury } from "./energyInjury";
 import { gameConfig, MP_CONFIG } from "../config";
+import { INITIAL_FAMILIARITY, tacticalExecution, tacticalExecutionContrast } from "./familiarity";
+import { remainingPlayerWorkloadMultiplier } from "./numericalDisadvantage";
 
 // ---------------------------------------------------------------------------
 // Possession-state match engine (plans/6. match-simulator-overhaul.md).
@@ -217,11 +219,6 @@ export function enginePressing(pressing: number): number {
   // [0,1] so press intensity is meaningful; `pressing.intensityDivisor` in
   // config targets a 0-100 scale that the club model does not use.
   return Math.max(0, Math.min(1, pressing / 2));
-}
-
-/** Tactical familiarity execution factor (§17). */
-function execution(familiarity: number): number {
-  return MS.tacticalFamiliarity.executionFloor + (MS.tacticalFamiliarity.executionCeiling - MS.tacticalFamiliarity.executionFloor) * (familiarity / 100);
 }
 
 // ---------------------------------------------------------------------------
@@ -556,16 +553,21 @@ function shapeSignal(eng: Engine, zone: MatchZone): number {
 // Pressing (§18)
 // ---------------------------------------------------------------------------
 
-function pressSignal(eng: Engine, side: Side, zone: MatchZone): number {
+function pressSignalAtExecution(side: Side, zone: MatchZone, executionFactor: number): number {
   const intensity = side.tactics.pressing;
   if (intensity <= 0) return 0;
   const localSupport = (side.support[zone] ?? 0) / Math.max(1e-6, side.expectedSupport[zone] ?? 1);
   const local = involvedPlayers(side, zone);
   const readinessMean = local.length > 0 ? weightedMean(local.map((l) => l.ps.readiness), local.map((l) => l.weight)) : 1;
-  const raw = intensity * localSupport * execution(side.tactics.familiarity) * readinessMean;
+  const raw = intensity * localSupport * executionFactor * readinessMean;
   // Standardize against the neutral reference (raw ≈ 1 at moderate press).
   const z = (raw - 0.6) / 0.5;
   return clamp(z, -MS.normalization.contestZClamp, MS.normalization.contestZClamp);
+}
+
+function pressSignal(eng: Engine, side: Side, zone: MatchZone): number {
+  const opponent = side === eng.home ? eng.away : eng.home;
+  return pressSignalAtExecution(side, zone, tacticalExecutionContrast(side.tactics.familiarity, opponent.tactics.familiarity));
 }
 
 // ---------------------------------------------------------------------------
@@ -610,13 +612,15 @@ function robustTacticalSigma(eng: Engine): number {
   const key = eng.st;
   const cached = tacticalSigmaCache.get(key);
   if (cached !== undefined) return cached;
-  // Compute a representative sigma by evaluating the tactical component spread
-  // across all zones with the current sides' tactics (plan §19).
+  // Compute a representative sigma at the fixed starting-familiarity reference.
+  // Letting actual familiarity alter the denominator would partially normalize
+  // away the proportional execution effect that calibration needs to measure.
   const samples: number[] = [];
+  const referenceExecution = tacticalExecution(INITIAL_FAMILIARITY);
   for (const zone of ZONES) {
     samples.push(shapeSignal(eng, zone));
-    samples.push(pressSignal(eng, sideOf(eng, eng.possessionSide), zone));
-    samples.push(pressSignal(eng, opp(eng, eng.possessionSide), zone));
+    samples.push(pressSignalAtExecution(sideOf(eng, eng.possessionSide), zone, referenceExecution));
+    samples.push(pressSignalAtExecution(opp(eng, eng.possessionSide), zone, referenceExecution));
     samples.push(directionSignal(eng, "LEFT"));
     samples.push(directionSignal(eng, "CENTRE"));
     samples.push(directionSignal(eng, "RIGHT"));
@@ -822,15 +826,17 @@ function asymmetricActionUtility(eng: Engine, action: string): number {
   return scale * (MS.tacticalActionMix.asymmetricActionUtility[action] ?? 0);
 }
 
-/** Style/direction/familiarity tactical signal for an action intent (§14/§19). */
+/** Style/shape tactical signal for an action intent (§14/§17/§19).
+ * Familiarity scales only style execution. Adding the same
+ * familiarity constant to every candidate would cancel out in the softmax. */
 function tacticalSignalForAction(eng: Engine, action: string): number {
   const side = sideOf(eng, eng.possessionSide);
   const style = side.tactics.style;
+  const opponent = opp(eng, eng.possessionSide);
+  const executionFactor = tacticalExecutionContrast(side.tactics.familiarity, opponent.tactics.familiarity);
   const components: number[] = [];
   // Shape
   components.push(shapeSignal(eng, eng.zone));
-  // Familiarity
-  components.push((side.tactics.familiarity - 50) / 50);
   if (style === "CONTROL") {
     // riskScore(action) = robust standardized logit(TURNOVER | state, action)
     const legal = Object.keys(intentBaseline(eng)).filter((a) => a !== "SHOT");
@@ -839,13 +845,13 @@ function tacticalSignalForAction(eng: Engine, action: string): number {
     const idx = legal.indexOf(action);
     if (idx >= 0) {
       const styleSignal = -standardized[idx];
-      components.push(styleSignal);
+      components.push(styleSignal * executionFactor);
     }
   } else if (style === "COUNTER") {
     if (eng.phase === "TRANSITION") {
       const expected = Math.max(expectedActionSeconds(action), MS.timing.instantActionSeconds);
       const speed = Math.max(LONG_RANK[eng.zone] / 3, 0) / expected;
-      components.push(speed);
+      components.push(speed * executionFactor);
     }
     // else styleRaw = 0
   }
@@ -898,8 +904,9 @@ function resolveOutcome(eng: Engine, action: string): Outcome {
     MS.normalization.contestZClamp
   );
   const zPress = pressSignal(eng, def, eng.zone);
-  const continueU = utility(eng, Math.log(base.continue), zExec, -INFLUENCE_SCALES.tacticsScale * zPress, 0);
-  const turnoverU = utility(eng, Math.log(base.turnover), -zExec, INFLUENCE_SCALES.tacticsScale * zPress, 0);
+  // `utility` applies the configured tactical share exactly once.
+  const continueU = utility(eng, Math.log(base.continue), zExec, -zPress, 0);
+  const turnoverU = utility(eng, Math.log(base.turnover), -zExec, zPress, 0);
   const foulShift = foulContextShift(eng, def);
   const foulU = utility(eng, Math.log(base.foul), 0, 0, foulShift);
   const retainedU = utility(eng, Math.log(base.retainedRestart), 0, 0, 0);
@@ -922,10 +929,11 @@ function destinationUtility(eng: Engine, action: string, next: MatchZone): numbe
   const retentionScore = 1 - Math.abs(progressScore);
   const side = sideOf(eng, eng.possessionSide);
   const style = side.tactics.style;
+  const opponent = opp(eng, eng.possessionSide);
+  const executionFactor = tacticalExecutionContrast(side.tactics.familiarity, opponent.tactics.familiarity);
 
   const components: number[] = [];
   components.push(shapeSignal(eng, next));
-  components.push((side.tactics.familiarity - 50) / 50);
   let styleRaw = 0;
   if (style === "CONTROL") {
     styleRaw = retentionScore;
@@ -937,9 +945,9 @@ function destinationUtility(eng: Engine, action: string, next: MatchZone): numbe
       styleRaw = 0;
     }
   }
-  components.push(styleRaw);
+  components.push(styleRaw * executionFactor);
   // Direction preference (lane handled separately, but include for wide/centre routing).
-  const dir = directionSignal(eng, destinationLaneFor(eng, next));
+  const dir = directionSignal(eng, destinationLaneFor(eng, next)) * executionFactor;
   const zTacticsTotal = combineTactics(eng, [...components, dir]);
   // Home advantage creation: apply to attacking PROGRESSION utility (§29) so
   // the home team reaches advanced/box zones slightly more often.
@@ -1479,11 +1487,12 @@ function resolveInjuryHazard(eng: Engine, action: string, minute: number, addedT
 
 function fatigueEnergyLoss(eng: Engine, side: Side, dtSeconds: number): void {
   const minutes = dtSeconds / 60;
+  const workloadMultiplier = remainingPlayerWorkloadMultiplier(side.on.length);
   for (const ps of side.on) {
     const involvementWeight = involvement(tacPosRole(ps.tacPos), eng.zone);
     const press = side.tactics.pressing * 100;
-    ps.energy = Math.max(0, ps.energy - energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: physicalSkill({ skills: ps.skills }), position: ps.position, pressing: press, involvement: involvementWeight, minutes }));
-    eng.playerMatchLoad[ps.id] = (eng.playerMatchLoad[ps.id] ?? 0) + loadIncrement({ position: ps.position, pressing: press, involvement: involvementWeight, minutes });
+    ps.energy = Math.max(0, ps.energy - workloadMultiplier * energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: physicalSkill({ skills: ps.skills }), position: ps.position, pressing: press, involvement: involvementWeight, minutes }));
+    eng.playerMatchLoad[ps.id] = (eng.playerMatchLoad[ps.id] ?? 0) + workloadMultiplier * loadIncrement({ position: ps.position, pressing: press, involvement: involvementWeight, minutes });
     refreshReadiness(ps, eng.centers);
   }
   // Formation support/coverage feeds tactical and organisation signals, so it
@@ -1641,7 +1650,9 @@ function tryActivateCounter(eng: Engine): void {
   const advancedRecoveryValue = LONG_RANK[eng.zone] / 3;
   const commitment = clamp(committedForward(def) / MS.defensiveOrganisation.playersCommittedForwardNormalizer, 0, 1);
   const counterOpportunity = advancedRecoveryValue * commitment * (1 - def.organisation);
-  const counterExecution = execution(sideOf(eng, att).tactics.familiarity);
+  const counterSide = sideOf(eng, att);
+  const counterOpponent = opp(eng, att);
+  const counterExecution = tacticalExecutionContrast(counterSide.tactics.familiarity, counterOpponent.tactics.familiarity);
   const counterSignal =
     counterOpportunity *
     (MS.counterattack.familiarityFloorWeight + MS.counterattack.familiarityExecutionWeight * counterExecution);
@@ -2088,8 +2099,6 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
     // Freeze stoppage as soon as we reach the raw boundary so the added window is known before stepping into it.
     ensureStoppageComputed(eng);
     const boundary = periodEndSeconds(eng);
-    // Respect explicit target (live tick) — stop when we have reached it.
-    if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
     if (eng.clockSeconds >= boundary) {
       if (eng.period === 1) {
         pushHalfTimeWhistle(eng);
@@ -2107,7 +2116,7 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
         pushSecondHalfKickoff(eng);
         continue;
       }
-      if (eng.st.decider && eng.st.scores[0] === eng.st.scores[1] && !eng.extraTimePlayed) {
+      if (eng.st.decider && eng.scores[0] === eng.scores[1] && !eng.extraTimePlayed) {
         eng.extraTimePlayed = true;
         pushShootoutAnnouncement(eng);
         doShootout(eng);
@@ -2116,6 +2125,11 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
       eng.ended = true;
       break;
     }
+    // Respect explicit target (live tick) after resolving any boundary that
+    // the preceding action crossed. Instant runs do the same boundary work on
+    // their next loop; checking the target first would defer a half/full-time
+    // transition and consume a different subsequent RNG path.
+    if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
     // If we have an explicit target and the next step would overshoot it, let stepPossession
     // handle the clock increment and then the next loop will break on the target check above.
     if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
@@ -2266,7 +2280,7 @@ function buildEngine(
     injuries: st.injuries ?? [],
     substitutions: st.substitutions ?? [],
     events: st.events,
-    isCounter: false,
+    isCounter: st.isCounter ?? false,
     lastAction: st.lastAction ?? null,
     prevZone: st.prevZone ?? null,
     ballCarrierId: st.ballCarrierId != null && (st.withBall === 0 ? homeXI : awayXI).some((p) => p.id === st.ballCarrierId)
@@ -2274,7 +2288,7 @@ function buildEngine(
       : null,
     ballActionSequence: st.ballActionSequence ?? 0,
     lastBallAction: st.lastBallAction ? { ...st.lastBallAction } : null,
-    possessionHighRecovery: false,
+    possessionHighRecovery: st.possessionHighRecovery ?? false,
     opponentControlSeconds: st.opponentControlSeconds ?? [0, 0],
     pressureAdvancedStates: st.pressureWindowAdvancedStates ?? [0, 0],
     pressureWindowStart: st.pressureWindowStartSeconds ?? [0, 0],
@@ -2411,6 +2425,7 @@ function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimula
   st.teamStats = eng.stats;
   st.stats = { home: { ...eng.stats.home }, away: { ...eng.stats.away } };
   st.isCounter = eng.isCounter;
+  st.possessionHighRecovery = eng.possessionHighRecovery;
   st.lastAction = eng.lastAction;
   st.prevZone = eng.prevZone;
   st.ballCarrierId = eng.ballCarrierId;

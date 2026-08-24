@@ -4037,7 +4037,7 @@
           }
         },
         "finisherVsGoalkeeperLogitCoefficient": 0.35,
-        "localDensityCoefficient": 1,
+        "localDensityCoefficient": 20,
         "shooterRoleWeights": {
           "ST": 1,
           "LW": 0.8,
@@ -4147,7 +4147,7 @@
         "minTacticalSigma": 0.25
       },
       "actionQuality": {
-        "localDensityCoefficient": 3,
+        "localDensityCoefficient": 0.6,
         "attributeWeights": {
           "PASS": {
             "technical": 1
@@ -4204,6 +4204,14 @@
             "physical": 0.6
           }
         }
+      },
+      "numericalDisadvantage": {
+        // Formation support already controls possession, coverage and xG.
+        // This separate, capped pathway models only the extra compensatory
+        // work performed by each remaining player when a side is short-handed.
+        "referencePlayers": 11,
+        "remainingPlayerWorkloadExponent": 0.5,
+        "maxRemainingPlayerWorkloadMultiplier": 1.2
       },
       "formationSupport": {
         "GK": {

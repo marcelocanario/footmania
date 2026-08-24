@@ -8,8 +8,9 @@
 // setup you switch INTO) and it lets each drilled setup retain its progress.
 //
 // All tunables come from MATCH_SIMULATOR_CONFIG.tacticalFamiliarity; the only
-// structural constant here is INITIAL_FAMILIARITY, which is the neutral center
-// of the 0..100 scale that the centered tactical signals use as ((f-50)/50).
+// structural constant here is INITIAL_FAMILIARITY, the starting point for an
+// untracked setup. Familiarity scales tactical execution; it is never a
+// stand-alone team-quality bonus.
 // ---------------------------------------------------------------------------
 
 import { gameConfig } from "../config";
@@ -21,6 +22,32 @@ import type { Club, LiveTactics, Tactics } from "./types";
 export const INITIAL_FAMILIARITY = 50;
 /** Storage hygiene cap: keep at most this many setups' progress per club. */
 const MAX_TRACKED_SETUPS = 12;
+
+/** Linear execution factor from plans/6 §17. Keeping this calculation in one
+ * place prevents pressing, counters and tactical choices from assigning
+ * different meanings to the same familiarity value. */
+export function tacticalExecution(familiarity: number): number {
+  const cfg = MS.tacticalFamiliarity;
+  const clamped = Math.max(0, Math.min(100, familiarity));
+  return cfg.executionFloor + (cfg.executionCeiling - cfg.executionFloor) * (clamped / 100);
+}
+
+/**
+ * Relative execution for a side facing an opponent's setup.
+ *
+ * A shared familiarity level must not change the match's common baseline: two
+ * identical teams at 25, 50, or 90 familiarity should execute equally well on
+ * average. Only the difference between the two sides is therefore applied to
+ * the neutral reference. The configured execution bounds remain hard caps.
+ */
+export function tacticalExecutionContrast(ownFamiliarity: number, opponentFamiliarity: number): number {
+  const cfg = MS.tacticalFamiliarity;
+  const reference = tacticalExecution(INITIAL_FAMILIARITY);
+  const raw = reference + tacticalExecution(ownFamiliarity) - tacticalExecution(opponentFamiliarity);
+  const low = Math.min(cfg.executionFloor, cfg.executionCeiling);
+  const high = Math.max(cfg.executionFloor, cfg.executionCeiling);
+  return Math.max(low, Math.min(high, raw));
+}
 
 export interface TacticFamiliarityEntry {
   /** Drilled familiarity 0..100 for this exact setup (already includes all

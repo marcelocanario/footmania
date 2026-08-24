@@ -10,6 +10,8 @@ import {
   setupKey,
   switchFamiliarity,
   setupSimilarity,
+  tacticalExecution,
+  tacticalExecutionContrast,
 } from "../src/game/familiarity";
 import { createLiveMatchState, applyLiveTacticsUpdate, applyLiveFormationChange, rebuildLiveHumanLineup, tickLiveMatch } from "../src/game/match";
 import { finalizeLiveMatch } from "../src/game/world";
@@ -20,6 +22,25 @@ import { FORMATION_POSITIONS, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } fro
 import type { Club, Player } from "../src/game/types";
 
 let clubId = 1;
+
+describe("tactical familiarity: execution scale", () => {
+  it("is linear, bounded, and never exceeds the configured tactical share", () => {
+    expect(tacticalExecution(-10)).toBe(tacticalExecution(0));
+    expect(tacticalExecution(50)).toBeCloseTo((tacticalExecution(0) + tacticalExecution(100)) / 2, 10);
+    expect(tacticalExecution(110)).toBe(tacticalExecution(100));
+    expect(tacticalExecution(25)).toBeLessThan(tacticalExecution(50));
+    expect(tacticalExecution(50)).toBeLessThan(tacticalExecution(90));
+  });
+
+  it("centers common execution and preserves only the familiarity gap", () => {
+    const reference = tacticalExecution(50);
+    expect(tacticalExecutionContrast(25, 25)).toBeCloseTo(reference, 10);
+    expect(tacticalExecutionContrast(90, 90)).toBeCloseTo(reference, 10);
+    expect(tacticalExecutionContrast(90, 25)).toBeGreaterThan(reference);
+    expect(tacticalExecutionContrast(25, 90)).toBeLessThan(reference);
+  });
+});
+
 function club(overrides: Partial<Club> = {}): Club {
   return {
     id: clubId++,
@@ -336,6 +357,28 @@ describe("tactical familiarity: engine integration", () => {
     expect(st.homeTactics.familiarity).toBeCloseTo(25 + 55 * (0.75 + 0.25 * jaccard(4, 7)) * 0.35, 2);
 
     // Rebuilding again with unchanged tactics must not re-apply any penalty.
+    const after = st.homeTactics.familiarity;
+    rebuildLiveHumanLineup(st, human, players, { absoluteGameDay: 5 });
+    expect(st.homeTactics.familiarity).toBe(after);
+  });
+
+  it("rebuildLiveHumanLineup prices persistent style/pressing/direction edits picked up at halftime", () => {
+    const rng = createRng(23);
+    const human = club({ id: 501, tacticFamiliarity: { "4-0-0-0": { familiarity: 80, lastUsedAbsoluteGameDay: null } } });
+    const opponent = club({ id: 502 });
+    const players = [...squad(rng, human), ...squad(rng, opponent)];
+    const st = createLiveMatchState(rng, human, opponent, players, { matchId: 71, competitionId: 1, fixtureId: 72 });
+    tickLiveMatch(rng, human, opponent, players, st, 52);
+
+    // Manager saved a persistent COUNTER flip during the interval; the rebuild
+    // must price it exactly like a live switch would (sim 0.75, undrilled dst).
+    human.tactics = { ...human.tactics, style: 2 };
+    rebuildLiveHumanLineup(st, human, players, { absoluteGameDay: 5 });
+    expect(st.homeTactics.style).toBe("COUNTER");
+    expect(st.homeTactics.formation).toBe(4);
+    expect(st.homeTactics.familiarity).toBeCloseTo(25 + 55 * 0.75 * 0.35, 2);
+
+    // And an unchanged rebuild stays free.
     const after = st.homeTactics.familiarity;
     rebuildLiveHumanLineup(st, human, players, { absoluteGameDay: 5 });
     expect(st.homeTactics.familiarity).toBe(after);

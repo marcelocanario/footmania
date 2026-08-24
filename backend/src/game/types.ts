@@ -516,6 +516,12 @@ export interface LiveMatchState {
   // -------------------------------------------------------------------------
   /** Current match-clock seconds (controlled-ball + dead-ball time). */
   matchClockSeconds: number;
+  /**
+   * Nominal simulated clock target advanced by live ticks. Action durations can
+   * overshoot this target; keeping it separately prevents that overshoot from
+   * compounding when a match is resumed on the next worker tick.
+   */
+  targetMatchClockSeconds?: number;
   period: 1 | 2;
   /** Seeded RNG stream owned by the engine. */
   rngState: RngState;

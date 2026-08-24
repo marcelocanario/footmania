@@ -299,8 +299,8 @@ describe("live match engine", () => {
     const rng2 = createRng(99);
     const home = makeClub(75);
     const away = makeClub(75);
-    const players1 = [...makeSquad(rng1, home, 30), ...makeSquad(rng1, away, 30)];
-    const players2 = [...makeSquad(rng2, home, 30), ...makeSquad(rng2, away, 30)];
+    const players1 = [...makeSquad(rng1, home, 30), ...makeSquad(rng1, away, 30, 30)];
+    const players2 = [...makeSquad(rng2, home, 30), ...makeSquad(rng2, away, 30, 30)];
     const instant = simulateMatch(rng1, home, away, players1, { competitionId: 1, fixtureId: 1 });
     const st = createLiveMatchState(rng2, home, away, players2, { matchId: 1, competitionId: 1, fixtureId: 1 });
     let guard = 0;
@@ -311,7 +311,7 @@ describe("live match engine", () => {
     const match = buildMatchFromState(st, home, away, players2);
     expect(match.homeScore).toBe(instant.match.homeScore);
     expect(match.awayScore).toBe(instant.match.awayScore);
-    expect(st.events.length).toBe(instant.match.events.length);
+    expect(st.events).toEqual(instant.match.events);
   });
 
   it("does not finish a streamed match before second-half added time", () => {

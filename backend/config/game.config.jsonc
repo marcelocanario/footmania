@@ -263,7 +263,7 @@
   },
 
   "injuries": {
-    "matchTargetPerMatch": 0.35,
+    "matchTargetPerMatch": 0.9,
     "trainingTargetPerClubSeason": 1.5,
     "severityScale": 1.0,
     // Auto-replace a player removed by a match injury with the best

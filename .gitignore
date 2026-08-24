@@ -35,3 +35,6 @@ Thumbs.db
 
 #To-do file
 ./todo.txt
+
+#Calibration
+calibration/
