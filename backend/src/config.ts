@@ -111,6 +111,8 @@ const gameConfigSchema = z
         halftimePauseMinutes: z.number().int().min(0).max(30),
         tacticsCooldownMatchMinutes: z.number().int().min(0).max(90),
         maxSubsPerSide: z.number().int().min(1).max(11),
+        // Pre-game prep window (real minutes before kickoff). 0 disables.
+        pregameWindowMinutes: z.number().int().min(0).max(720),
       })
       .partial()
       .optional(),
@@ -422,6 +424,14 @@ export const MP_CONFIG = {
   get maxSubsPerSide(): number {
     const raw = (gameConfig as unknown as { liveMatch?: { maxSubsPerSide?: number } })?.liveMatch;
     return Math.max(1, Math.min(11, raw?.maxSubsPerSide ?? 5));
+  },
+  // Real minutes before a scheduled kickoff that the pre-game prep screen opens
+  // for the human clubs. Purely a UI window: lineup/tactics saves were already
+  // unrestricted, and the saved lineup is applied at kickoff either way.
+  // 0 disables the prep window.
+  get pregameWindowMinutes(): number {
+    const raw = (gameConfig as unknown as { liveMatch?: { pregameWindowMinutes?: number } })?.liveMatch;
+    return Math.max(0, Math.min(720, raw?.pregameWindowMinutes ?? 60));
   },
   // How often (ms) the worker loop wakes up.
   workerIntervalMs: 5000,

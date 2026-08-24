@@ -12,6 +12,8 @@ export default defineConfig({
       "tests/seasonArchive.test.ts",
       "tests/adminFeatures.integration.test.ts",
       "tests/teamProfile.integration.test.ts",
+      "tests/settings.integration.test.ts",
+      "tests/familiarity.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 90000,

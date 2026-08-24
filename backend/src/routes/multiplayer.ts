@@ -356,6 +356,7 @@ export async function multiplayerRoutes(app: FastifyInstance) {
   app.get("/settings", async () => ({
     maxContractSeasons: gameConfig.maxContractSeasons,
     matchDurationMinutes: MP_CONFIG.matchDurationMinutes,
+    pregameWindowMinutes: MP_CONFIG.pregameWindowMinutes,
   }));
 
   // Countries list for club creation.

@@ -24,6 +24,7 @@ function write(n: number) {
 interface SettingsState {
   matchDurationMinutes: number;
   maxContractSeasons: number;
+  pregameWindowMinutes: number;
   loading: boolean;
   load: () => Promise<void>;
 }
@@ -31,6 +32,7 @@ interface SettingsState {
 export const useSettings = create<SettingsState>((set) => ({
   matchDurationMinutes: typeof window !== "undefined" ? read() : 30,
   maxContractSeasons: 5,
+  pregameWindowMinutes: 60,
   loading: false,
 
   load: async () => {
@@ -46,6 +48,10 @@ export const useSettings = create<SettingsState>((set) => ({
       const maxSeasons = Math.round(res.maxContractSeasons ?? 5);
       if (Number.isFinite(maxSeasons) && maxSeasons >= 1) {
         set({ maxContractSeasons: maxSeasons });
+      }
+      const pregameWindow = Math.round(res.pregameWindowMinutes ?? 60);
+      if (Number.isFinite(pregameWindow) && pregameWindow >= 0) {
+        set({ pregameWindowMinutes: pregameWindow });
       }
     } catch {
       /* keep local value */

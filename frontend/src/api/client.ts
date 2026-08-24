@@ -107,7 +107,7 @@ export interface ClubView {
   coachEditAllowed?: boolean;
   trainingFocus: "assistant" | "primary" | "secondary";
   competitionState?: string;
-  tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string } | null;
+  tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string; familiarity?: number; projections?: TacticProjection[] } | null;
   trophies: Record<string, number>;
   ledger: { income: LedgerEntry[]; expense: LedgerEntry[] };
   finance?: { activeBidCommitments: number; remainingSalaryCommitments: number; contingentSalary: number; immediateAvailableCash: number; remainingSeasonFraction: number; financialCushion: number; status: "SAFE" | "AT_RISK" | "NEGATIVE_CASH" };
@@ -760,6 +760,22 @@ export interface LiveTactics {
   direction: number;
 }
 
+/** Server-computed plans/6 §17 switch-transfer projection for one setup. */
+export interface TacticProjection {
+  style: number;
+  pressing: number;
+  direction: number;
+  familiarity: number;
+}
+
+/** Tactics view as delivered by the live-state API (request payload plus the
+ *  server-supplied familiarity fields). */
+export interface LiveTacticsView extends LiveTactics {
+  /** In-match familiarity with this side's current setup. */
+  familiarity: number;
+  projections: TacticProjection[];
+}
+
 export interface LiveBallAction {
   sequence: number;
   action: string;
@@ -834,8 +850,8 @@ export interface LiveState {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
-  homeTactics: LiveTactics;
-  awayTactics: LiveTactics;
+  homeTactics: LiveTacticsView;
+  awayTactics: LiveTacticsView;
   /** Live-match tactics lock: match-minutes remaining per side (0 = unlocked). */
   homeTacticsCooldownMinutes: number;
   awayTacticsCooldownMinutes: number;
@@ -911,6 +927,7 @@ export interface MatchEvents {
 export interface Settings {
   matchDurationMinutes: number;
   maxContractSeasons?: number;
+  pregameWindowMinutes?: number;
 }
 
 // --- In-flight dedupe + TTL cache for GET requests ---

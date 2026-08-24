@@ -672,6 +672,44 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .live-match-alert-action { white-space: nowrap; }
 
+/* Pre-game prep variant: same attention-drawing layout as the live alert but
+   amber/gold and without the pulsing "on air" red, so a prep window reads as
+   preparation, not as a match in progress. */
+.live-match-alert.pregame {
+  border-color: rgba(240, 180, 41, 0.58);
+  border-left-color: var(--gold-2);
+  background:
+    radial-gradient(340px 160px at 0% 50%, rgba(240, 180, 41, 0.2), transparent 72%),
+    linear-gradient(110deg, rgba(240, 180, 41, 0.16), rgba(240, 180, 41, 0.07) 58%, rgba(12, 28, 17, 0.96));
+  box-shadow: 0 16px 36px -24px rgba(240, 180, 41, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.live-match-alert.pregame .live-match-alert-icon {
+  border-color: rgba(240, 180, 41, 0.55);
+  color: var(--gold-2);
+  background: rgba(240, 180, 41, 0.16);
+  box-shadow: 0 0 24px -8px rgba(240, 180, 41, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.live-match-alert.pregame .live-match-alert-eyebrow { color: var(--gold-2); }
+
+/* Amber "pre-game prep" pill on the prep screen header — deliberately not the
+   pulsing .live-tag so preparation never reads as a match in progress. */
+.pregame-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid rgba(240, 180, 41, 0.5);
+  border-radius: 999px;
+  color: var(--gold-2);
+  background: rgba(240, 180, 41, 0.08);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 /* ---------- buttons ---------- */
 
 .btn {
@@ -1945,7 +1983,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .pitch-lines { z-index: 1; }
 .pitch-trail { z-index: 3; pointer-events: none; }
-.pitch-trail line { stroke: rgba(255, 217, 122, 0.9); stroke-width: 0.8; stroke-dasharray: 2 1.5; animation: pitchTrail 0.8s ease-out both; }
+.pitch-trail line,
+.pitch-trail path { stroke: rgba(255, 217, 122, 0.9); stroke-width: 0.8; stroke-dasharray: 2 1.5; fill: none; animation: pitchTrail 0.8s ease-out both; }
 .pitch-ball-layer { z-index: 4; pointer-events: none; overflow: visible; }
 .pitch-ball { fill: #fff; stroke: rgba(4, 19, 10, 0.65); stroke-width: 0.35; filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.55)); }
 .pitch-ball-set-piece .pitch-ball { fill: var(--gold-2); }
@@ -1966,7 +2005,11 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   line-height: 1;
   pointer-events: none;
   filter: drop-shadow(0 2px 2px rgba(0, 0, 0, 0.65));
-  transition: left 1.8s cubic-bezier(0.4, 0, 0.2, 1), top 1.8s cubic-bezier(0.4, 0, 0.2, 1);
+  /* --ball-glide-ms is set per-move (see MatchPitch's trajectory effect),
+     scaled to travel distance so a long diagonal ball doesn't cover the same
+     ground as a 5-yard pass in the same fixed window. The trail's draw
+     animation below reads the same variable so the two never drift apart. */
+  transition: left var(--ball-glide-ms, 1.8s) cubic-bezier(0.4, 0, 0.2, 1), top var(--ball-glide-ms, 1.8s) cubic-bezier(0.4, 0, 0.2, 1);
   animation: pitchLiveBallIn 0.45s ease-out both;
 }
 .pitch-live-ball-setpiece {
@@ -1976,13 +2019,40 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .pitch-live-ball-idle { opacity: 0.45; transition: none; animation: none; }
 .pitch-live-ball-reduced,
 .pitch-reduced-motion .pitch-live-ball { transition: none; animation-duration: 0.01ms; animation-iteration-count: 1; }
-.pitch-live-trail line {
+.pitch-live-trail line,
+.pitch-live-trail path {
   stroke: rgba(255, 217, 122, 0.9);
   stroke-width: 0.75;
   stroke-linecap: round;
   stroke-dasharray: 100;
   stroke-dashoffset: 100;
-  animation: pitchTrajectoryDraw 2.5s linear both;
+  animation: pitchTrajectoryDraw var(--ball-glide-ms, 2.5s) linear both;
+}
+
+/* Shot trajectories (goal/miss overlay line, save/woodwork's shooter→frame
+   leg, and open-play shots that end blocked or wide with no dedicated cue)
+   read as danger red instead of the default possession gold. */
+.pitch-trail-shot line,
+.pitch-trail-shot path,
+.pitch-trail-shot-blocked line,
+.pitch-trail-shot-blocked path,
+.pitch-trail-shot-miss line,
+.pitch-trail-shot-miss path,
+.pitch-shot-trail-danger line {
+  stroke: rgba(255, 92, 72, 0.92);
+}
+
+/* Crosses and corner deliveries: lofted-ball tint, distinct from a ground
+   pass, on top of the curved path the trajectory effect already computes. */
+.pitch-trail-cross line,
+.pitch-trail-cross path,
+.pitch-trail-corner line,
+.pitch-trail-corner path {
+  stroke: rgba(196, 226, 255, 0.92);
+}
+.pitch-trail-corner line,
+.pitch-trail-corner path {
+  stroke-width: 0.9;
 }
 
 /* Scripted shot sequences (save → GK → distribution, woodwork frame) glide
@@ -1993,12 +2063,20 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .pitch-live-ball-seq-start {
   transition: none;
 }
+.pitch-live-ball-seq-rebound {
+  transition-duration: 0.35s;
+}
 .pitch-shot-trail line {
   animation-duration: 0.9s;
 }
+.pitch-shot-trail-rebound line {
+  animation-duration: 0.35s;
+}
 
 /* Turnover intent: dotted line toward where the dispossessed move was
-   heading; fades out beside the solid interception trajectory. */
+   heading; fades out beside the solid interception trajectory. Colored per
+   side (see solidColor/intentColor in the trajectory effect) so a turnover
+   reads at a glance without checking the scoreline. */
 .pitch-live-trail line.pitch-trail-intent {
   stroke: rgba(240, 248, 244, 0.75);
   stroke-width: 0.55;
@@ -2006,6 +2084,65 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   stroke-dasharray: 2 2.4;
   stroke-dashoffset: 0;
   animation: pitchTrailIntentFade 1.7s ease-out both;
+}
+
+/* Counter-attack "comet": faint offset echoes drawn behind the lead line via
+   a negative animation-delay, so the trail looks like it's still catching up
+   — reinforcing the ball's own counter-attack pulse. Selectors match the
+   .pitch-live-trail line/path specificity so these longhands actually win
+   over its shorthand `animation` instead of losing on specificity. */
+.pitch-live-trail line.pitch-trail-comet,
+.pitch-live-trail path.pitch-trail-comet {
+  animation-name: pitchTrajectoryDraw;
+  animation-duration: var(--ball-glide-ms, 2.5s);
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+.pitch-live-trail line.pitch-trail-comet-1,
+.pitch-live-trail path.pitch-trail-comet-1 { opacity: 0.5; animation-delay: -120ms; }
+.pitch-live-trail line.pitch-trail-comet-2,
+.pitch-live-trail path.pitch-trail-comet-2 { opacity: 0.28; animation-delay: -240ms; }
+
+/* Foul: the ball stops dead rather than travelling anywhere, so it gets a
+   short red ping at the spot instead of a trail. */
+.pitch-foul-ping {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 3;
+  pointer-events: none;
+}
+.pitch-foul-ping circle {
+  fill: none;
+  stroke: rgba(255, 92, 72, 0.85);
+  stroke-width: 0.5;
+  animation: pitchFoulPing 1.4s ease-out both;
+}
+@keyframes pitchFoulPing {
+  0% { r: 0.6; opacity: 0.9; }
+  100% { r: 4.5; opacity: 0; }
+}
+
+/* Goal net-ripple: a couple of rings expanding from the goal mouth. */
+.pitch-goal-ripple {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 6;
+  pointer-events: none;
+}
+.pitch-goal-ripple-ring {
+  fill: none;
+  stroke: rgba(126, 240, 170, 0.85);
+  stroke-width: 0.4;
+}
+.pitch-goal-ripple-ring-1 { animation: pitchGoalRipple 0.9s ease-out 0.35s both; }
+.pitch-goal-ripple-ring-2 { animation: pitchGoalRipple 0.9s ease-out 0.55s both; }
+@keyframes pitchGoalRipple {
+  0% { r: 1.5; opacity: 0.9; }
+  100% { r: 7; opacity: 0; }
 }
 @keyframes pitchTrailIntentFade {
   0% { opacity: 0; }

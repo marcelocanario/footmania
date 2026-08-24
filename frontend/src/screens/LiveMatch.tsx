@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Flag, RefreshCw, Subscript, Users } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
+import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
+import { eventKey, hasPitchCue } from "../components/matchPitchUtils";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
+import { FamiliarityBar } from "../components/FamiliarityBar";
 import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
 
 const PHASE_LABEL: Record<string, string> = {
@@ -58,7 +61,8 @@ interface WsMessage {
 }
 
 export function LiveMatch() {
-  const { refresh, setLiveMatch } = useGame();
+  const { refresh, setLiveMatch, snapshot } = useGame();
+  const pregameWindowMinutes = useSettings((s) => s.pregameWindowMinutes);
   const navigate = useNavigate();
   // Spectator entry: /live-match/:matchId watches any match, not just our own.
   const routeMatchId = Number(useParams().matchId ?? "");
@@ -83,6 +87,27 @@ export function LiveMatch() {
   const [nowTick, setNowTick] = useState(() => Date.now());
   const wsRef = useRef<WebSocket | null>(null);
   const stateRef = useRef<LiveState | null>(null);
+  // Goal/card/save/… rows in the sidebar must appear in step with the pitch
+  // actually animating them, not the instant they arrive over the wire —
+  // otherwise the sidebar can report a goal seconds before (or, if the pitch
+  // ever drops a stale cue, without) the pitch showing anything for it.
+  // MatchPitch calls this exactly when it starts (or gives up on) each cue.
+  const revealedKeysRef = useRef<Set<string>>(new Set());
+  const [revealTick, setRevealTick] = useState(0);
+  const markRevealed = useCallback((event: LiveEvent) => {
+    const key = eventKey(event);
+    if (!revealedKeysRef.current.has(key)) {
+      revealedKeysRef.current.add(key);
+      setRevealTick((tick) => tick + 1);
+    }
+  }, []);
+  const historyEvents = useMemo(() => {
+    if (!state) return [];
+    // Once the match is over there's no ongoing pitch animation left to sync
+    // with, and nothing should be able to stay hidden past full time.
+    if (state.ended) return state.events;
+    return state.events.filter((event) => !hasPitchCue(event.type) || revealedKeysRef.current.has(eventKey(event)));
+  }, [state, revealTick]);
 
   const liveTactics = state ? (state.humanSide === 0 ? state.homeTactics : state.awayTactics) : null;
   // Live-match tactics lock (server-enforced): match-minutes left until this
@@ -92,6 +117,17 @@ export function LiveMatch() {
       ? state.homeTacticsCooldownMinutes ?? 0
       : state.awayTacticsCooldownMinutes ?? 0
     : 0;
+  // plans/6 §17: show the side's in-match familiarity and, while the draft
+  // differs from the applied setup, the projected post-switch value (the
+  // switch penalty is server-computed; applying it lowers this bar).
+  const draftMatchesLive =
+    !!liveTactics &&
+    tacticDraft.style === liveTactics.style &&
+    tacticDraft.pressing === liveTactics.pressing &&
+    tacticDraft.direction === liveTactics.direction;
+  const draftProjection = liveTactics?.projections?.find(
+    (p) => p.style === tacticDraft.style && p.pressing === tacticDraft.pressing && p.direction === tacticDraft.direction
+  )?.familiarity ?? null;
 
   useEffect(() => {
     if (liveTactics) setTacticDraft(liveTactics);
@@ -99,13 +135,31 @@ export function LiveMatch() {
 
   const matchId = liveId;
 
+  // A spectator can switch which match they're watching without this
+  // component remounting — the reveal set must not carry over.
+  useEffect(() => {
+    revealedKeysRef.current = new Set();
+    setRevealTick(0);
+  }, [matchId]);
+
   useEffect(() => {
     if (noLive) {
+      // Clear a stale "live" flag first: otherwise PreGame would bounce users
+      // straight back here (its liveMatchId effect) and the two screens would
+      // ping-pong, and the Dashboard prep banner would stay hidden.
       setLiveMatch(null);
+      // Idle link but the pre-game prep window is open for the next fixture:
+      // route to prep instead of bouncing out to the competitions screen.
+      const kickoffAt = snapshot?.nextFixture?.kickoffAt ?? null;
+      const msToKickoff = kickoffAt !== null ? kickoffAt - Date.now() : null;
+      if (msToKickoff !== null && msToKickoff > 0 && msToKickoff <= pregameWindowMinutes * 60_000) {
+        navigate("/pregame");
+        return;
+      }
       void refresh();
       navigate("/competitions");
     }
-  }, [noLive, navigate, refresh, setLiveMatch]);
+  }, [noLive, navigate, refresh, setLiveMatch, snapshot, pregameWindowMinutes]);
 
   useEffect(() => {
     // Direct link to a specific match (spectating): skip the own-match lookup.
@@ -378,7 +432,7 @@ export function LiveMatch() {
                 {isSpectator ? "Lineups" : "Match lineup"}
               </h2>
               <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>
-                {isSpectator ? "You are watching as a spectator. The match starts shortly." : "Set your starting eleven and bench before kickoff. Changes are saved instantly."}
+                {isSpectator ? "You are watching as a spectator. The match starts shortly." : "Final check — kick-off in moments. Changes are saved instantly."}
               </div>
             </div>
             {!isSpectator && (
@@ -458,6 +512,7 @@ export function LiveMatch() {
             minute={state.minute}
             addedTime={state.currentAddedTime ?? null}
             ball={state.ball ?? null}
+            onEventRevealed={markRevealed}
           />
         </div>
         <aside className="card live-side">
@@ -476,7 +531,7 @@ export function LiveMatch() {
 
           {sideTab === "events" && (
             <div className="live-side-content">
-              <MatchHistory events={state.events} homeClubId={state.homeClubId} homeName={state.home} awayName={state.away} emptyText={isDone ? "No goals, cards or injuries to report." : "The match is about to start..."} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
+              <MatchHistory events={historyEvents} homeClubId={state.homeClubId} homeName={state.home} awayName={state.away} emptyText={isDone ? "No goals, cards or injuries to report." : "The match is about to start..."} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
             </div>
           )}
 
@@ -499,6 +554,16 @@ export function LiveMatch() {
               <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{PRESSING.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
               <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              {typeof liveTactics?.familiarity === "number" && (
+                <div>
+                  <FamiliarityBar value={liveTactics.familiarity} projected={draftMatchesLive ? null : draftProjection} />
+                  <div className="live-tactics-hint">
+                    {draftMatchesLive
+                      ? "How well the team is drilled in this setup. Switching to an unfamiliar setup costs execution."
+                      : "Marker shows familiarity if you apply this draft — unfamiliar setups execute worse until drilled."}
+                  </div>
+                </div>
+              )}
               {!isSpectator && <button className="btn gold" onClick={() => void doTactics()} disabled={!canChangeTactics || tacticsBusy}>{tacticsBusy ? "Applying..." : tacticsCooldownMinutes > 0 ? `Locked (${tacticsCooldownMinutes}')` : "Apply tactics"}</button>}
               {!isSpectator && !isDone && <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}><Subscript size={15} /> Substitutions ({subsLeft})</button>}
               {tacticsStatus && <div className="live-tactics-status">{tacticsStatus}</div>}

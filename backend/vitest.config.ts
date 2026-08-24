@@ -7,6 +7,8 @@ export default defineConfig({
       "tests/integration.test.ts",
       "tests/adminFeatures.integration.test.ts",
       "tests/teamProfile.integration.test.ts",
+      "tests/settings.integration.test.ts",
+      "tests/familiarity.integration.test.ts",
       "tests/live.test.ts",
       "tests/namePoolService.test.ts",
       "tests/persistence.test.ts",

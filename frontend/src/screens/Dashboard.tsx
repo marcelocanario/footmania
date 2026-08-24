@@ -1,6 +1,8 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass, AlertTriangle, ChevronRight, Newspaper } from "lucide-react";
+import { ClipboardList, Radio, TrendingUp, Wallet, CalendarDays, Activity, Users, Trophy, ArrowRight, ChartNoAxesColumn, Clock, Hourglass, AlertTriangle, ChevronRight, Newspaper } from "lucide-react";
 import { useGame } from "../store/game";
+import { useSettings } from "../store/settings";
 import { strings } from "../strings";
 import { useLiveMatch } from "../hooks/useAdvanceDay";
 import { money } from "../format";
@@ -25,6 +27,15 @@ export function Dashboard() {
   const { snapshot, status, liveMatchId } = useGame();
   const navigate = useNavigate();
   const { busy, run } = useLiveMatch();
+  const pregameWindowMinutes = useSettings((s) => s.pregameWindowMinutes);
+
+  // Re-evaluate the pre-game prep window periodically so the amber banner
+  // appears without waiting for a data refresh.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   const club = snapshot?.club;
   const provisional = club?.competitionState === "PROVISIONAL";
@@ -44,6 +55,11 @@ export function Dashboard() {
   const season = status?.season;
   // Browser-local kickoff rendering, shared with every other screen (plan 9).
   const nextKickoff = snapshot.nextFixture ? formatKickoff(snapshot.nextFixture.kickoffAt) : "";
+
+  const nextKickoffAt = snapshot.nextFixture?.kickoffAt ?? null;
+  const msToKickoff = nextKickoffAt !== null ? nextKickoffAt - now : null;
+  // The live banner wins once a match is actually in progress.
+  const prepOpen = !liveMatchId && msToKickoff !== null && msToKickoff > 0 && msToKickoff <= pregameWindowMinutes * 60_000;
 
   return (
     <div>
@@ -130,6 +146,22 @@ export function Dashboard() {
           )}
           <button className="btn sm ghost" style={{ marginTop: 12 }} onClick={() => navigate("/finances")}>
             <Wallet size={14} /> View finances
+          </button>
+        </div>
+      )}
+
+      {prepOpen && (
+        <div className="live-match-alert pregame" role="status" aria-labelledby="pregame-alert-title">
+          <div className="live-match-alert-icon" aria-hidden="true">
+            <ClipboardList size={22} />
+          </div>
+          <div className="live-match-alert-copy">
+            <div className="live-match-alert-eyebrow">{strings.dashboard.pregame}</div>
+            <h2 id="pregame-alert-title">{strings.dashboard.pregameBannerTitle}</h2>
+            <p>{strings.dashboard.pregameBannerHint} Kick-off {nextKickoff}.</p>
+          </div>
+          <button className="btn gold live-match-alert-action" onClick={() => navigate("/pregame")}>
+            <ClipboardList size={16} /> {strings.dashboard.goToPregame} <ArrowRight size={15} />
           </button>
         </div>
       )}

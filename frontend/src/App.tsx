@@ -19,6 +19,7 @@ const Dashboard = lazyNamed(() => import("./screens/Dashboard"), "Dashboard");
 const Squad = lazyNamed(() => import("./screens/Squad"), "Squad");
 const Competitions = lazyNamed(() => import("./screens/Competitions"), "Competitions");
 const LiveMatch = lazyNamed(() => import("./screens/LiveMatch"), "LiveMatch");
+const PreGame = lazyNamed(() => import("./screens/PreGame"), "PreGame");
 const Transfers = lazyNamed(() => import("./screens/Transfers"), "Transfers");
 const Finances = lazyNamed(() => import("./screens/Finances"), "Finances");
 const SeasonEnd = lazyNamed(() => import("./screens/SeasonEnd"), "SeasonEnd");
@@ -153,6 +154,7 @@ function AppRoutes() {
       <Route path="/matchday" element={<Navigate to="/competitions" replace />} />
       <Route path="/live-match" element={<ClubGuard><LiveMatch /></ClubGuard>} />
       <Route path="/live-match/:matchId" element={<ClubGuard><LiveMatch /></ClubGuard>} />
+      <Route path="/pregame" element={<ClubGuard><PreGame /></ClubGuard>} />
       <Route path="/transfers" element={<ClubGuard><Transfers /></ClubGuard>} />
       <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />
       <Route path="/season-end" element={<ClubGuard><SeasonEnd /></ClubGuard>} />

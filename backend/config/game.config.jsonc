@@ -251,7 +251,10 @@
     "tacticsCooldownMatchMinutes": 10,
     // Maximum substitutions per side per match (manual, automation and the
     // engine's injury auto-substitution all draw from this shared cap).
-    "maxSubsPerSide": 5
+    "maxSubsPerSide": 5,
+    // Real minutes before a scheduled kickoff that the pre-game prep screen
+    // (lineup + tactics) opens for the two human clubs. 0 disables the window.
+    "pregameWindowMinutes": 60
   },
 
   "energy": {
