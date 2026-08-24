@@ -67,6 +67,8 @@ export function generateWorld(seed: number): World {
       calendarMigrationVersion: 1,
       contractMarketMigrationVersion: 1,
       loanEndAbsoluteGameDays: {},
+      pendingSeasonRetirees: null,
+      populationHistory: [],
     },
     mpQueue: [],
     liveMatches: [],

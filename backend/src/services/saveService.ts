@@ -1757,6 +1757,8 @@ async function rebuildWorld(
        lastDailyTickDate: null,
        manualRound: null,
        rolloverPhase: null,
+       pendingSeasonRetirees: null,
+       populationHistory: [],
        ...jsonOr<Partial<World["mp"]>>((saveRow as unknown as { mpStateJson?: string | null }).mpStateJson, {}),
      },
      mpQueue: [],

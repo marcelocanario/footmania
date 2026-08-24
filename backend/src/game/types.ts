@@ -834,6 +834,36 @@ export interface MpState {
   contractMarketMigrationVersion?: number;
   /** Absolute end day for loans, keyed by loan ID. */
   loanEndAbsoluteGameDays?: Record<string, number>;
+  /**
+   * Retiree count captured by processSeasonEndContracts, carried across to
+   * processSeasonalAcademyIntake (a separate rollover step/world load) so the
+   * combined population snapshot for the season can report both sides of the
+   * flow. Cleared once consumed.
+   */
+  pendingSeasonRetirees?: number | null;
+  /** Population health snapshots, one per season, for admin analytics trends. */
+  populationHistory?: PopulationHistoryEntry[];
+}
+
+/**
+ * One season's population stock-and-flow snapshot (admin analytics). Recorded
+ * once per season, at the end of processSeasonalAcademyIntake, after both
+ * retirement and academy-intake/promotion/replacement processing have run.
+ */
+export interface PopulationHistoryEntry {
+  seasonId: number;
+  seasonKey: string;
+  recordedAt: number;
+  /** Non-ephemeral (real) clubs counted for this snapshot. */
+  clubCount: number;
+  seniorCount: number;
+  youthCount: number;
+  meanAge: number;
+  meanOverall: number;
+  retirees: number;
+  promotions: number;
+  seasonalIntakeGenerated: number;
+  replacementsGenerated: number;
 }
 
 export interface MpQueueEntry {

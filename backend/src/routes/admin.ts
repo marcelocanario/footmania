@@ -343,7 +343,9 @@ export async function adminRoutes(app: FastifyInstance) {
   // -------------------------------------------------------------------------
 
   // World analytics (read-only, no lock — mirrors /admin/status precedent):
-  // real vs projected player quality per division plus financial distress.
+  // real vs projected player quality, population counts, age pyramid,
+  // position/wage drift and season-over-season flow, all per division plus
+  // world summary. See game/adminAnalytics.ts for the formulas.
   app.get("/admin/analytics", async () => {
     const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return { analytics: null };

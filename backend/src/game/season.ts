@@ -338,10 +338,17 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
     }
   }
   world.players = world.players.filter((p) => !retirees.includes(p.id));
+  // Carried to processSeasonalAcademyIntake (a separate rollover step/world
+  // load) so the combined population snapshot can report retirees alongside
+  // that step's promotions/intake/replacement counts.
+  world.mp.pendingSeasonRetirees = retirees.length;
 }
 
 /** Run youth promotion, seasonal academy intake, and roster replacement. */
 export function processSeasonalAcademyIntake(rng: World["rng"], world: World): void {
+  let promotions = 0;
+  let seasonalIntakeGenerated = 0;
+  let replacementsGenerated = 0;
   for (const club of world.clubs) {
     // Ephemeral AI squads are static (invariant #28): no promotions, no
     // academy intake and no replacement generation for filler clubs.
@@ -351,7 +358,9 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
     const juniorsToPromote = juniors.filter((p) => p.age >= 21);
     for (const j of juniorsToPromote) {
       const result = promoteYouthPlayer(world, j, "age");
-      if (!result.ok) {
+      if (result.ok) {
+        promotions++;
+      } else {
         world.news.push({ dayIndex: world.dayIndex, text: `${j.name} reached 21 but could not be promoted because the professional squad is full`, kind: "academy", clubId: club.id });
       }
     }
@@ -361,7 +370,7 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
     // releasing youth cannot increase the quota. Idempotent per club/season.
     const seasonId = world.mp.seasonId;
     if (seasonId !== 0 && !academyIntakeDone(world, club.id, seasonId)) {
-      generateSeasonalAcademyIntake({
+      const intake = generateSeasonalAcademyIntake({
         world,
         club,
         currentDivision: divisionForClub(world, club.id),
@@ -369,6 +378,7 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         totalDivisions: Math.max(1, lowestActiveTier(world, seasonId)),
         seasonId,
       });
+      seasonalIntakeGenerated += intake.length;
       markAcademyIntakeDone(world, club.id, seasonId);
     }
     squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
@@ -393,9 +403,43 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         });
         resetPayrollPeriod(p, world.dayIndex);
         world.players.push(p);
+        replacementsGenerated++;
       }
     }
   }
+  recordPopulationSnapshot(world, { promotions, seasonalIntakeGenerated, replacementsGenerated });
+}
+
+/**
+ * Record one population stock-and-flow snapshot per season for admin
+ * analytics (retirees carried from processSeasonEndContracts alongside this
+ * step's promotions/intake/replacements). Idempotent per season so a retried
+ * step cannot duplicate an entry.
+ */
+function recordPopulationSnapshot(world: World, flow: { promotions: number; seasonalIntakeGenerated: number; replacementsGenerated: number }): void {
+  const seasonId = world.mp.seasonId;
+  world.mp.populationHistory ??= [];
+  if (world.mp.populationHistory.some((entry) => entry.seasonId === seasonId)) return;
+  const realClubIds = new Set(world.clubs.filter((c) => !isEphemeralAI(c)).map((c) => c.id));
+  const seniors = world.players.filter((p) => p.clubId !== null && realClubIds.has(p.clubId) && !p.isYouth);
+  const youth = world.players.filter((p) => p.clubId !== null && realClubIds.has(p.clubId) && p.isYouth);
+  world.mp.populationHistory.push({
+    seasonId,
+    seasonKey: `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`,
+    recordedAt: Date.now(),
+    clubCount: realClubIds.size,
+    seniorCount: seniors.length,
+    youthCount: youth.length,
+    meanAge: seniors.length > 0 ? Math.round((seniors.reduce((sum, p) => sum + p.age, 0) / seniors.length) * 100) / 100 : 0,
+    meanOverall: seniors.length > 0 ? Math.round((seniors.reduce((sum, p) => sum + p.overall, 0) / seniors.length) * 100) / 100 : 0,
+    retirees: world.mp.pendingSeasonRetirees ?? 0,
+    promotions: flow.promotions,
+    seasonalIntakeGenerated: flow.seasonalIntakeGenerated,
+    replacementsGenerated: flow.replacementsGenerated,
+  });
+  world.mp.pendingSeasonRetirees = null;
+  // Bounded history: keep the most recent seasons only.
+  if (world.mp.populationHistory.length > 200) world.mp.populationHistory.splice(0, world.mp.populationHistory.length - 200);
 }
 
 /** Commit the new season's player-facing reset after all workflow steps pass. */

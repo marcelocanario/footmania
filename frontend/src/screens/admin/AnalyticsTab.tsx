@@ -1,13 +1,17 @@
 import { BarChart3 } from "lucide-react";
-import { api, type AdminAnalytics, type AdminAnalyticsDivision } from "../../api/client";
+import { api, type AdminAnalytics, type AdminAnalyticsDivision, type AdminAnalyticsPopulationFlow } from "../../api/client";
 import { AdminCard, useAdminFetch, type TabProps } from "./adminShared";
 import { groupLabel } from "../../components/competition/shared";
 
+const POSITION_ORDER = ["GK", "FB", "CB", "MF", "FW"];
+
 /**
- * World analytics for admins. The headline metric compares the real senior
- * quality in each division against the canonical generation expectation
- * (`divisionMean(tier, depth)`) so designers can see where live squads drift
- * from the pyramid's design curve, plus financial distress hotspots.
+ * World analytics for admins. Compares the living world against the same
+ * closed-form equations that drive generation and balancing — divisionMean
+ * for quality, the population-equilibrium academy-intake sizing for squad
+ * counts, and the live retirement odds for the age pyramid — so designers can
+ * see where the world drifts from its design curve, plus financial distress
+ * and long-term population health.
  */
 export function AnalyticsTab({ version }: TabProps) {
   const analytics = useAdminFetch(() => api.adminAnalytics(), [version]);
@@ -17,11 +21,21 @@ export function AnalyticsTab({ version }: TabProps) {
     <AdminCard
       icon={<BarChart3 size={17} />}
       title="World analytics"
-      subtitle="Real squad quality vs the projected divisionMean(tier) formula from player generation, and per-division financial distress. Read-only telemetry — never fed back into gameplay."
+      subtitle="Real vs projected squad quality, population, age pyramid and economics — all derived from the canonical generation/balancing formulas. Read-only telemetry — never fed back into gameplay."
     >
       <SummaryRow data={data} loading={analytics.loading} error={analytics.error} />
       {data && data.divisions.length === 0 && <div className="empty-state" style={{ padding: 24 }}>No active divisions.</div>}
-      {data && <TierSections data={data} />}
+      {data && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <PopulationRow data={data} />
+          <div className="grid cols-2" style={{ gap: 14, alignItems: "stretch" }}>
+            <AgeDistributionCard data={data} />
+            <FreeAgentPoolCard data={data} />
+          </div>
+          <TierSections data={data} />
+          <PopulationHistoryCard history={data.population.history} />
+        </div>
+      )}
     </AdminCard>
   );
 }
@@ -51,6 +65,9 @@ function SummaryRow({ data, loading, error }: { data: AdminAnalytics | null; loa
             <span style={{ color: "var(--text-3)", fontSize: "1rem" }}> → {summary.projectedAvgOverall !== null ? summary.projectedAvgOverall.toFixed(2) : "—"}</span>
           </div>
           {delta !== null && <DeltaChip delta={delta} />}
+          {summary.overallStdDev !== null && (
+            <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 4 }}>σ {summary.overallStdDev.toFixed(2)}</div>
+          )}
         </div>
       </div>
       <div className="card" style={{ padding: 16 }}>
@@ -59,6 +76,107 @@ function SummaryRow({ data, loading, error }: { data: AdminAnalytics | null; loa
           <div className="value" style={{ fontSize: "1.8rem", color: summary.clubsInFinancialDistress > 0 ? "#ff6b6b" : undefined }}>{summary.clubsInFinancialDistress}</div>
           <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>negative cushion, active humans</div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Living population vs the population-equilibrium academy-intake target. */
+function PopulationRow({ data }: { data: AdminAnalytics }) {
+  const s = data.summary;
+  const seniorDelta = s.realSeniorCount - s.projectedSeniorCount;
+  const youthDelta = s.realYouthCount - s.projectedYouthCount;
+  return (
+    <div className="grid cols-4" style={{ gap: 14 }}>
+      <PopCard label="Senior players (real → target)" real={s.realSeniorCount} projected={s.projectedSeniorCount} delta={seniorDelta} />
+      <PopCard label="Youth academy (real → target)" real={s.realYouthCount} projected={s.projectedYouthCount} delta={youthDelta} />
+      <div className="card" style={{ padding: 16 }}>
+        <div className="stat">
+          <div className="label">Clubs below squad floor</div>
+          <div className="value" style={{ fontSize: "1.8rem", color: s.clubsBelowSquadFloor > 0 ? "#ff6b6b" : undefined }}>{s.clubsBelowSquadFloor}</div>
+          <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>senior squad &lt; 20 players</div>
+        </div>
+      </div>
+      <div className="card" style={{ padding: 16 }}>
+        <div className="stat">
+          <div className="label">Wage drift index</div>
+          <div className="value" style={{ fontSize: "1.8rem" }}>
+            {s.salaryDriftIndex !== null ? `${s.salaryDriftIndex >= 0 ? "+" : ""}${(s.salaryDriftIndex * 100).toFixed(1)}%` : "—"}
+          </div>
+          <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>actual salary vs formula baseline</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PopCard({ label, real, projected, delta }: { label: string; real: number; projected: number; delta: number }) {
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div className="stat">
+        <div className="label">{label}</div>
+        <div className="value" style={{ fontSize: "1.8rem" }}>
+          {real}
+          <span style={{ color: "var(--text-3)", fontSize: "1rem" }}> → {projected}</span>
+        </div>
+        <DeltaChip delta={delta} suffix=" players" />
+      </div>
+    </div>
+  );
+}
+
+/** Standing-population age pyramid vs the steady-state share implied by live retirement odds. */
+function AgeDistributionCard({ data }: { data: AdminAnalytics }) {
+  const maxShare = Math.max(0.001, ...data.ageDistribution.flatMap((b) => [b.realShare, b.projectedShare]));
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div className="section-label" style={{ marginBottom: 10 }}>Age pyramid — real vs steady-state</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {data.ageDistribution.map((bucket) => (
+          <div key={bucket.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ width: 44, fontSize: "0.78rem", color: "var(--text-3)" }}>{bucket.label}</div>
+            <div style={{ flex: 1, position: "relative", height: 14, background: "var(--bg-2)", borderRadius: 4, border: "1px solid var(--line)", overflow: "hidden" }}
+              title={`Real ${(bucket.realShare * 100).toFixed(1)}% · Projected ${(bucket.projectedShare * 100).toFixed(1)}%`}>
+              <div style={{ position: "absolute", inset: 0, width: `${(bucket.realShare / maxShare) * 100}%`, background: "var(--grass-2)", opacity: 0.75 }} />
+              <div style={{ position: "absolute", top: 0, bottom: 0, left: `${(bucket.projectedShare / maxShare) * 100}%`, width: 2, background: "var(--gold-2)" }} />
+            </div>
+            <div style={{ width: 40, fontSize: "0.78rem", textAlign: "right" }}>{bucket.realCount}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: "0.74rem", color: "var(--text-3)" }}>
+        <span><span style={{ display: "inline-block", width: 8, height: 8, background: "var(--grass-2)", borderRadius: 2, marginRight: 5 }} />real share</span>
+        <span><span style={{ display: "inline-block", width: 2, height: 10, background: "var(--gold-2)", marginRight: 5 }} />steady-state projection</span>
+      </div>
+    </div>
+  );
+}
+
+function FreeAgentPoolCard({ data }: { data: AdminAnalytics }) {
+  const pool = data.freeAgentPool;
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div className="section-label" style={{ marginBottom: 10 }}>Free agent pool</div>
+      <div className="grid cols-2" style={{ gap: 10 }}>
+        <div className="stat">
+          <div className="label">Active listings</div>
+          <div className="value" style={{ fontSize: "1.6rem" }}>{pool.activeCount}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Avg listed value</div>
+          <div className="value" style={{ fontSize: "1.6rem" }}>{pool.avgListedValue !== null ? `$${Math.round(pool.avgListedValue).toLocaleString()}` : "—"}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Avg age</div>
+          <div className="value" style={{ fontSize: "1.6rem" }}>{pool.avgAge !== null ? pool.avgAge.toFixed(1) : "—"}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Avg overall</div>
+          <div className="value" style={{ fontSize: "1.6rem" }}>{pool.avgOverall !== null ? pool.avgOverall.toFixed(1) : "—"}</div>
+        </div>
+      </div>
+      <div style={{ color: "var(--text-3)", fontSize: "0.74rem", marginTop: 10 }}>
+        A swollen pool means clubs aren't absorbing supply; an empty one means demand is outrunning generation.
       </div>
     </div>
   );
@@ -86,6 +204,11 @@ function TierSections({ data }: { data: AdminAnalytics }) {
                   <th style={{ padding: "6px 10px" }}>Projected</th>
                   <th style={{ padding: "6px 10px" }}>Δ</th>
                   <th style={{ padding: "6px 10px" }}>Quality gap</th>
+                  <th style={{ padding: "6px 10px" }}>σ / p10-p90</th>
+                  <th style={{ padding: "6px 10px" }}>Senior real→tgt</th>
+                  <th style={{ padding: "6px 10px" }}>Youth real→tgt</th>
+                  <th style={{ padding: "6px 10px" }}>Filler Δ OVR</th>
+                  <th style={{ padding: "6px 10px" }}>Wage drift</th>
                   <th style={{ padding: "6px 10px" }}>Distress</th>
                 </tr>
               </thead>
@@ -101,6 +224,22 @@ function TierSections({ data }: { data: AdminAnalytics }) {
                     <td style={{ padding: "7px 10px", minWidth: 120 }}>
                       <DeltaBar delta={row.deltaOverall} />
                     </td>
+                    <td style={{ padding: "7px 10px", color: "var(--text-3)", whiteSpace: "nowrap" }}>
+                      {row.overallStdDev !== null ? `${row.overallStdDev.toFixed(1)} / ${row.overallP10}-${row.overallP90}` : "—"}
+                    </td>
+                    <td style={{ padding: "7px 10px", whiteSpace: "nowrap", color: row.clubsBelowSquadFloor > 0 ? "#ff6b6b" : undefined }}>
+                      {row.realSeniorCount} → {row.projectedSeniorCount}
+                      {row.clubsBelowSquadFloor > 0 ? ` (${row.clubsBelowSquadFloor} short)` : ""}
+                    </td>
+                    <td style={{ padding: "7px 10px", whiteSpace: "nowrap" }}>{row.realYouthCount} → {row.projectedYouthCount}</td>
+                    <td style={{ padding: "7px 10px" }}>
+                      {row.fillerAvgOverall !== null && row.humanAvgOverall !== null
+                        ? <DeltaChip delta={Math.round((row.humanAvgOverall - row.fillerAvgOverall) * 100) / 100} />
+                        : "—"}
+                    </td>
+                    <td style={{ padding: "7px 10px" }}>
+                      {row.salaryDriftIndex !== null ? `${row.salaryDriftIndex >= 0 ? "+" : ""}${(row.salaryDriftIndex * 100).toFixed(1)}%` : "—"}
+                    </td>
                     <td style={{ padding: "7px 10px", color: row.clubsInFinancialDistress > 0 ? "#ff6b6b" : undefined }}>
                       {row.clubsInFinancialDistress > 0 ? `${row.clubsInFinancialDistress}` : "—"}
                     </td>
@@ -109,13 +248,100 @@ function TierSections({ data }: { data: AdminAnalytics }) {
               </tbody>
             </table>
           </div>
+          <PositionBalanceRow rows={rows} />
         </div>
       ))}
     </div>
   );
 }
 
-function DeltaChip({ delta }: { delta: number }) {
+/** Real squad-position mix vs the senior generation template, per group. */
+function PositionBalanceRow({ rows }: { rows: AdminAnalyticsDivision[] }) {
+  return (
+    <div className="table-wrap" style={{ marginTop: 6 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.8rem" }}>
+        <thead>
+          <tr style={{ color: "var(--text-3)", textAlign: "left" }}>
+            <th style={{ padding: "4px 10px" }}>Group</th>
+            {POSITION_ORDER.map((pos) => (
+              <th key={pos} style={{ padding: "4px 10px" }}>{pos}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.divisionId} style={{ borderTop: "1px solid var(--line)" }}>
+              <td style={{ padding: "4px 10px", color: "var(--text-3)" }}>{row.name || `Group ${groupLabel(row.groupIndex)}`}</td>
+              {POSITION_ORDER.map((pos) => {
+                const count = row.positionCounts[pos] ?? 0;
+                const shareDelta = row.positionShareDelta[pos] ?? 0;
+                const off = Math.abs(shareDelta) >= 0.08;
+                return (
+                  <td key={pos} style={{ padding: "4px 10px", color: off ? (shareDelta > 0 ? "var(--grass-2)" : "#ff6b6b") : undefined }}>
+                    {count}
+                    <span style={{ fontSize: "0.72rem", color: "var(--text-3)" }}> ({shareDelta >= 0 ? "+" : ""}{(shareDelta * 100).toFixed(0)}%)</span>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Season-over-season retirement/replacement flow, most recent first. */
+function PopulationHistoryCard({ history }: { history: AdminAnalyticsPopulationFlow[] }) {
+  if (history.length === 0) {
+    return (
+      <div className="card" style={{ padding: 16 }}>
+        <div className="section-label" style={{ marginBottom: 6 }}>Population flow by season</div>
+        <div className="empty-state" style={{ padding: 12 }}>No season has completed rollover yet.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="card" style={{ padding: 16 }}>
+      <div className="section-label" style={{ marginBottom: 10 }}>Population flow by season</div>
+      <div className="table-wrap">
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.86rem" }}>
+          <thead>
+            <tr style={{ color: "var(--text-3)", textAlign: "left" }}>
+              <th style={{ padding: "6px 10px" }}>Season</th>
+              <th style={{ padding: "6px 10px" }}>Retirees</th>
+              <th style={{ padding: "6px 10px" }}>Promotions</th>
+              <th style={{ padding: "6px 10px" }}>Intake generated</th>
+              <th style={{ padding: "6px 10px" }}>Replacements</th>
+              <th style={{ padding: "6px 10px" }}>Net inflow</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((entry) => {
+              const inflow = entry.promotions + entry.replacementsGenerated;
+              const net = inflow - entry.retirees;
+              return (
+                <tr key={entry.seasonId} style={{ borderTop: "1px solid var(--line)" }}>
+                  <td style={{ padding: "6px 10px", fontWeight: 600 }}>{entry.seasonKey}</td>
+                  <td style={{ padding: "6px 10px" }}>{entry.retirees}</td>
+                  <td style={{ padding: "6px 10px" }}>{entry.promotions}</td>
+                  <td style={{ padding: "6px 10px" }}>{entry.seasonalIntakeGenerated}</td>
+                  <td style={{ padding: "6px 10px" }}>{entry.replacementsGenerated}</td>
+                  <td style={{ padding: "6px 10px" }}><DeltaChip delta={net} suffix=" players" /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ color: "var(--text-3)", fontSize: "0.74rem", marginTop: 10 }}>
+        Net inflow tracks promotions + generated replacements against retirees. A sustained negative trend means the senior population is shrinking faster than the academy pipeline replaces it.
+      </div>
+    </div>
+  );
+}
+
+function DeltaChip({ delta, suffix = "" }: { delta: number; suffix?: string }) {
   const positive = delta >= 0;
   return (
     <span
@@ -126,7 +352,7 @@ function DeltaChip({ delta }: { delta: number }) {
         fontSize: "0.75rem",
       }}
     >
-      {positive ? "+" : ""}{delta.toFixed(2)} vs projected
+      {positive ? "+" : ""}{delta.toFixed(2).replace(/\.00$/, "")}{suffix} vs projected
     </span>
   );
 }

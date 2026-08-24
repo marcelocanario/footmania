@@ -362,6 +362,36 @@ export interface AdminAnalyticsDivision {
   projectedAvgOverall: number;
   deltaOverall: number | null;
   clubsInFinancialDistress: number;
+  realSeniorCount: number;
+  projectedSeniorCount: number;
+  realYouthCount: number;
+  projectedYouthCount: number;
+  clubsBelowSquadFloor: number;
+  overallStdDev: number | null;
+  overallP10: number | null;
+  overallP90: number | null;
+  fillerCount: number;
+  fillerAvgOverall: number | null;
+  humanAvgOverall: number | null;
+  positionCounts: Record<string, number>;
+  positionShareDelta: Record<string, number>;
+  salaryDriftIndex: number | null;
+}
+
+export interface AdminAnalyticsAgeBucket {
+  label: string;
+  realCount: number;
+  realShare: number;
+  projectedShare: number;
+}
+
+export interface AdminAnalyticsPopulationFlow {
+  seasonId: number;
+  seasonKey: string;
+  retirees: number;
+  promotions: number;
+  seasonalIntakeGenerated: number;
+  replacementsGenerated: number;
 }
 
 export interface AdminAnalytics {
@@ -371,9 +401,28 @@ export interface AdminAnalytics {
   summary: {
     divisionCount: number;
     clubCount: number;
+    humanCount: number;
     realAvgOverall: number | null;
     projectedAvgOverall: number | null;
     clubsInFinancialDistress: number;
+    realSeniorCount: number;
+    projectedSeniorCount: number;
+    realYouthCount: number;
+    projectedYouthCount: number;
+    clubsBelowSquadFloor: number;
+    overallStdDev: number | null;
+    salaryDriftIndex: number | null;
+  };
+  ageDistribution: AdminAnalyticsAgeBucket[];
+  freeAgentPool: {
+    activeCount: number;
+    avgAge: number | null;
+    avgOverall: number | null;
+    avgListedValue: number | null;
+  };
+  population: {
+    history: AdminAnalyticsPopulationFlow[];
+    currentSeason: AdminAnalyticsPopulationFlow | null;
   };
 }
 
