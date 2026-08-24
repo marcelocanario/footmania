@@ -4335,7 +4335,13 @@
           "effectiveSkill": 0.65,
           "energy": 0.25,
           "fit": 0.1
-        }
+        },
+        "earliestMatchMinute": 50,
+        "latestMatchMinute": 88,
+        "maxPerSide": 5,
+        "minOnPitchMinutes": 15,
+        "fatigueNeedEnergyThreshold": 70,
+        "minNeedToSub": 0.3
       },
       "aiTactics": {
         "evaluationIntervalSeconds": 300,
@@ -4346,6 +4352,19 @@
         "maxLeadProtectionWeight": 0.75,
         "fatiguePenaltyWeight": 0.15,
         "nearTieFraction": 0.02
+      },
+      "aiPregameTactics": {
+        "profileSize": 16,
+        "controlTechnicalWeight": 0.5,
+        "controlPassingWeight": 0.5,
+        "pressDefendingWeight": 0.5,
+        "pressPhysicalWeight": 0.5,
+        "counterPaceWeight": 0.6,
+        "counterFinishingWeight": 0.4,
+        "pressingVeryHeavyPhysicalMin": 64,
+        "pressingHeavyPhysicalMin": 56,
+        "pressingEnergyReserveMin": 78,
+        "wideDirectionAdvantageMin": 4
       },
       "epv": {
         "convergenceTolerance": 1e-8,

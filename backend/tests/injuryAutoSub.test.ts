@@ -190,14 +190,20 @@ describe("engine injury auto-substitution", () => {
       expect(homeInjuries + awayInjuries).toBeGreaterThan(0);
       expect(homeSubs + awaySubs).toBe(0);
       expect(st.usedSubs).toEqual([5, 5]);
-      expect(st.homeOn.length).toBe(11 - homeInjuries);
-      expect(st.awayOn.length).toBe(11 - awayInjuries);
+      // Dismissals remove a player without an injury event; both kinds of
+      // absence must remain unreplaced once the shared slots are gone.
+      const dismissals = (clubId: number) =>
+        st.events.filter(
+          (event) => (event.type === EVENT_CODES.RED || event.type === EVENT_CODES.YELLOW_RED) && event.clubId === clubId
+        ).length;
+      expect(st.homeOn.length).toBe(11 - homeInjuries - dismissals(st.homeClubId));
+      expect(st.awayOn.length).toBe(11 - awayInjuries - dismissals(st.awayClubId));
     } finally {
       setup.restore();
     }
   });
 
-  it("does not substitute when the auto-substitute toggle is off", () => {
+  it("does not auto-substitute injuries when the toggle is off (AI tactical subs excepted)", () => {
     const setup = setupMatch(7, 6);
     const prevToggle = gameConfig.injuries.autoSubstitute;
     gameConfig.injuries.autoSubstitute = false;
@@ -206,9 +212,18 @@ describe("engine injury auto-substitution", () => {
       const st = setup.st;
       const [homeInjuries, awayInjuries] = sideCounts(st, EVENT_CODES.INJURY);
       expect(homeInjuries + awayInjuries).toBeGreaterThan(0);
-      expect(sideCounts(st, EVENT_CODES.SUB)).toEqual([0, 0]);
-      expect(st.substitutions.length).toBe(0);
-      expect(st.homeOn.length).toBe(11 - homeInjuries);
+      // The injury pathway stays off: no substitution may remove an injured
+      // player. AI-controlled sides may still replace the missing man through
+      // their own tactical-substitution need (shorthanded team), which is not
+      // governed by this toggle.
+      const injuredIds = new Set(
+        st.events.filter((event) => event.type === EVENT_CODES.INJURY).map((event) => event.playerId)
+      );
+      for (const sub of st.events.filter((event) => event.type === EVENT_CODES.SUB)) {
+        expect(injuredIds.has(sub.playerId)).toBe(false);
+        const side = sub.clubId === st.homeClubId ? 0 : 1;
+        expect(st.subbedIn[side]).toContain(sub.player2Id!);
+      }
     } finally {
       gameConfig.injuries.autoSubstitute = prevToggle;
       setup.restore();

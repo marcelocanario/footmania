@@ -9,12 +9,14 @@ before any change is declared complete.
 ```text
 backend/   Fastify API, Prisma schema, game engine, worker jobs   (TypeScript, Vitest)
 frontend/  React SPA (Vite, PrimeReact, zustand)                  (TypeScript)
-plans/     Product/implementation plans (source of truth for behavior)
 ```
 
 The game is a **single global multiplayer world**. There is no separate
-single-player/career mode. 
-`backend/src/game/INVARIANTS.md` records the non-negotiable multiplayer invariants and must be preserved by any change.
+single-player/career mode.
+`BUSINESS_RULES.md` (repo root) is the source of truth for every implemented rule,
+algorithm, and formula in the game — it documents behavior as coded, not as
+originally envisioned. `backend/src/game/INVARIANTS.md` records the non-negotiable
+multiplayer invariants and must be preserved by any change.
 
 ## Definition of done
 
@@ -135,8 +137,7 @@ blocks.
 
 ### 5. Tests for new behavior
 
-New game logic must ship with tests. The plans list required test cases per
-feature (see "Testing requirements by plan" below). At minimum:
+New game logic must ship with tests. At minimum:
 
 - pure calculation logic (finance, proxy bids, pricing, promotion math,
   subset selection, simulation regressions) gets unit tests;
@@ -148,7 +149,7 @@ feature (see "Testing requirements by plan" below). At minimum:
   `backend/tests/helpers.ts` (`makeWorld`/`makeClub`) and drives the real
   domain functions.
 
-## Design practices from the plans
+## Design practices
 
 These are project-wide guidelines, not per-feature trivia.
 

@@ -464,6 +464,10 @@ export interface LiveMatchState {
   awayOn: number[];
   usedSubs: [number, number];
   subbedIn: [number[], number[]];
+  /** Per side, the last match-minute evaluated for AI tactical substitutions.
+   *  Persists so a chunked/streamed advance cannot re-evaluate the same minute
+   *  after an engine rebuild. Absent in states created before the field. */
+  aiSubLastMinute?: [number, number];
   scores: [number, number];
   stats: MatchStats;
   events: MatchEvent[];

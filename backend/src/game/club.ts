@@ -3,6 +3,7 @@ import { nextInt, shuffle } from "./rng";
 import { tacticalSkillRating } from "./rating";
 import { energyLoss, loadIncrement, physicalSkill, readiness, recoverEnergy } from "./energyInjury";
 import { gameConfig } from "../config";
+import { MATCH_SIMULATOR_CONFIG } from "../matchSimulatorConfig";
 import {
   BENCH_ORDER,
   FORMATION_POSITIONS,
@@ -201,6 +202,159 @@ function pickFallbackForTacPos(players: Player[], tacPos: number, excluded: Set<
   return players
     .filter((p) => p.injuryDays === 0 && p.suspendedGames === 0 && !excluded.has(p.id))
     .sort((a, b) => selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions) || b.overall - a.overall || b.energy - a.energy)[0] ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Pre-match AI tactic selection (own squad only — no opponent scouting, no
+// hidden data). Deterministic: the same roster state always produces the same
+// tactics, so a restart or retry cannot reroll a different setup.
+// ---------------------------------------------------------------------------
+
+/** Tactical slots played out wide (fullbacks, wing midfielders, wingers). */
+const WIDE_TAC_POS = new Set([2, 6, 9, 10, 17, 19, 20]);
+
+interface AiTacticsProfile {
+  pace: number;
+  technical: number;
+  passing: number;
+  defending: number;
+  physical: number;
+  finishing: number;
+  energy: number;
+}
+
+/** Attribute profile of the squad's top contributors (config: profileSize). */
+function squadProfile(available: Player[], size: number): AiTacticsProfile {
+  const core = [...available].sort((a, b) => b.overall - a.overall || a.id - b.id).slice(0, size);
+  const mean = (pick: (p: Player) => number): number => core.reduce((sum, p) => sum + pick(p), 0) / core.length;
+  return {
+    pace: mean((p) => p.skills.vel),
+    technical: mean((p) => p.skills.tec),
+    passing: mean((p) => p.skills.pas),
+    defending: mean((p) => p.skills.des),
+    physical: mean((p) => (p.skills.des + p.skills.arm) / 2),
+    finishing: mean((p) => p.skills.fin),
+    energy: mean((p) => p.energy),
+  };
+}
+
+/** Greedy best-XI slot assignment for one formation variant; null when the
+ *  squad cannot fill all eleven slots. Pure: mutates nothing. */
+function greedySlots(
+  available: Player[],
+  formation: number[],
+  aiOptions: AiSelectionOptions
+): { tacPos: number; player: Player }[] | null {
+  const excluded = new Set<number>();
+  const slots: { tacPos: number; player: Player }[] = [];
+  for (const tacPos of formation) {
+    const p = pickForTacPos(available, tacPos, excluded, true, aiOptions) ?? pickFallbackForTacPos(available, tacPos, excluded, aiOptions);
+    if (!p) return null;
+    excluded.add(p.id);
+    slots.push({ tacPos, player: p });
+  }
+  return slots;
+}
+
+/**
+ * Greedy best-XI over all formation variants for a set of available players:
+ * the variant whose eleven slots maximize total `selectionValue` (the same
+ * metric `buildLineup` optimizes, so tactic choice and rotation decisions can
+ * never disagree). Ties keep the lowest formation index. Pure: mutates nothing.
+ * Exported for tests and AI-tactic consumers.
+ */
+export function aiBestXI(
+  available: Player[],
+  aiOptions: AiSelectionOptions
+): { formation: number; slots: { tacPos: number; player: Player }[] } | null {
+  let bestFormation = -1;
+  let bestSlots: { tacPos: number; player: Player }[] | null = null;
+  let bestTotal = -Infinity;
+  for (let f = 0; f < FORMATION_POSITIONS.length; f++) {
+    const slots = greedySlots(available, FORMATION_POSITIONS[f], aiOptions);
+    if (!slots) continue;
+    const total = slots.reduce((sum, s) => sum + selectionValue(s.player, s.tacPos, aiOptions), 0);
+    if (total > bestTotal) {
+      bestTotal = total;
+      bestFormation = f;
+      bestSlots = slots;
+    }
+  }
+  if (!bestSlots || bestFormation < 0) return null;
+  return { formation: bestFormation, slots: bestSlots };
+}
+
+/**
+ * Choose the starting tactics that best fit an AI club's own squad and mutate
+ * `club.tactics` accordingly. Called per matchday so injuries, suspensions,
+ * fatigue and rotation pressure are reflected in both the tactic and the XI:
+ *
+ * 1. Style/pressing from the squad attribute profile of its top contributors
+ *    (technical/passing -> CONTROL, defending/physical -> PRESS, pace/finishing
+ *    -> COUNTER; pressing levels gated by physical quality + energy reserve).
+ * 2. Formation/XI from `aiBestXI`, scored under the freshly chosen pressing so
+ *    rotation cost projection matches reality.
+ * 3. Direction exploits whichever slot group of the chosen XI rates higher
+ *    (wide vs central) by at least `wideDirectionAdvantageMin` rating points.
+ */
+export function chooseAiTactics(club: Club, allPlayers: Player[]): void {
+  if (club.isHuman) return;
+  const cfg = MATCH_SIMULATOR_CONFIG.aiPregameTactics;
+  const available = allPlayers.filter(
+    (p) => p.clubId === club.id && !p.onSale && p.injuryDays === 0 && p.suspendedGames === 0
+  );
+  if (available.length === 0) return;
+
+  // Style: argmax over the three style scores; ties keep the earlier candidate
+  // in the fixed CONTROL/PRESS/COUNTER order (engineStyle mapping: 0/1/2).
+  const profile = squadProfile(available, cfg.profileSize);
+  let style = 0;
+  let bestStyleScore =
+    cfg.controlTechnicalWeight * profile.technical + cfg.controlPassingWeight * profile.passing;
+  const pressScore = cfg.pressDefendingWeight * profile.defending + cfg.pressPhysicalWeight * profile.physical;
+  const counterScore = cfg.counterPaceWeight * profile.pace + cfg.counterFinishingWeight * profile.finishing;
+  if (pressScore > bestStyleScore) {
+    style = 1;
+    bestStyleScore = pressScore;
+  }
+  if (counterScore > bestStyleScore) {
+    style = 2;
+    bestStyleScore = counterScore;
+  }
+
+  // Pressing intensity: escalate only while the squad is physical enough to
+  // sustain it; Very Heavy additionally requires an energy reserve.
+  let pressing = 0;
+  if (profile.physical >= cfg.pressingHeavyPhysicalMin) pressing = 1;
+  if (profile.physical >= cfg.pressingVeryHeavyPhysicalMin && profile.energy >= cfg.pressingEnergyReserveMin) pressing = 2;
+
+  const best = aiBestXI(available, { pressing: enginePressingScale(pressing), futureFixtures: true });
+  if (!best) return;
+
+  // Direction: compare mean tactical rating of the chosen XI's wide vs central
+  // outfield slots; play down the wings only when clearly stronger there.
+  let wideSum = 0;
+  let wideCount = 0;
+  let centralSum = 0;
+  let centralCount = 0;
+  for (const { tacPos, player } of best.slots) {
+    if (tacPos === 1) continue; // goalkeeper belongs to neither group
+    if (WIDE_TAC_POS.has(tacPos)) {
+      wideSum += tacticalSkillRating(player.skills, tacPos);
+      wideCount++;
+    } else {
+      centralSum += tacticalSkillRating(player.skills, tacPos);
+      centralCount++;
+    }
+  }
+  const wideMean = wideCount > 0 ? wideSum / wideCount : -Infinity;
+  const centralMean = centralCount > 0 ? centralSum / centralCount : -Infinity;
+  const direction = wideMean - centralMean >= cfg.wideDirectionAdvantageMin ? 1 : 0;
+
+  club.tactics.formation = best.formation;
+  club.tactics.style = style;
+  club.tactics.pressing = pressing;
+  club.tactics.direction = direction;
 }
 
 export interface SavedLineupInput {

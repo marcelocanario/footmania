@@ -251,6 +251,35 @@ const substitutionAiSchema = z.object({
     energy: nonNegativeNumber,
     fit: nonNegativeNumber,
   }),
+  /** AI substitution gating (plan 6 §40). Evaluated once per match minute. */
+  earliestMatchMinute: nonNegativeNumber,
+  latestMatchMinute: positiveNumber,
+  /** Hard cap for AI tactical subs; also bounded by liveMatch.maxSubsPerSide. */
+  maxPerSide: z.number().int().min(0),
+  /** A player must have spent this many match-minutes on the pitch to be subbed off. */
+  minOnPitchMinutes: nonNegativeNumber,
+  /** Energy below this counts as fatigued; normalizes the fatigue term. */
+  fatigueNeedEnergyThreshold: z.number().min(0).max(100),
+  /** Minimum blended substitution-need score before the AI makes a change. */
+  minNeedToSub: nonNegativeNumber,
+});
+
+/** Pre-match AI tactic selection from the club's own squad profile (no opponent scouting). */
+const aiPregameTacticsSchema = z.object({
+  /** Top contributors (by overall) whose attributes define the squad profile. */
+  profileSize: z.number().int().min(1),
+  controlTechnicalWeight: nonNegativeNumber,
+  controlPassingWeight: nonNegativeNumber,
+  pressDefendingWeight: nonNegativeNumber,
+  pressPhysicalWeight: nonNegativeNumber,
+  counterPaceWeight: nonNegativeNumber,
+  counterFinishingWeight: nonNegativeNumber,
+  pressingVeryHeavyPhysicalMin: z.number().min(0).max(100),
+  pressingHeavyPhysicalMin: z.number().min(0).max(100),
+  /** Very Heavy pressing additionally requires this mean squad energy. */
+  pressingEnergyReserveMin: z.number().min(0).max(100),
+  /** Wide slots must beat central slots by this many tactical-rating points to play down the wings. */
+  wideDirectionAdvantageMin: nonNegativeNumber,
 });
 
 const aiTacticsSchema = z.object({
@@ -323,6 +352,7 @@ const matchSimulatorSchema = z
     cards: cardsSchema,
     substitutionAi: substitutionAiSchema,
     aiTactics: aiTacticsSchema,
+    aiPregameTactics: aiPregameTacticsSchema,
     epv: epvSchema,
     commentary: commentarySchema,
     validation: validationSchema,

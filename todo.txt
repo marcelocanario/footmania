@@ -13,9 +13,9 @@ Game engine
 		[DONE] the match simulator engine should incorporate the possibility of injuries (the more tired a player is, the more likely he is to become injured but does not affect severity). do we need to collect real injury data to tune coefficients?
 	[DONE] users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
 		[DONE] pro users can save one preset per tactic. regular users can only save one preset for one tactic
-	[PLANNED] implement:
-		[PLANNED] AI substitutions in matches
-		[PLANNED] AI should also rotate tired/unavailable players before the match starts
+	[IN PROGRESS] implement:
+		[IN PROGRESS] AI substitutions in matches
+		[IN PROGRESS] AI should also rotate tired/unavailable players before the match starts
 		[DONE] extra time (calculated by events in the match, not too much time)
 		[DONE] match start coin toss (currently, home team always starts with the ball); possession to team who loss coin tosse after half-time
 		[DONE] MP_CONFIG constant should be configurable in game.config.jsonc (initially 30 min); there should also be a half-time pause setting for real-life pause time (only when a human team is involved) (initially 5 min, real-life). keep instant matches instant (AI vs AI, test matches)
@@ -34,8 +34,8 @@ Multiplayer
 	[DONE] players create teams, choose team color, jerseys, country, stadium name, etc.
 		[DONE] allow players to customize team logo, jersey, etc. (pro players will be able to upload a custom logo)
 	[DONE] initial player names for that team should match the chosen country, same as youth-generated players
-	[IN PROGRESS] push notifications for match started and match ended
-		[IN PROGRESS] pros can see match goals and other events and also get their league results as push
+	[DONE] push notifications for match started and match ended
+		[DONE] pros can see match goals and other events and also get their league results as push
 	invite players should give some in-game advantage or give free pro
 	[DONE] let people select time zone upon account creation. pair them with people from similar timezones when forming leagues
 		[DONE] spawn small leagues; human players automatically promoted over AI teams
@@ -44,7 +44,7 @@ Multiplayer
 	[DONE] re-shuffle teams with same division based on region grouping (least timezone difference), after promotions/relegations and removals of inactive/possibly groups are processed
 	[DONE] how are players ranked right now for the purpose of standings and relegation/promotion? what are the criteria? we should add elo as last criteria (though hidden)
 	[DONE] allow players to add friends. we will prioritize friends when creating the division groups (ie. same division (must) > friends (new) > least timezone difference > elo spreadout)
-	consider replacing timezone entirely by the aready existing "available slots" system
+	[DONE] consider replacing timezone entirely by the aready existing "available slots" system
 
 UI:
 	[DONE, needs improvement] Implement a screen to see the match happening (based on globoesporte?)
@@ -57,7 +57,7 @@ UI:
 	generate players faces using: https://github.com/zengm-games/facesjs
 	[DONE] allow users to change player numbers
 	[DONE] in tactics tab, instead of showing a circle with the player initials, show the team jersey with player number
-	group together all news that would be posted in the same day for a given club in regards to player contracts expiring. add to a pre-season report (single message), including league, finance, contracts expiring, academy, etc.
+	[In progress] group together all news that would be posted in the same day for a given club in regards to player contracts expiring. add to a pre-season report (single message), including league, finance, contracts expiring, academy, etc.
 
 Economy:
 	[DONE] also make sure loans and sales between players are fair and balanced (no double account). use ebay-like bidding (max bid, bid deadline increases when someone bids in the last few minutes)
@@ -76,7 +76,7 @@ Multiplayer:
 	[DONE] how can we replace teams whose players are inactive/dropped? do we even need to do that? study how other games like Hattrick solve for that?
 	[DONE] how many teams per league so that a season will take around 1 month with a game every other day?
 	[DONE] does it make sense for the generated (initial) players to be better at each division? what formula should we use? i want there to be some individual luck upon each player, so that there are outliers even in lower divisions, but the overall should match that division's power so that a new team is not too strong or too bad for that division. should we use an exponential decay formula like the budget one? maybe we should just keep new teams with the same "power", no matter what division they spawn in and consider that power level will self-balance as teams go up/down divisions naturally
-		should we allow teams to upgrade their youth training centers so that they produce better and better players? upgrading must have diminishing returns - each upgrade makes less difference and is more expensive. i want people to play many seasons looking to improve their youth squad, this should not be easy to achieve. at the same time, someone wiht a maxed out one shouldn't always produce wonder players (like 17 yo, 90 overall). this should still be extremely rare. we should have a normal curve and the center of the normal slides depending on the level of the youth academy
+		[CANCELLED] should we allow teams to upgrade their youth training centers so that they produce better and better players? upgrading must have diminishing returns - each upgrade makes less difference and is more expensive. i want people to play many seasons looking to improve their youth squad, this should not be easy to achieve. at the same time, someone wiht a maxed out one shouldn't always produce wonder players (like 17 yo, 90 overall). this should still be extremely rare. we should have a normal curve and the center of the normal slides depending on the level of the youth academy
 	[DONE] algorithm to define fixtures
 		[DONE] players choose (when they sign up and can change in settings) what hours of the day are best for them - need to input at least 8 hours
 		[DONE] algorithm determines fixtures at the beginning of the season, trying to accomodate everyone's preference
@@ -84,12 +84,12 @@ Multiplayer:
 		[DONE] AI always adapts (available 24h)
 		[DONE] if a team joins mid-season, fixtures are not re-generated
 		[DONE] last matches (last round) of the season are always at the same time for a given group (not through different groups). for each group, try to minimize distance of preferred times
-	allow admins to remove team logos, reset team names, reset player nicknames (issuing warnings to players with reason) and can ban players
+	[DONE] allow admins to remove team logos, reset team names, reset player nicknames (issuing warnings to players with reason) and can ban players
 
 Technical/housekeeping:
-	create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.
-		implement full visibility to admin of what is scheduled to happen in each "tick". allow admin to trigger any scheduled event ahead of time (immediately), for testing purposes
-		create analytics, such as average player quality per division (real) vs projected (using our back-end formula). think of other relevant metrics like that
+	[DONE] create an admin screen where admins can see the trees of divisions, which teams are in each one, standings, fixtures, etc.
+		[DONE] implement full visibility to admin of what is scheduled to happen in each "tick". allow admin to trigger any scheduled event ahead of time (immediately), for testing purposes
+		[DONE] create analytics, such as average player quality per division (real) vs projected (using our back-end formula). think of other relevant metrics like that
 	[DONE] remove stadium
 	[DONE] remove fan support level
 	migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)
@@ -97,7 +97,7 @@ Technical/housekeeping:
 	[DONE] confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
 		[DONE] consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
 	[DONE] implement a message of the day (MOTD) system - admins can send messages through admin panel and those show in the home of the users, in the News section
-	check if there are any scalability improvements that can be proposed
+	[DONE] check if there are any scalability improvements that can be proposed
 	add an option for admins to reset the whole game (erase teams, players, groups, etc. - start game from scratch. keeps only accounts, forces everyone to recreate team)
 
 Tuning:
@@ -109,7 +109,7 @@ Tuning:
 		players being generated in main squad, youth squad and simulate growth/decay for a large number of players and propose tuning suggestions to related variables or formulas
 
 Documentation:
-	based on the plans and what is actually coded (code > plans), come up with a topic structure for a business rules document in markdown (all the important rules, algorithms and formulas in the system, what they mean and how they are calculated). it can be a very long/comprehensive file, that is ok (but make it very structured/organized). also create a readme.md file. replace the plans with this business rules doc and put the readme in the root
+	[DONE] based on the plans and what is actually coded (code > plans), come up with a topic structure for a business rules document in markdown (all the important rules, algorithms and formulas in the system, what they mean and how they are calculated). it can be a very long/comprehensive file, that is ok (but make it very structured/organized). also create a readme.md file. replace the plans with this business rules doc and put the readme in the root
 
 Match UX:
 	[DONE] why do we have a Refresh button? what does it do?

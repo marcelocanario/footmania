@@ -155,10 +155,14 @@ describe("match engine", () => {
     let lightYellows = 0;
     let pressYellows = 0;
     const n = 60;
+    // Human-controlled fixtures: this test isolates the mechanical
+    // press->fouls/cards relation from AI pre-match tactic selection, which
+    // would otherwise re-derive both sides' tactics from their squads.
+    const pinTactics = (tactics: Club["tactics"]): Partial<Club> => ({ ownerUserId: 1, isHuman: true, tactics });
     for (let i = 0; i < n; i++) {
       const matchRng = createRng(1000 + i);
-      const h1 = makeClub(70, { tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
-      const a1 = makeClub(71, { tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
+      const h1 = makeClub(70, pinTactics({ formation: 4, style: 0, pressing: 0, direction: 0 }));
+      const a1 = makeClub(71, pinTactics({ formation: 4, style: 0, pressing: 0, direction: 0 }));
       const h1Squad = makeSquad(createRng(1000 + i), h1, 30);
       const a1Squad = makeSquad(createRng(1000 + i), a1, 30, 30);
       const players = [...cloneSquad(h1Squad), ...cloneSquad(a1Squad)];
@@ -166,8 +170,8 @@ describe("match engine", () => {
       lightYellows += match.stats.home.yellows + match.stats.away.yellows;
 
       const matchRng2 = createRng(2000 + i);
-      const h2 = makeClub(72, { tactics: { formation: 4, style: 0, pressing: 2, direction: 0 } });
-      const a2 = makeClub(73, { tactics: { formation: 4, style: 0, pressing: 2, direction: 0 } });
+      const h2 = makeClub(72, pinTactics({ formation: 4, style: 0, pressing: 2, direction: 0 }));
+      const a2 = makeClub(73, pinTactics({ formation: 4, style: 0, pressing: 2, direction: 0 }));
       const h2Squad = makeSquad(createRng(2000 + i), h2, 30);
       const a2Squad = makeSquad(createRng(2000 + i), a2, 30, 30);
       const players2 = [...cloneSquad(h2Squad), ...cloneSquad(a2Squad)];

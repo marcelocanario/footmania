@@ -4,6 +4,7 @@ import { nextDouble, nextInt, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
 import { ENERGY_INJURY_MODEL, energyLoss, injuryRiskMultiplier, loadIncrement, physicalSkill, readiness, recordInjury } from "./energyInjury";
 import { gameConfig, MP_CONFIG } from "../config";
+import { tacticalSkillRating } from "./rating";
 import { INITIAL_FAMILIARITY, tacticalExecution, tacticalExecutionContrast } from "./familiarity";
 import { remainingPlayerWorkloadMultiplier } from "./numericalDisadvantage";
 
@@ -292,6 +293,10 @@ interface Engine {
   playerMinutes: Record<number, number>;
   playerRecentLoad: Record<number, number>;
   playerMatchLoad: Record<number, number>;
+  /** Per side, the last match-minute evaluated for AI tactical substitutions
+   *  (mirrors st.aiSubLastMinute; -1 = never). Keeps once-per-minute cadence
+   *  across chunked/streamed engine rebuilds. */
+  aiSubLastMinute: [number, number];
   commentary: string[];
   ended: boolean;
   extraTimePlayed: boolean;
@@ -1386,26 +1391,20 @@ export function pickInjuryReplacement(bench: Player[], outPosition: number): Pla
 }
 
 /**
- * Automatic substitution for a player just removed by a match injury
- * (`gameConfig.injuries.autoSubstitute`). Consumes one of the side's shared
- * substitution slots; without slots or an eligible candidate the team simply
- * continues one player short (red-card semantics, plan 9 §17).
- *
- * Mirrors `performLiveSub` bookkeeping inside the engine so the change is
- * picked up immediately and survives persistence: pitch/bench lists, slot
- * counter, SUB event + substitution record, and the energy/load/minutes maps
- * the full-time commit reads. Idempotent across chunks: the next engine build
- * starts from persisted state where the injured player is already off the
- * pitch, so this fires exactly once per injury.
+ * Shared engine-side substitution bookkeeping (injury auto-sub and AI tactical
+ * subs). Mirrors `performLiveSub` inside the engine so the change is picked up
+ * immediately and survives persistence: pitch/bench lists, slot counter, SUB
+ * event + substitution record, and the energy/load/minutes maps the full-time
+ * commit reads. The replacement inherits the outgoing player's tactical slot.
  */
-function applyInjuryAutoSub(eng: Engine, side: Side, outPs: LivePlayerState, minute: number): void {
-  if (!gameConfig.injuries.autoSubstitute) return;
-  if ((eng.st.usedSubs[side.idx] ?? 0) >= MP_CONFIG.maxSubsPerSide) return;
-  const incoming = pickInjuryReplacement(side.bench, outPs.position);
-  if (!incoming) return;
-  // The replacement occupies the injured player's tactical slot.
+function applyEngineSub(eng: Engine, side: Side, outPs: LivePlayerState, incoming: Player, minute: number): void {
+  // The replacement occupies the outgoing player's tactical slot.
   incoming.tacPos = outPs.tacPos;
   const ps = buildPlayerState(incoming, eng.centers, eng.st.playerEnergy[incoming.id] ?? incoming.energy);
+  // Take the outgoing player off the pitch (mirrors removeFromPitch's list
+  // bookkeeping; support is recomputed once below).
+  side.on = side.on.filter((candidate) => candidate.id !== outPs.id);
+  eng.onPitchBySide[side.idx] = eng.onPitchBySide[side.idx].filter((p) => p.id !== outPs.id);
   side.on.push(ps);
   side.rosterVersion++;
   eng.onPitchBySide[side.idx].push(incoming);
@@ -1431,6 +1430,132 @@ function applyInjuryAutoSub(eng: Engine, side: Side, outPs: LivePlayerState, min
   eng.playerMatchLoad[incoming.id] = 0;
   eng.playerMinutes[incoming.id] ??= 0;
   computeSupport(side);
+}
+
+/**
+ * Automatic substitution for a player just removed by a match injury
+ * (`gameConfig.injuries.autoSubstitute`). Consumes one of the side's shared
+ * substitution slots; without slots or an eligible candidate the team simply
+ * continues one player short (red-card semantics, plan 9 §17).
+ *
+ * Idempotent across chunks: the next engine build starts from persisted state
+ * where the injured player is already off the pitch, so this fires exactly once
+ * per injury.
+ */
+function applyInjuryAutoSub(eng: Engine, side: Side, outPs: LivePlayerState, minute: number): void {
+  if (!gameConfig.injuries.autoSubstitute) return;
+  if ((eng.st.usedSubs[side.idx] ?? 0) >= MP_CONFIG.maxSubsPerSide) return;
+  const incoming = pickInjuryReplacement(side.bench, outPs.position);
+  if (!incoming) return;
+  applyEngineSub(eng, side, outPs, incoming, minute);
+}
+
+// ---------------------------------------------------------------------------
+// AI tactical substitutions (plan 6 §40). Evaluated once per match minute for
+// AI-controlled sides only; fully deterministic so restarts and chunked
+// advances agree without consuming RNG draws.
+// ---------------------------------------------------------------------------
+
+/** Normalized card/injury-risk pressure of an on-pitch player: how far his
+ *  current injury hazard sits above the neutral reference (half the term),
+ *  plus a flat component while he carries a yellow. */
+function aiCardOrInjuryRisk(eng: Engine, ps: LivePlayerState): number {
+  const reference = injuryRiskMultiplier(
+    ENERGY_INJURY_MODEL.injuryRisk.referenceEnergy,
+    ENERGY_INJURY_MODEL.injuryRisk.referenceRecentLoad,
+    ENERGY_INJURY_MODEL.injuryRisk.ageReference,
+  );
+  const recentLoad = eng.playerRecentLoad[ps.id] ?? 0;
+  const ratio = injuryRiskMultiplier(ps.energy, recentLoad, ps.age) / reference;
+  const yellowed = (eng.playerYellows[ps.id] ?? 0) > 0 ? 0.5 : 0;
+  return Math.min(1, yellowed + 0.5 * Math.max(0, ratio - 1));
+}
+
+/**
+ * Bench candidate maximizing the §40 replacement value against the outgoing
+ * player's tactical slot:
+ *   effectiveSkill·w + energy·w + positionFit·w
+ * Goalkeepers are never eligible: tactical subs always replace an outfielder
+ * (the need scan skips GKs), mirroring pickInjuryReplacement's GK invariant.
+ * Deterministic (value desc, then lower id): no RNG draw, so instant and
+ * streamed runs — and restarts — always agree. Exported for tests.
+ */
+export function pickAiReplacement(bench: Player[], outTacPos: number, energyOf: (id: number) => number): Player | null {
+  const weights = MS.substitutionAi.replacementWeights;
+  const eligible = bench.filter((p) => p.position !== 0 && p.injuryDays === 0 && p.suspendedGames === 0);
+  const value = (p: Player): number =>
+    weights.effectiveSkill * (tacticalSkillRating(p.skills, outTacPos) / 100) +
+    weights.energy * (clamp(energyOf(p.id), 0, 100) / 100) +
+    weights.fit * positionFit(p.position, outTacPos);
+  let best: Player | null = null;
+  let bestValue = -Infinity;
+  for (const p of eligible) {
+    const v = value(p);
+    if (v > bestValue || (v === bestValue && best !== null && p.id < best.id)) {
+      best = p;
+      bestValue = v;
+    }
+  }
+  return best;
+}
+
+/** Substitution need of one on-pitch outfielder (plan 6 §40). */
+function aiSubNeed(eng: Engine, side: Side, ps: LivePlayerState): number {
+  const cfg = MS.substitutionAi;
+  const goalDiff = eng.scores[side.idx] - eng.scores[1 - side.idx];
+  const timeUrgency = logistic((eng.clockSeconds - MS.aiTactics.urgencyMidpointSeconds) / MS.aiTactics.urgencyScaleSeconds);
+  const scoreUrgency = timeUrgency * (clamp(-goalDiff, 0, 2) / 2);
+  const zoneDeficit = side.on.length < 11 ? 1 : 0;
+  const fatigue = clamp((cfg.fatigueNeedEnergyThreshold - ps.energy) / cfg.fatigueNeedEnergyThreshold, 0, 1);
+  return (
+    cfg.needWeights.fatigue * fatigue +
+    cfg.needWeights.zoneDeficit * zoneDeficit +
+    cfg.needWeights.scoreUrgency * scoreUrgency +
+    cfg.needWeights.cardOrInjuryRisk * aiCardOrInjuryRisk(eng, ps)
+  );
+}
+
+/** One AI tactical-sub attempt for a side; true when a change was made. */
+function tryAiSubstitution(eng: Engine, side: Side, minute: number): boolean {
+  const cfg = MS.substitutionAi;
+  let bestPs: LivePlayerState | null = null;
+  let bestNeed = -Infinity;
+  for (const ps of side.on) {
+    // Goalkeepers are never removed tactically; fresh subs need pitch time.
+    if (ps.position === 0) continue;
+    if ((eng.playerMinutes[ps.id] ?? 0) < cfg.minOnPitchMinutes) continue;
+    const need = aiSubNeed(eng, side, ps);
+    if (need > bestNeed || (need === bestNeed && bestPs !== null && ps.id < bestPs.id)) {
+      bestPs = ps;
+      bestNeed = need;
+    }
+  }
+  if (!bestPs || bestNeed < cfg.minNeedToSub) return false;
+  const energyOf = (id: number): number => eng.st.playerEnergy[id] ?? side.bench.find((p) => p.id === id)?.energy ?? 0;
+  const incoming = pickAiReplacement(side.bench, bestPs.tacPos, energyOf);
+  if (!incoming) return false;
+  applyEngineSub(eng, side, bestPs, incoming, minute);
+  return true;
+}
+
+/**
+ * Per-minute AI substitution check inside the run loop. Only AI sides act
+ * (`!club.isHuman` — human sides keep their automation rules); every side is
+ * evaluated at most once per match minute via `aiSubLastMinute`, which persists
+ * through writeBack so a rebuilt engine cannot re-evaluate the same minute.
+ */
+function evaluateAiSubstitutions(eng: Engine): void {
+  const cfg = MS.substitutionAi;
+  const minute = Math.floor(eng.clockSeconds / 60);
+  if (minute < cfg.earliestMatchMinute || minute > cfg.latestMatchMinute) return;
+  const cap = Math.min(cfg.maxPerSide, MP_CONFIG.maxSubsPerSide);
+  for (const side of [eng.home, eng.away]) {
+    if (side.club.isHuman) continue;
+    if (minute <= eng.aiSubLastMinute[side.idx]) continue;
+    eng.aiSubLastMinute[side.idx] = minute;
+    if ((eng.st.usedSubs[side.idx] ?? 0) >= cap) continue;
+    tryAiSubstitution(eng, side, minute);
+  }
 }
 
 /** Injury hazard check for the acting side (plan §37). Normalized so neutral
@@ -2133,6 +2258,7 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
     // If we have an explicit target and the next step would overshoot it, let stepPossession
     // handle the clock increment and then the next loop will break on the target check above.
     if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
+    evaluateAiSubstitutions(eng);
     stepPossession(eng);
   }
   const totalEnd = MS.timing.regulationSeconds + (eng.st.firstHalfAddedMinutes ?? 0) * 60 + (eng.st.secondHalfAddedMinutes ?? 0) * 60;
@@ -2299,6 +2425,7 @@ function buildEngine(
     playerMinutes: { ...(st.playerMinutes ?? {}) },
     playerRecentLoad: { ...(st.playerRecentLoad ?? {}) },
     playerMatchLoad: { ...(st.playerMatchLoad ?? {}) },
+    aiSubLastMinute: [...(st.aiSubLastMinute ?? [-1, -1])],
     commentary: [],
     ended: st.ended ?? false,
     extraTimePlayed: st.extraTimePlayed ?? false,
@@ -2454,6 +2581,7 @@ function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimula
   }
   st.playerRecentLoad = { ...eng.playerRecentLoad };
   st.playerMatchLoad = { ...eng.playerMatchLoad };
+  st.aiSubLastMinute = [...eng.aiSubLastMinute];
   st.homeOn = eng.home.on.map((ps) => ps.id);
   st.awayOn = eng.away.on.map((ps) => ps.id);
   st.scores = eng.scores;

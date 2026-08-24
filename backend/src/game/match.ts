@@ -1,6 +1,6 @@
 import type { Club, LiveMatchState, LiveTactics, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
 import { nextInt } from "./rng";
-import { lineupForMatch } from "./club";
+import { chooseAiTactics, lineupForMatch } from "./club";
 import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import {
   advancePossessionMatch,
@@ -214,6 +214,11 @@ export function createLiveMatchState(
   allPlayers: Player[],
   opts: LiveCreateOpts
 ): LiveMatchState {
+  // AI clubs pick the starting tactic that best fits their current squad
+  // (injuries, fatigue, rotation) before the lineups are built; humans keep
+  // whatever they saved. Deterministic, own-squad only.
+  if (!home.isHuman) chooseAiTactics(home, allPlayers);
+  if (!away.isHuman) chooseAiTactics(away, allPlayers);
   const setup = setupMatch(home, away, allPlayers, { homeFutureFixtures: opts.homeFutureFixtures, awayFutureFixtures: opts.awayFutureFixtures });
   const homeXI = setup.homeXI.length === 11 ? setup.homeXI : setup.homeSubs.slice(0, 11).concat(setup.homeXI).slice(0, 11);
   const awayXI = setup.awayXI.length === 11 ? setup.awayXI : setup.awaySubs.slice(0, 11).concat(setup.awayXI).slice(0, 11);

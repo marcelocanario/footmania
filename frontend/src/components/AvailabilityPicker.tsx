@@ -40,6 +40,8 @@ interface Props {
 export function AvailabilityPicker({ value, onChange, disabled }: Props) {
   const selected = new Set(value);
   const painting = useRef<{ active: boolean; mode: boolean }>({ active: false, mode: true });
+  // Anchor slot for shift+click range fills (last slot clicked without Shift).
+  const anchor = useRef<number | null>(null);
 
   useEffect(() => {
     const stop = () => { painting.current.active = false; };
@@ -55,6 +57,19 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
     if (selected.has(slot) === mode) return;
     const next = mode ? [...value, slot] : value.filter((s) => s !== slot);
     onChange(next);
+  };
+
+  // Shift+click fills the whole range between the anchor and this slot in one
+  // action, using the anchor's pre-click state as the paint mode.
+  const applyRange = (from: number, to: number, mode: boolean) => {
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    const next = new Set(value);
+    for (let s = lo; s <= hi; s++) {
+      if (mode) next.add(s);
+      else next.delete(s);
+    }
+    onChange([...next].sort((a, b) => a - b));
   };
 
   const hours = value.length / 2;
@@ -99,8 +114,15 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
                 aria-label={slotLabel(slot)}
                 aria-pressed={isSel}
                 disabled={disabled}
-                onPointerDown={() => {
+                onPointerDown={(e) => {
+                  if (e.shiftKey && anchor.current !== null && !disabled) {
+                    const mode = !selected.has(anchor.current);
+                    painting.current = { active: true, mode };
+                    applyRange(anchor.current, slot, mode);
+                    return;
+                  }
                   const mode = !isSel;
+                  anchor.current = slot;
                   painting.current = { active: true, mode };
                   apply(slot, mode);
                 }}
@@ -134,7 +156,7 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
         {hours.toFixed(1)} h selected{!enough && ` — pick at least ${MIN_SLOTS / 2} hours`}
       </div>
       <div style={{ marginTop: 4, fontSize: "0.78rem", color: "var(--text-3)" }}>
-        Times shown in your timezone ({userTimeZone()}).
+        Shift-click to fill a range of slots at once. Times shown in your timezone ({userTimeZone()}).
       </div>
     </div>
   );

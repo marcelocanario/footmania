@@ -46,7 +46,9 @@ function club(overrides: Partial<Club> = {}): Club {
     id: clubId++,
     name: "Fam FC",
     shortName: "FFC",
-    ownerUserId: null,
+    // Human-controlled: these tests exercise human familiarity/lineup
+    // mechanics, which AI pre-match tactic selection must not touch.
+    ownerUserId: 1,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,
@@ -62,7 +64,7 @@ function club(overrides: Partial<Club> = {}): Club {
     trainingFocus: "assistant",
     captainId: null,
     penaltyTakerId: null,
-    isHuman: false,
+    isHuman: true,
     ledger: { income: [], expense: [] },
     trophies: {},
     ...overrides,
