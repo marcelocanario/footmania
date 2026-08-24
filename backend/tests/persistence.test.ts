@@ -537,6 +537,46 @@ describe("global multiplayer world persistence", () => {
     expect(rw.freeAgentListings.find((listing) => listing.playerId === freeAgent.id)?.unclaimedSince).toBeDefined();
   });
 
+  it("round-trips grouped inbox news metadata (news overhaul)", async () => {
+    const { saveId } = await freshGlobalWorld(906);
+    const { seasonId, world } = await withSeason(saveId);
+    const clubId = world.clubs[0].id;
+    world.news.push(
+      {
+        dayIndex: 3,
+        text: "Player contracts expiring soon: A (12 days remaining on his current deal) and B (20 days remaining on his current deal). These deals have entered their renewal window, and the clock is running down before the players reach the open market.",
+        kind: "contract",
+        clubId,
+        recipientClubId: clubId,
+        seasonId,
+        subject: "contract-warning",
+        headline: "Contracts entering their final stretch",
+        entries: [
+          { key: "warn:1", label: "A", detail: "12 days remaining on his current deal" },
+          { key: "warn:2", label: "B", detail: "20 days remaining on his current deal" },
+        ],
+      },
+      { dayIndex: 4, text: "plain legacy item", kind: "mp" },
+    );
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const grouped = reloaded!.world.news.find((n) => n.subject === "contract-warning");
+    expect(grouped?.headline).toBe("Contracts entering their final stretch");
+    expect(grouped?.recipientClubId).toBe(clubId);
+    expect(grouped?.seasonId).toBe(seasonId);
+    expect(grouped?.entries).toEqual([
+      { key: "warn:1", label: "A", detail: "12 days remaining on his current deal" },
+      { key: "warn:2", label: "B", detail: "20 days remaining on his current deal" },
+    ]);
+    expect(grouped?.text).toBe("Player contracts expiring soon: A (12 days remaining on his current deal) and B (20 days remaining on his current deal). These deals have entered their renewal window, and the clock is running down before the players reach the open market.");
+    // Legacy rows without inbox metadata keep loading untouched.
+    const legacy = reloaded!.world.news.find((n) => n.text === "plain legacy item");
+    expect(legacy?.subject).toBeUndefined();
+    expect(legacy?.recipientClubId).toBeUndefined();
+  });
+
   it("reads a legacy matchday into seasonDayIndex without losing its value", async () => {
     const { saveId } = await freshGlobalWorld(903);
     const { seasonId, world } = await withSeason(saveId);

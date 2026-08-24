@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateEloChange, applyMatchElo } from "../src/game/elo";
+import { calculateEloChange, applyMatchElo, footmaniaRanking } from "../src/game/elo";
 import { emptyStandingsRow, standingsTiebreak } from "../src/game/league";
 import type { Match } from "../src/game/types";
 import { makeClub, makeWorld } from "./helpers";
@@ -64,5 +64,27 @@ describe("human club Elo", () => {
   it("uses Elo before clubId for a complete sporting tie", () => {
     const rows = standingsTiebreak([emptyStandingsRow(20), emptyStandingsRow(10)], new Map([[10, 1400], [20, 1600]]));
     expect(rows.map((row) => row.clubId)).toEqual([20, 10]);
+  });
+
+  it("ranks active human clubs without including AI or inactive clubs", () => {
+    const first = makeClub({ id: 1, name: "First FC", eloRating: 1700 });
+    const second = makeClub({ id: 2, name: "Second FC", eloRating: 1600 });
+    const dormant = makeClub({ id: 3, name: "Dormant FC", eloRating: 1900, competitionState: "DORMANT" });
+    const ai = makeClub({ id: 4, name: "AI FC", ownerUserId: null, isHuman: false, eloRating: 2000 });
+    const world = makeWorld([first, second, dormant, ai], []);
+
+    expect(footmaniaRanking(world)).toEqual([
+      { clubId: 1, rank: 1 },
+      { clubId: 2, rank: 2 },
+    ]);
+  });
+
+  it("uses club id as a deterministic tie-breaker", () => {
+    const higherId = makeClub({ id: 20, eloRating: 1500 });
+    const lowerId = makeClub({ id: 10, eloRating: 1500 });
+    expect(footmaniaRanking(makeWorld([higherId, lowerId], []))).toEqual([
+      { clubId: 10, rank: 1 },
+      { clubId: 20, rank: 2 },
+    ]);
   });
 });

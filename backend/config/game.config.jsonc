@@ -276,5 +276,13 @@
   // Single pinned announcement shown at the top of every user's News feed.
   "motd": {
     "maxLength": 280
+  },
+
+  // --- Season awards ---
+  // A player must have played at least this share of his club's league games
+  // in the season (at least one minute on the pitch per match) to win an
+  // individual award or make the division's Best XI.
+  "awards": {
+    "minAppearanceFraction": 0.4
   }
 }

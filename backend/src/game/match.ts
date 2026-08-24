@@ -22,6 +22,7 @@ import {
   type TacticFamiliarityMap,
 } from "./familiarity";
 import { currentSkillsVersion } from "./skillsVersion";
+import { NEWS_SUBJECTS, publishNews } from "./news";
 
 // ---------------------------------------------------------------------------
 // Public match-engine facade (plans/6. match-simulator-overhaul.md).
@@ -748,6 +749,10 @@ export function applyMatchToPlayers(match: Match, world: World) {
       if (!p) continue;
       const recorded = Math.round(minutes);
       p.recentMinutes = [recorded, ...(p.recentMinutes ?? [])].slice(0, DEVELOPMENT.recentMatchWindow);
+      // Any pitch time counts as an appearance for season-award eligibility.
+      // applyMatchToPlayers runs once per finalized competitive match; practice
+      // matches simulate on cloned worlds and never reach this path.
+      if (minutes > 0) p.seasonAppearances = (p.seasonAppearances ?? 0) + 1;
     }
   }
   for (const ev of match.events) {
@@ -766,11 +771,12 @@ export function applyMatchToPlayers(match: Match, world: World) {
       const club = world.clubs.find((c) => c.id === ev.clubId);
       if (club) {
         const flavor = games >= 5 ? "after a violent challenge" : games >= 3 ? "for a serious foul" : "for foul play";
-        world.news.push({
-          dayIndex: world.dayIndex,
-          text: `Tribunal suspends ${p.name} (${club.name}) for ${games} game${games > 1 ? "s" : ""} ${flavor}.`,
+        publishNews(world, {
           kind: "tribunal",
+          subject: NEWS_SUBJECTS.tribunal,
           clubId: club.id,
+          headline: "Disciplinary verdicts",
+          entries: [{ key: `ban:${p.id}`, label: p.name, detail: `(${club.name}) suspended for ${games} game${games > 1 ? "s" : ""} ${flavor}` }],
         });
       }
     }

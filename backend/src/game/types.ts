@@ -56,6 +56,9 @@ export interface Player {
   careerAssists: number;
   seasonGoals: number;
   seasonAssists: number;
+  /** League matches this season with at least one minute on the pitch.
+   *  Optional so worlds persisted before the field existed load unchanged. */
+  seasonAppearances?: number;
   yellows: number;
   reds: number;
   clubId: number | null;
@@ -565,8 +568,16 @@ export interface LiveMatchState {
    *  persisted before these fields existed load unchanged. Both are plain
    *  observations of already-computed engine values — writing them never
    *  consumes RNG draws, so match outcomes stay byte-identical. */
-  lastAction?: string | null;
-  prevZone?: string | null;
+   lastAction?: string | null;
+   prevZone?: string | null;
+  /** Assist bookkeeping: the passer of the last completed PASS/CROSS of the
+   *  current possession and his side. Cleared on turnovers, fouls and every
+   *  restart. Pure observation of already-computed engine values — reading or
+   *  writing it never consumes RNG draws, so match outcomes stay identical.
+   *  Optional so live states persisted before these fields existed load
+   *  unchanged. */
+  lastPasserId?: number | null;
+  lastPasserSide?: 0 | 1 | null;
   /** Stable visual carrier for the current team/zone possession. */
   ballCarrierId?: number | null;
   /** Monotonic presentation sequence for the last action. */
@@ -590,12 +601,39 @@ export interface LiveMatchState {
   automationDisabled?: [boolean, boolean];
 }
 
+/** One persisted fact inside a grouped dashboard news message. */
+export interface NewsEntry {
+  /** Stable dedupe key within a grouped message (player id, fixture id…). */
+  key?: string;
+  /** Primary label, usually a name. */
+  label?: string;
+  /** Specific detail rendered next to the label. */
+  detail?: string;
+}
+
 export interface NewsItem {
   id?: number;
   dayIndex: number;
   text: string;
   kind: string;
+  /** Public attribution (which club the news is about). */
   clubId?: number;
+  /**
+   * Privacy audience: when set, only this club's manager sees the item.
+   * Undefined = globally visible broadcast.
+   */
+  recipientClubId?: number;
+  /** Season the news belongs to; part of the grouping key. */
+  seasonId?: number;
+  /**
+   * Grouping subject: same-day items for the same recipient+subject merge
+   * into one message. Null = never merges (legacy rows, MOTDs, reports).
+   */
+  subject?: string;
+  /** Optional headline retained as metadata for the dashboard news item. */
+  headline?: string;
+  /** Structured facts rendered as the message's detail list. */
+  entries?: NewsEntry[];
 }
 
 /** One private maximum bid per club/listing (transfer-market-overhaul §69). */
@@ -857,6 +895,12 @@ export interface MpState {
   pendingSeasonRetirees?: number | null;
   /** Population health snapshots, one per season, for admin analytics trends. */
   populationHistory?: PopulationHistoryEntry[];
+  /**
+   * Per-club rollover flow (promotions/academy intake/replacements) captured
+   * during SEASONAL_ACADEMY_INTAKE and read by the preseason report at
+   * SEASON_ROLLOVER_COMMIT, keyed by club id. Cleared once consumed.
+   */
+  pendingPreseasonFlow?: Record<string, { promotions: number; intake: number; replacements: number }>;
   /**
    * Season pause (admin control). While set, this is the frozen world instant:
    * workers, day advancement and schedule-dependent mutations are gated, and

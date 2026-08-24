@@ -18,6 +18,7 @@ import { createRng, nextDouble } from "./rng";
 import { DEVELOPMENT } from "./constants";
 import { calculateBaseSalary, calculateContractDemand, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
 import { ensureClubSquadNumbers } from "./squadNumbers";
+import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
 
 /**
  * Free-agent market (transfer-market-overhaul Phase 7, §41-§54).
@@ -380,11 +381,16 @@ export function settleFreeAgentListing(
   listing.winningClubId = winner.id;
   listing.finalPrice = finalPrice;
 
-  world.news.push({
-    dayIndex: world.dayIndex,
-    text: `${winner.name} signed ${player.name} as a free agent for ${formatMoney(finalPrice)}`,
+  publishNews(world, {
     kind: "market",
+    subject: NEWS_SUBJECTS.transfers,
     clubId: winner.id,
+    headline: "Free agent signed",
+    entries: [{
+      key: `free-agent:${listing.id}`,
+      label: player.name,
+      detail: `${winner.name} signed ${player.name} as a free agent for ${formatMoney(finalPrice)}`,
+    }],
   });
   return { ok: true, winnerClubId: winner.id, finalPrice };
 }
@@ -522,11 +528,4 @@ export function freeAgentListingView(world: World, listing: FreeAgentListing, my
     myContractSalary: myBid?.contractSalary ?? null,
     amILeading: listing.leadingClubId === myClubId,
   };
-}
-
-/** Compact currency formatter for news text. */
-function formatMoney(amount: number): string {
-  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(amount % 1_000_000 === 0 ? 0 : 2)}M`;
-  if (amount >= 1_000) return `$${(amount / 1_000).toFixed(0)}K`;
-  return `$${amount}`;
 }

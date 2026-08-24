@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Medal, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Crown, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Crown, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
@@ -24,7 +24,6 @@ const NAV: NavItem[] = [
   { to: "/finances", label: "Finances", icon: <Wallet size={15} /> },
   { to: "/my-club", label: "My Club", icon: <Shirt size={15} /> },
   { to: "/history", label: "History", icon: <HistoryIcon size={15} /> },
-  { to: "/records", label: "Records", icon: <Medal size={15} /> },
   { to: "/friends", label: "Friends", icon: <UserPlus size={15} /> },
   { to: "/settings", label: "Settings", icon: <SettingsIcon size={15} /> },
 ];

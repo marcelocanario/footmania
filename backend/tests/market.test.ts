@@ -864,7 +864,7 @@ describe("settlement (§22)", () => {
     expect(world.playerMarketHistory[0].contractSalary).toBe(winningBid?.contractSalary);
 
     // News published.
-    expect(world.news.some((n) => n.kind === "auction" && n.text.includes(player.name))).toBe(true);
+    expect(world.news.some((n) => n.kind === "auction" && (n.text.includes(player.name) || n.entries?.some((entry) => entry.label === player.name)))).toBe(true);
   });
 
   it("does not double-settle: a completed listing is skipped", () => {

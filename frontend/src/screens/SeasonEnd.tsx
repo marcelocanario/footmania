@@ -3,6 +3,7 @@ import { Trophy, PartyPopper, Medal } from "lucide-react";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { ClubNameLink } from "../components/ClubNameLink";
+import { bestXiEntries } from "../utils/awards";
 
 export function SeasonEnd() {
   const { snapshot } = useGame();
@@ -88,7 +89,9 @@ export function SeasonEnd() {
               <div className="news-item" key={`${award.category}-${award.competitionId}-${i}`}>
                 <span className="day">{award.category.replaceAll("_", " ")}</span>
                 <span>{award.playerNameSnapshot ?? "Club award"}</span>
-                <span style={{ marginLeft: "auto", color: "var(--text-3)" }}>{award.detail}</span>
+                <span style={{ marginLeft: "auto", color: "var(--text-3)" }}>
+                  {bestXiEntries(award)?.map((entry) => entry.name).join(" · ") ?? award.detail}
+                </span>
               </div>
             ))}
           </div>

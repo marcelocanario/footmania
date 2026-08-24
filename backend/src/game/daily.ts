@@ -8,6 +8,7 @@ import { isEphemeralAI } from "./club";
 import { nextDouble } from "./rng";
 import { calendarValues, roundForSeasonDayIndex } from "../services/seasonCalendar";
 import { injuryDaysRemaining, loadFactor, ageFactor, recordInjury, recoverEnergy, recoveryCeiling, syncLegacyInjuryDays, ENERGY_INJURY_MODEL } from "./energyInjury";
+import { NEWS_SUBJECTS, publishNews } from "./news";
 
 /**
  * Authoritative game-day processing. The durable scheduler drives one
@@ -70,6 +71,7 @@ function processTrainingInjuries(world: World, absoluteGameDay: number, seasonDa
     const eligibleDays = Math.max(1, calendar.seasonDays - calendar.roundsPerSeason);
     const events = poisson(world.rng, gameConfig.injuries.trainingTargetPerClubSeason / eligibleDays * meanRelativeRisk);
     const pool = risks.slice();
+    const injured: Player[] = [];
     for (let i = 0; i < events && pool.length > 0; i++) {
       const total = pool.reduce((sum, item) => sum + item.risk, 0);
       let roll = nextDouble(world.rng) * total;
@@ -77,7 +79,21 @@ function processTrainingInjuries(world: World, absoluteGameDay: number, seasonDa
       for (let j = 0; j < pool.length; j++) { roll -= pool[j].risk; if (roll <= 0) { index = j; break; } }
       const selected = pool.splice(index, 1)[0].player;
       recordInjury(world.rng, selected, "TRAINING", absoluteGameDay, calendar.roundsPerSeason, calendar.matchSpacingDays);
-      world.news.push({ dayIndex: world.dayIndex, text: `${selected.name} suffered a training injury`, kind: "injury", clubId: club.id });
+      injured.push(selected);
+    }
+    // One grouped dashboard message per club per day instead of one row per injury.
+    if (injured.length > 0) {
+      publishNews(world, {
+        kind: "injury",
+        subject: NEWS_SUBJECTS.injuries,
+        recipientClubId: club.id,
+        headline: "Treatment room update",
+        entries: injured.map((player) => ({
+          key: `injury:${player.id}`,
+          label: player.name,
+          detail: `${injuryDaysRemaining(player, absoluteGameDay)} days out with a training injury`,
+        })),
+      });
     }
   }
 }

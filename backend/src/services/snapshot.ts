@@ -6,6 +6,7 @@ import { FORMATION_NAMES, MOTD_NEWS_KIND, POSITION_NAMES, STYLE_NAMES, PRESSING_
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 import { resolveClubKits } from "../game/kits";
+import { newsVisibleTo } from "../game/news";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { seasonKey } from "../game/clock";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
@@ -17,6 +18,21 @@ import {
 } from "../game/familiarity";
 
 const snapshotCache = new WeakMap<World, Map<number, unknown>>();
+
+/** Wire shape of one news item as served to clients. */
+export function newsItemView(n: World["news"][number], dayLabelText: string) {
+  return {
+    id: n.id,
+    dayIndex: n.dayIndex,
+    dayLabel: dayLabelText,
+    text: n.text,
+    kind: n.kind,
+    ...(n.headline !== undefined ? { headline: n.headline } : {}),
+    ...(n.subject !== undefined ? { subject: n.subject } : {}),
+    ...(n.entries && n.entries.length > 0 ? { entries: n.entries } : {}),
+    ...(n.recipientClubId !== undefined ? { recipientClubId: n.recipientClubId } : {}),
+  };
+}
 
 export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }, absoluteGameDay = 0) {
   const nick = (p.nickname ?? "").trim();
@@ -60,6 +76,53 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     loanClubName: loan?.loanClubName ?? null,
     loanFromName: loan?.loanFromName ?? null,
   };
+}
+
+/** One parsed Best XI member of a best_xi season award. */
+export interface SeasonAwardEntryView {
+  id: number;
+  clubId: number | null;
+  name: string;
+  /** False once the player has left the world (retired/deleted): the client
+   *  renders the name as plain text instead of a player-card link. */
+  active: boolean;
+}
+
+/**
+ * Parse the structured Best XI detail written by computeSeasonAwards
+ * (`[{id, clubId, name}]`) and flag which members still exist in the world.
+ * Legacy rows stored bare name arrays; those parse to names-only entries with
+ * id = null so clients render them as non-clickable text.
+ */
+export function bestXiEntries(detail: string | null, world: World): (SeasonAwardEntryView | { id: null; clubId: null; name: string; active: false })[] | null {
+  if (!detail) return null;
+  try {
+    const parsed = JSON.parse(detail) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.map((entry) => {
+      if (typeof entry === "string") return { id: null, clubId: null, name: entry, active: false };
+      const e = entry as { id?: unknown; clubId?: unknown; name?: unknown };
+      if (typeof e.id !== "number" || typeof e.name !== "string") return null;
+      const id = e.id as number;
+      return {
+        id,
+        clubId: typeof e.clubId === "number" ? (e.clubId as number) : null,
+        name: e.name as string,
+        active: world.players.some((p) => p.id === id),
+      } satisfies SeasonAwardEntryView;
+    }).filter((entry): entry is SeasonAwardEntryView | { id: null; clubId: null; name: string; active: false } => entry !== null);
+  } catch {
+    return null;
+  }
+}
+
+/** Season awards as served to clients, with Best XI entries resolved. */
+export function seasonAwardsView(world: World) {
+  return world.seasonAwards.slice().reverse().map((award) => {
+    if (award.category !== "best_xi") return award;
+    const entries = bestXiEntries(award.detail, world);
+    return entries ? { ...award, entries } : award;
+  });
 }
 /** Loan context for a player relative to a club, or neutral defaults. */
 function loanInfo(
@@ -147,17 +210,13 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   // Admin announcements ("motd") are pinned ahead of the chronological feed
   // from the FULL history — older announcements remain visible no matter how
   // much match news follows them. Admins may retain multiple announcements.
+  // Club-private items (recipientClubId) only reach that club's manager.
   const pinnedNews = world.news.filter((n) => n.kind === MOTD_NEWS_KIND);
   const chronological = world.news
-    .filter((n) => n.kind !== MOTD_NEWS_KIND)
+    .filter((n) => n.kind !== MOTD_NEWS_KIND && newsVisibleTo(n, clubId))
     .slice(-(compact ? 12 : 30))
     .reverse();
-  const news = [...pinnedNews, ...chronological].map((n) => ({
-    dayIndex: n.dayIndex,
-    dayLabel: dayLabel(n.dayIndex),
-    text: n.text,
-    kind: n.kind,
-  }));
+  const news = [...pinnedNews, ...chronological].map((n) => newsItemView(n, dayLabel(n.dayIndex)));
 
   const auctions = includeMarket ? (() => {
     const bidsByListing = new Map<number, typeof world.marketBids>();
@@ -332,7 +391,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
     auctions,
     freeAgents,
     records: world.records,
-    seasonAwards: world.seasonAwards.slice(-(compact ? 12 : 40)).reverse(),
+    seasonAwards: seasonAwardsView(world).slice(0, compact ? 12 : 40),
   };
 }
 

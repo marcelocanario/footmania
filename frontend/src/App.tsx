@@ -23,7 +23,6 @@ const PreGame = lazyNamed(() => import("./screens/PreGame"), "PreGame");
 const Transfers = lazyNamed(() => import("./screens/Transfers"), "Transfers");
 const Finances = lazyNamed(() => import("./screens/Finances"), "Finances");
 const SeasonEnd = lazyNamed(() => import("./screens/SeasonEnd"), "SeasonEnd");
-const Records = lazyNamed(() => import("./screens/Records"), "Records");
 const History = lazyNamed(() => import("./screens/History"), "History");
 const SettingsScreen = lazyNamed(() => import("./screens/Settings"), "SettingsScreen");
 const FriendsScreen = lazyNamed(() => import("./screens/Friends"), "FriendsScreen");
@@ -158,7 +157,7 @@ function AppRoutes() {
       <Route path="/transfers" element={<ClubGuard><Transfers /></ClubGuard>} />
       <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />
       <Route path="/season-end" element={<ClubGuard><SeasonEnd /></ClubGuard>} />
-      <Route path="/records" element={<ClubGuard><Records /></ClubGuard>} />
+      <Route path="/records" element={<Navigate to="/history" replace />} />
       <Route path="/history" element={<ClubGuard><History /></ClubGuard>} />
       <Route path="/settings" element={<ClubGuard><SettingsScreen /></ClubGuard>} />
       <Route path="/friends" element={<ClubGuard><FriendsScreen /></ClubGuard>} />

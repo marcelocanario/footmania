@@ -10,7 +10,6 @@ import { ClubCrest } from "../components/ClubCrest";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { formatKickoff } from "../utils/time";
 
-/** Accent color per news kind; unknown kinds fall back to a neutral tone. */
 const NEWS_KIND_COLORS: Record<string, string> = {
   season: "var(--gold)",
   mp: "var(--gold)",
@@ -249,13 +248,11 @@ export function Dashboard() {
           ) : (
             <div className="news-feed">
               {snapshot.news.slice(0, 12).map((n, i) => (
-                <div className="news-feed-item" key={i}>
+                <div className="news-feed-item" key={n.id ?? `i-${i}`}>
                   <span className="kind-dot" style={{ background: NEWS_KIND_COLORS[n.kind] ?? "var(--text-3)" }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div>
-                      {n.kind === "motd" && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.5)", color: "var(--gold-2)", marginRight: 6, fontSize: "0.68rem", padding: "1px 6px" }}>ADMIN</span>}
-                      {n.text}
-                    </div>
+                    {n.kind === "motd" && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.5)", color: "var(--gold-2)", marginRight: 6, fontSize: "0.68rem", padding: "1px 6px" }}>ADMIN</span>}
+                    {n.text}
                   </div>
                   <span className="day">{n.dayLabel}</span>
                 </div>

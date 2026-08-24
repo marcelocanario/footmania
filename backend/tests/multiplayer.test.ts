@@ -1212,7 +1212,7 @@ describe("filler retirement market reconciliation", () => {
     expect(world.players.some((p) => p.id === player.id)).toBe(true);
     expect(bidder.cash).toBe(cashBefore - listing.finalPrice!);
     expect(world.clubs.some((c) => c.id === aiId)).toBe(false);
-    expect(world.news.some((n) => n.text.includes("won the auction"))).toBe(true);
+    expect(world.news.some((n) => n.entries?.some((entry) => entry.detail?.includes("won the auction")))).toBe(true);
   });
 
   it("settles competing bidders at the proxy clearing price and releases every reservation", () => {

@@ -301,6 +301,8 @@ model Player {
   careerAssists   Int
   seasonGoals     Int
   seasonAssists   Int
+  // League matches this season with at least one minute on the pitch.
+  seasonAppearances Int @default(0)
   yellows         Int
   reds            Int
   tacPos          Int
@@ -509,6 +511,15 @@ model NewsItem {
   text     String
   kind     String
   clubId   Int?
+  // Inbox model (news overhaul): `subject` is the grouping key component so
+  // same-day same-subject items for one recipient merge into a single message.
+  // Null subject = never merges (legacy rows, MOTDs, one-off reports).
+  seasonId        Int?
+  subject         String?
+  headline        String?
+  entriesJson     String?
+  // Privacy: when set, only that club's manager sees the item in snapshots.
+  recipientClubId Int?
 
   @@index([saveId, id])
 }

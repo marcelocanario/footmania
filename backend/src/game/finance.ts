@@ -9,6 +9,7 @@ import { prepareFreeAgentListing } from "./freeAgents";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 import { ensureClubSquadNumbers } from "./squadNumbers";
 import { bumpSkillsVersion } from "./skillsVersion";
+import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
 
 /**
  * Financial system (plans/5. financial-control.md).
@@ -528,6 +529,8 @@ export function runFinancialIntervention(
 
   let systemLiquidationRevenue = 0;
   let unableToFullyRecover = false;
+  // Departed players collected for the single grouped intervention message.
+  const liquidated: { id: number; name: string; price: number }[] = [];
 
   if (D > 0) {
     // --- 3. Build the system-liquidation candidate pool (§30) ---
@@ -600,12 +603,7 @@ export function runFinancialIntervention(
       const listing = preparedListings.get(player.id);
       if (!listing) throw new Error(`Financial intervention lost the prepared free-agent listing for player ${player.id}`);
       world.freeAgentListings.push(listing);
-      world.news.push({
-        dayIndex: world.dayIndex,
-        text: `${player.name} left ${club.name} due to unpaid wages and is now a free agent`,
-        kind: "finance",
-        clubId: club.id,
-      });
+      liquidated.push({ id: player.id, name: player.name, price: candidate.price });
 
       recordTransaction(world, {
         playerId: player.id,
@@ -640,12 +638,6 @@ export function runFinancialIntervention(
     // replacements (§49).
     if (effectiveRecovered < D) {
       unableToFullyRecover = true;
-      world.news.push({
-        dayIndex: world.dayIndex,
-        text: `${club.name} remains in financial difficulty despite the forced sale of players`,
-        kind: "finance",
-        clubId: club.id,
-      });
     }
   }
 
@@ -674,15 +666,22 @@ export function runFinancialIntervention(
   world.financialInterventions.push(intervention);
 
   const departedEntries = entries.filter((entry) => entry.kind === "FORCED_AUCTION" || entry.kind === "SYSTEM_LIQUIDATION");
-  if (departedEntries.length > 0) {
-    const departedNames = departedEntries
-      .slice(0, 3)
-      .map((entry) => world.players.find((p) => p.id === entry.playerId)?.name ?? "a player");
-    world.news.push({
-      dayIndex: world.dayIndex,
-      text: `Financial problems force players to leave: ${departedNames.join(", ")} left ${club.name} after the club failed to meet its obligations`,
+  if (departedEntries.length > 0 || unableToFullyRecover) {
+    const interventionEntries = liquidated.map((item) => ({
+      key: `liquidation:${item.id}`,
+      label: item.name,
+      detail: `left ${club.name} due to unpaid wages and is now a free agent (sold for ${formatMoney(item.price)})`,
+    }));
+    if (unableToFullyRecover) {
+      interventionEntries.push({ key: "status", label: "Outlook", detail: "the club remains in financial difficulty despite the forced sale of players" });
+    }
+    // One private grouped message per club per day instead of one row per fact.
+    publishNews(world, {
       kind: "finance",
-      clubId: club.id,
+      subject: NEWS_SUBJECTS.finance,
+      recipientClubId: club.id,
+      headline: "Financial intervention",
+      entries: interventionEntries,
     });
   }
 

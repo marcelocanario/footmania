@@ -20,6 +20,8 @@ import { standingsTiebreak, validateDoubleRoundRobinFixtures } from "../game/lea
 import { commitSeasonRollover, computeSeasonAwards, processContractExpiry, processSeasonEndContracts, processSeasonalAcademyIntake, updateCareerRecords } from "../game/season";
 import { applySeasonalEloRegression, eloRatings } from "../game/elo";
 import { revokeUnclaimedLoans } from "../game/loans";
+import { NEWS_SUBJECTS, publishNews } from "../game/news";
+import { generatePreseasonReports } from "../game/preseasonReport";
 import { ensureSeasonRow, issueAllocation, removeFillerClubs } from "./mpService";
 import { nextUint } from "../game/rng";
 
@@ -228,7 +230,13 @@ export async function executeRolloverStep(
       club.competitionState = "DORMANT";
       club.abandonmentEligibleAt = null;
       club.lastMeaningfulActivityAt = null;
-      world.news.push({ dayIndex: world.dayIndex, text: `${club.name} was moved to dormant status and will re-enter at the lowest tier if you return`, kind: "mp", clubId: club.id });
+      publishNews(world, {
+        kind: "mp",
+        subject: NEWS_SUBJECTS.clubStatus,
+        recipientClubId: club.id,
+        headline: "Pyramid standing",
+        entries: [{ key: `dormant:${club.id}`, label: club.name, detail: "was moved to dormant status and will re-enter at the lowest tier if you return" }],
+      });
     }
     world.mp.rolloverPhase = "MOVEMENTS_CALCULATED";
   } else if (step === "DIVISION_RESTRUCTURE") {
@@ -328,6 +336,10 @@ export async function executeRolloverStep(
     world.mp.startAbsoluteGameDay = (world.mp.absoluteGameDay ?? world.dayIndex) + 1;
     world.mp.seasonStartAt = now;
     world.mp.lastAdvancedAt = now;
+    // One pre-season briefing per human club on the first day of the new
+    // season. Idempotent per club/season; flow data is consumed and cleared.
+    generatePreseasonReports(world);
+    world.mp.pendingPreseasonFlow = undefined;
     world.mp.rolloverPhase = null;
     world.mp.rolloverContext = null;
   }

@@ -10,6 +10,11 @@ export interface EloChange {
   actualAway: number;
 }
 
+export interface FootmaniaRank {
+  clubId: number;
+  rank: number;
+}
+
 export function calculateEloChange(homeRating: number, awayRating: number, homeScore: number, awayScore: number): EloChange {
   const expectedHome = 1 / (1 + Math.pow(10, (awayRating - (homeRating + ELO_CONFIG.homeAdvantage)) / ELO_CONFIG.scale));
   const expectedAway = 1 - expectedHome;
@@ -67,6 +72,20 @@ export function applySeasonalEloRegression(world: World): void {
 
 export function eloRatings(world: World): ReadonlyMap<number, number> {
   return new Map(world.clubs.map((club) => [club.id, club.eloRating ?? ELO_CONFIG.initial]));
+}
+
+/** Public ranking eligibility: only active player-managed clubs have meaningful Elo. */
+export function isFootmaniaRankedClub(club: Club): boolean {
+  return club.ownerUserId !== null && club.competitionState === "ACTIVE";
+}
+
+/** Rank active human clubs without exposing the underlying rating. */
+export function footmaniaRanking(world: World): FootmaniaRank[] {
+  return world.clubs
+    .filter(isFootmaniaRankedClub)
+    .slice()
+    .sort((a, b) => (b.eloRating ?? ELO_CONFIG.initial) - (a.eloRating ?? ELO_CONFIG.initial) || a.id - b.id)
+    .map((club, index) => ({ clubId: club.id, rank: index + 1 }));
 }
 
 export function displayElo(club: Club): number {

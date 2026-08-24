@@ -16,13 +16,7 @@ import { seniorRosterFullError, isEphemeralAI } from "./club";
 import { newClubSellLockError } from "./league";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 import { ensureClubSquadNumbers } from "./squadNumbers";
-
-/** Compact currency formatter for news text. */
-function formatMoney(amount: number): string {
-  if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(amount % 1_000_000 === 0 ? 0 : 2)}M`;
-  if (amount >= 1_000) return `$${(amount / 1_000).toFixed(0)}K`;
-  return `$${amount}`;
-}
+import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
 
 /**
  * Shared marketplace infrastructure (transfer-market-overhaul Phase 2).
@@ -702,11 +696,16 @@ export function settleTransferAuction(
   listing.winningClubId = winner.id;
   listing.finalPrice = finalPrice;
 
-  world.news.push({
-    dayIndex: world.dayIndex,
-    text: `${winner.name} won the auction for ${player.name} for ${formatMoney(finalPrice)}${tax > 0 ? ` (includes ${formatMoney(tax)} sales tax)` : ""}`,
+  publishNews(world, {
     kind: "auction",
+    subject: NEWS_SUBJECTS.transfers,
     clubId: winner.id,
+    headline: "Transfer completed",
+    entries: [{
+      key: `auction:${listing.id}`,
+      label: player.name,
+      detail: `${winner.name} won the auction for ${formatMoney(finalPrice)}${tax > 0 ? ` (includes ${formatMoney(tax)} sales tax)` : ""}`,
+    }],
   });
 
   return { ok: true, winnerClubId: winner.id, finalPrice };
@@ -723,10 +722,9 @@ export function cancelUnsettleableAuction(world: World, listing: TransferAuction
   listing.status = "CANCELLED";
   listing.cancelledAt = now;
   if (player) player.onSale = false;
-  world.news.push({
-    dayIndex: world.dayIndex,
-    text: `The auction for ${player?.name ?? "a player"} was cancelled (${reason})`,
+  publishNews(world, {
     kind: "auction",
+    text: `The auction for ${player?.name ?? "a player"} was cancelled (${reason})`,
   });
 }
 

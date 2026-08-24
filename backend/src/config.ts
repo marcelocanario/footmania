@@ -134,6 +134,14 @@ const gameConfigSchema = z
     motd: z.object({
       maxLength: z.number().int().min(1).max(2000).default(280),
     }).default({ maxLength: 280 }),
+    // Season-award eligibility. Optional with a default so older/custom config
+    // objects keep parsing without a migration.
+    awards: z.object({
+      // Minimum share of his club's league games in the season (matches with
+      // at least one minute on the pitch / possible club games) for a player
+      // to be eligible for an individual award or the Best XI.
+      minAppearanceFraction: z.number().min(0).max(1).default(0.4),
+    }).default({ minAppearanceFraction: 0.4 }),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
@@ -457,7 +465,7 @@ export const MP_CONFIG = {
   newClubSellLockMatches: 3,
 } as const;
 
-/** Human-club Elo settings. Elo is intentionally hidden from player-facing APIs. */
+/** Human-club Elo settings. Raw Elo is private; only ordinal Footmania rank is public. */
 export const ELO_CONFIG = {
   initial: 1500,
   scale: 400,
@@ -678,6 +686,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   energy: { matchLossScale: 1, recoveryScale: 1 },
   injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1, autoSubstitute: true },
   motd: { maxLength: 280 },
+  awards: { minAppearanceFraction: 0.4 },
   roundsPerSeason: 14,
   matchSpacingDays: 2,
   lastLeagueMatchDayIndex: 27,

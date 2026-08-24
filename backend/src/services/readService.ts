@@ -7,6 +7,7 @@ import { resolveClubKits } from "../game/kits";
 import { standingsTiebreak } from "../game/league";
 import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf } from "../game/multiplayer";
 import { POSITION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
+import { footmaniaRanking, isFootmaniaRankedClub } from "../game/elo";
 
 type MpStateView = {
   seasonId?: number;
@@ -249,6 +250,36 @@ export async function readSeasonHistory(prisma: PrismaClient, userId: number, li
   return { seasons };
 }
 
+/** Public Footmania ranking: ordinal rank plus club identity, never raw Elo. */
+export function footmaniaRankingView(world: World, userId?: number | null) {
+  const ranks = footmaniaRanking(world);
+  const clubById = new Map(world.clubs.map((club) => [club.id, club]));
+  const top = ranks.slice(0, 10).flatMap((entry) => {
+    const club = clubById.get(entry.clubId);
+    if (!club) return [];
+    const kits = resolveClubKits(club);
+    return [{
+      rank: entry.rank,
+      clubId: club.id,
+      name: club.name,
+      shortName: club.shortName,
+      country: club.country,
+      primaryColor: club.primaryColor,
+      secondaryColor: club.secondaryColor,
+      kit: kits.home,
+      hasCustomLogo: Boolean(club.customLogo && club.customLogo.status === "ACTIVE"),
+    }];
+  });
+  const viewerClub = userId == null ? null : world.clubs.find((club) => club.ownerUserId === userId) ?? null;
+  return {
+    rankings: top,
+    totalRanked: ranks.length,
+    viewerRank: viewerClub && isFootmaniaRankedClub(viewerClub)
+      ? ranks.find((entry) => entry.clubId === viewerClub.id)?.rank ?? null
+      : null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Team-screen read models (pure World views; no DB access so they are
 // unit-testable and shared between routes).
@@ -354,6 +385,7 @@ export interface TeamSeasonHistoryRow {
 export function buildTeamProfile(world: World, clubId: number) {
   const club = world.clubs.find((c) => c.id === clubId);
   if (!club) return null;
+  const ranks = footmaniaRanking(world);
 
   // Current-season division membership (null for PROVISIONAL/DORMANT clubs).
   const divisions = divisionsInSeason(world, world.mp.seasonId).filter((c) => c.status !== "ARCHIVED");
@@ -435,6 +467,7 @@ export function buildTeamProfile(world: World, clubId: number) {
       isHuman: club.ownerUserId !== null,
       competitionState: club.competitionState,
     },
+    footmaniaRank: isFootmaniaRankedClub(club) ? ranks.find((entry) => entry.clubId === club.id)?.rank ?? null : null,
     trophies: club.trophies,
     totalValue,
     players,

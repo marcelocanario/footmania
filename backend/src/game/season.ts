@@ -23,6 +23,7 @@ import { generateSeniorPlayer } from "./playerGeneration";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { playerHasActiveListing } from "./market";
 import { isEphemeralAI } from "./club";
+import { NEWS_SUBJECTS, publishNews } from "./news";
 
 /** Add game-days without wrapping at a civil-month or season boundary. */
 export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
@@ -66,11 +67,16 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
   player.starter = false;
   // Promoted youth need a squad number that no senior currently wears.
   ensureClubSquadNumbers(world, club.id);
-  world.news.push({
-    dayIndex: world.dayIndex,
-    text: reason === "age" ? `${player.name} was automatically promoted from the youth academy at age ${player.age}` : `${player.name} was promoted from the youth academy to the senior squad`,
+  publishNews(world, {
     kind: "academy",
-    clubId: club.id,
+    subject: NEWS_SUBJECTS.academy,
+    recipientClubId: club.id,
+    headline: "Academy and squad movement",
+    entries: [{
+      key: `promote:${player.id}`,
+      label: player.name,
+      detail: reason === "age" ? `promoted from the academy at age ${player.age}` : "promoted from the academy to the senior squad",
+    }],
   });
   return { ok: true };
 }
@@ -80,7 +86,13 @@ export function dismissYouthPlayer(world: World, player: Player): { ok: boolean;
   if (!club || !player.isYouth) return { ok: false, error: "Player is not in the youth academy" };
   settlePlayerPayroll(world, player);
   world.players = world.players.filter((p) => p.id !== player.id);
-  world.news.push({ dayIndex: world.dayIndex, text: `${player.name} was released from the youth academy`, kind: "academy", clubId: club.id });
+  publishNews(world, {
+    kind: "academy",
+    subject: NEWS_SUBJECTS.academy,
+    recipientClubId: club.id,
+    headline: "Academy and squad movement",
+    entries: [{ key: `dismiss:${player.id}`, label: player.name, detail: "released from the youth academy" }],
+  });
   return { ok: true };
 }
 
@@ -137,9 +149,17 @@ export function computeSeasonAwards(world: World) {
   // Only the divisions of the season being archived are eligible; archived
   // competitions from earlier seasons must never produce duplicate awards.
   const comps = world.competitions.filter((c) => c.kind === "division" && c.seasonId === world.mp.seasonId && c.status !== "ARCHIVED");
+  // Award eligibility (config): a player must have appeared in at least this
+  // share of his club's league games to win an individual award or make the
+  // Best XI. Keeps bench warmers with high overall from beating productive
+  // starters. ceil() so a fraction like 0.4 of 14 games requires 6 appearances.
+  const minFraction = gameConfig.awards.minAppearanceFraction;
   for (const comp of comps) {
     const clubIds = new Set(comp.config.clubs);
-    const players = world.players.filter((p) => p.clubId !== null && clubIds.has(p.clubId));
+    const clubGames = Math.max(0, (comp.config.clubs.length - 1) * gameConfig.league.turns);
+    const minApps = Math.ceil(clubGames * minFraction);
+    const players = world.players.filter((p) => p.clubId !== null && clubIds.has(p.clubId))
+      .filter((p) => (p.seasonAppearances ?? 0) >= minApps);
     const scorers = [...players].sort((a, b) => b.seasonGoals - a.seasonGoals || b.seasonAssists - a.seasonAssists);
     const topScorer = scorers[0];
     if (topScorer && topScorer.seasonGoals > 0) {
@@ -201,7 +221,9 @@ export function computeSeasonAwards(world: World) {
         playerId: null,
         clubId: null,
         playerNameSnapshot: null,
-        detail: JSON.stringify(xi.map((p) => p.name)),
+        // Structured entries (id + clubId + name) so the client can link each
+        // member to his player card while he still exists in the world.
+        detail: JSON.stringify(xi.map((p) => ({ id: p.id, clubId: p.clubId, name: p.name }))),
       });
     }
   }
@@ -239,10 +261,15 @@ export function processContractWarning(world: World, playerId: number): void {
   const player = world.players.find((candidate) => candidate.id === playerId);
   const club = player?.clubId === null || player?.clubId === undefined ? undefined : world.clubs.find((candidate) => candidate.id === player.clubId);
   if (!player || !club || club.competitionState !== "ACTIVE" || player.contractDays <= 0 || player.contractDays > gameConfig.seasonDays * gameConfig.contractWarningSeasons) return;
-  const text = `${player.name} contract expiring soon`;
-  if (!world.news.some((item) => item.kind === "contract" && item.clubId === club.id && item.text === text)) {
-    world.news.push({ dayIndex: world.dayIndex, text, kind: "contract", clubId: club.id });
-  }
+  // Same-day warnings for the same club merge into one grouped message;
+  // the per-player entry key keeps a retried warning from duplicating a row.
+  publishNews(world, {
+    kind: "contract",
+    subject: NEWS_SUBJECTS.contractWarning,
+    recipientClubId: club.id,
+    headline: "Contracts entering their final stretch",
+    entries: [{ key: `warn:${player.id}`, label: player.name, detail: `${player.contractDays} days remaining on his current deal` }],
+  });
 }
 
 /** Expire one contract through the same domain transition used by the cycle. */
@@ -265,10 +292,14 @@ export function processContractExpiry(world: World, playerId: number): void {
   player.starter = false;
   player.onSale = false;
   if (prepared && prepared.ok) world.freeAgentListings.push(prepared.listing);
-  const text = `${player.name} left ${club.name} as a free agent after his contract expired`;
-  if (!world.news.some((item) => item.kind === "contract" && item.clubId === club.id && item.text === text)) {
-    world.news.push({ dayIndex: world.dayIndex, text, kind: "contract", clubId: club.id });
-  }
+  // Same-day expiries for the same club merge into one grouped message.
+  publishNews(world, {
+    kind: "contract",
+    subject: NEWS_SUBJECTS.contractExpiry,
+    recipientClubId: club.id,
+    headline: "Contract expiries",
+    entries: [{ key: `expire:${player.id}`, label: player.name, detail: `left ${club.name} as a free agent after his contract expired` }],
+  });
 }
 
 export function endLoan(world: World, loan: { id: number; playerId: number; fromClubId: number; toClubId: number | null }) {
@@ -286,11 +317,16 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
   const from = world.clubs.find((c) => c.id === loan.fromClubId);
   const to = loan.toClubId !== null ? world.clubs.find((c) => c.id === loan.toClubId) : null;
   if (p && from) {
-    world.news.push({
-      dayIndex: world.dayIndex,
-      text: to ? `${p.name} returned to ${from.name} after his loan at ${to.name} ended` : `${p.name} was removed from the loan list of ${from.name}`,
+    publishNews(world, {
       kind: "loan",
-      clubId: from.id,
+      subject: NEWS_SUBJECTS.loans,
+      recipientClubId: from.id,
+      headline: "Loan movements",
+      entries: [{
+        key: `loan:${loan.id}`,
+        label: p.name,
+        detail: to ? `returned to ${from.name} after his loan at ${to.name} ended` : `was removed from the loan list of ${from.name}`,
+      }],
     });
   }
 }
@@ -326,11 +362,12 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
       // roster; the whole squad is replaced with the club at rollover.
       if (club && isEphemeralAI(club)) continue;
       if (player.age >= 33 && chance(rng, 25)) {
-        world.news.push({
-          dayIndex: world.dayIndex,
-          text: `${player.name} (${club?.name ?? ""}) announced this will be his last season`,
+        publishNews(world, {
           kind: "retirement",
+          subject: NEWS_SUBJECTS.retirement,
           clubId: club?.id,
+          headline: "Retirement announcements",
+          entries: [{ key: `retire:${player.id}`, label: player.name, detail: `(${club?.name ?? ""}) announced this will be his last season` }],
         });
       }
       if (shouldRetire(rng, player)) {
@@ -350,19 +387,29 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
   let promotions = 0;
   let seasonalIntakeGenerated = 0;
   let replacementsGenerated = 0;
+  // Per-club flow consumed by the preseason report at SEASON_ROLLOVER_COMMIT.
+  const flowByClub: Record<string, { promotions: number; intake: number; replacements: number }> = {};
   for (const club of world.clubs) {
     // Ephemeral AI squads are static (invariant #28): no promotions, no
     // academy intake and no replacement generation for filler clubs.
     if (isEphemeralAI(club)) continue;
     let squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
     let juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
+    let clubPromotions = 0;
     const juniorsToPromote = juniors.filter((p) => p.age >= 21);
     for (const j of juniorsToPromote) {
       const result = promoteYouthPlayer(world, j, "age");
       if (result.ok) {
         promotions++;
+        clubPromotions++;
       } else {
-        world.news.push({ dayIndex: world.dayIndex, text: `${j.name} reached 21 but could not be promoted because the professional squad is full`, kind: "academy", clubId: club.id });
+        publishNews(world, {
+          kind: "academy",
+          subject: NEWS_SUBJECTS.academy,
+          recipientClubId: club.id,
+          headline: "Academy and squad movement",
+          entries: [{ key: `blocked:${j.id}`, label: j.name, detail: "reached 21 but could not be promoted because the professional squad is full" }],
+        });
       }
     }
     // Seasonal academy intake (player-generation §42-§45): after aging and
@@ -370,6 +417,7 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
     // academy roster slots. Unused intake slots are lost — never banked, and
     // releasing youth cannot increase the quota. Idempotent per club/season.
     const seasonId = world.mp.seasonId;
+    let clubIntake = 0;
     if (seasonId !== 0 && !academyIntakeDone(world, club.id, seasonId)) {
       const intake = generateSeasonalAcademyIntake({
         world,
@@ -380,9 +428,11 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         seasonId,
       });
       seasonalIntakeGenerated += intake.length;
+      clubIntake = intake.length;
       markAcademyIntakeDone(world, club.id, seasonId);
     }
     squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+    let clubReplacements = 0;
     if (squad.length < 20) {
       const division = divisionForClub(world, club.id);
       const totalDivisions = Math.max(1, lowestActiveTier(world, seasonId));
@@ -406,9 +456,12 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         world.players.push(p);
         bumpSkillsVersion();
         replacementsGenerated++;
+        clubReplacements++;
       }
     }
+    flowByClub[String(club.id)] = { promotions: clubPromotions, intake: clubIntake, replacements: clubReplacements };
   }
+  world.mp.pendingPreseasonFlow = flowByClub;
   recordPopulationSnapshot(world, { promotions, seasonalIntakeGenerated, replacementsGenerated });
 }
 
@@ -464,6 +517,7 @@ export function commitSeasonRollover(world: World): void {
   for (const player of world.players) {
     player.seasonGoals = 0;
     player.seasonAssists = 0;
+    player.seasonAppearances = 0;
     player.yellows = 0;
     player.reds = 0;
     player.onSale = world.transferAuctions.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id)

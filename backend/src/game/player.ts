@@ -240,6 +240,7 @@ export function aging(rng: RngState, player: Player, club: Club) {
   player.age += 1;
   player.seasonGoals = 0;
   player.seasonAssists = 0;
+  player.seasonAppearances = 0;
   player.yellows = 0;
   player.reds = 0;
 }

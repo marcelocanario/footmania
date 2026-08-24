@@ -4,6 +4,7 @@ import { resetPayrollPeriod, settlePlayerPayroll } from "./payroll";
 import { playerHasActiveListing } from "./market";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { getImmediateAvailableCash } from "./finance";
+import { publishNews } from "./news";
 
 /** Release a player into the normalized free-agent market lifecycle. */
 export function releasePlayer(world: World, player: Player, club: Club): { ok: boolean; error?: string; cost: number } {
@@ -35,11 +36,11 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
   player.starter = false;
   player.onSale = false;
   if (prepared?.ok) world.freeAgentListings.push(prepared.listing);
-  world.news.push({
-    dayIndex: world.dayIndex,
-    text: `${player.name} was released by ${club.name} as a free agent`,
+  publishNews(world, {
     kind: "contract",
-    clubId: club.id,
+    recipientClubId: club.id,
+    headline: "Squad update",
+    text: `${player.name} was released by ${club.name} as a free agent. The release clause was settled at ${cost > 0 ? `$${cost}` : "no cost"} and the player is available on the open market immediately.`,
   });
   return { ok: true, cost };
 }

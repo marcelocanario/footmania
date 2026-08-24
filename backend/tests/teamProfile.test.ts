@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildTeamProfile } from "../src/services/readService";
+import { buildTeamProfile, footmaniaRankingView } from "../src/services/readService";
 import { makeClub, makeWorld } from "./helpers";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
@@ -65,8 +65,45 @@ describe("buildTeamProfile", () => {
     expect(serialized).not.toContain('"salary"');
     expect(serialized).not.toContain("eloRating");
     expect(serialized).not.toContain("ledger");
+    expect(profile.footmaniaRank).toBeNull();
 
     expect(buildTeamProfile(world, 999)).toBeNull();
+  });
+
+  it("exposes only the public ordinal Footmania rank for active human clubs", () => {
+    const alpha = makeClub({ id: 1, name: "Alpha FC", ownerUserId: 11, eloRating: 1712 });
+    const beta = makeClub({ id: 2, name: "Beta FC", ownerUserId: 12, eloRating: 1600 });
+    const world = worldWith([alpha, beta], []);
+
+    const profile = buildTeamProfile(world, alpha.id)!;
+    expect(profile.footmaniaRank).toBe(1);
+    const serialized = JSON.stringify(profile);
+    expect(serialized).not.toContain("eloRating");
+    expect(serialized).not.toContain('"elo"');
+  });
+
+  it("builds a public top-ten ranking without raw ratings", () => {
+    const alpha = makeClub({ id: 1, name: "Alpha FC", ownerUserId: 11, eloRating: 1712 });
+    const beta = makeClub({ id: 2, name: "Beta FC", ownerUserId: 12, eloRating: 1600 });
+    const world = worldWith([alpha, beta], []);
+
+    const view = footmaniaRankingView(world, 11);
+    expect(view).toMatchObject({ totalRanked: 2, viewerRank: 1 });
+    expect(view.rankings.map((entry) => entry.clubId)).toEqual([1, 2]);
+    expect(JSON.stringify(view)).not.toContain("elo");
+  });
+
+  it("limits the public ranking list to ten clubs", () => {
+    const clubs = Array.from({ length: 12 }, (_, index) => makeClub({
+      id: index + 1,
+      ownerUserId: index + 1,
+      name: `Club ${index + 1}`,
+      eloRating: 1800 - index,
+    }));
+    const view = footmaniaRankingView(worldWith(clubs, []));
+    expect(view.totalRanked).toBe(12);
+    expect(view.rankings).toHaveLength(10);
+    expect(view.rankings.at(-1)?.rank).toBe(10);
   });
 
   it("summarises the current division snapshot with position and filtered fixtures", () => {

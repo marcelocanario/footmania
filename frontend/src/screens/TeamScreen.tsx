@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { CalendarDays, Clock, History as HistoryIcon, Landmark, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
+import { CalendarDays, Clock, Landmark, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
 import { api, type FixtureView, type TeamProfile } from "../api/client";
 import { countryFlag } from "../countryFlags";
 import { money } from "../format";
@@ -12,6 +12,8 @@ import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 import { StandingsTable } from "../components/competition/StandingsTable";
 import { MatchResultDialog } from "../components/competition/MatchResultDialog";
 import { ClubNameLink } from "../components/ClubNameLink";
+import { FootmaniaRankBadge } from "../components/FootmaniaRanking";
+import { SeasonHistoryTimeline } from "../components/SeasonHistoryTimeline";
 
 const KIT_LABELS: Record<"home" | "away" | "gk", string> = {
   home: "Home",
@@ -62,8 +64,7 @@ export function TeamScreen() {
   const played = profile.fixtures.filter((f) => f.played && f.matchId != null);
   const upcoming = profile.fixtures.filter((f) => !f.played);
   const seasonComplete = profile.fixtures.length > 0 && profile.fixtures.every((f) => f.played);
-  const titleEntries = Object.entries(profile.trophies);
-  const titlesTotal = titleEntries.reduce((sum, [, count]) => sum + count, 0);
+  const titlesTotal = Object.values(profile.trophies).reduce((sum, count) => sum + count, 0);
 
   return (
     <div>
@@ -102,6 +103,10 @@ export function TeamScreen() {
           <div className="team-hero-titles" title="Division titles">
             <Trophy size={20} />
             <b>{titlesTotal}</b>
+          </div>
+          <div className="team-hero-ranking">
+            <FootmaniaRankBadge rank={profile.footmaniaRank} compact />
+            <span>Footmania rank</span>
           </div>
         </div>
         {isOwnClub && (
@@ -221,78 +226,10 @@ export function TeamScreen() {
         </div>
       )}
 
-      {/* Trophy cabinet */}
-      {titleEntries.length > 0 && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <h2 className="card-title"><Trophy size={17} /> Trophy cabinet</h2>
-          <div className="news-list">
-            {titleEntries.map(([name, count]) => (
-              <div className="news-item" key={name}>
-                <span className="day" style={{ color: "var(--gold-2)" }}>🏆 {count}×</span>
-                {name}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Season-by-season history timeline */}
-      <div className="card" style={{ marginTop: 16 }}>
-        <h2 className="card-title"><HistoryIcon size={17} /> Season history</h2>
-        {profile.history.length === 0 ? (
-          <div className="empty-state" style={{ padding: "26px 10px" }}>
-            No completed seasons yet. History is written at every season rollover.
-          </div>
-        ) : (
-          <div className="table-wrap">
-            <table className="standings-table team-history-table">
-              <thead>
-                <tr>
-                  <th>Season</th>
-                  <th>Division</th>
-                  <th>Pos</th>
-                  <th>Pld</th>
-                  <th>W</th>
-                  <th>D</th>
-                  <th>L</th>
-                  <th>GF</th>
-                  <th>GA</th>
-                  <th>Pts</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...profile.history].reverse().map((row) => (
-                  <tr key={`${row.seasonKey}-${row.divisionName}`} className={row.champion ? "my-row" : ""}>
-                    <td style={{ whiteSpace: "nowrap", fontWeight: 600 }}>{row.seasonKey}</td>
-                    <td>{row.divisionName}</td>
-                    <td><span className={`rank-pill${row.position === 1 ? " champion-rank" : ""}`}>{row.position}</span></td>
-                    <td>{row.played}</td>
-                    <td>{row.wins}</td>
-                    <td>{row.draws}</td>
-                    <td>{row.losses}</td>
-                    <td>{row.goalsFor}</td>
-                    <td>{row.goalsAgainst}</td>
-                    <td><b>{row.points}</b></td>
-                    <td>
-                      {row.champion && (
-                        <span className="chip" style={{ borderColor: "rgba(240,180,41,0.65)", color: "var(--gold-2)", background: "rgba(240,180,41,0.12)" }}>
-                          <Trophy size={12} /> Champions
-                        </span>
-                      )}
-                      {row.promoted && (
-                        <span className="chip" style={{ borderColor: "rgba(61,220,132,0.5)", color: "var(--grass-2)" }}>Promoted</span>
-                      )}
-                      {row.relegated && (
-                        <span className="chip" style={{ borderColor: "rgba(255,99,99,0.5)", color: "#ff6b6b" }}>Relegated</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+      {/* Club journey: the same movement language used by the world archive. */}
+      <div className="card team-history-card" style={{ marginTop: 16 }}>
+        <div className="card-title"><Trophy size={17} /> Club journey</div>
+        <SeasonHistoryTimeline rows={profile.history} trophies={profile.trophies} />
       </div>
 
       <MatchResultDialog fixture={resultFixture} onClose={() => setResultFixture(null)} />

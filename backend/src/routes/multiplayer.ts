@@ -13,7 +13,7 @@ import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../servic
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
 import { hasPro } from "../services/pro";
-import { readMpStatus, readSeasonHistory, readUserLiveMatch, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
+import { readMpStatus, readSeasonHistory, readUserLiveMatch, footmaniaRankingView, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 import { isPaused, worldPausedError } from "../services/seasonPause";
 
@@ -223,6 +223,12 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     return result;
   });
 
+  app.get("/mp/rankings/footmania", async (req, reply) => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!loaded) return reply.code(404).send({ error: "World not found" });
+    return footmaniaRankingView(loaded.world, req.user!.id);
+  });
+
   // --- Division standings / fixtures --------------------------------------
   app.get("/mp/divisions/:id/standings", async (req, reply) => {
     const loaded = await loadGlobalWorldReadOnly(app.prisma);
@@ -245,7 +251,8 @@ export async function multiplayerRoutes(app: FastifyInstance) {
 
   // --- Team screen (public club profile) -----------------------------------
   // Any authenticated manager may inspect any club; the view builder enforces
-  // the privacy rule (identity + results only, no cash/ledger/Elo).
+  // the privacy rule (identity + results + public Footmania rank only; no
+  // cash, ledger, or raw Elo rating).
   app.get("/mp/clubs/:id", async (req, reply) => {
     const loaded = await loadGlobalWorldReadOnly(app.prisma);
     if (!loaded) return reply.code(404).send({ error: "World not found" });

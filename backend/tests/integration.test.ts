@@ -76,6 +76,11 @@ describe("API flow", () => {
     expect(pyramid.json().seasonKey).toBeTruthy();
     expect(pyramid.json().tiers.length).toBeGreaterThanOrEqual(1);
 
+    const ranking = await app.inject({ method: "GET", url: "/api/mp/rankings/footmania", headers: { cookie } });
+    expect(ranking.statusCode).toBe(200);
+    expect(ranking.json()).not.toHaveProperty("elo");
+    expect(ranking.json()).not.toHaveProperty("eloRating");
+
     const history = await app.inject({ method: "GET", url: "/api/mp/history", headers: { cookie } });
     expect(history.statusCode).toBe(200);
     expect(history.json().seasons[0].seasonKey).toBe("2026-01");

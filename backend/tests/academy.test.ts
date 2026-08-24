@@ -33,7 +33,7 @@ describe("youth academy", () => {
 
     expect(youth.age).toBe(21);
     expect(youth.isYouth).toBe(false);
-    expect(world.news.some((n) => n.text.includes("automatically promoted"))).toBe(true);
+    expect(world.news.some((n) => n.entries?.some((entry) => entry.detail?.includes("promoted from the academy at age 21")))).toBe(true);
     expect(world.news.some((n) => n.kind === "academy")).toBe(true);
   });
 
@@ -44,6 +44,6 @@ describe("youth academy", () => {
 
     expect(dismissYouthPlayer(world, youth).ok).toBe(true);
     expect(world.players).toHaveLength(0);
-    expect(world.news.at(-1)?.text).toContain("released from the youth academy");
+    expect(world.news.at(-1)?.entries?.some((entry) => entry.detail?.includes("released from the youth academy"))).toBe(true);
   });
 });

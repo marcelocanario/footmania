@@ -13,6 +13,7 @@ import { applyMatchElo, eloRatings } from "./elo";
 import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "./market";
 import { generateFillerRoster, totalDivisionsForGeneration } from "./clubGenerator";
 import { deriveAiKits } from "./kits";
+import { NEWS_SUBJECTS, publishNews } from "./news";
 
 export const CLUBS_PER_DIVISION = gameConfig.league.teams;
 export const ROUNDS_PER_SEASON = gameConfig.league.turns * (gameConfig.league.teams - 1);
@@ -555,10 +556,9 @@ function retireFillerClub(world: World, clubId: number, now: number): void {
     const player = world.players.find((candidate) => candidate.id === listing.playerId);
     if (player) player.onSale = false;
     if (hasBids) {
-      world.news.push({
-        dayIndex: world.dayIndex,
-        text: `The auction for ${player?.name ?? "a player"} was cancelled because it could not be settled`,
+      publishNews(world, {
         kind: "auction",
+        text: `The auction for ${player?.name ?? "a player"} was cancelled because it could not be settled`,
       });
     }
   }
@@ -640,7 +640,13 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
   club.competitionState = "ACTIVE";
   // The human club inherits only current-season competition state; it keeps
   // its own identity, roster, finances, facilities.
-  world.news.push({ dayIndex: world.dayIndex, text: `${club.name} joined ${division.name}`, kind: "mp", clubId: club.id });
+  publishNews(world, {
+    kind: "mp",
+    subject: NEWS_SUBJECTS.clubStatus,
+    clubId: club.id,
+    headline: "Pyramid standing",
+    entries: [{ key: `join:${club.id}`, label: club.name, detail: `joined ${division.name}` }],
+  });
   return { kind: "active", divisionId: division.id, tier: tierOf(division), position, replacedClubId: aiId };
 }
 
@@ -698,7 +704,13 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
   club.competitionState = "ACTIVE";
   club.abandonmentEligibleAt = null;
   club.lastMeaningfulActivityAt = Date.now();
-  world.news.push({ dayIndex: world.dayIndex, text: `${club.name} returned to the pyramid in ${division.name}`, kind: "mp", clubId: club.id });
+  publishNews(world, {
+    kind: "mp",
+    subject: NEWS_SUBJECTS.clubStatus,
+    clubId: club.id,
+    headline: "Pyramid standing",
+    entries: [{ key: `return:${club.id}`, label: club.name, detail: `returned to the pyramid in ${division.name}` }],
+  });
   return { kind: "active", divisionId: division.id, tier: tierOf(division), position, replacedClubId: aiId };
 }
 
@@ -783,7 +795,13 @@ export function evaluateInactivity(world: World, now: number): void {
     if (daysInactive >= thresholdDays) {
       if (club.abandonmentEligibleAt === null) {
         club.abandonmentEligibleAt = now;
-        world.news.push({ dayIndex: world.dayIndex, text: `${club.name} has been inactive and may be removed at season end`, kind: "mp", clubId: club.id });
+        publishNews(world, {
+          kind: "mp",
+          subject: NEWS_SUBJECTS.clubStatus,
+          recipientClubId: club.id,
+          headline: "Inactivity warning",
+          entries: [{ key: `inactive:${club.id}`, label: club.name, detail: "has been inactive and may be removed at season end" }],
+        });
       }
     } else {
       club.abandonmentEligibleAt = null;

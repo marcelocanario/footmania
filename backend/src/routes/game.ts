@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
-import { playerView } from "../services/snapshot";
+import { playerView, seasonAwardsView } from "../services/snapshot";
 import { liveStateView } from "../services/liveView";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { releasePlayer } from "../game/transfers";
@@ -19,6 +19,7 @@ import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
 import { setPlayerSquadNumber } from "../game/squadNumbers";
+import { NEWS_SUBJECTS, publishNews } from "../game/news";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { Tactics, World } from "../game/types";
@@ -497,7 +498,13 @@ export async function gameRoutes(app: FastifyInstance) {
       player.salary = demand;
       player.contractDays = contractDaysForTerm(seasons);
       player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
-      world.news.push({ dayIndex: world.dayIndex, text: `${player.name} signed a new contract`, kind: "contract" });
+      publishNews(world, {
+        kind: "contract",
+        subject: NEWS_SUBJECTS.contractRenewal,
+        recipientClubId: club.id,
+        headline: "Contract agreed",
+        entries: [{ key: `renew:${player.id}`, label: player.name, detail: `signed a new contract for ${seasons} more ${seasons === 1 ? "season" : "seasons"}` }],
+      });
       return { value: { ok: true, demand } };
     });
     return replyFrom(res, reply);
@@ -593,7 +600,13 @@ export async function gameRoutes(app: FastifyInstance) {
       // entry gains the transferred value (game/familiarity.ts recordSwitch).
       recordSwitch(club, nextTactics, switchFamiliarity(srcValue, canonicalFromClub(club.tactics), canonicalFromClub(nextTactics), dstDecayed));
       club.tactics = nextTactics;
-      world.news.push({ dayIndex: world.dayIndex, text: `${club.name} adopted new tactics`, kind: "tactics" });
+      publishNews(world, {
+        kind: "tactics",
+        subject: NEWS_SUBJECTS.tactics,
+        recipientClubId: club.id,
+        headline: "New tactical setup",
+        entries: [{ key: `tactics:${world.dayIndex}`, label: club.name, detail: "adopted new tactics" }],
+      });
       return { value: { ok: true } };
     });
     return replyFrom(res, reply);
@@ -640,7 +653,7 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!club) return reply.code(400).send({ error: "You have no club" });
     return {
       records: loaded.world.records,
-      awards: loaded.world.seasonAwards.slice(-20).reverse(),
+      awards: seasonAwardsView(loaded.world).slice(0, 20),
     };
   });
 

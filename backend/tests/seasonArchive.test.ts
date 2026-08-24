@@ -21,6 +21,11 @@ async function freshWorldWithStandings(seed: number): Promise<{ saveId: number; 
   // The season row must exist first: Competition has an FK to MpSeason.
   const season = await ensureSeasonRow(prisma, { year: 2026, month: 1 });
   initSeason(world, { year: 2026, month: 1 }, season.seasonId);
+  // Award eligibility requires a configured share of appearances; seed every
+  // senior player above the floor so award rows are produced by the archive.
+  for (const player of world.players) {
+    if (!player.isYouth) player.seasonAppearances = 99;
+  }
   // Deterministic final standings: club id order == final ranking.
   const division = world.competitions.find((c) => c.kind === "division")!;
   Object.values(division.standings).forEach((row, index) => {

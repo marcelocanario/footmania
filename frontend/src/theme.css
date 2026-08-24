@@ -3377,3 +3377,205 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   .tb-slot { width: 76px; }
   .tb-player-name { max-width: 70px; }
 }
+
+/* ============================================================
+   CLUB HISTORY — archive, honours and Footmania ranking
+   ============================================================ */
+
+.history-page { display: grid; gap: 16px; }
+
+.history-hero {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 22px;
+  min-height: 220px;
+  overflow: hidden;
+  padding: 30px 28px;
+  border: 1px solid rgba(61, 220, 132, 0.24);
+  border-radius: 26px;
+  background:
+    radial-gradient(620px 260px at 12% -30%, rgba(240, 180, 41, 0.22), transparent 66%),
+    radial-gradient(520px 280px at 92% 0%, rgba(61, 220, 132, 0.18), transparent 68%),
+    linear-gradient(135deg, #0f291c, #07130c 72%);
+  box-shadow: 0 34px 70px -32px rgba(0, 0, 0, 0.86), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.history-hero-floodlights,
+.history-hero-stripes { position: absolute; inset: 0; pointer-events: none; }
+.history-hero-floodlights {
+  background:
+    radial-gradient(190px 130px at 10% -24px, rgba(255, 244, 214, 0.2), transparent 70%),
+    radial-gradient(190px 130px at 90% -24px, rgba(255, 244, 214, 0.16), transparent 70%);
+}
+.history-hero-stripes { opacity: 0.08; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.45) 0 48px, transparent 48px 96px); }
+.history-hero-copy, .history-hero-seal { position: relative; z-index: 1; }
+.history-hero-copy { max-width: 650px; }
+.history-hero .kicker { color: var(--gold-2); }
+.history-hero h1 { margin-top: 8px; font-size: clamp(2.25rem, 5vw, 3.8rem); letter-spacing: 0.07em; line-height: 0.9; }
+.history-hero p { max-width: 560px; margin: 13px 0 0; color: var(--text-2); font-size: 1rem; line-height: 1.5; }
+.history-hero-seal {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  padding: 13px 15px;
+  border: 1px solid rgba(240, 180, 41, 0.38);
+  border-radius: 17px;
+  background: rgba(4, 13, 8, 0.5);
+  color: var(--gold-2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-family: var(--font-display);
+  font-size: 0.76rem;
+  letter-spacing: 0.1em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+.history-hero-seal b { color: var(--text); font-size: 0.86rem; }
+
+.history-overview-grid, .history-hall-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr); }
+.history-hall-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.history-journey-card, .footmania-ranking-panel, .history-records-card, .history-awards-card { min-width: 0; }
+.history-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
+.history-section-head h2 { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.history-section-head h2 svg { color: var(--gold); }
+.history-section-note { color: var(--text-3); font-size: 0.78rem; white-space: nowrap; }
+.history-stat-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.history-stat-card { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: rgba(228, 245, 235, 0.035); }
+.history-stat-card span { overflow: hidden; color: var(--text-3); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.history-stat-card b { color: var(--text); font-family: var(--font-display); font-size: 1.45rem; }
+.history-stat-card:nth-child(3) b, .history-stat-card:nth-child(4) b { color: var(--gold-2); }
+.history-callout { margin-top: 14px; padding: 10px 12px; border: 1px solid rgba(240, 180, 41, 0.24); border-radius: 11px; background: rgba(240, 180, 41, 0.07); color: var(--text-2); font-size: 0.84rem; }
+.history-callout.good { border-color: rgba(61, 220, 132, 0.24); background: rgba(61, 220, 132, 0.07); }
+
+.footmania-ranking-panel { background: linear-gradient(180deg, rgba(18, 46, 30, 0.9), rgba(12, 28, 17, 0.98)); }
+.footmania-ranking-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.footmania-ranking-head h2 { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.footmania-ranking-head h2 svg { color: var(--gold); }
+.footmania-ranking-count { padding: 5px 8px; border: 1px solid rgba(61, 220, 132, 0.25); border-radius: 999px; color: var(--grass-2); font-family: var(--font-display); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+.footmania-ranking-copy { margin: 0 0 13px; color: var(--text-3); font-size: 0.8rem; line-height: 1.4; }
+.footmania-ranking-list { display: grid; gap: 7px; }
+.footmania-ranking-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(4, 13, 8, 0.38); transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease; }
+.footmania-ranking-row:hover { transform: translateX(2px); border-color: var(--line-2); background: rgba(228, 245, 235, 0.07); }
+.footmania-ranking-row.podium { border-color: rgba(240, 180, 41, 0.22); background: linear-gradient(90deg, rgba(240, 180, 41, 0.1), rgba(4, 13, 8, 0.3)); }
+.footmania-ranking-place { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px; color: var(--text-3); font-family: var(--font-display); font-size: 0.9rem; font-weight: 800; }
+.footmania-ranking-place.podium { background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--gold-ink); box-shadow: 0 5px 13px -6px rgba(240, 180, 41, 0.75); }
+.footmania-ranking-club { display: grid; min-width: 0; flex: 1; gap: 1px; }
+.footmania-ranking-club .club-name-link { min-width: 0; overflow: hidden; color: var(--text); font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.footmania-ranking-club > span:last-child { color: var(--text-3); font-size: 0.7rem; }
+.footmania-ranking-medal { flex-shrink: 0; color: var(--gold-2); }
+.footmania-ranking-footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); color: var(--text-3); font-size: 0.8rem; }
+.footmania-rank-badge { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 6px 10px; border: 1px solid rgba(240, 180, 41, 0.42); border-radius: 999px; background: rgba(240, 180, 41, 0.14); color: var(--gold-2); font-family: var(--font-display); font-size: 0.76rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.footmania-rank-badge.podium { border-color: rgba(255, 217, 122, 0.7); background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--gold-ink); }
+.footmania-rank-badge.standard { border-color: rgba(61, 220, 132, 0.35); background: rgba(61, 220, 132, 0.1); color: var(--grass-2); }
+.footmania-rank-badge.muted { border-color: var(--line); background: rgba(228, 245, 235, 0.05); color: var(--text-3); }
+.footmania-rank-badge.compact { padding: 4px 8px; font-size: 0.66rem; }
+
+.history-record-list, .history-award-list { display: grid; gap: 8px; }
+.history-record { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 50px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(228, 245, 235, 0.035); }
+.history-record-value { display: grid; place-items: center; min-height: 34px; border-radius: 9px; background: rgba(240, 180, 41, 0.14); color: var(--gold-2); font-family: var(--font-display); font-size: 1.2rem; font-weight: 800; }
+.history-record-label { color: var(--text-2); font-size: 0.86rem; }
+.history-record b { max-width: 150px; overflow: hidden; color: var(--text-3); font-size: 0.8rem; text-overflow: ellipsis; white-space: nowrap; }
+.history-award { display: grid; grid-template-columns: 30px minmax(0, 1fr) minmax(80px, auto); align-items: center; gap: 9px; min-height: 50px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(228, 245, 235, 0.035); }
+.history-award-icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; background: rgba(240, 180, 41, 0.14); color: var(--gold-2); }
+.history-award > div { display: grid; min-width: 0; gap: 2px; }
+.history-award > div b { overflow: hidden; color: var(--text); font-size: 0.86rem; text-overflow: ellipsis; white-space: nowrap; }
+.history-award > div span { overflow: hidden; color: var(--text-3); font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
+.history-award strong { max-width: 150px; overflow: hidden; color: var(--gold-2); font-size: 0.76rem; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+
+.history-seasons-section { display: grid; gap: 12px; }
+.history-seasons-head { align-items: flex-end; margin: 4px 2px 0; }
+.archive-season-list { display: grid; gap: 10px; }
+.archive-season-card { overflow: hidden; border: 1px solid var(--line); border-radius: 18px; background: rgba(12, 28, 17, 0.78); box-shadow: var(--shadow-card); }
+.archive-season-card.open { border-color: rgba(61, 220, 132, 0.28); }
+.archive-season-toggle { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 13px; width: 100%; padding: 15px 17px; border: 0; background: transparent; color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+.archive-season-toggle:hover { background: rgba(228, 245, 235, 0.035); }
+.archive-season-mark { display: grid; place-items: center; width: 38px; height: 38px; border: 1px solid rgba(61, 220, 132, 0.3); border-radius: 12px; background: rgba(61, 220, 132, 0.11); color: var(--grass-2); }
+.archive-season-title { display: grid; min-width: 0; gap: 3px; }
+.archive-season-title .kicker { font-size: 0.64rem; }
+.archive-season-title b { overflow: hidden; font-family: var(--font-display); font-size: 1.2rem; letter-spacing: 0.06em; text-overflow: ellipsis; text-transform: uppercase; }
+.archive-season-meta { color: var(--text-3); font-size: 0.78rem; white-space: nowrap; }
+.archive-season-chevron { display: grid; place-items: center; color: var(--gold-2); }
+.archive-season-body { display: grid; gap: 18px; padding: 0 17px 18px; }
+.archive-division { display: grid; gap: 8px; }
+.archive-division-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding-top: 3px; }
+.archive-division-head h3 { margin-top: 3px; font-size: 1.1rem; }
+.archive-division-count { color: var(--text-3); font-size: 0.75rem; }
+.archive-standings-table { min-width: 660px; }
+.archive-standings-table td, .archive-standings-table th { vertical-align: middle; }
+.archive-standings-table tr.archive-champion-row td { background: rgba(240, 180, 41, 0.045); }
+.archive-club-cell { display: flex; align-items: center; gap: 8px; min-width: 260px; }
+.archive-club-cell .club-name-link { color: var(--text); font-weight: 600; }
+.archive-club-cell .history-status-badges { margin-left: auto; }
+
+.team-hero-ranking { display: grid; justify-items: center; gap: 4px; min-width: 112px; padding: 8px 10px; border: 1px solid rgba(240, 180, 41, 0.28); border-radius: 14px; background: rgba(4, 13, 8, 0.26); }
+.team-hero-ranking > span:last-child { color: rgba(255, 255, 255, 0.72); font-family: var(--font-display); font-size: 0.62rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; }
+.team-history-card > .card-title { margin-bottom: 9px; }
+.season-history-module { display: grid; gap: 14px; }
+.season-history-summary { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; }
+.season-history-stat { display: grid; justify-items: center; gap: 3px; min-width: 0; padding: 10px 5px; border: 1px solid var(--line); border-radius: 11px; background: rgba(228, 245, 235, 0.035); color: var(--text-3); }
+.season-history-stat svg { color: var(--grass-2); }
+.season-history-stat span { overflow: hidden; max-width: 100%; font-size: 0.63rem; font-weight: 700; letter-spacing: 0.07em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.season-history-stat b { color: var(--text); font-family: var(--font-display); font-size: 1.12rem; }
+.season-history-stat.gold svg, .season-history-stat.gold b { color: var(--gold-2); }
+.season-history-trophies { padding: 11px 12px; border: 1px solid rgba(240, 180, 41, 0.25); border-radius: 12px; background: rgba(240, 180, 41, 0.06); }
+.season-history-trophies-head { display: flex; align-items: center; gap: 6px; color: var(--gold-2); font-family: var(--font-display); font-size: 0.73rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+.season-history-trophy-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.season-history-trophy { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border: 1px solid rgba(240, 180, 41, 0.22); border-radius: 999px; color: var(--text-2); font-size: 0.76rem; }
+.season-history-trophy svg { color: var(--gold-2); }
+.season-history-empty { padding: 28px 12px; }
+.season-timeline { position: relative; display: grid; gap: 10px; }
+.season-timeline::before { position: absolute; top: 20px; bottom: 20px; left: 39px; width: 1px; content: ""; background: linear-gradient(var(--grass), rgba(61, 220, 132, 0.08)); }
+.season-timeline-item { position: relative; display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; }
+.season-timeline-marker { position: relative; z-index: 1; display: flex; justify-content: center; padding-top: 16px; }
+.season-timeline-marker span { display: inline-flex; padding: 5px 7px; border: 1px solid rgba(61, 220, 132, 0.28); border-radius: 8px; background: var(--surface); color: var(--grass-2); font-family: var(--font-display); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.04em; white-space: nowrap; }
+.season-timeline-item.champion .season-timeline-marker span { border-color: rgba(240, 180, 41, 0.48); color: var(--gold-2); }
+.season-timeline-card { padding: 13px 14px; border: 1px solid var(--line); border-radius: 14px; background: rgba(228, 245, 235, 0.035); }
+.season-timeline-item.champion .season-timeline-card { border-color: rgba(240, 180, 41, 0.3); background: linear-gradient(105deg, rgba(240, 180, 41, 0.08), rgba(228, 245, 235, 0.025)); }
+.season-timeline-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.season-timeline-head .kicker { font-size: 0.68rem; }
+.season-timeline-sub { margin-top: 3px; color: var(--text-3); font-size: 0.74rem; }
+.season-timeline-position { display: grid; justify-items: end; gap: 1px; }
+.season-timeline-position span { color: var(--text-3); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.season-timeline-position b { color: var(--grass-2); font-family: var(--font-display); font-size: 1.55rem; line-height: 1; }
+.season-timeline-position.champion b { color: var(--gold-2); }
+.season-timeline-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.season-timeline-metric { display: grid; gap: 2px; }
+.season-timeline-metric span { color: var(--text-3); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.season-timeline-metric b { color: var(--text); font-family: var(--font-display); font-size: 1rem; }
+.history-status-badges { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.season-timeline-card > .history-status-badges { margin-top: 11px; }
+.history-status { display: inline-flex; align-items: center; gap: 4px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 999px; font-size: 0.66rem; font-weight: 700; white-space: nowrap; }
+.history-status.champion { border-color: rgba(240, 180, 41, 0.5); background: rgba(240, 180, 41, 0.12); color: var(--gold-2); }
+.history-status.promoted { border-color: rgba(61, 220, 132, 0.42); background: rgba(61, 220, 132, 0.1); color: var(--grass-2); }
+.history-status.relegated { border-color: rgba(255, 99, 99, 0.42); background: rgba(255, 99, 99, 0.1); color: var(--red-2); }
+
+@media (max-width: 880px) {
+  .history-overview-grid, .history-hall-grid { grid-template-columns: 1fr; }
+  .history-hero { min-height: 190px; padding: 25px 21px; }
+  .history-hero-seal { display: none; }
+  .season-history-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .history-hero h1 { font-size: 2.35rem; }
+  .history-hero p { font-size: 0.9rem; }
+  .history-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-record { grid-template-columns: 45px minmax(0, 1fr); }
+  .history-record b { grid-column: 2; max-width: none; }
+  .history-award { grid-template-columns: 30px minmax(0, 1fr); }
+  .history-award strong { grid-column: 2; max-width: none; text-align: left; }
+  .archive-season-toggle { grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; padding: 13px 11px; }
+  .archive-season-meta { grid-column: 2; grid-row: 2; }
+  .archive-season-chevron { grid-column: 3; grid-row: 1 / span 2; }
+  .archive-season-body { padding: 0 10px 13px; }
+  .archive-club-cell { min-width: 220px; }
+  .team-hero-ranking { margin-left: 98px; }
+  .season-history-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .season-history-stat:last-child { grid-column: 1 / -1; }
+  .season-timeline-item { grid-template-columns: 1fr; gap: 4px; }
+  .season-timeline::before { left: 13px; top: 22px; bottom: 22px; }
+  .season-timeline-marker { justify-content: flex-start; padding: 0 0 0 1px; }
+  .season-timeline-marker span { padding-left: 10px; padding-right: 10px; }
+}

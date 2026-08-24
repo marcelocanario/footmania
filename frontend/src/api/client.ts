@@ -479,7 +479,7 @@ export interface Snapshot {
   squad: PlayerView[];
   juniors: PlayerView[];
   loanedOut: PlayerView[];
-  news: { dayIndex: number; dayLabel: string; text: string; kind: string }[];
+  news: NewsItemView[];
   auctions: AuctionView[];
   freeAgents: PlayerView[];
   records: CareerRecord[];
@@ -487,6 +487,26 @@ export interface Snapshot {
 }
 
 export interface PyramidResponse { seasonKey: string | null; tiers: PyramidTier[]; myDivisionId?: number | null }
+
+/** One structured fact inside a grouped news message. */
+export interface NewsEntryView {
+  key?: string;
+  label?: string;
+  detail?: string;
+}
+
+/** News item as served by the dashboard snapshot. */
+export interface NewsItemView {
+  id?: number;
+  dayIndex: number;
+  dayLabel: string;
+  text: string;
+  kind: string;
+  headline?: string;
+  subject?: string;
+  entries?: NewsEntryView[];
+  recipientClubId?: number;
+}
 
 /** Public identity block of the team screen (GET /api/mp/clubs/:id). */
 export interface TeamClubIdentity {
@@ -556,6 +576,7 @@ export interface TeamPlayerRow {
  *  manager's club. */
 export interface TeamProfile {
   club: TeamClubIdentity;
+  footmaniaRank: number | null;
   trophies: Record<string, number>;
   /** Squad market value plus cash balance. */
   totalValue: number;
@@ -572,6 +593,16 @@ export interface CareerRecord {
   holderName: string;
 }
 
+/** One Best XI member of a best_xi award, resolved by the server. */
+export interface SeasonAwardEntry {
+  id: number | null;
+  clubId: number | null;
+  name: string;
+  /** False once the player has left the world (retired/deleted): render as
+   *  plain text instead of a player-card link. */
+  active: boolean;
+}
+
 export interface SeasonAward {
   season: number;
   category: string;
@@ -580,6 +611,26 @@ export interface SeasonAward {
   clubId: number | null;
   playerNameSnapshot: string | null;
   detail: string | null;
+  /** Best XI members (best_xi rows only), parsed server-side. */
+  entries?: SeasonAwardEntry[] | null;
+}
+
+export interface FootmaniaRankingEntry {
+  rank: number;
+  clubId: number;
+  name: string;
+  shortName: string;
+  country: string;
+  primaryColor: string;
+  secondaryColor: string;
+  kit?: KitDesign | null;
+  hasCustomLogo?: boolean;
+}
+
+export interface FootmaniaRankingResponse {
+  rankings: FootmaniaRankingEntry[];
+  totalRanked: number;
+  viewerRank: number | null;
 }
 
 export interface LoanView {
@@ -1191,6 +1242,7 @@ export const api = {
   teamProfile: (clubId: number) => request<TeamProfile>(`/api/mp/clubs/${clubId}`),
   countries: () => request<{ featuredCountries: CountryOption[]; allCountries: CountryOption[] }>("/api/mp/countries"),
   history: () => request<{ seasons: SeasonHistoryView[] }>("/api/mp/history"),
+  footmaniaRanking: () => request<FootmaniaRankingResponse>("/api/mp/rankings/footmania"),
 
   liveMatchInfo: () => request<{ match: { id: number; home: string; away: string } | null }>("/api/mp/live-match"),
 

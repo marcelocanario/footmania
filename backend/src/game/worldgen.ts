@@ -25,7 +25,7 @@ export function generateWorld(seed: number): World {
     fixtures: [],
     matches: [],
     clubEloEvents: [],
-    news: [{ dayIndex: 0, text: "Welcome to Footmania! A new season is about to begin.", kind: "season" }],
+    news: [{ dayIndex: 0, text: "Welcome to Footmania! A new season is about to begin. Take charge of your squad, shape your tactics and lead the club up the pyramid.", kind: "season", headline: "Welcome to Footmania" }],
     loans: [],
     marketBids: [],
     transferAuctions: [],

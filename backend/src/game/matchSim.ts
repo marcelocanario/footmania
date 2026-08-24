@@ -280,6 +280,11 @@ interface Engine {
   prevZone: string | null;
   /** Stable visual carrier used only by the live pitch projection. */
   ballCarrierId: number | null;
+  /** Assist bookkeeping: last completed PASS/CROSS passer of the possession.
+   *  Presentation-level data only — never read before outcomes resolve, so it
+   *  cannot alter the RNG stream or any probability. */
+  lastPasserId: number | null;
+  lastPasserSide: 0 | 1 | null;
   ballActionSequence: number;
   lastBallAction: LiveBallAction | null;
   possessionHighRecovery: boolean;
@@ -1018,6 +1023,11 @@ function beginPossession(eng: Engine, restart: string | null, keepLane = false, 
   eng.possessionAgeSeconds = 0;
   eng.isCounter = false;
   eng.possessionHighRecovery = false;
+  // A restart opens a fresh possession sequence: the previous passer no longer
+  // assists a later goal (penalties come from fouls, so this also suppresses
+  // penalty "assists").
+  eng.lastPasserId = null;
+  eng.lastPasserSide = null;
   // Count each possession for both teams (the possession side was set before
   // calling beginPossession).
   const ownerStats = eng.stats[eng.possessionSide === 0 ? "home" : "away"];
@@ -1943,9 +1953,17 @@ function stepPossession(eng: Engine): void {
       finishBallAction(ballAction, { outcome: "GOAL", toZone: null, targetPlayerId: null });
       const club = sideOf(eng, attSide).club;
       eng.scores[attSide]++;
+      // Assist attribution: the passer of the last completed PASS/CROSS of
+      // this possession, when he is a teammate other than the scorer. Derived
+      // from already-resolved presentation state — no RNG draws, no rule
+      // change. Null after turnovers/restarts, so penalties and direct
+      // free kicks never credit an assist.
+      const assistId = result.shooter && eng.lastPasserSide === attSide && eng.lastPasserId !== null && eng.lastPasserId !== result.shooter.id
+        ? eng.lastPasserId
+        : null;
       eng.events.push({
         minute: displayMinute, half: eventHalf, type: EVENT_CODES.GOAL, subtype: GOAL_SUBTYPES.NORMAL,
-        clubId: club.id, playerId: result.shooter?.id ?? null, player2Id: null, goalType: GOAL_SUBTYPES.NORMAL,
+        clubId: club.id, playerId: result.shooter?.id ?? null, player2Id: assistId, goalType: GOAL_SUBTYPES.NORMAL,
         ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
       });
       if (result.shooter) {
@@ -1953,6 +1971,13 @@ function stepPossession(eng: Engine): void {
         if (p) {
           p.seasonGoals++;
           p.careerGoals++;
+        }
+      }
+      if (assistId !== null) {
+        const a = eng.onPitchBySide[attSide].find((p) => p.id === assistId);
+        if (a) {
+          a.seasonAssists++;
+          a.careerAssists++;
         }
       }
       eng.commentary.push(`${result.shooter ? sideOf(eng, attSide).club.name : ""} score`);
@@ -2053,6 +2078,12 @@ function stepPossession(eng: Engine): void {
       ? ballAction.fromPlayerId
       : presentationPlayerId(sideOf(eng, attSide), mappedZone, ballAction.fromPlayerId);
     eng.ballCarrierId = nextCarrierId;
+    // A completed pass/cross arms the assist window: its passer can assist the
+    // next goal of this possession. Carries/dribbles keep the window open.
+    if (action === "PASS" || action === "CROSS") {
+      eng.lastPasserId = ballAction.fromPlayerId;
+      eng.lastPasserSide = attSide;
+    }
     finishBallAction(ballAction, { outcome: "CONTINUE", toZone: mappedZone, targetPlayerId: nextCarrierId });
     return;
   }
@@ -2066,6 +2097,10 @@ function stepPossession(eng: Engine): void {
     }
     // Live turnover → switch possession, mirror lane, no dead-ball delay.
     eng.possessionSide = attSide === 0 ? 1 : 0;
+    // Possession changed hands without a restart: the previous passer cannot
+    // assist against his own team.
+    eng.lastPasserId = null;
+    eng.lastPasserSide = null;
     eng.lane = mirrorLane(eng.lane);
     eng.possessionAgeSeconds = 0;
     const interceptorId = presentationPlayerId(sideOf(eng, eng.possessionSide), eng.zone);
@@ -2412,6 +2447,10 @@ function buildEngine(
     ballCarrierId: st.ballCarrierId != null && (st.withBall === 0 ? homeXI : awayXI).some((p) => p.id === st.ballCarrierId)
       ? st.ballCarrierId
       : null,
+    // Assist window survives streamed ticks so a goal right after a resume is
+    // still credited to the possession's passer.
+    lastPasserId: st.lastPasserId ?? null,
+    lastPasserSide: st.lastPasserSide ?? null,
     ballActionSequence: st.ballActionSequence ?? 0,
     lastBallAction: st.lastBallAction ? { ...st.lastBallAction } : null,
     possessionHighRecovery: st.possessionHighRecovery ?? false,
@@ -2556,6 +2595,8 @@ function writeBack(eng: Engine, st: LiveMatchState, diagnosticsOut?: MatchSimula
   st.lastAction = eng.lastAction;
   st.prevZone = eng.prevZone;
   st.ballCarrierId = eng.ballCarrierId;
+  st.lastPasserId = eng.lastPasserId;
+  st.lastPasserSide = eng.lastPasserSide;
   st.ballActionSequence = eng.ballActionSequence;
   st.lastBallAction = eng.lastBallAction ? { ...eng.lastBallAction } : null;
   st.opponentControlSeconds = eng.opponentControlSeconds;

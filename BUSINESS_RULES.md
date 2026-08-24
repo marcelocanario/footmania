@@ -775,7 +775,15 @@ its own if anything gets interrupted partway through:
 1. **Finalize the season**: lock in final standings and permanently archive them
    (including each club's name exactly as it was at that moment), hand out trophies to
    division winners, and calculate end-of-season awards — top scorer, top assister,
-   player of the season, and a best XI.
+   player of the season, and a best XI. Awards are computed independently for every
+   division+group (never aggregated across groups), and a player is only eligible if he
+   appeared in at least `awards.minAppearanceFraction` (default 40%) of his club's
+   league games that season (a match with at least one minute on the pitch counts as an
+   appearance). Assists are recorded by the match engine purely as bookkeeping: the
+   passer of the last completed pass/cross of a possession is credited when a teammate
+   scores from open play; turnovers, fouls, restarts, penalties and shootouts never
+   produce assists. The best XI stores each member's player id, club id and name so
+   clients can still link members to their player card while they exist in the world.
 2. **Promotion and relegation**: work out which clubs move up, which move down, and
    which stay — see §9.3. Clubs that have gone quiet and unresponsive for too long are
    formally marked dormant at this point.
@@ -823,13 +831,13 @@ clubs — a match involving an AI club never affects anyone's rating. Between se
 every club's rating drifts 10% of the way back toward a neutral starting point, so
 ratings don't just keep drifting further and further apart forever.
 
-This rating is deliberately never shown to anyone through the club's public profile or
-anywhere else players can see — it exists purely as an internal tool for the
-standings tiebreak above, for deciding who gets promoted when several candidates are
-tied (below), and for keeping divisions evenly matched when they're rebuilt each
-season. It plays no role at all in actually simulating a match (§4.2) — a highly-rated
-club doesn't get any direct boost in a match itself; the rating only reflects and
-orders past results.
+The raw rating, rating changes, rating history and rated-match count are deliberately
+never shown through the club's public profile or anywhere else players can see. The
+public Footmania ranking is the one permitted derivative: it publishes only the
+ordinal order of active human-managed clubs, with no rating values. AI, provisional and
+dormant clubs are not eligible for that ranking. It plays no role at all in actually
+simulating a match (§4.2) — a highly-rated club doesn't get any direct boost in a match
+itself; the rating only reflects and orders past results.
 
 ### 9.3 Promotion and relegation
 
@@ -986,6 +994,34 @@ player's view up to date automatically — for example, telling their screen to 
 refresh itself the moment something relevant changes elsewhere (a market bid
 resolving, an admin announcement going up) rather than making them notice and refresh
 manually.
+
+### 12.4 Club news
+
+Everything a manager needs to know about their club and the world around it arrives as
+written messages in the existing dashboard news section, not as bare one-line
+statements or a separate inbox page. Messages are immersive: the stored body itself
+contains the player names, days remaining, amounts, and context needed to understand
+what happened and why it matters. Structured facts remain persisted for deterministic
+grouping and auditability, but are not rendered as a separate list.
+
+Grouping rule: events of the same subject landing on the same season day for the same
+audience merge into one message instead of spamming the feed — e.g. every contract
+entering its renewal window today is one message listing each player with his days
+remaining; multiple training injuries at one club on one day are one treatment-room
+update; all contract expiries processed at season rollover are one departure report.
+Retried jobs can never duplicate a fact inside a grouped message.
+
+Visibility rule: club-internal matters (own contracts, finances, academy moves,
+inactivity warnings) are visible only to that club's manager. Public items attributed
+to a club are shown only in that club's dashboard news; unattributed broadcasts and
+admin announcements are global. Admin announcements stay pinned above everything else.
+
+Pre-season report: on the first day of every new season each human-managed club
+receives one briefing covering its division placement and last-season finish, cash
+and financial cushion, contracts approaching expiry, senior/academy squad sizes,
+rollover movement (promotions, new intake, replacements), the first fixture, and the
+season budget. The report is written once per club per season — rollover retries
+cannot duplicate it.
 
 ---
 
