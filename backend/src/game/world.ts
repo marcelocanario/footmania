@@ -13,6 +13,7 @@ import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { syncClubSeasons } from "./multiplayer";
 import { applyMatchElo } from "./elo";
 import { processAutomation } from "./automation";
+import { applyMatchFamiliarity } from "./familiarity";
 
 function emptyTeamStats() {
   return {
@@ -242,6 +243,12 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   applyLiveMatchEnergy(st, world.players);
   applyMatchToPlayers(match, world);
   applyMatchElo(world, match);
+  // §17 familiarity growth for both sides' current setups. Real competitive
+  // fixtures only — finalizeLiveMatch never runs for practice matches (they
+  // simulate on cloned worlds), so invariant 15 (no practice farming) holds.
+  const matchGameDay = world.mp.absoluteGameDay ?? world.dayIndex;
+  applyMatchFamiliarity(home, matchGameDay);
+  applyMatchFamiliarity(away, matchGameDay);
   if (existing) existing.eloProcessed = match.eloProcessed;
   for (const id of st.suspensionClears ?? []) {
     const p = world.players.find((x) => x.id === id);

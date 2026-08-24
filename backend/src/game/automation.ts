@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AUTOMATION_CONFIG } from "../config";
 import type { AutomationAction, AutomationCondition, AutomationPreset, AutomationRule, AutomationTriggerKind, Club, LiveMatchState, World } from "./types";
-import { applyLiveTacticsUpdate, performLiveSub } from "./match";
+import { applyLiveFormationChange, applyLiveTacticsUpdate, performLiveSub } from "./match";
 import { isHalftime, isPregame } from "./match";
 import { DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
@@ -280,20 +280,31 @@ export function evaluateAutomationForMatch(params: {
         if (!res.error) mutated = true;
       } else if (rule.action.kind === "TACTICS") {
         // TACTICS: mutate live tactics only (not club.tactics — that would persist beyond the match).
-        const target = side === 0 ? st.homeTactics : st.awayTactics;
-        const tacticError = applyLiveTacticsUpdate(st, side as 0 | 1, {
-          style: rule.action.style,
-          pressing: rule.action.pressing,
-          direction: rule.action.direction,
-        });
-        // Formation changes require the pregame/halftime lineup rebuild. Keep
-        // automation from changing formation during live play as well.
-        if (rule.action.formation !== undefined && (isPregame(st) || isHalftime(st))) {
-          target.formation = rule.action.formation;
-        }
+        // The owning club's per-setup progress feeds the §17 switch penalty so
+        // automation flips behave exactly like manual live tactic changes.
+        const ownerClub = world.clubs.find((c) => c.id === (side === 0 ? st.homeClubId : st.awayClubId));
+        const context = {
+          familiarityMap: ownerClub?.tacticFamiliarity,
+          absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex,
+        };
+        const hasTacticFields = rule.action.style !== undefined || rule.action.pressing !== undefined || rule.action.direction !== undefined;
+        const tacticError = hasTacticFields
+          ? applyLiveTacticsUpdate(st, side as 0 | 1, {
+              style: rule.action.style,
+              pressing: rule.action.pressing,
+              direction: rule.action.direction,
+            }, context)
+          : null;
+        // Formation changes require the pregame/halftime window. Keep
+        // automation from changing formation during live play as well, and
+        // price the §17 transfer like every other setup-change pathway.
+        const wantsFormation = rule.action.formation !== undefined && (isPregame(st) || isHalftime(st));
+        const formError = wantsFormation
+          ? applyLiveFormationChange(st, side as 0 | 1, rule.action.formation!, context)
+          : null;
         fired.add(firedKey);
         st.automationFiredRuleIds = Array.from(fired);
-        if (!tacticError && (rule.action.style !== undefined || rule.action.pressing !== undefined || rule.action.direction !== undefined || (rule.action.formation !== undefined && (isPregame(st) || isHalftime(st))))) {
+        if ((hasTacticFields && !tacticError) || (wantsFormation && !formError)) {
           mutated = true;
         }
       }

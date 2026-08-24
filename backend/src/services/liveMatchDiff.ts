@@ -69,10 +69,12 @@ export function diffLiveMatchAdvances(
   const updates: LiveMatchUpdate[] = [];
   const changedStates: LiveMatchState[] = [];
   const goals: LiveMatchGoal[] = [];
+  const stateByMatchId = new Map(liveMatchesNow.map((state) => [state.matchId, state]));
+  const finishedByMatchId = new Map(finished.map((match) => [match.id, match]));
   for (const [matchId, previous] of before) {
-    const state = liveMatchesNow.find((candidate) => candidate.matchId === matchId);
+    const state = stateByMatchId.get(matchId);
     if (!state) {
-      const match = finished.find((candidate) => candidate.id === matchId);
+      const match = finishedByMatchId.get(matchId);
       if (!match) continue;
       updates.push({ matchId, homeClubId: match.homeClubId, awayClubId: match.awayClubId, eventStart: previous.eventCount, phaseChanged: true, finished: true });
       collectGoals(matchId, previous.state, previous.eventCount, goals);

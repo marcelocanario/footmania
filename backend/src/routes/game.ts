@@ -21,7 +21,15 @@ import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/
 import { setPlayerSquadNumber } from "../game/squadNumbers";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
-import type { World } from "../game/types";
+import type { Tactics, World } from "../game/types";
+import {
+  canonicalFromClub,
+  decayedStoredFamiliarity,
+  effectiveFamiliarity,
+  recordSwitch,
+  setupKey,
+  switchFamiliarity,
+} from "../game/familiarity";
 import { materializeSeasonEvents } from "../services/scheduler";
 import { createNotification } from "../services/notifications";
 import { marketUpdatedEvents } from "../services/marketEvents";
@@ -135,8 +143,9 @@ export async function gameRoutes(app: FastifyInstance) {
     const home = loaded.world.clubs.find((c) => c.id === match.homeClubId);
     const away = loaded.world.clubs.find((c) => c.id === match.awayClubId);
     // Detailed match stats are a Pro feature; the gate is enforced server-side.
-    const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user!.id } });
-    const isPro = sessionUser !== null && hasPro(sessionUser);
+    // req.user.isPro is already the isPro||isAdmin value computed once at
+    // auth time (plugins/auth.ts) — no need to re-fetch and recompute it.
+    const isPro = hasPro(req.user);
     const events = match.events.map((e) => ({
       minute: e.minute,
       half: e.half,
@@ -206,7 +215,11 @@ export async function gameRoutes(app: FastifyInstance) {
         return { error: { code: 403, body: { error: "You are not a participant in this match" } } };
       }
       const side = st.homeClubId === clubId ? 0 : 1;
-      const error = applyLiveTacticsUpdate(st, side, parsed.data);
+      const sideClub = world.clubs.find((c) => c.id === clubId)!;
+      const error = applyLiveTacticsUpdate(st, side, parsed.data, {
+        familiarityMap: sideClub.tacticFamiliarity,
+        absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex,
+      });
       if (error) return { error: { code: 400, body: { error } } };
       return { value: { ok: true, state: liveStateView(world, st, req.user!.id) } };
     });
@@ -312,7 +325,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((c) => c.id === clubId)!;
       const err = applySavedLineup(club, world.players, parsed.data);
       if (err) return { error: { code: 400, body: { error: err } } };
-      rebuildLiveHumanLineup(st, club, world.players);
+      rebuildLiveHumanLineup(st, club, world.players, { absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex });
       return { value: { ok: true, state: liveStateView(world, st, req.user!.id) } };
     });
     return replyFrom(res, reply);
@@ -551,10 +564,27 @@ export async function gameRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     const res = await withWorld(app, req.user!.id, "tactics", async (world, clubId) => {
       const club = world.clubs.find((c) => c.id === clubId)!;
-      if (parsed.data.formation !== undefined) club.tactics.formation = parsed.data.formation;
-      club.tactics.style = parsed.data.style;
-      club.tactics.pressing = parsed.data.pressing;
-      club.tactics.direction = parsed.data.direction;
+      const nextTactics: Tactics = {
+        formation: parsed.data.formation !== undefined ? parsed.data.formation : club.tactics.formation,
+        style: parsed.data.style,
+        pressing: parsed.data.pressing,
+        direction: parsed.data.direction,
+      };
+      const unchanged =
+        nextTactics.formation === club.tactics.formation &&
+        nextTactics.style === club.tactics.style &&
+        nextTactics.pressing === club.tactics.pressing &&
+        nextTactics.direction === club.tactics.direction;
+      // Saving the exact same setup is a no-op: it must not churn news nor
+      // re-roll familiarity through the §17 switch transfer.
+      if (unchanged) return { value: { ok: true } };
+      const gameDay = world.mp.absoluteGameDay ?? world.dayIndex;
+      const srcValue = effectiveFamiliarity(club, gameDay);
+      const dstDecayed = decayedStoredFamiliarity(club.tacticFamiliarity, setupKey(nextTactics), gameDay);
+      // The abandoned setup keeps its stored progress; only the destination
+      // entry gains the transferred value (game/familiarity.ts recordSwitch).
+      recordSwitch(club, nextTactics, switchFamiliarity(srcValue, canonicalFromClub(club.tactics), canonicalFromClub(nextTactics), dstDecayed));
+      club.tactics = nextTactics;
       world.news.push({ dayIndex: world.dayIndex, text: `${club.name} adopted new tactics`, kind: "tactics" });
       return { value: { ok: true } };
     });

@@ -245,6 +245,13 @@ interface Side {
   organisationRecoveryTime: number;
   /** Cached baseline organisation (recomputed when support/readiness change). */
   cachedBaselineOrganisation: number;
+  /** Bumped whenever `on` gains/loses a player or a player's tacPos changes
+   *  (substitution, injury auto-sub); invalidates involvedCache below. */
+  rosterVersion: number;
+  /** Per-zone memo of involvedPlayers(side, zone): membership/weights depend
+   *  only on tacPos + zone, not the per-step-changing readiness values on the
+   *  same `ps` references, so it's safe to reuse until rosterVersion moves. */
+  involvedCache: Partial<Record<MatchZone, { version: number; result: { ps: LivePlayerState; weight: number }[] }>>;
 }
 
 interface Engine {
@@ -391,11 +398,14 @@ function playerUsableZ(ps: LivePlayerState, key: "tech" | "pace" | "physical" | 
 
 /** Local involved players in the current zone: those with support weight > 0. */
 function involvedPlayers(side: Side, zone: MatchZone): { ps: LivePlayerState; weight: number }[] {
+  const cached = side.involvedCache[zone];
+  if (cached && cached.version === side.rosterVersion) return cached.result;
   const out: { ps: LivePlayerState; weight: number }[] = [];
   for (const ps of side.on) {
     const w = involvement(tacPosRole(ps.tacPos), zone);
     if (w > 0) out.push({ ps, weight: w });
   }
+  side.involvedCache[zone] = { version: side.rosterVersion, result: out };
   return out;
 }
 
@@ -487,19 +497,21 @@ function defensiveResistanceFor(side: Side, zone: MatchZone, action: string): nu
 // ---------------------------------------------------------------------------
 
 function computeSupport(side: Side): void {
-  const support: Record<MatchZone, number> = { DEF_WIDE: 0, DEF_CENTRAL: 0, MID_WIDE: 0, MID_CENTRAL: 0, ATT_WIDE: 0, ATT_CENTRAL: 0, BOX: 0 };
-  const coverage: Record<MatchZone, number> = { DEF_WIDE: 0, DEF_CENTRAL: 0, MID_WIDE: 0, MID_CENTRAL: 0, ATT_WIDE: 0, ATT_CENTRAL: 0, BOX: 0 };
+  // Called twice per possession step; mutate the side's existing support/
+  // coverage records in place instead of allocating two fresh ones each time.
+  for (const zone of ZONES) {
+    side.support[zone] = 0;
+    side.coverage[zone] = 0;
+  }
   for (const ps of side.on) {
     const role = tacPosRole(ps.tacPos);
     const kernel = MS.formationSupport[role] ?? {};
     for (const [zone, w] of Object.entries(kernel)) {
       const z = zone as MatchZone;
-      support[z] += w;
-      coverage[z] += w * (0.55 + 0.45 * ps.readiness);
+      side.support[z] += w;
+      side.coverage[z] += w * (0.55 + 0.45 * ps.readiness);
     }
   }
-  side.support = support;
-  side.coverage = coverage;
   side.cachedBaselineOrganisation = baselineOrganisation(side);
 }
 
@@ -1345,6 +1357,7 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
 function removeFromPitch(eng: Engine, side: Side, playerId: number): void {
   side.on = side.on.filter((ps) => ps.id !== playerId);
   eng.onPitchBySide[side.idx] = eng.onPitchBySide[side.idx].filter((p) => p.id !== playerId);
+  side.rosterVersion++;
   computeSupport(side);
 }
 
@@ -1386,6 +1399,7 @@ function applyInjuryAutoSub(eng: Engine, side: Side, outPs: LivePlayerState, min
   incoming.tacPos = outPs.tacPos;
   const ps = buildPlayerState(incoming, eng.centers, eng.st.playerEnergy[incoming.id] ?? incoming.energy);
   side.on.push(ps);
+  side.rosterVersion++;
   eng.onPitchBySide[side.idx].push(incoming);
   side.bench = side.bench.filter((p) => p.id !== incoming.id);
   const persistedBench = side.idx === 0 ? eng.st.homeSubs : eng.st.awaySubs;
@@ -2164,7 +2178,8 @@ function buildEngine(
   // live match resumes deterministically after a reload; `rng` is only the
   // fallback for states created before the stream field existed.
   const engineRng = st.rngState ?? { seed: rng.seed, state: rng.state };
-  const resolve = (ids: number[]) => ids.map((id) => players.find((p) => p.id === id)).filter((p): p is Player => !!p);
+  const playersById = new Map(players.map((p) => [p.id, p]));
+  const resolve = (ids: number[]) => ids.map((id) => playersById.get(id)).filter((p): p is Player => !!p);
   st.playerEnergy ??= {};
   const homeXI = resolve(st.homeOn);
   const awayXI = resolve(st.awayOn);
@@ -2184,6 +2199,8 @@ function buildEngine(
     organisationDisruption: 0,
     organisationRecoveryTime: 1,
     cachedBaselineOrganisation: 0,
+    rosterVersion: 0,
+    involvedCache: {},
   };
   const awaySide: Side = {
     idx: 1,
@@ -2200,6 +2217,8 @@ function buildEngine(
     organisationDisruption: 0,
     organisationRecoveryTime: 1,
     cachedBaselineOrganisation: 0,
+    rosterVersion: 0,
+    involvedCache: {},
   };
   for (const side of [homeSide, awaySide]) {
     side.expectedSupportTotal = ZONES.reduce((s, z) => s + (side.expectedSupport[z] ?? 0), 0) || 7;

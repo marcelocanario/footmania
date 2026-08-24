@@ -61,7 +61,9 @@ interface WsMessage {
 }
 
 export function LiveMatch() {
-  const { refresh, setLiveMatch, snapshot } = useGame();
+  const refresh = useGame((s) => s.refresh);
+  const setLiveMatch = useGame((s) => s.setLiveMatch);
+  const snapshot = useGame((s) => s.snapshot);
   const pregameWindowMinutes = useSettings((s) => s.pregameWindowMinutes);
   const navigate = useNavigate();
   // Spectator entry: /live-match/:matchId watches any match, not just our own.
@@ -107,7 +109,19 @@ export function LiveMatch() {
     // with, and nothing should be able to stay hidden past full time.
     if (state.ended) return state.events;
     return state.events.filter((event) => !hasPitchCue(event.type) || revealedKeysRef.current.has(eventKey(event)));
-  }, [state, revealTick]);
+  }, [state?.events, state?.ended, revealTick]);
+
+  // Stable PitchTeam objects for MatchPitch (React.memo'd): rebuilding these
+  // literals on every render would defeat memoization even when nothing the
+  // pitch cares about changed.
+  const home = useMemo(() => {
+    if (!state) return null;
+    return { clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId };
+  }, [state?.homeClubId, state?.home, state?.homeKit, state?.homeGkKit, state?.homeOn, state?.homeFormationId]);
+  const away = useMemo(() => {
+    if (!state) return null;
+    return { clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId };
+  }, [state?.awayClubId, state?.away, state?.awayKit, state?.awayGkKit, state?.awayOn, state?.awayFormationId]);
 
   const liveTactics = state ? (state.humanSide === 0 ? state.homeTactics : state.awayTactics) : null;
   // Live-match tactics lock (server-enforced): match-minutes left until this
@@ -184,8 +198,16 @@ export function LiveMatch() {
   const applyDelta = useCallback((delta: LiveStateDelta) => {
     const current = stateRef.current;
     if (!current || current.matchId !== delta.matchId) return;
-    const known = new Set(current.events.map((event) => event.sequence));
-    const events = [...current.events, ...delta.newEvents.filter((event) => event.sequence === undefined || !known.has(event.sequence))];
+    // Only allocate a new events array when there is actually something new
+    // to append — a delta with no unseen events should let the component
+    // reuse the existing array reference (avoids downstream re-renders/memo
+    // invalidations keyed on `events` identity).
+    let events = current.events;
+    if (delta.newEvents.length > 0) {
+      const known = new Set(current.events.map((event) => event.sequence));
+      const unseen = delta.newEvents.filter((event) => event.sequence === undefined || !known.has(event.sequence));
+      if (unseen.length > 0) events = [...current.events, ...unseen];
+    }
     applyState({
       ...current,
       minute: delta.minute,
@@ -445,8 +467,8 @@ export function LiveMatch() {
           {!isSpectator && <TacticsBoard mode="match" matchId={state.matchId} liveState={state} />}
         </div>
         <MatchPitch
-          home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
-          away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
+          home={home!}
+          away={away!}
           missing={state.missingPlayers ?? []}
           events={state.events}
           phase={state.phase}
@@ -504,8 +526,8 @@ export function LiveMatch() {
       <div className="live-columns">
         <div className="live-pitch-column">
           <MatchPitch
-            home={{ clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId }}
-            away={{ clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId }}
+            home={home!}
+            away={away!}
             missing={state.missingPlayers ?? []}
             events={state.events}
             phase={state.phase}

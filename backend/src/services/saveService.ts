@@ -28,6 +28,7 @@ import { createRng } from "../game/rng";
 import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
 import { DEVELOPMENT } from "../game/constants";
 import { parseStoredPresets } from "../game/automation";
+import type { TacticFamiliarityMap } from "../game/familiarity";
 import { deserializeClubKits, serializeClubKits } from "../game/kits";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
@@ -611,19 +612,28 @@ export async function persistWorld(
     if (rewriteTables.has("newsItem") && world.news.length > 0 && (!previous || !stableDeltaTables.has("newsItem"))) {
       await tx.newsItem.createMany({ data: world.news.map((n) => ({ saveId, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? null })) });
     }
-    const ledgerRows: { saveId: number; clubId: number; direction: string; code: number; amount: number; day: number; label: string }[] = [];
-    for (const club of world.clubs) {
-      for (const e of club.ledger.income) ledgerRows.push({ saveId, clubId: club.id, direction: "income", code: e.code, amount: e.amount, day: e.day, label: e.label });
-      for (const e of club.ledger.expense) ledgerRows.push({ saveId, clubId: club.id, direction: "expense", code: e.code, amount: e.amount, day: e.day, label: e.label });
+    // Only walk every club's full ledger/trophy history when this persist will
+    // actually use the result (fresh save, or an existing save whose ledger/
+    // trophy table wasn't already handled incrementally above) -- these
+    // arrays accumulate over a whole season and were previously rebuilt on
+    // every persist regardless of whether the insert below would run.
+    if (rewriteTables.has("ledgerEntry") && (!previous || !stableDeltaTables.has("ledgerEntry"))) {
+      const ledgerRows: { saveId: number; clubId: number; direction: string; code: number; amount: number; day: number; label: string }[] = [];
+      for (const club of world.clubs) {
+        for (const e of club.ledger.income) ledgerRows.push({ saveId, clubId: club.id, direction: "income", code: e.code, amount: e.amount, day: e.day, label: e.label });
+        for (const e of club.ledger.expense) ledgerRows.push({ saveId, clubId: club.id, direction: "expense", code: e.code, amount: e.amount, day: e.day, label: e.label });
+      }
+      if (ledgerRows.length > 0) await tx.ledgerEntry.createMany({ data: ledgerRows });
     }
-      if (rewriteTables.has("ledgerEntry") && ledgerRows.length > 0 && (!previous || !stableDeltaTables.has("ledgerEntry"))) await tx.ledgerEntry.createMany({ data: ledgerRows });
-     const trophyRows: { saveId: number; clubId: number; competitionName: string; count: number }[] = [];
-     for (const club of world.clubs) {
-       for (const [name, count] of Object.entries(club.trophies)) {
-         trophyRows.push({ saveId, clubId: club.id, competitionName: name, count });
-       }
-     }
-       if (rewriteTables.has("trophy") && trophyRows.length > 0 && (!previous || !stableDeltaTables.has("trophy"))) await tx.trophy.createMany({ data: trophyRows });
+    if (rewriteTables.has("trophy") && (!previous || !stableDeltaTables.has("trophy"))) {
+      const trophyRows: { saveId: number; clubId: number; competitionName: string; count: number }[] = [];
+      for (const club of world.clubs) {
+        for (const [name, count] of Object.entries(club.trophies)) {
+          trophyRows.push({ saveId, clubId: club.id, competitionName: name, count });
+        }
+      }
+      if (trophyRows.length > 0) await tx.trophy.createMany({ data: trophyRows });
+    }
        if (rewriteTables.has("seasonAward") && world.seasonAwards.length > 0 && (!previous || !stableDeltaTables.has("seasonAward"))) {
        await tx.seasonAward.createMany({ data: world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })) });
      }
@@ -925,6 +935,7 @@ function clubRow(c: Club, saveId: number) {
       tacticsStyle: c.tactics.style,
       tacticsPressing: c.tactics.pressing,
       tacticsDirection: c.tactics.direction,
+      tacticsFamiliarityJson: c.tacticFamiliarity ? JSON.stringify(c.tacticFamiliarity) : null,
       trainingFocus: c.trainingFocus,
        savedLineupJson: c.savedLineup ? JSON.stringify(c.savedLineup) : null,
        eloRating: c.eloRating,
@@ -1409,7 +1420,10 @@ async function rebuildWorld(
         automationPresets: parseStoredPresets(jsonOr<unknown>(r2.automationPresetsJson, null), r.tacticsFormation),
         coachName: r.coachName,
         coachNameChangedSeasonKey: (r2 as unknown as { coachNameChangedSeasonKey?: string | null }).coachNameChangedSeasonKey ?? null,
-       tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
+        tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
+        // Per-setup familiarity progress (plans/6 §17); absent on legacy rows,
+        // in which case every setup reads as neutral INITIAL_FAMILIARITY.
+        tacticFamiliarity: jsonOr<TacticFamiliarityMap | undefined>((r2 as unknown as { tacticsFamiliarityJson?: string | null }).tacticsFamiliarityJson ?? null, undefined),
        trainingFocus: ((r as unknown as { trainingFocus?: string }).trainingFocus ?? "assistant") as Club["trainingFocus"],
        captainId: r.captainId,
        penaltyTakerId: r.penaltyTakerId,

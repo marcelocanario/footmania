@@ -197,6 +197,10 @@ export interface Club {
   /** Season key in which the human manager last changed the coach name. */
   coachNameChangedSeasonKey?: string | null;
   tactics: Tactics;
+  /** Per-setup tactical familiarity progress (plans/6 §17), keyed by
+   *  game/familiarity.ts setupKey ("formation-style-pressing-direction").
+   *  Undefined = never tracked (all setups read as neutral INITIAL_FAMILIARITY). */
+  tacticFamiliarity?: import("./familiarity").TacticFamiliarityMap | null;
   trainingFocus: "assistant" | "primary" | "secondary";
   captainId: number | null;
   penaltyTakerId: number | null;

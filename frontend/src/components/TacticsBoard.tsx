@@ -411,6 +411,10 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     "--tb-kit-dot": kitDotBackground(kit),
   } as CSSProperties);
   const isOver = (area: BoardArea, index: number) => dragging?.over?.area === area && dragging.over.index === index;
+  // playerStyle() only depends on `kit`, which is identical for every starter
+  // row — compute the CSS-vars object once instead of allocating a fresh one
+  // per row on every render.
+  const starterChipStyle = playerStyle();
 
   return (
     <div className="tb-root">
@@ -469,7 +473,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                   >
                     <span className="tb-slot-role">{slotNames[index] ?? `#${index + 1}`}</span>
                     {player ? (
-                      <span className="tb-player-chip" style={playerStyle()}>
+                      <span className="tb-player-chip" style={starterChipStyle}>
                         <span className="tb-player-dot">{playerInitials(player.name)}</span>
                         <span className="tb-player-name">{player.name}</span>
                         <span className="tb-player-rating">{player.overall}</span>

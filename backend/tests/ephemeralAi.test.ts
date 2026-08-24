@@ -10,6 +10,7 @@ import { processGameDayPayroll, processGameDayStart, processGameDayWeekly } from
 import { processSeasonEndContracts, processSeasonalAcademyIntake, commitSeasonRollover } from "../src/game/season";
 import { removeFillerClubs } from "../src/services/mpService";
 import type { World } from "../src/game/types";
+import { FEATURED_COUNTRIES } from "../src/game/countries";
 
 function worldWithAI(seed = 42): World {
   const world = generateWorld(seed);
@@ -22,6 +23,7 @@ describe("ephemeral filler-AI clubs (invariant #28)", () => {
     const world = worldWithAI(1);
     const ai = createFillerAI(world, 1, 1);
     expect(isEphemeralAI(ai)).toBe(true);
+    expect(FEATURED_COUNTRIES.some((country) => country.code === ai.country)).toBe(true);
     expect(ai.cash).toBe(0);
     const seniors = world.players.filter((p) => p.clubId === ai.id && !p.isYouth);
     const youth = world.players.filter((p) => p.clubId === ai.id && p.isYouth);

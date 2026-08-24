@@ -25,7 +25,8 @@ function AuctionCountdown({ deadline }: { deadline: number }) {
 }
 
 export function Transfers() {
-  const { snapshot, refresh } = useGame();
+  const snapshot = useGame((s) => s.snapshot);
+  const refresh = useGame((s) => s.refresh);
   const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
   const [auctions, setAuctions] = useState<AuctionView[]>([]);
   const [freeAgents, setFreeAgents] = useState<FreeAgentView[]>([]);

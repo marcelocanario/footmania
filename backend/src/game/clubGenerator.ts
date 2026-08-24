@@ -5,6 +5,7 @@ import { gameConfig } from "../config";
 import { SENIOR_SQUAD_LIMIT } from "./constants";
 import { retirementProbability } from "./player";
 import { assignInitialSquadNumbers } from "./squadNumbers";
+import { bumpSkillsVersion } from "./skillsVersion";
 
 /**
  * Squad-level generation orchestration (plans/4. player-generation.md §70-§73).
@@ -113,6 +114,7 @@ export function generateInitialSeniorSquad(ctx: GenerationContext, size: number 
     created.push(player);
     world.players.push(player);
   }
+  bumpSkillsVersion();
   const gks = created.filter((p) => p.position === 0).sort((a, b) => b.overall - a.overall);
   if (gks.length > 0) club.captainId = gks[0].id;
   club.penaltyTakerId = created.filter((p) => p.position === 4).sort((a, b) => b.overall - a.overall)[0]?.id ?? gks[0]?.id ?? null;
@@ -154,6 +156,7 @@ export function generateInitialAcademy(ctx: GenerationContext): Player[] {
     created.push(player);
     world.players.push(player);
   }
+  bumpSkillsVersion();
   return created;
 }
 
@@ -190,6 +193,7 @@ export function generateSeasonalAcademyIntake(ctx: GenerationContext): Player[] 
     created.push(player);
     world.players.push(player);
   }
+  bumpSkillsVersion();
   if (ctx.seasonId !== null) markAcademyIntakeDone(world, club.id, ctx.seasonId);
   return created;
 }

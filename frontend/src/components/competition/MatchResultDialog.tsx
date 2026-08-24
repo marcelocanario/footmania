@@ -20,12 +20,18 @@ export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView |
 
   useEffect(() => {
     if (fixture?.matchId == null) return;
+    // Guard against a stale response landing after a rapid re-selection
+    // (a slower earlier fetch resolving after a newer one has already set data).
+    let active = true;
     setResultData(null);
     setBusy(true);
     api.matchEvents(fixture.matchId)
-      .then((res) => setResultData(res))
-      .catch(() => onClose())
-      .finally(() => setBusy(false));
+      .then((res) => { if (active) setResultData(res); })
+      .catch(() => { if (active) onClose(); })
+      .finally(() => { if (active) setBusy(false); });
+    return () => {
+      active = false;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fixture?.matchId]);
 

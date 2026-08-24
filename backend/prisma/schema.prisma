@@ -252,6 +252,10 @@ model Club {
   tacticsStyle     Int
   tacticsPressing  Int
   tacticsDirection Int
+  // Per-setup tactical familiarity progress (plans/6 §17): JSON map keyed by
+  // "formation-style-pressing-direction" -> {familiarity,lastUsedAbsoluteGameDay}.
+  // Null = never tracked; reads fall back to the neutral INITIAL_FAMILIARITY.
+  tacticsFamiliarityJson String?
   trainingFocus   String @default("assistant")
   savedLineupJson  String?
   eloRating        Float    @default(1500)
@@ -421,6 +425,8 @@ model Fixture {
 
   @@id([saveId, id])
   @@index([saveId, competitionId])
+  @@index([saveId, homeClubId])
+  @@index([saveId, awayClubId])
 }
 
 model Match {

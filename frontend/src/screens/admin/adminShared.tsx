@@ -7,8 +7,18 @@ export interface TabProps {
   notify: (severity: "success" | "error" | "warn" | "info", summary: string, detail?: string) => void;
 }
 
+/** Return shape of {@link useAdminFetch}, reusable when a fetch is lifted to a
+ * parent and handed down as a prop (e.g. Admin.tsx sharing its scheduler-clock
+ * fetch with OverviewTab instead of each independently calling the API). */
+export interface AdminFetchResult<T> {
+  data: T | null;
+  loading: boolean;
+  error: string | null;
+  reload: () => void;
+}
+
 /** Fetches admin data on mount, whenever `deps` change, and whenever `reload()` is called. */
-export function useAdminFetch<T>(fetcher: () => Promise<T>, deps: unknown[]) {
+export function useAdminFetch<T>(fetcher: () => Promise<T>, deps: unknown[]): AdminFetchResult<T> {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

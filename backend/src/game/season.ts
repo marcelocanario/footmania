@@ -18,6 +18,7 @@ import {
 } from "./economy";
 import { divisionForClub, lowestActiveTier } from "./multiplayer";
 import { generateSeasonalAcademyIntake, academyIntakeDone, markAcademyIntakeDone } from "./clubGenerator";
+import { bumpSkillsVersion } from "./skillsVersion";
 import { generateSeniorPlayer } from "./playerGeneration";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { playerHasActiveListing } from "./market";
@@ -403,6 +404,7 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         });
         resetPayrollPeriod(p, world.dayIndex);
         world.players.push(p);
+        bumpSkillsVersion();
         replacementsGenerated++;
       }
     }

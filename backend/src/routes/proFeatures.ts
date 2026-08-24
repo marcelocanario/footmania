@@ -64,8 +64,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
   app.post("/mp/club/logo", async (req, reply) => {
     await app.authenticate(req, reply);
     if (!req.user) return;
-    const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!sessionUser || !hasPro(sessionUser)) return reply.code(403).send({ error: "Pro required to upload custom logo" });
+    if (!hasPro(req.user)) return reply.code(403).send({ error: "Pro required to upload custom logo" });
     const parsed = logoUploadBodySchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid payload" });
     const err = validateCustomLogo(parsed.data);
@@ -112,8 +111,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
      return res.value;
   });
 
-  // Serve custom logo bytes (public, long cache)
-  app.get("/clubs/:clubId/logo", async (req, reply) => {
+  // Serve custom logo bytes (public, long cache). Already-compressed image
+  // formats (PNG/JPEG/WebP) gain nothing from gzip/br and just burn CPU, so
+  // this route opts out of the global @fastify/compress hook (server.ts).
+  app.get("/clubs/:clubId/logo", { compress: false }, async (req, reply) => {
     const clubId = Number((req.params as { clubId: string }).clubId);
     if (!Number.isFinite(clubId)) return reply.code(400).send({ error: "Invalid club id" });
     const globalSave = await app.prisma.save.findFirst({ where: { isGlobal: true } });
@@ -163,8 +164,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const normalized = normalizeNickname(raw);
     const err = validateNickname(normalized);
     if (err) return reply.code(400).send({ error: err });
-    const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user.id } });
-    if (!sessionUser || !hasPro(sessionUser)) return reply.code(403).send({ error: "Pro required to nickname players" });
+    if (!hasPro(req.user)) return reply.code(403).send({ error: "Pro required to nickname players" });
     const res = await withGlobalLock(async () => {
          const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
@@ -201,8 +201,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     if (!player) return reply.code(404).send({ error: "Player not found" });
 
     const isOwner = player.clubId !== null && worldLoaded.world.clubs.find((c) => c.id === player.clubId)?.ownerUserId === req.user!.id;
-    const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user!.id } });
-    const pro = hasPro(sessionUser);
+    const pro = hasPro(req.user);
     let allowHistory = isOwner || pro;
     if (!allowHistory) {
       // Auction exception: active listing for this player visible to everyone
@@ -340,8 +339,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
       const ruleIds = p.rules.map((r) => r.id);
       if (new Set(ruleIds).size !== ruleIds.length) return reply.code(400).send({ error: `Duplicate rule ids in preset ${p.id}` });
     }
-    const sessionUser = await app.prisma.user.findUnique({ where: { id: req.user.id } });
-    const pro = hasPro(sessionUser);
+    const pro = hasPro(req.user);
     const quotaErr = validatePresetQuotas(presets, pro);
     if (quotaErr) return reply.code(403).send({ error: quotaErr });
 

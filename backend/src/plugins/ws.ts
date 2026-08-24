@@ -1,7 +1,7 @@
 import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorldMutable, persistLiveMatchState, persistWorld } from "../services/saveService";
-import { liveStateView, liveStateDeltaView } from "../services/liveView";
+import { liveStateView, liveStateDeltaView, viewerFieldsFor } from "../services/liveView";
 import { applyLiveTacticsUpdate, performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
@@ -31,30 +31,44 @@ function send(ws: WebSocket, msg: unknown) {
 function broadcastState(world: import("../game/types").World, matchId?: number) {
   for (const st of world.liveMatches) {
     if (matchId !== undefined && st.matchId !== matchId) continue;
-    for (const ws of conns.get(st.matchId) ?? []) {
+    const sockets = conns.get(st.matchId);
+    if (!sockets || sockets.size === 0) continue;
+    // Live matches are public: every connected spectator receives state, not
+    // just the two participants. Everything in the view is identical across
+    // spectators except humanSide/isParticipant (services/liveView.ts), so
+    // compute the shared payload once per match and patch those two fields
+    // in per socket instead of rebuilding the whole view per viewer.
+    const base = liveStateView(world, st, null);
+    for (const ws of sockets) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
-      // Live matches are public: every connected spectator receives state,
-      // not just the two participants.
       if (!meta) continue;
-      send(ws, { type: "state", state: liveStateView(world, st, meta.userId) });
+      send(ws, { type: "state", state: { ...base, ...viewerFieldsFor(world, st, meta.userId) } });
     }
   }
 }
 
 function broadcastLiveMatchUpdates(world: import("../game/types").World, updates: LiveMatchUpdate[]) {
   for (const update of updates) {
+    const sockets = conns.get(update.matchId);
+    if (!sockets || sockets.size === 0) continue;
     const state = world.liveMatches.find((candidate) => candidate.matchId === update.matchId);
-    for (const ws of conns.get(update.matchId) ?? []) {
+    const finished = update.finished || !state;
+    // liveStateDeltaView carries no viewer-specific fields at all, and
+    // liveStateView's only per-viewer fields are humanSide/isParticipant, so
+    // compute the shared payload once per match per update, not per socket.
+    const fullState = !finished && update.phaseChanged ? liveStateView(world, state!, null) : null;
+    const delta = !finished && !update.phaseChanged ? liveStateDeltaView(world, state!, update.eventStart) : null;
+    for (const ws of sockets) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
       // Spectators follow the match too; control messages remain
       // participant-gated in handleMessage below.
       if (!meta) continue;
-      if (update.finished || !state) {
+      if (finished) {
         send(ws, { type: "finished", matchId: update.matchId });
-      } else if (update.phaseChanged) {
-        send(ws, { type: "state", state: liveStateView(world, state, meta.userId) });
+      } else if (fullState) {
+        send(ws, { type: "state", state: { ...fullState, ...viewerFieldsFor(world, state!, meta.userId) } });
       } else {
-        send(ws, { type: "delta", delta: liveStateDeltaView(world, state, update.eventStart) });
+        send(ws, { type: "delta", delta });
       }
     }
   }
@@ -262,7 +276,10 @@ async function handleMessage(
           return;
         }
         const side = st.homeClubId === humanClub.id ? 0 : 1;
-        const error = applyLiveTacticsUpdate(st, side, { style: msg.style, pressing: msg.pressing, direction: msg.direction });
+        const error = applyLiveTacticsUpdate(st, side, { style: msg.style, pressing: msg.pressing, direction: msg.direction }, {
+          familiarityMap: humanClub.tacticFamiliarity,
+          absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex,
+        });
         if (error) {
           send(ws, { type: "tactics", error, state: liveStateView(world, st, meta.userId) });
           return;
@@ -297,7 +314,7 @@ async function handleMessage(
           send(ws, { type: "lineup", error: err, state: liveStateView(world, st, meta.userId) });
           return;
         }
-        rebuildLiveHumanLineup(st, humanClub, world.players);
+        rebuildLiveHumanLineup(st, humanClub, world.players, { absoluteGameDay: world.mp.absoluteGameDay ?? world.dayIndex });
         await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         send(ws, { type: "lineup", state: liveStateView(world, st, meta.userId) });
         broadcastState(world, meta.matchId);

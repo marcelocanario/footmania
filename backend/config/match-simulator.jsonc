@@ -4256,7 +4256,14 @@
         "dailyUnusedDecay": 0.005,
         "switchTransferCoefficient": 0.35,
         "executionFloor": 0.6,
-        "executionCeiling": 1
+        "executionCeiling": 1,
+        "switchStartFloor": 25,
+        "switchSimilarityWeights": {
+          "formation": 0.25,
+          "style": 0.25,
+          "pressing": 0.25,
+          "direction": 0.25
+        }
       },
       "tacticalActionMix": {
         "nonNeutralCorrectionScale": 0.75,

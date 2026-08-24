@@ -113,7 +113,7 @@ export function Admin() {
         </button>
       )}
 
-      {tab === "overview" && <OverviewTab version={version} notify={notify} />}
+      {tab === "overview" && <OverviewTab version={version} notify={notify} clock={clock} />}
       {tab === "events" && <EventsTab key={eventStatusPreset ?? "all"} version={version} notify={notify} statusPreset={eventStatusPreset} />}
       {tab === "liveops" && <MatchesAuctionsTab version={version} notify={notify} />}
       {tab === "season" && <SeasonTab version={version} notify={notify} />}

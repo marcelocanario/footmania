@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { ClubBadge } from "./ClubBadge";
 import type { KitDesign } from "./kit/types";
 
@@ -23,10 +24,14 @@ export function ClubCrest({
   clubId?: number;
   hasCustomLogo?: boolean;
 }) {
+  // Cache-bust only when the logo could actually have changed (club switch
+  // or the custom-logo flag flipping), not on every render — otherwise the
+  // browser can never cache crest images across re-renders.
+  const cacheBust = useMemo(() => Date.now(), [clubId, hasCustomLogo]);
   if (hasCustomLogo && clubId !== undefined) {
     return (
       <img
-        src={`/api/clubs/${clubId}/logo?ts=${Date.now()}`}
+        src={`/api/clubs/${clubId}/logo?ts=${cacheBust}`}
         alt={name}
         title={name}
         style={{ width: size, height: size, borderRadius: Math.max(4, size * 0.18), objectFit: "contain", background: "rgba(255,255,255,0.06)" }}

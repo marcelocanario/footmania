@@ -8,6 +8,7 @@ import { overallFromSkills } from "./rating";
 import { calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
 import { gameConfig } from "../config";
 import { calendarValues } from "../services/seasonCalendar";
+import { bumpSkillsVersion } from "./skillsVersion";
 
 const modelSchema = z.object({
   schemaVersion: z.literal(1),
@@ -211,6 +212,9 @@ export function applyLastingSetback(rng: RngState, player: Player, equivalentRea
   for (const [key, loss] of Object.entries(skillLoss)) {
     if (loss && key in player.skills) player.skills[key as keyof typeof player.skills] = Math.max(1, player.skills[key as keyof typeof player.skills] - loss);
   }
+  // A lasting setback permanently changes skills that computeAttributeCenters
+  // draws on; invalidate any cached centers so the next tick recomputes them.
+  bumpSkillsVersion();
   const after = overallFromSkills(player.position, player.skills);
   player.overall = after;
   player.potential = Math.max(after, player.potential - stochasticRound(rng, s.potentialLossShare * Math.max(0, before - after)));

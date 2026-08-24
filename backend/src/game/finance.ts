@@ -8,6 +8,7 @@ import { settleTransferAuction, cancelTransferAuction, recordTransaction, auctio
 import { prepareFreeAgentListing } from "./freeAgents";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 import { ensureClubSquadNumbers } from "./squadNumbers";
+import { bumpSkillsVersion } from "./skillsVersion";
 
 /**
  * Financial system (plans/5. financial-control.md).
@@ -508,6 +509,7 @@ export function runFinancialIntervention(
     if (!departed) continue;
     const replacement = makeReplacementPlayer(world, club, departed, replacementCtx, interventionSeed);
     world.players.push(replacement);
+    bumpSkillsVersion();
     forcedReplacements.push(replacement);
     entry.replacementPlayerId = replacement.id;
   }
@@ -588,6 +590,7 @@ export function runFinancialIntervention(
       if (preview) {
         preview.clubId = club.id;
         world.players.push(preview);
+        bumpSkillsVersion();
         // Replacement joins with a number no squadmate wears.
         ensureClubSquadNumbers(world, club.id);
       }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Dialog } from "primereact/dialog";
@@ -17,6 +17,7 @@ import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { AutomationPanel } from "../components/AutomationPanel";
+import { FamiliarityBar } from "../components/FamiliarityBar";
 import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
@@ -44,8 +45,94 @@ function conditionIcon(condition: string) {
   }
 }
 
+// Column `body` renderers hoisted to module scope: each reads only its `p`
+// parameter (plus other module-level helpers/components), so a fresh closure
+// per render (and per row) buys nothing and only adds allocation churn.
+function positionBody(p: PlayerView) {
+  return <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`}>{p.positionName}</span>;
+}
+
+function squadNumberBody(p: PlayerView) {
+  return <span style={{ fontFamily: "var(--font-display)", fontWeight: 700 }}>{p.squadNumber ?? "–"}</span>;
+}
+
+function nameBody(p: PlayerView) {
+  return <span className="squad-player-cell"><PlayerName player={p} showPosition={false} preferNickname showSuspended={false} /></span>;
+}
+
+function ratingBody(p: PlayerView) {
+  return (
+    <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.2rem" }}>
+      {p.overall}
+    </span>
+  );
+}
+
+function energyBody(p: PlayerView) {
+  return <RatingBar value={p.energy} color={energyColor(p.energy)} />;
+}
+
+function conditionBody(p: PlayerView) {
+  const condition = p.conditionLabel ?? "Normal workload";
+  const injuryDays = p.injuryDaysRemaining ?? p.injuryDays;
+  const conditionText = condition === "Injured"
+    ? `${condition} · returns in ${injuryDays} day${injuryDays === 1 ? "" : "s"}`
+    : `${condition}${(p.injuryDaysRemaining ?? 0) > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}`;
+  const suspensionText = `Suspended for ${p.suspendedGames} match${p.suspendedGames === 1 ? "" : "es"}`;
+  const Icon = conditionIcon(condition);
+  return (
+    <span className="squad-condition-icons">
+      <button
+        type="button"
+        className="squad-condition squad-tooltip-trigger"
+        data-pr-tooltip={conditionText}
+        title={conditionText}
+        aria-label={conditionText}
+        style={{ color: condition === "Needs rest" || condition === "Injured" ? "var(--red-2)" : "var(--text-2)" }}
+      >
+        <Icon size={16} aria-hidden="true" />
+      </button>
+      {p.suspended && (
+        <button
+          type="button"
+          className="squad-suspension squad-tooltip-trigger"
+          data-pr-tooltip={suspensionText}
+          title={suspensionText}
+          aria-label={suspensionText}
+        >
+          <ShieldAlert size={16} aria-hidden="true" />
+        </button>
+      )}
+    </span>
+  );
+}
+
+function valueBody(p: PlayerView) {
+  return money(p.value);
+}
+
+function salaryBody(p: PlayerView) {
+  return money(p.salary);
+}
+
+function contractBody(p: PlayerView & { contractSeasons: number }) {
+  return (
+    <span
+      className={`squad-contract${p.contractSeasons <= 1 ? " squad-tooltip-trigger" : ""}`}
+      data-pr-tooltip={p.contractSeasons <= 1 ? "Contract expires this season" : undefined}
+      aria-label={p.contractSeasons <= 1 ? `${p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} S`}. Contract expires this season` : undefined}
+      tabIndex={p.contractSeasons <= 1 ? 0 : undefined}
+      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+    >
+      {p.contractSeasons <= 1 && <AlertTriangle size={14} style={{ color: "var(--gold-2)" }} aria-label="Expiring contract" />}
+      {p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} S`}
+    </span>
+  );
+}
+
 export function Squad() {
-  const { snapshot, refresh } = useGame();
+  const snapshot = useGame((s) => s.snapshot);
+  const refresh = useGame((s) => s.refresh);
   const isMobile = useIsMobile();
   const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
   const [selected, setSelected] = useState<PlayerView | null>(null);
@@ -82,20 +169,37 @@ export function Squad() {
   };
 
   const club = snapshot?.club;
+  // plans/6 §17 UI: familiarity bars for the drafted tactic combination. The
+  // server computes all projections; when an unsaved formation is picked on
+  // the board the projections would not match, so we show the saved value only.
+  const clubTactics = club?.tactics ?? null;
+  const formationSaved = !clubTactics || tactics.formation === clubTactics.formation;
+  const draftMatchesSaved =
+    !!clubTactics && formationSaved &&
+    tactics.style === clubTactics.style && tactics.pressing === clubTactics.pressing && tactics.direction === clubTactics.direction;
+  const draftProjection = clubTactics?.projections?.find(
+    (p) => p.style === tactics.style && p.pressing === tactics.pressing && p.direction === tactics.direction
+  )?.familiarity ?? null;
+  const shownFamiliarity = draftMatchesSaved ? clubTactics?.familiarity : formationSaved ? draftProjection : null;
   const seniors = snapshot?.squad ?? [];
   const juniors = snapshot?.juniors ?? [];
   const rows = tab === "juniors" ? juniors : seniors;
   const seasonDays = snapshot?.save.seasonDays ?? 30;
-  const tableRows = rows.map((player) => ({
-    ...player,
-    contractSeasons: player.contractDays > 0 ? Math.ceil(player.contractDays / seasonDays) : 0,
-  }));
-  const filteredRows = tableRows.filter((player) => {
+  const tableRows = useMemo(
+    () => rows.map((player) => ({
+      ...player,
+      contractSeasons: player.contractDays > 0 ? Math.ceil(player.contractDays / seasonDays) : 0,
+    })),
+    [rows, seasonDays]
+  );
+  const filteredRows = useMemo(() => {
     const query = filter.trim().toLowerCase();
-    const nameMatches = !query || (player.displayName ?? player.name).toLowerCase().includes(query);
-    const positionMatches = positionFilter.length === 0 || positionFilter.includes(player.position);
-    return nameMatches && positionMatches;
-  });
+    return tableRows.filter((player) => {
+      const nameMatches = !query || (player.displayName ?? player.name).toLowerCase().includes(query);
+      const positionMatches = positionFilter.length === 0 || positionFilter.includes(player.position);
+      return nameMatches && positionMatches;
+    });
+  }, [tableRows, filter, positionFilter]);
 
   useEffect(() => {
     void api.finances().then((response) => setFinance(response.finance)).catch(() => setFinance(null));
@@ -235,25 +339,6 @@ export function Squad() {
     );
   };
 
-  const ratingBody = (p: PlayerView) => (
-    <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.2rem" }}>
-      {p.overall}
-    </span>
-  );
-
-  const contractBody = (p: PlayerView & { contractSeasons: number }) => (
-    <span
-      className={`squad-contract${p.contractSeasons <= 1 ? " squad-tooltip-trigger" : ""}`}
-      data-pr-tooltip={p.contractSeasons <= 1 ? "Contract expires this season" : undefined}
-      aria-label={p.contractSeasons <= 1 ? `${p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} S`}. Contract expires this season` : undefined}
-      tabIndex={p.contractSeasons <= 1 ? 0 : undefined}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-    >
-      {p.contractSeasons <= 1 && <AlertTriangle size={14} style={{ color: "var(--gold-2)" }} aria-label="Expiring contract" />}
-      {p.contractSeasons === 0 ? "Expired" : `${p.contractSeasons} S`}
-    </span>
-  );
-
   const selectedPlayer = selected ?? rows[0];
   const selectedTablePlayer = selectedPlayer ? tableRows.find((player) => player.id === selectedPlayer.id) ?? null : null;
   const selectedCountryName = selectedPlayer ? countryNames[selectedPlayer.country] ?? selectedPlayer.country : "";
@@ -267,13 +352,19 @@ export function Squad() {
   }, [selectedPlayer?.id, selectedPlayer?.nickname, selectedPlayer?.squadNumber]);
 
   // Numbers already worn by squadmates; selecting one swaps the two players.
-  const takenNumbers = new Map(
-    rows.filter((p) => p.id !== selectedPlayer?.id && typeof p.squadNumber === "number").map((p) => [p.squadNumber as number, p]),
+  const takenNumbers = useMemo(
+    () => new Map(
+      rows.filter((p) => p.id !== selectedPlayer?.id && typeof p.squadNumber === "number").map((p) => [p.squadNumber as number, p]),
+    ),
+    [rows, selectedPlayer?.id]
   );
-  const numberOptions = Array.from({ length: 99 }, (_, i) => i + 1).map((n) => ({
-    label: takenNumbers.has(n) ? `${n} — ${takenNumbers.get(n)!.displayName ?? takenNumbers.get(n)!.name} (swap)` : `${n}`,
-    value: n,
-  }));
+  const numberOptions = useMemo(
+    () => Array.from({ length: 99 }, (_, i) => i + 1).map((n) => ({
+      label: takenNumbers.has(n) ? `${n} — ${takenNumbers.get(n)!.displayName ?? takenNumbers.get(n)!.name} (swap)` : `${n}`,
+      value: n,
+    })),
+    [takenNumbers]
+  );
   const numberSwapHint = numberInput !== null && numberInput !== selectedPlayer?.squadNumber && takenNumbers.has(numberInput);
 
   const saveNumber = async () => {
@@ -368,6 +459,15 @@ export function Squad() {
               <label htmlFor="tac-dir">{strings.squad.direction}</label>
               <Dropdown id="tac-dir" value={tactics.direction} options={DIRECTIONS} onChange={(e) => setTactics({ ...tactics, direction: e.value })} style={{ width: "100%" }} />
             </div>
+            {clubTactics?.familiarity !== undefined && (
+              <div className="form-group">
+                <label>Tactical familiarity</label>
+                <FamiliarityBar value={shownFamiliarity ?? clubTactics.familiarity} projected={draftMatchesSaved ? null : formationSaved ? draftProjection : null} />
+                <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
+                  Familiarity grows with every match played in a setup and fades when unused. Switching setups keeps only part of it — similar setups carry more over.
+                </div>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <button className="btn" onClick={saveTactics} style={{ flex: 1 }}>
                 {strings.common.save}
@@ -442,53 +542,20 @@ export function Squad() {
                   </div>
                 }
               >
-                <Column field="position" header="Pos" body={(p) => <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`}>{p.positionName}</span>} sortable style={{ width: isMobile ? "10%" : "7%" }} />
-                <Column field="squadNumber" header="#" body={(p) => <span style={{ fontFamily: "var(--font-display)", fontWeight: 700 }}>{p.squadNumber ?? "–"}</span>} sortable style={{ width: "7%" }} />
-                <Column field="name" header={strings.squad.player} body={(p) => <span className="squad-player-cell"><PlayerName player={p} showPosition={false} preferNickname showSuspended={false} /></span>} sortable style={isMobile ? { width: "25%" } : { width: "18%" }} />
+                <Column field="position" header="Pos" body={positionBody} sortable style={{ width: isMobile ? "10%" : "7%" }} />
+                <Column field="squadNumber" header="#" body={squadNumberBody} sortable style={{ width: "7%" }} />
+                <Column field="name" header={strings.squad.player} body={nameBody} sortable style={isMobile ? { width: "25%" } : { width: "18%" }} />
                 <Column field="overall" header={strings.squad.overall} body={ratingBody} sortable style={{ width: isMobile ? "9%" : "7%" }} />
                 <Column field="age" header={strings.squad.age} sortable style={{ width: isMobile ? "8%" : "6%" }} />
-                <Column field="energy" header={strings.squad.energy} body={(p) => <RatingBar value={p.energy} color={energyColor(p.energy)} />} sortable style={{ width: isMobile ? "15%" : "11%" }} />
+                <Column field="energy" header={strings.squad.energy} body={energyBody} sortable style={{ width: isMobile ? "15%" : "11%" }} />
                 <Column
                   field="conditionLabel"
                   header={strings.squad.condition}
-                  body={(p) => {
-                    const condition = p.conditionLabel ?? "Normal workload";
-                    const injuryDays = p.injuryDaysRemaining ?? p.injuryDays;
-                    const conditionText = condition === "Injured"
-                      ? `${condition} · returns in ${injuryDays} day${injuryDays === 1 ? "" : "s"}`
-                      : `${condition}${p.injuryDaysRemaining > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}`;
-                    const suspensionText = `Suspended for ${p.suspendedGames} match${p.suspendedGames === 1 ? "" : "es"}`;
-                    const Icon = conditionIcon(condition);
-                    return (
-                      <span className="squad-condition-icons">
-                        <button
-                          type="button"
-                          className="squad-condition squad-tooltip-trigger"
-                          data-pr-tooltip={conditionText}
-                          title={conditionText}
-                          aria-label={conditionText}
-                          style={{ color: condition === "Needs rest" || condition === "Injured" ? "var(--red-2)" : "var(--text-2)" }}
-                        >
-                          <Icon size={16} aria-hidden="true" />
-                        </button>
-                        {p.suspended && (
-                          <button
-                            type="button"
-                            className="squad-suspension squad-tooltip-trigger"
-                            data-pr-tooltip={suspensionText}
-                            title={suspensionText}
-                            aria-label={suspensionText}
-                          >
-                            <ShieldAlert size={16} aria-hidden="true" />
-                          </button>
-                        )}
-                      </span>
-                    );
-                  }}
+                  body={conditionBody}
                   style={{ width: isMobile ? "10%" : "10%" }}
                 />
-                {!isMobile && <Column field="value" header={strings.squad.value} body={(p) => money(p.value)} sortable style={{ width: "9%" }} />}
-                {!isMobile && <Column field="salary" header={strings.squad.salary} body={(p) => money(p.salary)} sortable style={{ width: "9%" }} />}
+                {!isMobile && <Column field="value" header={strings.squad.value} body={valueBody} sortable style={{ width: "9%" }} />}
+                {!isMobile && <Column field="salary" header={strings.squad.salary} body={salaryBody} sortable style={{ width: "9%" }} />}
                 <Column field="contractSeasons" header={strings.squad.contract} body={contractBody} sortable style={{ width: "16%" }} />
               </DataTable>
             </div>

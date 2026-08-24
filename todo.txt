@@ -13,14 +13,15 @@ Game engine
 		[DONE] the match simulator engine should incorporate the possibility of injuries (the more tired a player is, the more likely he is to become injured but does not affect severity). do we need to collect real injury data to tune coefficients?
 	[DONE] users need to be allowed to create presets of conditions for auto-subs or tactic changes to kick off automatically if they are not going to be watching/controlling the game
 		[DONE] pro users can save one preset per tactic. regular users can only save one preset for one tactic
-	implement:
-		AI substitutions in matches
+	[PLANNED] implement:
+		[PLANNED] AI substitutions in matches
+		[PLANNED] AI should also rotate tired/unavailable players before the match starts
 		[DONE] extra time (calculated by events in the match, not too much time)
 		[DONE] match start coin toss (currently, home team always starts with the ball); possession to team who loss coin tosse after half-time
 		[DONE] MP_CONFIG constant should be configurable in game.config.jsonc (initially 30 min); there should also be a half-time pause setting for real-life pause time (only when a human team is involved) (initially 5 min, real-life). keep instant matches instant (AI vs AI, test matches)
-	player stats and history (goals in the career, yellow and red cards, injuries, etc.)
-		only pro users can see history of other user's players
-		during auctions, everyone can see full history of the player in the auction
+	[DONE] player stats and history (goals in the career, yellow and red cards, injuries, etc.)
+		[DONE] only pro users can see history of other user's players
+		[DONE] during auctions, everyone can see full history of the player in the auction
 	[DONE] remove player morale
 	[DONE] make sure that the random player generator for each team will generate players from diverse positions and we do not end up with a team that has too many or too few players from the same positions
 	allow admins to:
@@ -52,10 +53,10 @@ UI:
 		in the live match UI, use the appropriate jerseys instead of the circles
 	[DONE] modify the tactics screen. I want something that looks like this: https://league-builder.app/lineup-creator
 	give the ability to hold shift and select multiple time slots at once in the "Matchday schedule" screen
-	add a nationality flag for players (not users, actual players)
+	[DONE] add a nationality flag for players (not users, actual players)
 	generate players faces using: https://github.com/zengm-games/facesjs
-	allow users to change player numbers
-	in tactics tab, instead of showing a circle with the player initials, show the team jersey with player number
+	[DONE] allow users to change player numbers
+	[DONE] in tactics tab, instead of showing a circle with the player initials, show the team jersey with player number
 	group together all news that would be posted in the same day for a given club in regards to player contracts expiring. add to a pre-season report (single message), including league, finance, contracts expiring, academy, etc.
 
 Economy:
@@ -95,7 +96,7 @@ Technical/housekeeping:
 	[DONE] when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
 	[DONE] confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
 		[DONE] consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway
-	implement a message of the day (MOTD) system - admins can send messages through admin panel and those show in the home of the users, in the News section
+	[DONE] implement a message of the day (MOTD) system - admins can send messages through admin panel and those show in the home of the users, in the News section
 	check if there are any scalability improvements that can be proposed
 	add an option for admins to reset the whole game (erase teams, players, groups, etc. - start game from scratch. keeps only accounts, forces everyone to recreate team)
 
@@ -108,7 +109,7 @@ Tuning:
 		players being generated in main squad, youth squad and simulate growth/decay for a large number of players and propose tuning suggestions to related variables or formulas
 
 Documentation:
-	based on the plans, come up with a topic structure for a business rules document (all the important rules, algorithms and formulas in the system, what they mean and how they are calculated)
+	based on the plans and what is actually coded (code > plans), come up with a topic structure for a business rules document in markdown (all the important rules, algorithms and formulas in the system, what they mean and how they are calculated). it can be a very long/comprehensive file, that is ok (but make it very structured/organized). also create a readme.md file. replace the plans with this business rules doc and put the readme in the root
 
 Match UX:
 	[DONE] why do we have a Refresh button? what does it do?
@@ -119,4 +120,4 @@ Match UX:
 	[DONE] there should be a tab with text updates of the match, all events should show there. make live pitch always show on top and match history and tactics tabs.
 	[DONE] players watching the match should be able to toggle between automations ON (autopilot) and OFF (they control the match)
 	[DONE] add an element above the pitch with the club names, score and a progress bar
-	[IN PROGRESS] show more match events in the history
+	[DONE]  show more match events in the history

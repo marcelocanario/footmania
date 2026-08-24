@@ -44,70 +44,82 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
 
   const mp = parseJson<MpStateView>(save.mpStateJson, {});
   const seasonDayIndex = mp.seasonDayIndex ?? save.dayIndex;
-  const club = await prisma.club.findFirst({
-    where: { saveId: save.id, ownerUserId: userId },
-    select: {
-      id: true,
-      name: true,
-      shortName: true,
-      country: true,
-      highestDivision: true,
-      cash: true,
-      competitionState: true,
-      friendGroupingOptIn: true,
-      preferredHoursJson: true,
-      // Read with the legacy marker so read paths can apply the same one-time
-      // local→UTC slot conversion as rebuildWorld (plan 9).
-      timezone: true,
-      abandonmentEligibleAt: true,
-    },
-  });
-  const reservedAllocation = club
-    ? await prisma.mpAllocation.findFirst({
-        where: { clubId: club.id, seasonId: { gt: mp.seasonId ?? 0 }, type: "PROVISIONAL_NEXT_SEASON" },
-        orderBy: { seasonId: "asc" },
-        select: { seasonId: true, amount: true, issuedAt: true },
-      })
-    : null;
   const calendar = calendarValues();
   const year = mp.seasonYear ?? save.year;
   const month = mp.seasonMonth ?? 1;
-
-  // The stored completed-round counter is only advanced by the admin manual
-  // clock; live matchdays never touch it. Derive the real value from the
-  // highest played round in the current season's divisions so the UI reflects
-  // actual progress after every match.
-  const divisionRows = mp.seasonId
-    ? await prisma.competition.findMany({ where: { saveId: save.id, kind: "division", seasonId: mp.seasonId }, select: { id: true } })
-    : [];
-  let playedRoundsCount = 0;
-  if (divisionRows.length > 0) {
-    const playedAgg = await prisma.fixture.aggregate({
-      where: { saveId: save.id, played: true, competitionId: { in: divisionRows.map((c) => c.id) } },
-      _max: { round: true },
-    });
-    playedRoundsCount = (playedAgg._max.round ?? -1) + 1;
-  }
-
-  // Season calendar popover data: the authoritative per-day schedule plus the
-  // user's own fixtures (with results) keyed by season day index.
   const schedule = seasonSchedulePreview();
-  const myFixtureRows = club
-    ? await prisma.fixture.findMany({
-        where: { saveId: save.id, OR: [{ homeClubId: club.id }, { awayClubId: club.id }] },
-        select: { id: true, round: true, dayIndex: true, homeClubId: true, awayClubId: true, played: true },
-      })
-    : [];
-  const myMatchRows = myFixtureRows.length
-    ? await prisma.match.findMany({
-        where: { saveId: save.id, fixtureId: { in: myFixtureRows.map((f) => f.id) } },
-        select: { fixtureId: true, homeScore: true, awayScore: true },
-      })
-    : [];
+
+  // `club` and `divisionRows` depend only on `save`/`mp`, not on each other,
+  // so they can be fetched concurrently.
+  const [club, divisionRows] = await Promise.all([
+    prisma.club.findFirst({
+      where: { saveId: save.id, ownerUserId: userId },
+      select: {
+        id: true,
+        name: true,
+        shortName: true,
+        country: true,
+        highestDivision: true,
+        cash: true,
+        competitionState: true,
+        friendGroupingOptIn: true,
+        preferredHoursJson: true,
+        // Read with the legacy marker so read paths can apply the same one-time
+        // local→UTC slot conversion as rebuildWorld (plan 9).
+        timezone: true,
+        abandonmentEligibleAt: true,
+      },
+    }),
+    // The stored completed-round counter is only advanced by the admin manual
+    // clock; live matchdays never touch it. Derive the real value from the
+    // highest played round in the current season's divisions so the UI
+    // reflects actual progress after every match.
+    mp.seasonId
+      ? prisma.competition.findMany({ where: { saveId: save.id, kind: "division", seasonId: mp.seasonId }, select: { id: true } })
+      : Promise.resolve([] as { id: number }[]),
+  ]);
+
+  // `reservedAllocation`, `playedAgg` and `myFixtureRows` each depend only on
+  // values already resolved above (club, divisionRows), not on one another.
+  const [reservedAllocation, playedAgg, myFixtureRows] = await Promise.all([
+    club
+      ? prisma.mpAllocation.findFirst({
+          where: { clubId: club.id, seasonId: { gt: mp.seasonId ?? 0 }, type: "PROVISIONAL_NEXT_SEASON" },
+          orderBy: { seasonId: "asc" },
+          select: { seasonId: true, amount: true, issuedAt: true },
+        })
+      : Promise.resolve(null),
+    divisionRows.length > 0
+      ? prisma.fixture.aggregate({
+          where: { saveId: save.id, played: true, competitionId: { in: divisionRows.map((c) => c.id) } },
+          _max: { round: true },
+        })
+      : Promise.resolve(null),
+    // Season calendar popover data: the authoritative per-day schedule plus
+    // the user's own fixtures (with results) keyed by season day index.
+    club
+      ? prisma.fixture.findMany({
+          where: { saveId: save.id, OR: [{ homeClubId: club.id }, { awayClubId: club.id }] },
+          select: { id: true, round: true, dayIndex: true, homeClubId: true, awayClubId: true, played: true },
+        })
+      : Promise.resolve([] as { id: number; round: number; dayIndex: number; homeClubId: number; awayClubId: number; played: boolean }[]),
+  ]);
+  const playedRoundsCount = playedAgg ? (playedAgg._max.round ?? -1) + 1 : 0;
+
+  // `myMatchRows` and `opponents` both depend only on `myFixtureRows`, not on
+  // each other, so they can be fetched concurrently.
   const opponentIds = [...new Set(myFixtureRows.map((f) => (f.homeClubId === club!.id ? f.awayClubId : f.homeClubId)))];
-  const opponents = opponentIds.length
-    ? await prisma.club.findMany({ where: { saveId: save.id, id: { in: opponentIds } }, select: { id: true, shortName: true, name: true } })
-    : [];
+  const [myMatchRows, opponents] = await Promise.all([
+    myFixtureRows.length
+      ? prisma.match.findMany({
+          where: { saveId: save.id, fixtureId: { in: myFixtureRows.map((f) => f.id) } },
+          select: { fixtureId: true, homeScore: true, awayScore: true },
+        })
+      : Promise.resolve([] as { fixtureId: number; homeScore: number; awayScore: number }[]),
+    opponentIds.length
+      ? prisma.club.findMany({ where: { saveId: save.id, id: { in: opponentIds } }, select: { id: true, shortName: true, name: true } })
+      : Promise.resolve([] as { id: number; shortName: string; name: string }[]),
+  ]);
   const opponentName = new Map(opponents.map((c) => [c.id, c.shortName || c.name]));
   const scoreByFixture = new Map(myMatchRows.map((m) => [m.fixtureId, m]));
   const myMatches = myFixtureRows

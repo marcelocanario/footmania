@@ -27,6 +27,13 @@ const CUE_TYPES: Record<number, PitchCueKind> = {
   16: "woodwork",
 };
 
+/** Whether this event type ever produces a pitch cue at all. A parent showing
+ * its own event feed alongside the pitch needs this to know which rows must
+ * wait for MatchPitch's onEventRevealed instead of appearing immediately. */
+export function hasPitchCue(type: number): boolean {
+  return type in CUE_TYPES;
+}
+
 export interface PitchCue {
   kind: PitchCueKind;
   event: LiveEvent;
@@ -440,6 +447,53 @@ export function nextZoneTowardAttack(zone: string): string {
 export interface IntentLine {
   from: PitchPoint;
   to: PitchPoint;
+}
+
+// ---------------------------------------------------------------------------
+// Trajectory styling
+//
+// Classifies the possession move that just landed so the pitch can draw a
+// trail that actually looks like what happened (a curled cross, a blocked
+// shot, a corner delivery) instead of every move being an identical gold
+// line. Driven entirely by fields already on LiveBall — no engine changes.
+// ---------------------------------------------------------------------------
+
+export type MoveStyle = "pass" | "cross" | "shot-blocked" | "shot-miss" | "corner" | "foul";
+
+/** Classifies the move that produced the current ball snapshot. */
+export function classifyMove(ball: LiveBall | null | undefined): MoveStyle {
+  const action = ball?.lastBallAction;
+  if (ball?.startType === "CORNER") return "corner";
+  if (action?.outcome === "FOUL") return "foul";
+  if (action?.action === "SHOT" && action.outcome === "BLOCKED") return "shot-blocked";
+  if (action?.action === "SHOT" && action.outcome === "MISS") return "shot-miss";
+  if (action?.action === "CROSS") return "cross";
+  return "pass";
+}
+
+/** FNV-1a seeded +1/-1, used to pick a stable curve direction per action so a
+ * replay/reconnect never flips which way a cross or wide shot bows. */
+export function bendSignFor(key: string): 1 | -1 {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h & 1) === 0 ? 1 : -1;
+}
+
+/** Control point for a quadratic Bezier bowing perpendicular to the from→to
+ * line by `bendUnits` (pitch percentage units; sign flips which side it bows
+ * toward). */
+export function curveControlPoint(from: PitchPoint, to: PitchPoint, bendUnits: number): PitchPoint {
+  const mx = (from.x + to.x) / 2;
+  const my = (from.y + to.y) / 2;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const px = -dy / len;
+  const py = dx / len;
+  return { x: mx + px * bendUnits, y: my + py * bendUnits };
 }
 
 /**

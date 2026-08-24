@@ -171,6 +171,16 @@ const tacticalFamiliaritySchema = z.object({
   switchTransferCoefficient: nonNegativeNumber,
   executionFloor: z.number().min(0).max(1),
   executionCeiling: z.number().min(0).max(1),
+  // Starting point for a setup that has never been drilled; switching into a
+  // previously-drilled setup uses max(floor, its decayed stored value).
+  switchStartFloor: nonNegativeNumber,
+  // Relative contribution of each tactic dimension to switch similarity.
+  switchSimilarityWeights: z.object({
+    formation: nonNegativeNumber,
+    style: nonNegativeNumber,
+    pressing: nonNegativeNumber,
+    direction: nonNegativeNumber,
+  }),
 });
 
 const tacticalActionMixSchema = z.object({

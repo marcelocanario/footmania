@@ -1,7 +1,12 @@
 import type { LiveBallAction, LiveMatchState, Player, World } from "../game/types";
 import { livePhase, tacticsCooldownMinutesRemaining } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
-import { EVENT_CODES, FORMATION_NAMES } from "../game/constants";
+import { EVENT_CODES, FORMATION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
+import {
+  canonicalFromLive,
+  decayedStoredFamiliarity,
+  projectSetups,
+} from "../game/familiarity";
 import { resolveClubKits } from "../game/kits";
 import { displayName } from "../game/displayName";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
@@ -69,10 +74,24 @@ export interface LiveKitView {
   pattern: string;
 }
 
+export interface TacticProjectionView {
+  style: number;
+  pressing: number;
+  direction: number;
+  /** Projected post-switch familiarity for that combination. */
+  familiarity: number;
+}
+
 export interface LiveTacticView {
   style: number;
   pressing: number;
   direction: number;
+  /** plans/6 §17: this side's in-match familiarity with its current setup
+   *  (kickoff snapshot, reduced by any live switch penalties taken so far). */
+  familiarity: number;
+  /** Server-computed switch-transfer projection for every style/pressing/
+   *  direction combination at this side's current formation. */
+  projections: TacticProjectionView[];
 }
 
 /**
@@ -186,8 +205,27 @@ export interface LiveStateDeltaView {
   ball: LiveBallView;
 }
 
+/**
+ * The only two fields of `LiveStateView` that vary per viewer: which side (if
+ * any) they control, and whether they're a participant. Everything else in
+ * the view (kits, formations, roster, events, stats) is identical for every
+ * spectator of the same match, so callers broadcasting to many sockets for
+ * one match can compute the rest once and patch just these two fields in.
+ */
+export function viewerFieldsFor(world: World, st: LiveMatchState, viewerUserId?: number | null): { humanSide: 0 | 1; isParticipant: boolean } {
+  const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
+  const humanClubId = viewerClub?.id ?? null;
+  return {
+    humanSide: humanClubId !== null ? (st.homeClubId === humanClubId ? 0 : 1) : 1,
+    isParticipant: humanClubId !== null && (st.homeClubId === humanClubId || st.awayClubId === humanClubId),
+  };
+}
+
 export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: number | null): LiveStateView {
-  const byId = new Map(world.players.map((p) => [p.id, p]));
+  // Only the two rostered clubs' players are ever referenced below (roster
+  // lists, events, cards, injuries); no need to index every player in the
+  // world for a single match's lookup.
+  const byId = new Map(world.players.filter((p) => p.clubId === st.homeClubId || p.clubId === st.awayClubId).map((p) => [p.id, p]));
   const club = (id: number) => world.clubs.find((c) => c.id === id);
   const comp = world.competitions.find((c) => c.id === st.competitionId);
   const home = club(st.homeClubId);
@@ -231,9 +269,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     ...(e.type === EVENT_CODES.INJURY ? { goalType: e.goalType } : {}),
   }));
   const { progressPct, currentAddedTime } = clockProgress(st);
-  // Determine which side the viewer controls (if any).
-  const viewerClub = viewerUserId !== undefined && viewerUserId !== null ? world.clubs.find((c) => c.ownerUserId === viewerUserId) : undefined;
-  const humanClubId = viewerClub?.id ?? null;
+  const { humanSide, isParticipant } = viewerFieldsFor(world, st, viewerUserId);
   const homeKits = home ? resolveClubKits(home) : null;
   const awayKits = away ? resolveClubKits(away) : null;
   return {
@@ -275,16 +311,16 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     homeBench: toPlayers(st.homeSubs),
     awayBench: toPlayers(st.awaySubs),
     usedSubs: st.usedSubs,
-    humanSide: humanClubId !== null ? (st.homeClubId === humanClubId ? 0 : 1) : 1,
-    isParticipant: humanClubId !== null && (st.homeClubId === humanClubId || st.awayClubId === humanClubId),
+    humanSide,
+    isParticipant,
     homeManager: home?.coachName ?? "",
     awayManager: away?.coachName ?? "",
     homeFormation: formationName(home),
     awayFormation: formationName(away),
     homeFormationId: home?.tactics?.formation ?? 4,
     awayFormationId: away?.tactics?.formation ?? 4,
-    homeTactics: tacticView(st.homeTactics),
-    awayTactics: tacticView(st.awayTactics),
+    homeTactics: tacticSideView(st.homeTactics, home, world.mp.absoluteGameDay ?? world.dayIndex),
+    awayTactics: tacticSideView(st.awayTactics, away, world.mp.absoluteGameDay ?? world.dayIndex),
     // Live-match tactics lock (match-minutes left per side) so clients can
     // disable Apply and show a countdown.
     homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),
@@ -341,7 +377,35 @@ function tacticView(tactics: LiveMatchState["homeTactics"]): LiveTacticView {
     style: tactics.style === "COUNTER" ? 2 : tactics.style === "PRESS" ? 1 : 0,
     pressing: Math.max(0, Math.min(2, Math.round(tactics.pressing * 2))),
     direction: tactics.direction === "WIDE" ? 1 : 0,
+    familiarity: 50,
+    projections: [],
   };
+}
+
+/** Full tactics view for one side: current in-match familiarity plus §17
+ *  switch-transfer projections for every combination at the side's formation,
+ *  seeded from the owning club's persistent per-setup progress map. */
+function tacticSideView(
+  tactics: LiveMatchState["homeTactics"],
+  club: World["clubs"][number] | undefined,
+  absoluteGameDay?: number
+): LiveTacticView {
+  const view = tacticView(tactics);
+  view.familiarity = Math.round(tactics.familiarity);
+  const map = club?.tacticFamiliarity ?? null;
+  view.projections = projectSetups(
+    tactics.familiarity,
+    canonicalFromLive(tactics),
+    tactics.formation,
+    STYLE_NAMES.length,
+    PRESSING_NAMES.length,
+    DIRECTION_NAMES.length,
+    // Keys use the club-scale integers (pressing loop index), matching the
+    // format written by the persistent /club/tactics path.
+    (style, pressing, direction) =>
+      decayedStoredFamiliarity(map, `${tactics.formation}-${style}-${pressing}-${direction}`, absoluteGameDay)
+  );
+  return view;
 }
 
 function formationName(club: { tactics?: { formation: number } } | undefined): string {
@@ -404,7 +468,9 @@ function clockProgress(st: LiveMatchState): { progressPct: number; currentAddedT
 
 /** Compact, viewer-neutral update used during server-driven live play. */
 export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart: number): LiveStateDeltaView {
-  const byId = new Map(world.players.map((p) => [p.id, p]));
+  // Same narrowing as liveStateView: only the two rostered clubs' players are
+  // ever referenced (new events, cards, injuries).
+  const byId = new Map(world.players.filter((p) => p.clubId === st.homeClubId || p.clubId === st.awayClubId).map((p) => [p.id, p]));
   const newEvents = st.events.slice(Math.max(0, eventStart)).map((e, offset) => ({
     sequence: Math.max(0, eventStart) + offset,
     minute: e.minute,

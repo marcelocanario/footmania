@@ -498,7 +498,14 @@ export async function adminRoutes(app: FastifyInstance) {
     const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { matches: [] };
     const currentCompetitionIds = new Set(loaded.world.competitions.filter((competition) => competition.seasonId === loaded.world.mp.seasonId && competition.kind === "division").map((competition) => competition.id));
-    const matches = await Promise.all(loaded.world.fixtures.filter((fixture) => currentCompetitionIds.has(fixture.competitionId)).map(async (fixture) => ({
+    const dueFixtures = loaded.world.fixtures.filter((fixture) => currentCompetitionIds.has(fixture.competitionId));
+    const events = await app.prisma.scheduledEvent.findMany({ where: { saveId: loaded.save.id, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: { in: dueFixtures.map((fixture) => String(fixture.id)) }, status: { not: "CANCELLED" } } });
+    // First-wins per fixture, matching the row order findFirst would see.
+    const eventByFixtureId = new Map<string, (typeof events)[number]>();
+    for (const event of events) {
+      if (event.entityId !== null && !eventByFixtureId.has(event.entityId)) eventByFixtureId.set(event.entityId, event);
+    }
+    const matches = dueFixtures.map((fixture) => ({
       id: fixture.id,
       seasonId: loaded.world.mp.seasonId,
       round: fixture.round + 1,
@@ -508,8 +515,8 @@ export async function adminRoutes(app: FastifyInstance) {
       scheduledGameDay: (fixture.scheduledSeasonDayIndex ?? fixture.dayIndex) + 1,
       scheduledAt: fixture.kickoffAt ?? null,
       status: fixture.played ? "COMPLETED" : loaded.world.liveMatches.some((match) => match.fixtureId === fixture.id) ? "LIVE" : "SCHEDULED",
-      event: await app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: String(fixture.id), status: { not: "CANCELLED" } } }),
-    })));
+      event: eventByFixtureId.get(String(fixture.id)) ?? null,
+    }));
     return { matches };
   });
 
@@ -553,7 +560,13 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/admin/scheduler/auctions", async () => {
     const loaded = await loadGlobalWorldMutable(app.prisma);
     if (!loaded) return { auctions: [] };
-    const auctions = await Promise.all(loaded.world.transferAuctions.map(async (auction) => ({
+    const events = await app.prisma.scheduledEvent.findMany({ where: { saveId: loaded.save.id, type: ScheduledEventType.AUCTION_END, entityType: "AUCTION", entityId: { in: loaded.world.transferAuctions.map((auction) => String(auction.id)) }, status: { not: "CANCELLED" } } });
+    // First-wins per auction, matching the row order findFirst would see.
+    const eventByAuctionId = new Map<string, (typeof events)[number]>();
+    for (const event of events) {
+      if (event.entityId !== null && !eventByAuctionId.has(event.entityId)) eventByAuctionId.set(event.entityId, event);
+    }
+    const auctions = loaded.world.transferAuctions.map((auction) => ({
       id: auction.id,
       player: loaded.world.players.find((player) => player.id === auction.playerId)?.name ?? "Unknown",
       seller: loaded.world.clubs.find((club) => club.id === auction.sellerClubId)?.name ?? "Unknown",
@@ -563,8 +576,8 @@ export async function adminRoutes(app: FastifyInstance) {
       createdAt: auction.createdAt,
       endsAt: auction.deadline,
       status: auction.status,
-      event: await app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.AUCTION_END, entityType: "AUCTION", entityId: String(auction.id), status: { not: "CANCELLED" } } }),
-    })));
+      event: eventByAuctionId.get(String(auction.id)) ?? null,
+    }));
     return { auctions };
   });
 

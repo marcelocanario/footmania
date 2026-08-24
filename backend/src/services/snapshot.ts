@@ -9,6 +9,12 @@ import { resolveClubKits } from "../game/kits";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { seasonKey } from "../game/clock";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
+import {
+  canonicalFromClub,
+  decayedStoredFamiliarity,
+  effectiveFamiliarity,
+  projectSetups,
+} from "../game/familiarity";
 
 const snapshotCache = new WeakMap<World, Map<number, unknown>>();
 
@@ -262,16 +268,37 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
             };
           })(),
           tactics: club.tactics
-            ? {
-                formation: club.tactics.formation,
-                style: club.tactics.style,
-                pressing: club.tactics.pressing,
-                direction: club.tactics.direction,
-                formationName: FORMATION_NAMES[club.tactics.formation] ?? "",
-                styleName: STYLE_NAMES[club.tactics.style] ?? "",
-                pressingName: PRESSING_NAMES[club.tactics.pressing] ?? "",
-                directionName: DIRECTION_NAMES[club.tactics.direction] ?? "",
-              }
+            ? (() => {
+                // §17: expose the current setup's drilled (lazily decayed)
+                // familiarity plus server-computed projections for every
+                // style/pressing/direction combination at the saved formation,
+                // so clients render bars without duplicating the math.
+                const gameDay = world.mp.absoluteGameDay ?? world.dayIndex;
+                const srcValue = effectiveFamiliarity(club, gameDay);
+                const srcSetup = canonicalFromClub(club.tactics);
+                const map = club.tacticFamiliarity ?? null;
+                return {
+                  formation: club.tactics.formation,
+                  style: club.tactics.style,
+                  pressing: club.tactics.pressing,
+                  direction: club.tactics.direction,
+                  formationName: FORMATION_NAMES[club.tactics.formation] ?? "",
+                  styleName: STYLE_NAMES[club.tactics.style] ?? "",
+                  pressingName: PRESSING_NAMES[club.tactics.pressing] ?? "",
+                  directionName: DIRECTION_NAMES[club.tactics.direction] ?? "",
+                  familiarity: Math.round(srcValue),
+                  projections: projectSetups(
+                    srcValue,
+                    srcSetup,
+                    club.tactics.formation,
+                    STYLE_NAMES.length,
+                    PRESSING_NAMES.length,
+                    DIRECTION_NAMES.length,
+                    (style, pressing, direction) =>
+                      decayedStoredFamiliarity(map, `${club.tactics.formation}-${style}-${pressing}-${direction}`, gameDay)
+                  ),
+                };
+              })()
             : null,
           trophies: club.trophies,
           ledger: {

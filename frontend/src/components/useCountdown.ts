@@ -1,12 +1,35 @@
 import { useEffect, useState } from "react";
 
+// A single shared 1s ticker for every mounted countdown, instead of each
+// AuctionCountdown row (auctions/free-agent/loan listings can easily number
+// in the dozens) running its own independent setInterval. Behavior per
+// instance is unchanged: each subscriber still re-renders once a second with
+// a fresh Date.now().
+type TickListener = (now: number) => void;
+const tickListeners = new Set<TickListener>();
+let tickIntervalId: number | null = null;
+
+function subscribeTick(listener: TickListener): () => void {
+  tickListeners.add(listener);
+  if (tickIntervalId === null) {
+    tickIntervalId = window.setInterval(() => {
+      const now = Date.now();
+      for (const l of tickListeners) l(now);
+    }, 1000);
+  }
+  return () => {
+    tickListeners.delete(listener);
+    if (tickListeners.size === 0 && tickIntervalId !== null) {
+      window.clearInterval(tickIntervalId);
+      tickIntervalId = null;
+    }
+  };
+}
+
 /** Re-renders every second until `targetMs` passes, then returns 0. */
 export function useCountdown(targetMs: number): number {
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
+  useEffect(() => subscribeTick(setNow), []);
   return Math.max(0, targetMs - now);
 }
 

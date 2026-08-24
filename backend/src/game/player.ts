@@ -4,6 +4,7 @@ import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
 import { overallFromSkills, SKILL_KEYS, trainingWeights } from "./rating";
 import { calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
 import { generateSeniorPlayer, generateYouthPlayer, tierFromZ } from "./playerGeneration";
+import { bumpSkillsVersion } from "./skillsVersion";
 
 export { overallFromSkills } from "./rating";
 
@@ -150,6 +151,9 @@ export function applyDevelopment(rng: RngState, player: Player, club: Club, dayI
       }
     }
   }
+  // Development can change tec/vel/des/arm/fin/gol, which computeAttributeCenters
+  // draws on; invalidate any cached centers so the next tick recomputes them.
+  bumpSkillsVersion();
   refreshPlayerDerived(club, player);
 }
 

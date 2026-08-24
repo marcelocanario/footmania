@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CalendarClock, Clock, FastForward, Gauge, RefreshCw, ScrollText, Undo2 } from "lucide-react";
 import { api, type SchedulerClockView } from "../../api/client";
-import { AdminCard, useAdminFetch, type TabProps } from "./adminShared";
+import { AdminCard, useAdminFetch, type AdminFetchResult, type TabProps } from "./adminShared";
 import { StatusChip, type ChipTone } from "./StatusChip";
 import { relativeTime } from "./adminTime";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
@@ -28,9 +28,8 @@ const HEALTH_META: Record<string, { label: string; tone: ChipTone; hint: string 
   SCHEDULER_REQUIRES_ADMIN_REVIEW: { label: "Admin review required", tone: "failed", hint: "A review flag was raised — inspect failed events before advancing the clock." },
 };
 
-export function OverviewTab({ version, notify }: TabProps) {
+export function OverviewTab({ version, notify, clock }: TabProps & { clock: AdminFetchResult<SchedulerClockView> }) {
   const world = useAdminFetch(() => api.adminStatus().then((r) => r.world as WorldStatus), [version]);
-  const clock = useAdminFetch(() => api.adminSchedulerClock().then((r) => r.clock), [version]);
   const [advanceDays, setAdvanceDays] = useState(1);
   const [reason, setReason] = useState("");
   const [targetRound, setTargetRound] = useState(14);

@@ -318,8 +318,11 @@ export function AutomationPanel({ formation }: { formation: number }) {
   const others = presets.filter((p) => p.formationId !== formation);
   const savedFormation = snap?.club?.tactics?.formation;
 
-  const issues = presets.flatMap((p) => p.rules.map((r) => ruleIssue(r)).filter((msg): msg is string => msg !== null));
-  const canSave = loaded && issues.length === 0 && dirty;
+  const issues = useMemo(
+    () => presets.flatMap((p) => p.rules.map((r) => ruleIssue(r)).filter((msg): msg is string => msg !== null)),
+    [presets]
+  );
+  const canSave = useMemo(() => loaded && issues.length === 0 && dirty, [loaded, issues, dirty]);
 
   const mutate = (updater: (prev: Preset[]) => Preset[]) => {
     setPresets(updater);

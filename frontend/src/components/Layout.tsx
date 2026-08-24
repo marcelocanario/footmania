@@ -163,7 +163,13 @@ function SeasonCalendar({ days, today, matches }: { days: SeasonDayEntry[]; toda
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { snapshot, clear, setUser, status, liveMatchId, checkLiveMatch, user } = useGame();
+  const snapshot = useGame((s) => s.snapshot);
+  const clear = useGame((s) => s.clear);
+  const setUser = useGame((s) => s.setUser);
+  const status = useGame((s) => s.status);
+  const liveMatchId = useGame((s) => s.liveMatchId);
+  const checkLiveMatch = useGame((s) => s.checkLiveMatch);
+  const user = useGame((s) => s.user);
   const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobile();

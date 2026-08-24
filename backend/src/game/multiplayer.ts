@@ -7,6 +7,7 @@ import { pickFixtureKickoff, pickSynchronizedKickoff, stableHash, type Preferenc
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
+import { FEATURED_COUNTRIES } from "./countries";
 import { overallFromSkills } from "./rating";
 import { applyMatchElo, eloRatings } from "./elo";
 import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "./market";
@@ -201,7 +202,7 @@ export function createFillerAI(world: World, tier: number, seasonId?: number): C
   const id = world.nextId++;
   const city = pickCity(rng);
   const name = `${city} FC`;
-  const country = "BRA";
+  const country = FEATURED_COUNTRIES[nextInt(rng, FEATURED_COUNTRIES.length)].code;
   // Kit Lab: fillers wear their deterministic palette-derived designs; the
   // identity columns mirror the home shell so color readers stay consistent.
   const kits = deriveAiKits(id);
@@ -1055,11 +1056,16 @@ export function preferredTimeDistance(a: number[] | null | undefined, b: number[
   return Math.pow(MP_CONFIG.slotsPerDay - shared, 2);
 }
 
-/** Sum of squared pairwise missing-overlap within each proposed group. */
-export function calculatePreferredTimeCost(groups: { clubId: number }[][], world: World): number {
+/**
+ * Sum of squared pairwise missing-overlap within each proposed group.
+ * `clubMap` lets hot callers (buildBalancedTierGroups) pass a pre-built
+ * id->club index instead of re-scanning `world.clubs` on every lookup.
+ */
+export function calculatePreferredTimeCost(groups: { clubId: number }[][], world: World, clubMap?: Map<number, Club>): number {
+  const lookup = (id: number) => clubMap?.get(id) ?? clubById(world, id);
   return groups.reduce((total, group) => total + group.reduce((cost, a, i) => cost + group.slice(i + 1).reduce((pairCost, b) => {
-    const clubA = clubById(world, a.clubId);
-    const clubB = clubById(world, b.clubId);
+    const clubA = lookup(a.clubId);
+    const clubB = lookup(b.clubId);
     return pairCost + preferredTimeDistance(clubA?.preferredHours ?? null, clubB?.preferredHours ?? null);
   }, 0), 0), 0);
 }
@@ -1083,13 +1089,15 @@ export function preferredCentroid(preferredSlots: number[] | null | undefined): 
   return normalized;
 }
 
-export function calculateEloBalanceCost(groups: { clubId: number }[][], world: World): number {
+/** `clubMap` lets hot callers pass a pre-built id->club index (see above). */
+export function calculateEloBalanceCost(groups: { clubId: number }[][], world: World, clubMap?: Map<number, Club>): number {
+  const lookup = (id: number) => clubMap?.get(id) ?? clubById(world, id);
   const humans = groups.flat();
   if (humans.length === 0) return 0;
-  const mean = humans.reduce((sum, human) => sum + (clubById(world, human.clubId)?.eloRating ?? ELO_CONFIG.initial), 0) / humans.length;
+  const mean = humans.reduce((sum, human) => sum + (lookup(human.clubId)?.eloRating ?? ELO_CONFIG.initial), 0) / humans.length;
   return groups.reduce((total, group) => {
     if (group.length === 0) return total;
-    const groupMean = group.reduce((sum, human) => sum + (clubById(world, human.clubId)?.eloRating ?? ELO_CONFIG.initial), 0) / group.length;
+    const groupMean = group.reduce((sum, human) => sum + (lookup(human.clubId)?.eloRating ?? ELO_CONFIG.initial), 0) / group.length;
     return total + group.length * Math.pow(groupMean - mean, 2);
   }, 0);
 }
@@ -1136,8 +1144,12 @@ function buildSocialGraph(world: World): { direct: Set<string>; neighbors: Map<n
  * owners kept friend-grouping enabled (`friendGroupingOptIn !== false`), so a
  * player can never be pulled into someone else's group against their will.
  */
-export function calculateSocialScore(groups: { clubId: number }[][], world: World): { direct: number; friendsOfFriends: number } {
-  const { direct, neighbors } = buildSocialGraph(world);
+export function calculateSocialScore(
+  groups: { clubId: number }[][],
+  world: World,
+  graph?: { direct: Set<string>; neighbors: Map<number, Set<number>> },
+): { direct: number; friendsOfFriends: number } {
+  const { direct, neighbors } = graph ?? buildSocialGraph(world);
   let directScore = 0;
   let friendsOfFriendsScore = 0;
   for (const group of groups) {
@@ -1209,6 +1221,11 @@ function buildBalancedTierGroups(
   required: number,
   assignmentSeed?: number,
 ): { clubId: number }[][] {
+  // Both the id->club index and the friendship graph are invariant for the
+  // whole call: build them once here and thread them through instead of
+  // having every nested scoring/search helper below re-derive them.
+  const clubMap = new Map(world.clubs.map((c) => [c.id, c]));
+  const graph = buildSocialGraph(world);
   const baseSize = Math.floor(humans.length / required);
   const extra = humans.length % required;
   const capacities = Array.from({ length: required }, (_, i) => baseSize + (i < extra ? 1 : 0));
@@ -1216,8 +1233,8 @@ function buildBalancedTierGroups(
     // Seed rotations from the circular centroid of each club's preferred
     // windows so every candidate starts window-contiguous; unconstrained
     // clubs (null preferences) sort last and only contribute tie-breaks.
-    const centroidA = preferredCentroid(clubById(world, a.clubId)?.preferredHours ?? null);
-    const centroidB = preferredCentroid(clubById(world, b.clubId)?.preferredHours ?? null);
+    const centroidA = preferredCentroid(clubMap.get(a.clubId)?.preferredHours ?? null);
+    const centroidB = preferredCentroid(clubMap.get(b.clubId)?.preferredHours ?? null);
     if (centroidA === null || centroidB === null) {
       if (centroidA !== null) return -1;
       if (centroidB !== null) return 1;
@@ -1228,7 +1245,6 @@ function buildBalancedTierGroups(
     const tieB = assignmentSeed === undefined ? b.clubId : seededTieBreak(assignmentSeed, b.clubId);
     return tieA - tieB || a.clubId - b.clubId;
   });
-  const graph = buildSocialGraph(world);
   // Objectives 2–3 (plan 9 §2): solve the friendship packing EXACTLY when the
   // search fits its node budget; only oversized tiers fall back to the
   // rotation heuristic below. Either way, availability is then descended at
@@ -1236,8 +1252,8 @@ function buildBalancedTierGroups(
   const exactGroups = bestExactSocialGroups(humans, capacities, sorted, graph);
   let best: GroupCandidate | null = null;
   if (exactGroups) {
-    improveAvailabilityAtFixedSocial(exactGroups, world);
-    best = measureGroups(exactGroups, world, 0);
+    improveAvailabilityAtFixedSocial(exactGroups, world, clubMap, graph);
+    best = measureGroups(exactGroups, world, 0, clubMap, graph);
   } else {
     for (let rotation = 0; rotation < sorted.length; rotation++) {
       const rotated = sorted.map((_, i) => sorted[(i + rotation) % sorted.length]);
@@ -1247,8 +1263,8 @@ function buildBalancedTierGroups(
         groups.push(rotated.slice(cursor, cursor + capacity));
         cursor += capacity;
       }
-      improveAssignment(groups, world);
-      const candidate = measureGroups(groups, world, assignmentSeed === undefined ? rotation : seededTieBreak(assignmentSeed, rotation));
+      improveAssignment(groups, world, clubMap, graph);
+      const candidate = measureGroups(groups, world, assignmentSeed === undefined ? rotation : seededTieBreak(assignmentSeed, rotation), clubMap, graph);
       if (!best || lexBetter(candidate, best)) best = candidate;
     }
   }
@@ -1258,17 +1274,17 @@ function buildBalancedTierGroups(
   let improved = true;
   while (improved) {
     improved = false;
-    const currentElo = calculateEloBalanceCost(best.groups, world);
+    const currentElo = calculateEloBalanceCost(best.groups, world, clubMap);
     for (let leftIndex = 0; leftIndex < best.groups.length && !improved; leftIndex++) {
       for (let rightIndex = leftIndex + 1; rightIndex < best.groups.length && !improved; rightIndex++) {
         for (let leftMember = 0; leftMember < best.groups[leftIndex].length && !improved; leftMember++) {
           for (let rightMember = 0; rightMember < best.groups[rightIndex].length; rightMember++) {
             const candidate = best.groups.map((group) => [...group]);
             [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
-            if (calculatePreferredTimeCost(candidate, world) !== best.avail) continue;
-            const social = calculateSocialScore(candidate, world);
+            if (calculatePreferredTimeCost(candidate, world, clubMap) !== best.avail) continue;
+            const social = calculateSocialScore(candidate, world, graph);
             if (social.direct !== best.social.direct || social.friendsOfFriends !== best.social.friendsOfFriends) continue;
-            const candidateElo = calculateEloBalanceCost(candidate, world);
+            const candidateElo = calculateEloBalanceCost(candidate, world, clubMap);
             if (candidateElo < currentElo - ELO_CONFIG.costEpsilon) {
               best.groups = candidate;
               best.social = social;
@@ -1303,12 +1319,18 @@ interface GroupCandidate {
   tieRank: number;
 }
 
-function measureGroups(groups: { clubId: number }[][], world: World, tieRank: number): GroupCandidate {
+function measureGroups(
+  groups: { clubId: number }[][],
+  world: World,
+  tieRank: number,
+  clubMap: Map<number, Club>,
+  graph: { direct: Set<string>; neighbors: Map<number, Set<number>> },
+): GroupCandidate {
   return {
     groups,
-    social: calculateSocialScore(groups, world),
-    avail: calculatePreferredTimeCost(groups, world),
-    elo: calculateEloBalanceCost(groups, world),
+    social: calculateSocialScore(groups, world, graph),
+    avail: calculatePreferredTimeCost(groups, world, clubMap),
+    elo: calculateEloBalanceCost(groups, world, clubMap),
     tieRank,
   };
 }
@@ -1406,23 +1428,28 @@ function bestExactSocialGroups(
  * adopted when it improves a higher objective or keeps them identical while
  * strictly reducing availability cost.
  */
-function improveAssignment(groups: { clubId: number }[][], world: World): void {
+function improveAssignment(
+  groups: { clubId: number }[][],
+  world: World,
+  clubMap: Map<number, Club>,
+  graph: { direct: Set<string>; neighbors: Map<number, Set<number>> },
+): void {
   let improved = true;
   while (improved) {
     improved = false;
-    const current = calculateSocialScore(groups, world);
-    const currentAvail = calculatePreferredTimeCost(groups, world);
+    const current = calculateSocialScore(groups, world, graph);
+    const currentAvail = calculatePreferredTimeCost(groups, world, clubMap);
     for (let leftIndex = 0; leftIndex < groups.length && !improved; leftIndex++) {
       for (let rightIndex = leftIndex + 1; rightIndex < groups.length && !improved; rightIndex++) {
         for (let leftMember = 0; leftMember < groups[leftIndex].length && !improved; leftMember++) {
           for (let rightMember = 0; rightMember < groups[rightIndex].length; rightMember++) {
             const candidate = groups.map((group) => [...group]);
             [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
-            const score = calculateSocialScore(candidate, world);
+            const score = calculateSocialScore(candidate, world, graph);
             const socialGain = score.direct > current.direct ||
               (score.direct === current.direct && score.friendsOfFriends > current.friendsOfFriends);
             const socialNeutral = score.direct === current.direct && score.friendsOfFriends === current.friendsOfFriends;
-            if (socialGain || (socialNeutral && calculatePreferredTimeCost(candidate, world) < currentAvail)) {
+            if (socialGain || (socialNeutral && calculatePreferredTimeCost(candidate, world, clubMap) < currentAvail)) {
               groups[leftIndex] = candidate[leftIndex];
               groups[rightIndex] = candidate[rightIndex];
               improved = true;
@@ -1440,21 +1467,26 @@ function improveAssignment(groups: { clubId: number }[][], world: World): void {
  * identical, strictly reducing window-overlap cost. Higher-priority objectives
  * are never traded away (plan 9 §2: overlap sits below both social scores).
  */
-function improveAvailabilityAtFixedSocial(groups: { clubId: number }[][], world: World): void {
-  const base = calculateSocialScore(groups, world);
+function improveAvailabilityAtFixedSocial(
+  groups: { clubId: number }[][],
+  world: World,
+  clubMap: Map<number, Club>,
+  graph: { direct: Set<string>; neighbors: Map<number, Set<number>> },
+): void {
+  const base = calculateSocialScore(groups, world, graph);
   let improved = true;
   while (improved) {
     improved = false;
-    const currentAvail = calculatePreferredTimeCost(groups, world);
+    const currentAvail = calculatePreferredTimeCost(groups, world, clubMap);
     for (let leftIndex = 0; leftIndex < groups.length && !improved; leftIndex++) {
       for (let rightIndex = leftIndex + 1; rightIndex < groups.length && !improved; rightIndex++) {
         for (let leftMember = 0; leftMember < groups[leftIndex].length && !improved; leftMember++) {
           for (let rightMember = 0; rightMember < groups[rightIndex].length; rightMember++) {
             const candidate = groups.map((group) => [...group]);
             [candidate[leftIndex][leftMember], candidate[rightIndex][rightMember]] = [candidate[rightIndex][rightMember], candidate[leftIndex][leftMember]];
-            const score = calculateSocialScore(candidate, world);
+            const score = calculateSocialScore(candidate, world, graph);
             if (score.direct !== base.direct || score.friendsOfFriends !== base.friendsOfFriends) continue;
-            if (calculatePreferredTimeCost(candidate, world) < currentAvail) {
+            if (calculatePreferredTimeCost(candidate, world, clubMap) < currentAvail) {
               groups[leftIndex] = candidate[leftIndex];
               groups[rightIndex] = candidate[rightIndex];
               improved = true;

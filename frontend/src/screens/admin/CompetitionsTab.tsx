@@ -39,8 +39,14 @@ export function CompetitionsTab({ version, notify }: TabProps) {
 
   useEffect(() => {
     if (selectedDiv === null) return;
-    api.divisionStandings(selectedDiv).then((res) => setTable(res.standings)).catch(() => undefined);
-    api.divisionFixtures(selectedDiv).then((res) => setFixtures(res.fixtures)).catch(() => undefined);
+    // Guard against a stale, slower response from a previously selected
+    // division overwriting the table/fixtures for the one selected now.
+    let active = true;
+    api.divisionStandings(selectedDiv).then((res) => { if (active) setTable(res.standings); }).catch(() => undefined);
+    api.divisionFixtures(selectedDiv).then((res) => { if (active) setFixtures(res.fixtures); }).catch(() => undefined);
+    return () => {
+      active = false;
+    };
   }, [selectedDiv]);
 
   const selectDivision = (tier: number, id: number) => {

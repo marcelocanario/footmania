@@ -950,8 +950,12 @@ type CacheListener = (scope?: string) => void;
 const cacheListeners = new Set<CacheListener>();
 const marketUpdateListeners = new Set<(event: MarketUpdate) => void>();
 
-// Auth endpoints, live match info, match live state, and settings are never cached.
-const NEVER_CACHE = /^api\/(auth|mp\/live-match$|matches\/.*\/(live|events|sub|halftime|ws)|settings)/;
+// Auth endpoints, live match info, match live state, and settings are never
+// cached. `matches/:id/events` is intentionally excluded from this list: for
+// a finished (immutable) match its response never changes, so it can safely
+// flow through the normal GET cache — only the genuinely-live endpoints
+// (live state, subs, halftime, the WS handshake path) need to bypass it.
+const NEVER_CACHE = /^api\/(auth|mp\/live-match$|matches\/.*\/(live|sub|halftime|ws)|settings)/;
 
 function shouldCache(url: string): boolean {
   const path = url.split("?", 1)[0].replace(/^\//, "");
