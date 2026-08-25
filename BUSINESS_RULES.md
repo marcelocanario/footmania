@@ -1102,3 +1102,25 @@ settings with no real effect today:
   from what actually shipped (for example, an illustrative example figure for how
   strong Division 1 players should be) — where this document's numbers disagree with
   an older note, trust this document.
+
+## Authentication (Google-only)
+
+- **The only way to create an account or log in is Google Sign-In** (better-auth,
+  `backend/src/auth.ts`). There is no username/password registration or login;
+  legacy password accounts were wiped by the `better_auth` migration.
+- **The verified Google email is the account key** (`User.email`, unique). The
+  Google display name (`User.name`) is the manager identity: it is the default
+  coach name when a human joins the world (`POST /api/mp/join` without
+  `coachName`), and it is shown in the header and admin user list.
+- **Same user across providers**: a future provider (e.g. Facebook) whose
+  verified email matches an existing user links to the SAME account
+  (better-auth account linking, enabled by default). One person never maps to
+  two accounts.
+- **Admin by email**: the Google account matching `ADMIN_EMAIL` is promoted to
+  admin at every sign-in (promote-only, never demotes).
+- **Sessions**: better-auth issues a signed `better-auth.session_token` cookie
+  (30-day expiry). WebSocket handshakes read the raw token part of the signed
+  cookie. Bans revoke sessions and block new authentication.
+- **Invite links**: the token is stashed client-side before the Google redirect
+  and redeemed via `POST /api/account/invite/accept` once the session exists
+  (friendship creation rules unchanged).

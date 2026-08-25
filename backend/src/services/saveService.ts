@@ -263,9 +263,9 @@ export async function ensureGlobalSave(prisma: PrismaClient): Promise<{ id: numb
   if (existing) return { id: existing.id, name: existing.name };
   // The global save needs an owning user for the FK; use (or create) a
   // dedicated "system" user.
-  let system = await prisma.user.findUnique({ where: { username: "__system__" } });
+  let system = await prisma.user.findUnique({ where: { email: "__system__@footmania.local" } });
   if (!system) {
-    system = await prisma.user.create({ data: { username: "__system__", passwordHash: "!" } });
+    system = await prisma.user.create({ data: { email: "__system__@footmania.local", name: "System" } });
   }
   // Name pools must be ready before the first world is generated so the
   // deterministic RNG draws from the database source of truth.

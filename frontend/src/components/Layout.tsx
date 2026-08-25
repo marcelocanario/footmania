@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Crown, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
 import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { api } from "../api/client";
@@ -315,8 +315,8 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
           )}
           {user && (
-            <span className="chip" title={user.isPro ? "Pro" : "Regular"} style={user.isPro ? { borderColor: "var(--gold-2)", color: "var(--gold-2)" } : undefined}>
-              <Crown size={12} /> {user.isPro ? "PRO" : "REG"} {user.isAdmin && "· ADMIN"}
+            <span className="chip" title={user.name} style={user.isPro ? { borderColor: "var(--gold-2)", color: "var(--gold-2)" } : undefined}>
+              {user.isPro ? "PRO" : "REG"} {user.isAdmin && "· ADMIN"} · {user.name}
             </span>
           )}
           <div className="top-pop-wrap" ref={notifPopRef}>

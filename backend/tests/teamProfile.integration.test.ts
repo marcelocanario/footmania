@@ -6,15 +6,10 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.NODE_ENV = "test";
 
 import { buildServer } from "../src/server";
+import { createTestSessionCookie } from "./testAuth";
 
 async function setupClub(app: FastifyInstance, username: string) {
-  const register = await app.inject({
-    method: "POST",
-    url: "/api/auth/register",
-    payload: { username, password: "secret123" },
-  });
-  expect(register.statusCode).toBe(200);
-  const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+  const { cookie } = await createTestSessionCookie(app, { name: username, email: `${username}@test.dev` });
   // Force a joinable ACTIVE season regardless of what earlier test files did
   // to the shared world clock (same pattern as live.test.ts).
   const { ensureCurrentSeason } = await import("../src/services/mpService");

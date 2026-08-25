@@ -10,7 +10,7 @@ import { readUserLiveMatch } from "../services/readService";
 import { registerWorldEventPublisher, registerConnectedUsersProvider } from "../services/worldEvents";
 import { registerLiveMatchBroadcaster, type LiveMatchUpdate } from "../services/liveMatchEvents";
 
-const COOKIE_NAME = "fm_session";
+const COOKIE_NAME = "better-auth.session_token";
 const conns = new Map<number, Set<WebSocket>>();
 const userConns = new Map<number, Set<WebSocket>>();
 
@@ -126,7 +126,10 @@ const wsPlugin: FastifyPluginAsync = async (app) => {
     if (!pathMatch && !isWorldSocket) return;
     const matchId = pathMatch ? Number(pathMatch[1]) : null;
     const netSocket = socket as import("node:net").Socket;
-    const token = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    const rawCookie = parseCookies(req.headers.cookie)[COOKIE_NAME];
+    // better-auth signs the session cookie as `<token>.<hmac>`; the database
+    // stores only the raw token, so strip the signature before the lookup.
+    const token = rawCookie?.split(".")[0];
     void (async () => {
       if (!token) {
         reject(netSocket);

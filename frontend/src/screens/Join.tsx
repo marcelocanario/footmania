@@ -64,6 +64,7 @@ function FieldHelp({ text }: { text: string }) {
 
 export function Join() {
   const { loadStatus, loadClub, setLiveMatch } = useGame();
+  const user = useGame((s) => s.user);
   const navigate = useNavigate();
   const toast = useRef<Toast>(null);
   const [status, setStatus] = useState<MpStatus | null>(null);
@@ -76,7 +77,8 @@ export function Join() {
     applyTeamColorPreset(deriveKitDefaults(DEFAULT_PRIMARY, DEFAULT_SECONDARY), DEFAULT_PRIMARY, DEFAULT_SECONDARY),
   );
   const [stadiumName, setStadiumName] = useState("");
-  const [coachName, setCoachName] = useState("");
+  // The manager's name is the Google display name by default (editable).
+  const [coachName, setCoachName] = useState(() => user?.name ?? "");
   const [preferredHours, setPreferredHours] = useState<number[]>(PRESET_EVENINGS);
   const [joining, setJoining] = useState(false);
   const [countries, setCountries] = useState<CountryOption[]>([]);
@@ -495,7 +497,7 @@ export function Join() {
                   <div className="jm-field">
                     <label className="jm-label" htmlFor="join-coach">
                       <UserRound size={13} /> Manager
-                      <FieldHelp text="Choose the name shown as your manager in match coverage and club identity." />
+                      <FieldHelp text="Your Google name by default. Choose the name shown as your manager in match coverage and club identity." />
                       <span className="jm-req">*</span>
                     </label>
                     <span className="p-input-icon-left jm-input-wrap">
@@ -504,7 +506,7 @@ export function Join() {
                         id="join-coach"
                         value={coachName}
                         onChange={(e) => setCoachName(e.target.value)}
-                        placeholder="e.g. Alex Morgan"
+                        placeholder="e.g. Marcelo Canario"
                         maxLength={40}
                         className={coachName.length > 0 && !coachNameValid ? "jm-invalid" : ""}
                         style={{ width: "100%" }}

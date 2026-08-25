@@ -16,7 +16,7 @@ import { ModerationDialog, WarningsDialog, type ModerationRequest } from "./mode
 export function ClubModerationDialog({ clubId, onClose, notify }: { clubId: number | null; onClose: () => void; notify: TabProps["notify"] }) {
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
   const [moderation, setModeration] = useState<ModerationRequest | null>(null);
-  const [warningsFor, setWarningsFor] = useState<{ id: number; username: string } | null>(null);
+  const [warningsFor, setWarningsFor] = useState<{ id: number; name: string } | null>(null);
   // Reroll counter for generated name suggestions; deterministic per attempt.
   const [nameAttempt, setNameAttempt] = useState(0);
   const [reloadTick, setReloadTick] = useState(0);
@@ -196,7 +196,7 @@ export function ClubModerationDialog({ clubId, onClose, notify }: { clubId: numb
                 <ShieldCheck size={13} /> Unban…
               </button>
             )}
-            <button className="btn ghost sm" onClick={() => setWarningsFor({ id: target.ownerUserId!, username: target.ownerUsername! })}>Warnings</button>
+            <button className="btn ghost sm" onClick={() => setWarningsFor({ id: target.ownerUserId!, name: target.ownerUsername! })}>Warnings</button>
           </div>
         </>
       )}
@@ -236,3 +236,4 @@ export function ClubModerationDialog({ clubId, onClose, notify }: { clubId: numb
     </>
   );
 }
+

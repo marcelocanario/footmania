@@ -16,7 +16,7 @@ if not exist "frontend\node_modules" (
 
 echo ============================================================
 echo   Footmania - starting frontend
-echo   Frontend: http://localhost:5173
+echo   Frontend: http://localhost:3000
 echo   Stop the server by closing this window or pressing Ctrl+C.
 echo ============================================================
 echo.
@@ -26,3 +26,4 @@ start "Footmania Frontend" /D "%~dp0frontend" cmd /k "npm run dev"
 echo Frontend is launching in a separate window.
 timeout /t 3 >nul
 endlocal
+

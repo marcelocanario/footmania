@@ -84,7 +84,7 @@ export function ModerationDialog({ request, onClose }: { request: ModerationRequ
 }
 
 /** Warning history for one user (or club-owner lookup target). */
-export function WarningsDialog({ user, onClose }: { user: { id: number; username: string } | null; onClose: () => void }) {
+export function WarningsDialog({ user, onClose }: { user: { id: number; name: string } | null; onClose: () => void }) {
   const [warnings, setWarnings] = useState<{ id: number; reason: string; issuedByAdminUserId: number; createdAt: string; acknowledgedAt: string | null }[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -98,7 +98,7 @@ export function WarningsDialog({ user, onClose }: { user: { id: number; username
   }, [user]);
 
   return (
-    <Dialog header={user ? `Warnings · ${user.username}` : "Warnings"} visible={user !== null} onHide={onClose} style={{ width: 480 }}>
+    <Dialog header={user ? `Warnings · ${user.name}` : "Warnings"} visible={user !== null} onHide={onClose} style={{ width: 480 }}>
       {error && <div style={{ color: "#ff6b6b" }}>{error}</div>}
       {!error && warnings === null && <div className="empty-state" style={{ padding: 20 }}>Loading…</div>}
       {warnings !== null && warnings.length === 0 && <div className="empty-state" style={{ padding: 20 }}>No warnings issued.</div>}

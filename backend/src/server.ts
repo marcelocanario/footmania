@@ -2,10 +2,12 @@ import Fastify from "fastify";
 import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
 import cors from "@fastify/cors";
+import { fromNodeHeaders } from "better-auth/node";
 import prismaPlugin from "./plugins/prisma";
 import authPlugin from "./plugins/auth";
 import wsPlugin from "./plugins/ws";
-import { authRoutes } from "./routes/auth";
+import { getAuth } from "./auth";
+import { accountRoutes } from "./routes/account";
 import { multiplayerRoutes } from "./routes/multiplayer";
 import { gameRoutes } from "./routes/game";
 import { adminRoutes } from "./routes/admin";
@@ -13,10 +15,12 @@ import { proFeaturesRoutes } from "./routes/proFeatures";
 import { startWorker } from "./services/worker";
 import { ensureCurrentSeason } from "./services/mpService";
 import { ensureNamePools } from "./services/namePoolService";
-import { PORT, MP_CONFIG } from "./config";
-import bcrypt from "bcryptjs";
+import { PORT, MP_CONFIG, GOOGLE_CLIENT_ID } from "./config";
 
 export function buildServer() {
+  if (process.env.NODE_ENV === "production" && !GOOGLE_CLIENT_ID) {
+    throw new Error("GOOGLE_CLIENT_ID must be set in production");
+  }
   const app = Fastify({
     logger: process.env.NODE_ENV === "test"
       ? false
@@ -44,7 +48,33 @@ export function buildServer() {
   void app.register(prismaPlugin);
   void app.register(authPlugin);
   void app.register(wsPlugin);
-  void app.register(authRoutes, { prefix: "/api" });
+
+  // better-auth owns /api/auth/* (sign-in/social callbacks/get-session/sign-out).
+  app.route({
+    method: ["GET", "POST", "OPTIONS"],
+    url: "/api/auth/*",
+    async handler(request, reply) {
+      try {
+        const auth = getAuth();
+        const url = new URL(request.url, `http://${request.headers.host}`);
+        const headers = fromNodeHeaders(request.headers);
+        const req = new Request(url.toString(), {
+          method: request.method,
+          headers,
+          ...(request.body ? { body: JSON.stringify(request.body) } : {}),
+        });
+        const response = await auth.handler(req);
+        reply.status(response.status);
+        response.headers.forEach((value, key) => reply.header(key, value));
+        return reply.send(response.body ? await response.text() : null);
+      } catch (error) {
+        app.log.error(error);
+        return reply.status(500).send({ error: "Internal authentication error" });
+      }
+    },
+  });
+
+  void app.register(accountRoutes, { prefix: "/api/account" });
   void app.register(multiplayerRoutes, { prefix: "/api" });
   void app.register(gameRoutes, { prefix: "/api" });
   void app.register(adminRoutes, { prefix: "/api" });
@@ -62,7 +92,6 @@ if (process.env.NODE_ENV !== "test") {
     .register(async (instance) => {
       // Start the authoritative clock once the prisma plugin is ready.
       instance.addHook("onReady", async () => {
-        await ensureAdminUser(instance.prisma);
         await ensureNamePools(instance.prisma);
         await ensureCurrentSeason(instance.prisma);
         stopWorker = startWorker(instance.prisma, MP_CONFIG.workerIntervalMs);
@@ -77,25 +106,4 @@ if (process.env.NODE_ENV !== "test") {
       app.log.error(err);
       process.exit(1);
     });
-}
-
-/**
- * Bootstraps an admin account for manual clock control.
- * Username/password come from ADMIN_USERNAME / ADMIN_PASSWORD (defaults
- * "admin" / "admin123"). Only ever promotes, never demotes.
- */
-async function ensureAdminUser(prisma: import("@prisma/client").PrismaClient) {
-  const username = process.env.ADMIN_USERNAME ?? "admin";
-  const configuredPassword = process.env.ADMIN_PASSWORD;
-  if (process.env.NODE_ENV === "production" && !configuredPassword) {
-    throw new Error("ADMIN_PASSWORD must be set in production");
-  }
-  const password = configuredPassword ?? "admin123";
-  const existing = await prisma.user.findUnique({ where: { username } });
-  if (existing) {
-    if (!existing.isAdmin) await prisma.user.update({ where: { id: existing.id }, data: { isAdmin: true } });
-    return;
-  }
-  const passwordHash = await bcrypt.hash(password, 10);
-  await prisma.user.create({ data: { username, passwordHash, isAdmin: true } });
 }

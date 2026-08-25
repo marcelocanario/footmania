@@ -6,7 +6,7 @@ import { ClubNameLink } from "../components/ClubNameLink";
 
 interface FriendRow {
   userId: number;
-  username: string;
+  name: string;
   clubId: number | null;
   clubName: string | null;
   competitionState: string | null;
@@ -155,7 +155,7 @@ export function FriendsScreen() {
             {friends.map((friend) => (
               <li key={friend.userId} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
                 <span>
-                  <b style={{ fontSize: "0.92rem" }}>{friend.username}</b>
+                  <b style={{ fontSize: "0.92rem" }}>{friend.name}</b>
                   <span style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>
                     {" "}·{" "}
                     {friend.clubName && friend.clubId != null

@@ -15,6 +15,7 @@ export default defineConfig({
       "tests/settings.integration.test.ts",
       "tests/familiarity.integration.test.ts",
       "tests/worldControls.integration.test.ts",
+      "tests/authGoogle.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 90000,

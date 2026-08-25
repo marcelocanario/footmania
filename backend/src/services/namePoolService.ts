@@ -59,9 +59,11 @@ export async function seedNamePoolsFromArtifact(
     rows += entries.length;
     allEntries.push(...entries);
   }
-  // Batch inserts to stay well under Postgres's per-statement bind-parameter limit.
+  // Batch inserts to stay well under Postgres's per-statement bind-parameter
+  // limit. skipDuplicates keeps concurrent/reset re-seeding idempotent (a
+  // stale row from another schema or a partial truncate must not crash).
   for (let offset = 0; offset < allEntries.length; offset += 2000) {
-    await prisma.namePoolEntry.createMany({ data: allEntries.slice(offset, offset + 2000) });
+    await prisma.namePoolEntry.createMany({ data: allEntries.slice(offset, offset + 2000), skipDuplicates: true });
   }
   return { rows, countries };
 }

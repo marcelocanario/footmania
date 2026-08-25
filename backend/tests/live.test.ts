@@ -7,16 +7,11 @@ process.env.NODE_ENV = "test";
 
 import { buildServer } from "../src/server";
 import type { FastifyInstance } from "fastify";
+import { createTestSessionCookie } from "./testAuth";
 
 async function setupClub(app: FastifyInstance, username: string, seed = 4242) {
   void seed;
-  const register = await app.inject({
-    method: "POST",
-    url: "/api/auth/register",
-    payload: { username, password: "secret123" },
-  });
-  expect(register.statusCode).toBe(200);
-  const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+  const { cookie, userId } = await createTestSessionCookie(app, { name: username, email: `${username}@test.dev` });
   const { ensureCurrentSeason } = await import("../src/services/mpService");
   const { loadGlobalWorld, persistWorld } = await import("../src/services/saveService");
   await ensureCurrentSeason(app.prisma);
@@ -35,7 +30,7 @@ async function setupClub(app: FastifyInstance, username: string, seed = 4242) {
   });
   expect(join.statusCode).toBe(200);
   const body = join.json();
-  return { cookie, clubId: body.clubId as number, userId: register.json().user.id as number };
+  return { cookie, clubId: body.clubId as number, userId };
 }
 
 /** Create a live match deterministically for a given club. */

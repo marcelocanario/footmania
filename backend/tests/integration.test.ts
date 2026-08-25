@@ -7,24 +7,20 @@ process.env.NODE_ENV = "test";
 import { buildServer } from "../src/server";
 import { ensureSeasonRow } from "../src/services/mpService";
 import { loadGlobalWorld } from "../src/services/saveService";
+import { createTestSessionCookie } from "./testAuth";
 
 describe("API flow", () => {
   it("registers, joins with a club, and sees its status and snapshot", async () => {
     const app = buildServer();
     await app.ready();
 
-    const register = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "player1", password: "secret123" },
-    });
-    expect(register.statusCode).toBe(200);
-    const setCookie = register.headers["set-cookie"] as string;
-    const cookie = setCookie.split(";")[0];
+    const { cookie, userId } = await createTestSessionCookie(app, { name: "Player One", email: "player1@test.dev" });
+    const register = { user: { id: userId } } as never;
 
-    const me = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie } });
+    const me = await app.inject({ method: "GET", url: "/api/account/me", headers: { cookie } });
     expect(me.statusCode).toBe(200);
-    expect(me.json().user.username).toBe("player1");
+    expect(me.json().user.email).toBe("player1@test.dev");
+    expect(me.json().user.name).toBe("Player One");
 
     const join = await app.inject({
       method: "POST",
@@ -96,12 +92,7 @@ describe("API flow", () => {
   it("requires a stadium name when joining", async () => {
     const app = buildServer();
     await app.ready();
-    const register = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "stadiumrequired", password: "secret123" },
-    });
-    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const { cookie } = await createTestSessionCookie(app, { name: "Stadium Required", email: "stadiumrequired@test.dev" });
     const join = await app.inject({
       method: "POST",
       url: "/api/mp/join",
@@ -112,35 +103,27 @@ describe("API flow", () => {
     await app.close();
   });
 
-  it("requires a coach name when joining", async () => {
+  it("defaults the coach name to the Google display name when joining", async () => {
     const app = buildServer();
     await app.ready();
-    const register = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "coachrequired", password: "secret123" },
-    });
-    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const { cookie } = await createTestSessionCookie(app, { name: "Coach Required", email: "coachrequired@test.dev" });
     const join = await app.inject({
       method: "POST",
       url: "/api/mp/join",
       headers: { cookie },
       payload: { clubName: "Coach FC", country: "BRA", stadiumName: "Coach Stadium", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
-    expect(join.statusCode).toBe(400);
+    expect(join.statusCode).toBe(200);
+    const club = await app.inject({ method: "GET", url: "/api/mp/club", headers: { cookie } });
+    expect(club.json().snapshot.club.coachName).toBe("Coach Required");
     await app.close();
   });
 
   it("limits Pro coach name changes to once per season", async () => {
     const app = buildServer();
     await app.ready();
-    const register = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "coachpro", password: "secret123" },
-    });
-    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
-    await app.prisma.user.update({ where: { id: register.json().user.id }, data: { isPro: true } });
+    const { cookie, userId } = await createTestSessionCookie(app, { name: "Coach Pro", email: "coachpro@test.dev" });
+    await app.prisma.user.update({ where: { id: userId }, data: { isPro: true } });
     const join = await app.inject({
       method: "POST",
       url: "/api/mp/join",
@@ -167,12 +150,7 @@ describe("API flow", () => {
   it("rejects coach name changes from non-Pro users", async () => {
     const app = buildServer();
     await app.ready();
-    const register = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "coachregular", password: "secret123" },
-    });
-    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const { cookie } = await createTestSessionCookie(app, { name: "Coach Regular", email: "coachregular@test.dev" });
     const join = await app.inject({
       method: "POST",
       url: "/api/mp/join",
@@ -185,13 +163,12 @@ describe("API flow", () => {
     await app.close();
   });
 
-  it("rejects bad credentials", async () => {
+  it("rejects requests without a session", async () => {
     const app = buildServer();
     await app.ready();
     const res = await app.inject({
-      method: "POST",
-      url: "/api/auth/login",
-      payload: { username: "nobody", password: "wrong" },
+      method: "GET",
+      url: "/api/account/me",
     });
     expect(res.statusCode).toBe(401);
     await app.close();
@@ -200,12 +177,7 @@ describe("API flow", () => {
   it("prevents a user from joining twice", async () => {
     const app = buildServer();
     await app.ready();
-    const register = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "player2", password: "secret123" },
-    });
-    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const { cookie } = await createTestSessionCookie(app, { name: "Player Two", email: "player2@test.dev" });
     const join1 = await app.inject({
       method: "POST",
       url: "/api/mp/join",
@@ -226,26 +198,20 @@ describe("API flow", () => {
   it("accepts an invitation by creating an idempotent friendship at signup", async () => {
     const app = buildServer();
     await app.ready();
-    const inviter = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "inviter", password: "secret123" },
-    });
-    const inviterCookie = (inviter.headers["set-cookie"] as string).split(";")[0];
-    const inviterId = inviter.json().user.id;
-    const invitation = await app.inject({ method: "POST", url: "/api/auth/invite", headers: { cookie: inviterCookie } });
+    const inviter = await createTestSessionCookie(app, { name: "Inviter", email: "inviter@test.dev" });
+    const inviterCookie = inviter.cookie;
+    const inviterId = inviter.userId;
+    const invitation = await app.inject({ method: "POST", url: "/api/account/invite", headers: { cookie: inviterCookie } });
     expect(invitation.statusCode).toBe(200);
     const inviteToken = invitation.json().inviteToken;
 
     // Friendship mutations must bump Save.revision so cached worlds (this and
     // other processes) rebuild with the new edge before the next regrouping.
     const revisionBefore = (await app.prisma.save.findFirstOrThrow({ where: { isGlobal: true } })).revision;
-    const invitee = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "invitee", password: "secret123", inviteToken },
-    });
-    expect(invitee.statusCode).toBe(200);
+    const invitee = await createTestSessionCookie(app, { name: "Invitee", email: "invitee@test.dev" });
+    const inviteeCookie = invitee.cookie;
+    const accept = await app.inject({ method: "POST", url: "/api/account/invite/accept", headers: { cookie: inviteeCookie }, payload: { token: inviteToken } });
+    expect(accept.statusCode).toBe(200);
     expect(await app.prisma.friendship.count()).toBe(1);
     expect(await app.prisma.invitation.count({ where: { token: inviteToken, acceptedAt: { not: null } } })).toBe(1);
     const revisionAfter = (await app.prisma.save.findFirstOrThrow({ where: { isGlobal: true } })).revision;
@@ -253,7 +219,7 @@ describe("API flow", () => {
     // The rebuilt world materializes the fresh edge for regrouping. Scoped to
     // this pair: parallel test files share the global save and may hold their
     // own edges.
-    const inviteeId = invitee.json().user.id;
+    const inviteeId = invitee.userId;
     const newEdge = { userAId: Math.min(inviterId, inviteeId), userBId: Math.max(inviterId, inviteeId) };
     expect((await loadGlobalWorld(app.prisma))?.world.friendships ?? []).toContainEqual(newEdge);
     await app.close();
@@ -264,54 +230,51 @@ describe("API flow", () => {
     await app.ready();
 
     // Inviter generates two links, revokes one, keeps the other.
-    const inviter = await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "friendhub", password: "secret123" } });
-    const inviterCookie = (inviter.headers["set-cookie"] as string).split(";")[0];
-    const inviterId = inviter.json().user.id;
-    const keep = await app.inject({ method: "POST", url: "/api/auth/invite", headers: { cookie: inviterCookie } });
-    const drop = await app.inject({ method: "POST", url: "/api/auth/invite", headers: { cookie: inviterCookie } });
+    const inviter = await createTestSessionCookie(app, { name: "Friend Hub", email: "friendhub@test.dev" });
+    const inviterCookie = inviter.cookie;
+    const inviterId = inviter.userId;
+    const keep = await app.inject({ method: "POST", url: "/api/account/invite", headers: { cookie: inviterCookie } });
+    const drop = await app.inject({ method: "POST", url: "/api/account/invite", headers: { cookie: inviterCookie } });
     expect(await app.prisma.invitation.count({ where: { inviterUserId: inviterId, acceptedAt: null } })).toBe(2);
-    const revoked = await app.inject({ method: "DELETE", url: `/api/auth/invitations/${drop.json().inviteToken}`, headers: { cookie: inviterCookie } });
+    const revoked = await app.inject({ method: "DELETE", url: `/api/account/invitations/${drop.json().inviteToken}`, headers: { cookie: inviterCookie } });
     expect(revoked.statusCode).toBe(200);
-    const listed = await app.inject({ method: "GET", url: "/api/auth/invitations", headers: { cookie: inviterCookie } });
+    const listed = await app.inject({ method: "GET", url: "/api/account/invitations", headers: { cookie: inviterCookie } });
     expect(listed.json().invitations.map((i: { token: string }) => i.token)).toEqual([keep.json().inviteToken]);
 
-    // Invitee signs up through the kept link; both now list each other.
-    const invitee = await app.inject({
-      method: "POST",
-      url: "/api/auth/register",
-      payload: { username: "friendtarget", password: "secret123", inviteToken: keep.json().inviteToken },
-    });
-    expect(invitee.statusCode).toBe(200);
-    const inviteeId = invitee.json().user.id;
+    // Invitee accepts the kept link; both now list each other.
+    const invitee = await createTestSessionCookie(app, { name: "Friend Target", email: "friendtarget@test.dev" });
+    const inviteeCookie = invitee.cookie;
+    const inviteeId = invitee.userId;
+    const accept = await app.inject({ method: "POST", url: "/api/account/invite/accept", headers: { cookie: inviteeCookie }, payload: { token: keep.json().inviteToken } });
+    expect(accept.statusCode).toBe(200);
     const pairFilter = { userAId: Math.min(inviterId, inviteeId), userBId: Math.max(inviterId, inviteeId) };
     const inviteeJoin = await app.inject({
       method: "POST",
       url: "/api/mp/join",
-      headers: { cookie: (invitee.headers["set-cookie"] as string).split(";")[0] },
+      headers: { cookie: inviteeCookie },
       payload: { clubName: "Target FC", country: "BRA", stadiumName: "Target Stadium", coachName: "Target Coach", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
     });
     expect(inviteeJoin.statusCode).toBe(200);
-    const friends = await app.inject({ method: "GET", url: "/api/auth/friends", headers: { cookie: inviterCookie } });
+    const friends = await app.inject({ method: "GET", url: "/api/account/friends", headers: { cookie: inviterCookie } });
     expect(friends.statusCode).toBe(200);
     expect(friends.json().friends).toHaveLength(1);
-    expect(friends.json().friends[0]).toMatchObject({ username: "friendtarget", clubName: "Target FC" });
+    expect(friends.json().friends[0]).toMatchObject({ name: "Friend Target", clubName: "Target FC" });
 
     // Adversarial: a third user cannot remove someone else's friendship...
-    const stranger = await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "stranger", password: "secret123" } });
-    const strangerCookie = (stranger.headers["set-cookie"] as string).split(";")[0];
-    const forbidden = await app.inject({ method: "DELETE", url: `/api/auth/friends/${inviterId}`, headers: { cookie: strangerCookie } });
+    const stranger = await createTestSessionCookie(app, { name: "Stranger", email: "stranger@test.dev" });
+    const strangerCookie = stranger.cookie;
+    const forbidden = await app.inject({ method: "DELETE", url: `/api/account/friends/${inviterId}`, headers: { cookie: strangerCookie } });
     expect(forbidden.statusCode).toBe(404);
     // The stranger's attempt must not touch the inviter/invitee edge (other
     // tests in this file create their own friendships, so scope the count).
     expect(await app.prisma.friendship.count({ where: pairFilter })).toBe(1);
     // ...or revoke someone else's used invitation token.
-    const foreignToken = await app.inject({ method: "DELETE", url: `/api/auth/invitations/${keep.json().inviteToken}`, headers: { cookie: strangerCookie } });
+    const foreignToken = await app.inject({ method: "DELETE", url: `/api/account/invitations/${keep.json().inviteToken}`, headers: { cookie: strangerCookie } });
     expect(foreignToken.statusCode).toBe(404);
 
     // Either side may sever its own friendship; the other side then sees none.
-    const inviteeCookie = (invitee.headers["set-cookie"] as string).split(";")[0];
     const revisionBeforeSever = (await app.prisma.save.findFirstOrThrow({ where: { isGlobal: true } })).revision;
-    const sever = await app.inject({ method: "DELETE", url: `/api/auth/friends/${inviterId}`, headers: { cookie: inviteeCookie } });
+    const sever = await app.inject({ method: "DELETE", url: `/api/account/friends/${inviterId}`, headers: { cookie: inviteeCookie } });
     expect(sever.statusCode).toBe(200);
     // Removal bumps the revision so cached worlds drop the severed edge too.
     expect((await app.prisma.save.findFirstOrThrow({ where: { isGlobal: true } })).revision).toBeGreaterThan(revisionBeforeSever);
@@ -320,7 +283,7 @@ describe("API flow", () => {
     const remainingEdges = ((await loadGlobalWorld(app.prisma))?.world.friendships ?? [])
       .filter((edge) => edge.userAId === severedEdge.userAId && edge.userBId === severedEdge.userBId);
     expect(remainingEdges).toHaveLength(0);
-    expect((await app.inject({ method: "GET", url: "/api/auth/friends", headers: { cookie: inviterCookie } })).json().friends).toHaveLength(0);
+    expect((await app.inject({ method: "GET", url: "/api/account/friends", headers: { cookie: inviterCookie } })).json().friends).toHaveLength(0);
 
     await app.close();
   });
@@ -328,8 +291,7 @@ describe("API flow", () => {
   it("toggles friend-grouping consent on the owner's club", async () => {
     const app = buildServer();
     await app.ready();
-    const register = await app.inject({ method: "POST", url: "/api/auth/register", payload: { username: "consentuser", password: "secret123" } });
-    const cookie = (register.headers["set-cookie"] as string).split(";")[0];
+    const { cookie } = await createTestSessionCookie(app, { name: "Consent User", email: "consentuser@test.dev" });
     await app.inject({
       method: "POST",
       url: "/api/mp/join",

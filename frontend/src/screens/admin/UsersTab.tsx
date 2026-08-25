@@ -9,7 +9,7 @@ import { StatusChip } from "./StatusChip";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { ModerationDialog, WarningsDialog, type ModerationRequest } from "./moderationShared";
 
-type AdminUser = { id: number; username: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string };
+type AdminUser = { id: number; name: string; email: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string };
 
 export function UsersTab({ version, notify }: TabProps) {
   const [searchInput, setSearchInput] = useState("");
@@ -34,30 +34,30 @@ export function UsersTab({ version, notify }: TabProps) {
   };
 
   const togglePro = (u: AdminUser) =>
-    void act(`pro:${u.id}`, () => api.adminSetPro(u.id, !u.isPro), `${u.username} Pro ${u.isPro ? "revoked" : "granted"}`);
+    void act(`pro:${u.id}`, () => api.adminSetPro(u.id, !u.isPro), `${u.name} Pro ${u.isPro ? "revoked" : "granted"}`);
 
   const banUser = (u: AdminUser) =>
     setModeration({
-      title: `Ban ${u.username}`,
+      title: `Ban ${u.name}`,
       description: <>Banning blocks login and kills all active sessions immediately.</>,
       submitLabel: "Ban user",
       fields: [{ key: "reason", label: "Reason", type: "text", placeholder: "Shown to the user and kept in the audit log" }],
       run: async (values) => {
         await api.adminBanUser(u.id, values.reason);
-        notify("success", `${u.username} banned`);
+        notify("success", `${u.name} banned`);
         users.reload();
       },
     });
 
   const warnUser = (u: AdminUser) =>
     setModeration({
-      title: `Warn ${u.username}`,
+      title: `Warn ${u.name}`,
       description: <>The warning surfaces as a banner until the user acknowledges it.</>,
       submitLabel: "Send warning",
       fields: [{ key: "reason", label: "Warning text", type: "text", placeholder: "What should the user change?" }],
       run: async (values) => {
         await api.adminWarnUser(u.id, values.reason);
-        notify("success", `${u.username} warned`);
+        notify("success", `${u.name} warned`);
       },
     });
 
@@ -149,10 +149,10 @@ export function UsersTab({ version, notify }: TabProps) {
           disabled={busyKey !== null}
           onClick={() =>
             setConfirm({
-              title: `Unban ${u.username}?`,
+              title: `Unban ${u.name}?`,
               message: <>The user can log in again immediately and regains access to the world.</>,
               confirmLabel: "Unban",
-              onConfirm: () => act(`unban:${u.id}`, () => api.adminUnbanUser(u.id), `${u.username} unbanned`),
+              onConfirm: () => act(`unban:${u.id}`, () => api.adminUnbanUser(u.id), `${u.name} unbanned`),
             })
           }
         >
@@ -181,8 +181,8 @@ export function UsersTab({ version, notify }: TabProps) {
           <InputText
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search username"
-            aria-label="Search username"
+            placeholder="Search name or email"
+            aria-label="Search name or email"
             onKeyDown={(e) => e.key === "Enter" && setAppliedSearch(searchInput.trim() || undefined)}
           />
           <button className="btn" disabled={users.loading} onClick={() => setAppliedSearch(searchInput.trim() || undefined)}>Search</button>
@@ -199,7 +199,8 @@ export function UsersTab({ version, notify }: TabProps) {
             tableStyle={{ width: "100%", tableLayout: "fixed" }}
             emptyMessage={users.loading ? "Loading…" : "No users found."}
           >
-            <Column header="User" body={(u) => <span>{u.username} <span style={{ color: "var(--text-3)" }}>#{u.id}</span></span>} style={{ width: "auto" }} />
+            <Column header="User" body={(u) => <span>{u.name} <span style={{ color: "var(--text-3)" }}>#{u.id}</span></span>} style={{ width: "auto" }} />
+            <Column header="Email" body={(u: AdminUser) => <span style={{ color: "var(--text-3)" }}>{u.email}</span>} style={{ width: "auto" }} />
             <Column header="Flags" body={(u) => (
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {u.isPro && <StatusChip label="PRO" tone="gold" />}
@@ -231,3 +232,4 @@ export function UsersTab({ version, notify }: TabProps) {
     </div>
   );
 }
+

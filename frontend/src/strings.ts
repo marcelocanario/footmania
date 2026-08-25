@@ -4,15 +4,6 @@ export const strings = {
     tagline: "Take charge of your club",
   },
   auth: {
-    login: "Sign In",
-    register: "Create Account",
-    username: "Username",
-    password: "Password",
-    confirmPassword: "Confirm Password",
-    usernameHint: "3-24 characters, letters/numbers/underscore",
-    passwordHint: "At least 6 characters",
-    noAccount: "New manager?",
-    hasAccount: "Already a manager?",
     logout: "Sign out",
   },
   join: {

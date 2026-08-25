@@ -812,14 +812,21 @@ export async function adminRoutes(app: FastifyInstance) {
   app.get("/admin/users", async (req, reply) => {
     const q = (req.query as { search?: string; limit?: string }).search?.trim() ?? "";
     const limit = Math.max(1, Math.min(100, Number((req.query as { limit?: string }).limit ?? 20) || 20));
-    const where = q ? { username: { contains: q } } : {};
+    const where = q
+      ? {
+          OR: [
+            { name: { contains: q, mode: "insensitive" as const } },
+            { email: { contains: q, mode: "insensitive" as const } },
+          ],
+        }
+      : {};
     const loaded = await loadGlobalWorldReadOnly(app.prisma);
     const eloByUserId = new Map(
       (loaded?.world.clubs ?? [])
         .filter((club) => club.ownerUserId !== null)
         .map((club) => [club.ownerUserId!, displayElo(club)]),
     );
-    const users = await app.prisma.user.findMany({ where, orderBy: { id: "asc" }, take: limit, select: { id: true, username: true, isAdmin: true, isPro: true, bannedAt: true, banReason: true, createdAt: true } });
+    const users = await app.prisma.user.findMany({ where, orderBy: { id: "asc" }, take: limit, select: { id: true, name: true, email: true, isAdmin: true, isPro: true, bannedAt: true, banReason: true, createdAt: true } });
     return {
       users: users.map((u) => ({
         ...u,
@@ -1089,7 +1096,7 @@ export async function adminRoutes(app: FastifyInstance) {
     );
     const squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
     const owner = club.ownerUserId !== null
-      ? await app.prisma.user.findUnique({ where: { id: club.ownerUserId }, select: { username: true, bannedAt: true } })
+      ? await app.prisma.user.findUnique({ where: { id: club.ownerUserId }, select: { name: true, bannedAt: true } })
       : null;
     return {
       club: {
@@ -1100,7 +1107,7 @@ export async function adminRoutes(app: FastifyInstance) {
         competitionState: club.competitionState,
         country: club.country,
         ownerUserId: club.ownerUserId,
-        ownerUsername: owner?.username ?? null,
+        ownerUsername: owner?.name ?? null,
         ownerBannedAt: owner?.bannedAt?.toISOString() ?? null,
         cash: club.cash,
         financialCushion: getCommitmentTotals(world, club).financialCushion,

@@ -1,6 +1,9 @@
 export interface User {
   id: number;
-  username: string;
+  /** Google display name (the manager is called by this in-game). */
+  name: string;
+  /** Verified email — the account key across OAuth providers. */
+  email: string;
   isAdmin?: boolean;
   isPro?: boolean;
   bannedAt?: string | null;
@@ -1013,7 +1016,7 @@ const marketUpdateListeners = new Set<(event: MarketUpdate) => void>();
 // a finished (immutable) match its response never changes, so it can safely
 // flow through the normal GET cache — only the genuinely-live endpoints
 // (live state, subs, halftime, the WS handshake path) need to bypass it.
-const NEVER_CACHE = /^api\/(auth|mp\/live-match$|matches\/.*\/(live|sub|halftime|ws)|settings)/;
+const NEVER_CACHE = /^api\/(auth|account|mp\/live-match$|matches\/.*\/(live|sub|halftime|ws)|settings)/;
 
 function shouldCache(url: string): boolean {
   const path = url.split("?", 1)[0].replace(/^\//, "");
@@ -1204,21 +1207,19 @@ export const api = {
   rawFetch,
   mpWsUrl: () =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/mp/ws`,
-  me: () => request<{ user: User }>("/api/auth/me"),
-  register: (username: string, password: string, inviteToken?: string) =>
-    request<{ user: User }>("/api/auth/register", { method: "POST", body: JSON.stringify(inviteToken ? { username, password, inviteToken } : { username, password }) }),
-  login: (username: string, password: string) =>
-    request<{ user: User }>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
-  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  me: () => request<{ user: User }>("/api/account/me"),
+  logout: () => request<{ ok: boolean }>("/api/account/logout", { method: "POST" }),
+  acceptInvite: (token: string) =>
+    request<{ ok: boolean }>("/api/account/invite/accept", { method: "POST", body: JSON.stringify({ token }) }),
 
   // Friends & invitations (plan 9)
-  friends: () => request<{ friends: { userId: number; username: string; clubId: number | null; clubName: string | null; competitionState: string | null; since: string }[] }>("/api/auth/friends"),
+  friends: () => request<{ friends: { userId: number; name: string; clubId: number | null; clubName: string | null; competitionState: string | null; since: string }[] }>("/api/account/friends"),
   removeFriend: (userId: number) =>
-    request<{ ok: boolean }>(`/api/auth/friends/${userId}`, { method: "DELETE" }),
-  invitations: () => request<{ invitations: { token: string; createdAt: string }[] }>("/api/auth/invitations"),
-  createInvitation: () => request<{ inviteToken: string }>("/api/auth/invite", { method: "POST" }),
+    request<{ ok: boolean }>(`/api/account/friends/${userId}`, { method: "DELETE" }),
+  invitations: () => request<{ invitations: { token: string; createdAt: string }[] }>("/api/account/invitations"),
+  createInvitation: () => request<{ inviteToken: string }>("/api/account/invite", { method: "POST" }),
   revokeInvitation: (token: string) =>
-    request<{ ok: boolean }>(`/api/auth/invitations/${token}`, { method: "DELETE" }),
+    request<{ ok: boolean }>(`/api/account/invitations/${token}`, { method: "DELETE" }),
 
   // Multiplayer
   mpStatus: () => request<MpStatus>("/api/mp/status"),
@@ -1404,11 +1405,11 @@ export const api = {
   pushUnsubscribe: (endpoint: string) => request<{ ok: boolean }>("/api/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }) }),
 
   // Warnings (own)
-  myWarnings: () => request<{ warnings: { id: number; reason: string; createdAt: string; acknowledgedAt: string | null }[] }>("/api/auth/warnings"),
-  ackWarning: (id: number) => request<{ ok: boolean }>(`/api/auth/warnings/${id}/acknowledge`, { method: "POST" }),
+  myWarnings: () => request<{ warnings: { id: number; reason: string; createdAt: string; acknowledgedAt: string | null }[] }>("/api/account/warnings"),
+  ackWarning: (id: number) => request<{ ok: boolean }>(`/api/account/warnings/${id}/acknowledge`, { method: "POST" }),
 
   // Admin user management
-  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; username: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
+  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; name: string; email: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
   adminSetPro: (userId: number, isPro: boolean) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ isPro }) }),
   adminBanUser: (userId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/users/${userId}/ban`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminUnbanUser: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/unban`, { method: "POST" }),

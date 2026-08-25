@@ -9,15 +9,10 @@ import { scheduleEvent, ScheduledEventType } from "../src/services/scheduler";
 import { ensureCurrentSeason } from "../src/services/mpService";
 import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
 import { schedulerProcessor } from "../src/services/jobs/schedulerProcessor";
+import { createTestSessionCookie } from "./testAuth";
 
 async function registerAndLogin(app: Awaited<ReturnType<typeof buildServer>>, username: string): Promise<string> {
-  const register = await app.inject({
-    method: "POST",
-    url: "/api/auth/register",
-    payload: { username, password: "secret123" },
-  });
-  expect(register.statusCode).toBe(200);
-  return (register.headers["set-cookie"] as string).split(";")[0];
+  return (await createTestSessionCookie(app, { name: username, email: `${username}@test.dev` })).cookie;
 }
 
 async function joinClub(app: Awaited<ReturnType<typeof buildServer>>, cookie: string, name: string) {
@@ -58,7 +53,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
     }
 
     const adminCookie = await registerAndLogin(app, "pauseadmin");
-    await app.prisma.user.update({ where: { username: "pauseadmin" }, data: { isAdmin: true } });
+    await app.prisma.user.update({ where: { email: "pauseadmin@test.dev" }, data: { isAdmin: true } });
     const userCookie = await registerAndLogin(app, "paususer");
     await joinClub(app, userCookie, "Pause United");
 
@@ -142,7 +137,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
   it("recalculates pre-season schedules and refuses once a match exists", async () => {
     await app.ready();
     const adminCookie = await registerAndLogin(app, "recalcadmin");
-    await app.prisma.user.update({ where: { username: "recalcadmin" }, data: { isAdmin: true } });
+    await app.prisma.user.update({ where: { email: "recalcadmin@test.dev" }, data: { isAdmin: true } });
 
     await ensureGlobalSave(app.prisma);
     await ensureCurrentSeason(app.prisma);
@@ -176,7 +171,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
   it("resets the world while preserving accounts, sessions and settings", async () => {
     await app.ready();
     const adminCookie = await registerAndLogin(app, "resetadmin");
-    await app.prisma.user.update({ where: { username: "resetadmin" }, data: { isAdmin: true } });
+    await app.prisma.user.update({ where: { email: "resetadmin@test.dev" }, data: { isAdmin: true } });
     const playerCookie = await registerAndLogin(app, "resetplayer");
     await joinClub(app, playerCookie, "Reset City");
 
@@ -188,7 +183,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
     const settingCount = await app.prisma.setting.count();
 
     // A stale notification referencing the doomed world must not survive it.
-    const playerId = await app.prisma.user.findUniqueOrThrow({ where: { username: "resetplayer" }, select: { id: true } });
+    const playerId = await app.prisma.user.findUniqueOrThrow({ where: { email: "resetplayer@test.dev" }, select: { id: true } });
     await app.prisma.userNotification.create({
       data: { userId: playerId.id, type: "MATCH_FINISHED", payloadJson: JSON.stringify({ homeName: "Reset City" }) },
     });
@@ -224,3 +219,4 @@ describe("admin world controls (season pause / fixture recalculation / world res
     void oldSaveId;
   });
 });
+

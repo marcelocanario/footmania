@@ -41,7 +41,16 @@ function Gate({ children }: { children: React.ReactNode }) {
     if (user) return;
     api
       .me()
-       .then((res) => setUser(res.user))
+      .then((res) => {
+        setUser(res.user);
+        // Complete a pending friend invitation stashed before the Google
+        // redirect; best-effort (an invalid/used token is ignored silently).
+        const pending = sessionStorage.getItem("fm_pending_invite");
+        if (pending) {
+          sessionStorage.removeItem("fm_pending_invite");
+          void api.acceptInvite(pending).catch(() => undefined);
+        }
+      })
       .catch(() => navigate("/login"));
   }, [user, setUser, navigate]);
 

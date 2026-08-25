@@ -26,7 +26,9 @@ const joinSchema = z.object({
   // clients; when present the home shell becomes the club identity colors.
   kits: clubKitsSchema.nullable().optional(),
   stadiumName: z.string().trim().min(1).max(80),
-  coachName: z.string().trim().min(2).max(40),
+  // Manager name. Optional: when omitted the club uses the user's Google
+  // display name (User.name), which is also what the frontend prefills.
+  coachName: z.string().trim().min(2).max(40).optional(),
   preferredHours: z.array(z.number()).optional(),
 });
 
@@ -94,7 +96,9 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         secondaryColor: parsed.data.secondaryColor,
         kits: parsed.data.kits ?? null,
         stadiumName: parsed.data.stadiumName,
-        coachName: parsed.data.coachName,
+        // The Google display name is the default manager name (the frontend
+        // prefills it and it is editable); a legacy client may omit it.
+        coachName: parsed.data.coachName ?? user.name,
         preferredHours,
       });
 

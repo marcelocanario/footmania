@@ -16,6 +16,7 @@ export default defineConfig({
       "tests/worker.test.ts",
       "tests/seasonArchive.test.ts",
       "tests/worldControls.integration.test.ts",
+      "tests/authGoogle.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 60000,

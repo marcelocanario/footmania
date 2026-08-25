@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "better-auth": "^1.7.1",
     "lucide-react": "^0.469.0",
     "primeicons": "^7.0.0",
     "primereact": "^10.8.6",

@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { readNamePoolsArtifact, seedNamePoolsFromArtifact, loadNamePoolsFromDb } from "../src/services/namePoolService";
+import { invalidateWorldCache } from "../src/services/saveService";
 import { TEST_DATABASE_URL } from "./testDbUrl";
 
 // Integration tests need real country pools, not the full production-sized
@@ -34,12 +35,15 @@ export async function resetTestDb(): Promise<void> {
     // the tables in the current search_path, which the TEST_DATABASE_URL pins
     // to the shared `test` schema.
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "Save", "User", "Session", "Friendship", "Invitation", "Club", "Player", "Loan", "Competition", "StandingsRow", "Fixture", "Match", "MatchStat", "MatchEvent", "NewsItem", "LedgerEntry", "Trophy", "SeasonAward", "CareerRecord", "LiveMatch", "TransferAuction", "MarketBid", "FreeAgentListing", "MarketReservation", "PlayerMarketTransaction", "MpSeason", "MpMembership", "MpClubSeason", "MpQueue", "MpAllocation", "MpActivity", "MpAudit", "Setting", "DailyExecution", "PlayerSeasonHistory", "Warning", "UserNotification", "PushSubscription", "AdminSchedulerAudit", "GameClock", "NamePoolEntry" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "Save", "User", "Session", "Account", "Verification", "Friendship", "Invitation", "Club", "Player", "Loan", "Competition", "StandingsRow", "Fixture", "Match", "MatchStat", "MatchEvent", "NewsItem", "LedgerEntry", "Trophy", "SeasonAward", "CareerRecord", "LiveMatch", "TransferAuction", "MarketBid", "FreeAgentListing", "MarketReservation", "PlayerMarketTransaction", "MpSeason", "MpMembership", "MpClubSeason", "MpQueue", "MpAllocation", "MpActivity", "MpAudit", "Setting", "DailyExecution", "PlayerSeasonHistory", "Warning", "UserNotification", "PushSubscription", "AdminSchedulerAudit", "GameClock", "NamePoolEntry" RESTART IDENTITY CASCADE',
     );
     // The in-memory catalog is process-global: load once per file so pure
     // engine tests that never touch Prisma still get country pools.
     await seedNamePoolsFromArtifact(prisma, testArtifact);
     await loadNamePoolsFromDb(prisma);
+    // The world cache is also process-global: a previous test file's cached
+    // World must not leak into this file's loadGlobalWorld calls.
+    invalidateWorldCache(prisma);
   } finally {
     await prisma.$disconnect();
   }

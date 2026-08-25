@@ -7,17 +7,27 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Account identity lives in better-auth's User/Session/Account/Verification
+// tables (see backend/src/auth.ts). The email is the verified account key:
+// OAuth providers (Google today, Facebook later) link to the same user by
+// verified email, so one person always maps to one User row. The in-game
+// manager is called by their `name` (the Google display name) as the club's
+// coachName.
 model User {
   id           Int      @id @default(autoincrement())
-  username     String   @unique
-  passwordHash String
+  name         String
+  email        String   @unique
+  emailVerified Boolean @default(false)
+  image        String?
   timezone     String?
   isAdmin      Boolean  @default(false)
   isPro        Boolean  @default(false)
   bannedAt     DateTime?
   banReason    String?
   createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
   sessions     Session[]
+  accounts     Account[]
   saves        Save[]
   club         Club?    @relation("ClubOwner")
   friendshipsA Friendship[] @relation("FriendshipA")
@@ -28,12 +38,56 @@ model User {
   pushSubscriptions PushSubscription[]
 }
 
+// better-auth session (token is a unique column, not the PK).
 model Session {
-  token     String   @id
+  id        Int      @id @default(autoincrement())
   userId    Int
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  token     String   @unique
   expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// One authentication method linked to a user. The unique (issuer, accountId)
+// pair is the provider-side identity; Google uses its issuer, other OAuth
+// providers without one use the `local:oauth:<providerId>` namespace. Credential
+// (email/password) accounts use `local:credential` and are not used by this game.
+model Account {
+  id                 Int      @id @default(autoincrement())
+  userId             Int
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issuer             String
+  accountId          String
+  providerId         String
+  accessToken        String?
+  refreshToken       String?
+  accessTokenExpiresAt DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope              String?
+  idToken            String?
+  password           String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+}
+
+// better-auth email/session verification records (e.g. OAuth state nonces).
+model Verification {
+  id          Int      @id @default(autoincrement())
+  identifier  String
+  value       String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([identifier])
 }
 
 // A save is fully normalized: every world entity lives in its own table.

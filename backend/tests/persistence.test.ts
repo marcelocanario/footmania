@@ -83,7 +83,7 @@ describe("global multiplayer world persistence", () => {
     const { world } = await withSeason(saveId);
     // Club.ownerUserId has a real FK: back the human club with a User row.
     await prisma.user.deleteMany({ where: { id: 4700 } });
-    await prisma.user.create({ data: { id: 4700, username: "persist-consent", passwordHash: "test" } });
+    await prisma.user.create({ data: { id: 4700, name: "Persist Consent", email: "persist-consent@test.dev", emailVerified: true } });
     const club = createHumanClub(world, { userId: 4700, clubName: "Consent FC", country: "BRA" });
     club.friendGroupingOptIn = false;
     await persistWorld(prisma, saveId, saveId, world);
@@ -123,7 +123,7 @@ describe("global multiplayer world persistence", () => {
     const { saveId } = await freshGlobalWorld(4713);
     const { world } = await withSeason(saveId);
     await prisma.user.deleteMany({ where: { id: 4701 } });
-    await prisma.user.create({ data: { id: 4701, username: "persist-nepal", passwordHash: "test" } });
+    await prisma.user.create({ data: { id: 4701, name: "Persist Nepal", email: "persist-nepal@test.dev", emailVerified: true } });
     const club = createHumanClub(world, { userId: 4701, clubName: "Nepal FC", country: "BRA" });
     await persistWorld(prisma, saveId, saveId, world);
 
@@ -420,8 +420,8 @@ describe("global multiplayer world persistence", () => {
     await prisma.user.deleteMany({ where: { id: { in: [9000, 9001] } } });
     await prisma.user.createMany({
       data: [
-        { id: 9000, username: "persist-seller", passwordHash: "test" },
-        { id: 9001, username: "persist-buyer", passwordHash: "test" },
+        { id: 9000, name: "Persist Seller", email: "persist-seller@test.dev", emailVerified: true },
+        { id: 9001, name: "Persist Buyer", email: "persist-buyer@test.dev", emailVerified: true },
       ],
     });
     const { createHumanClub } = await import("../src/game/worldgen");
@@ -621,8 +621,8 @@ describe("global multiplayer world persistence", () => {
     await prisma.user.deleteMany({ where: { id: { in: [9051, 9052] } } });
     await prisma.user.createMany({
       data: [
-        { id: 9051, username: "bidder-9051", passwordHash: "test" },
-        { id: 9052, username: "joiner-9052", passwordHash: "test" },
+        { id: 9051, name: "Bidder 9051", email: "bidder-9051@test.dev", emailVerified: true },
+        { id: 9052, name: "Joiner 9052", email: "joiner-9052@test.dev", emailVerified: true },
       ],
     });
     const { seasonId, world } = await withSeason(saveId);

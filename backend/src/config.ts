@@ -6,7 +6,17 @@ import { z } from "zod";
 
 export const PORT = Number(process.env.PORT ?? 3001);
 export const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS ?? 30);
-export const COOKIE_NAME = "fm_session";
+
+// better-auth / OAuth configuration. GOOGLE_CLIENT_ID/SECRET are required in
+// production; dev/test may run with a stub (see backend/src/auth.ts).
+export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+// The origin the browser uses (frontend dev server or the deployed site).
+// The dev frontend runs on :3000 (see frontend/vite.config.ts); Google's
+// authorized redirect URI must match this origin.
+export const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN ?? "http://localhost:3000";
+// Google account (verified email) granted admin rights at every sign-in.
+export const ADMIN_EMAIL = process.env.ADMIN_EMAIL;
 
 const nonNegativeNumber = z.number().min(0);
 

@@ -5,15 +5,10 @@ process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.NODE_ENV = "test";
 
 import { buildServer } from "../src/server";
+import { createTestSessionCookie } from "./testAuth";
 
 async function registerAndLogin(app: Awaited<ReturnType<typeof buildServer>>, username: string): Promise<string> {
-  const register = await app.inject({
-    method: "POST",
-    url: "/api/auth/register",
-    payload: { username, password: "secret123" },
-  });
-  expect(register.statusCode).toBe(200);
-  return (register.headers["set-cookie"] as string).split(";")[0];
+  return (await createTestSessionCookie(app, { name: username, email: `${username}@test.dev` })).cookie;
 }
 
 describe("admin panel features (MOTD / world browsing / moderation)", () => {
@@ -27,7 +22,7 @@ describe("admin panel features (MOTD / world browsing / moderation)", () => {
     const forbidden = await app.inject({ method: "POST", url: "/api/admin/motd", headers: { cookie }, payload: { text: "nope" } });
     expect(forbidden.statusCode).toBe(403);
 
-    await app.prisma.user.update({ where: { username: "motdadmin" }, data: { isAdmin: true } });
+    await app.prisma.user.update({ where: { email: "motdadmin@test.dev" }, data: { isAdmin: true } });
 
     // Posting creates a durable announcement row.
     const post = await app.inject({ method: "POST", url: "/api/admin/motd", headers: { cookie }, payload: { text: "Maintenance tonight" } });
@@ -91,8 +86,8 @@ describe("admin panel features (MOTD / world browsing / moderation)", () => {
     const clubId = join.json().clubId as number;
 
     const adminCookie = await registerAndLogin(app, "moderationadmin");
-    await app.prisma.user.update({ where: { username: "moderationadmin" }, data: { isAdmin: true } });
-    const ownerId = await app.prisma.user.findUniqueOrThrow({ where: { username: "clubowner2" }, select: { id: true } });
+    await app.prisma.user.update({ where: { email: "moderationadmin@test.dev" }, data: { isAdmin: true } });
+    const ownerId = await app.prisma.user.findUniqueOrThrow({ where: { email: "clubowner2@test.dev" }, select: { id: true } });
 
     // Club detail surfaces the owner, squad and nickname data the UI needs.
     const detail = await app.inject({ method: "GET", url: `/api/admin/clubs/${clubId}`, headers: { cookie: adminCookie } });
@@ -140,7 +135,7 @@ describe("admin panel features (MOTD / world browsing / moderation)", () => {
     await app.ready();
 
     const adminCookie = await registerAndLogin(app, "analyticsadmin");
-    await app.prisma.user.update({ where: { username: "analyticsadmin" }, data: { isAdmin: true } });
+    await app.prisma.user.update({ where: { email: "analyticsadmin@test.dev" }, data: { isAdmin: true } });
 
     const res = await app.inject({ method: "GET", url: "/api/admin/analytics", headers: { cookie: adminCookie } });
     expect(res.statusCode).toBe(200);
@@ -176,10 +171,10 @@ describe("admin panel features (MOTD / world browsing / moderation)", () => {
     expect(join.statusCode).toBe(200);
 
     const adminCookie = await registerAndLogin(app, "elolistadmin");
-    await app.prisma.user.update({ where: { username: "elolistadmin" }, data: { isAdmin: true } });
+    await app.prisma.user.update({ where: { email: "elolistadmin@test.dev" }, data: { isAdmin: true } });
     const users = await app.inject({ method: "GET", url: "/api/admin/users?search=elouser", headers: { cookie: adminCookie } });
     expect(users.statusCode).toBe(200);
-    expect(users.json().users).toMatchObject([{ username: "elouser", elo: 1500 }]);
+    expect(users.json().users).toMatchObject([{ name: "elouser", email: "elouser@test.dev", elo: 1500 }]);
 
     const forbidden = await app.inject({ method: "GET", url: "/api/admin/users", headers: { cookie: ownerCookie } });
     expect(forbidden.statusCode).toBe(403);

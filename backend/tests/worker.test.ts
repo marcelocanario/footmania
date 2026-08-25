@@ -47,7 +47,7 @@ async function withSeason(saveId: number, ref = currentMonth()) {
  *  and a matching User row for the Club.ownerUserId foreign key. */
 async function humanTrader(world: World, userId: number, name: string) {
   await prisma.user.deleteMany({ where: { id: userId } });
-  await prisma.user.create({ data: { id: userId, username: `w-${userId}-${name}`, passwordHash: "test" } });
+  await prisma.user.create({ data: { id: userId, name, email: `w-${userId}-${name}@test.dev`, emailVerified: true } });
   const club = createHumanClub(world, { userId, clubName: name, country: "BRA" });
   club.competitionState = "ACTIVE";
   // Played own fixtures so the outbound-market lock is satisfied.
