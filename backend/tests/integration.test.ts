@@ -320,4 +320,26 @@ describe("API flow", () => {
     expect(history.statusCode).toBe(401);
     await app.close();
   });
+
+  it("serves the public season status without authentication", async () => {
+    const app = buildServer();
+    await app.ready();
+
+    // No cookie / session at all — this is the pre-login landing page call.
+    const res = await app.inject({ method: "GET", url: "/api/public/season" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.ready).toBe(true);
+    expect(body.paused).toBeTypeOf("boolean");
+    expect(body.season.seasonNumber).toBeTypeOf("number");
+    expect(body.season.seasonDay).toBeGreaterThanOrEqual(1);
+    expect(body.season.seasonDays).toBeGreaterThan(0);
+    expect(["ACTIVE", "POST_MATCH", "INTERSEASON"]).toContain(body.season.phase);
+    expect(["OPEN", "LOCKED"]).toContain(body.season.joinState);
+    // The public payload must never leak club/account data.
+    expect(body.club).toBeUndefined();
+    expect(body.myMatches).toBeUndefined();
+
+    await app.close();
+  });
 });

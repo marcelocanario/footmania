@@ -39,6 +39,42 @@ async function globalSave(prisma: PrismaClient) {
   });
 }
 
+/**
+ * Public, unauthenticated season-status snapshot for the landing page. Reveals
+ * only the world clock state every visitor already sees on the login screen —
+ * never per-user or club data. `ready: false` while the global save has not
+ * been initialized (first boot).
+ */
+export async function readPublicSeasonStatus(prisma: PrismaClient) {
+  const save = await globalSave(prisma);
+  if (!save) return { ready: false as const };
+
+  const mp = parseJson<MpStateView>(save.mpStateJson, {});
+  const seasonDayIndex = mp.seasonDayIndex ?? save.dayIndex;
+  const calendar = calendarValues();
+  const seasonNumber = mp.seasonNumber ?? Math.max(1, save.year);
+  const completedRounds = Math.max(mp.completedRounds ?? 0, 0);
+  const joinState = mp.joinState === "LOCKED" || completedRounds >= (mp.joinLockRound ?? 0) ? "LOCKED" : "OPEN";
+
+  return {
+    ready: true as const,
+    paused: typeof mp.pausedAt === "number" && Number.isFinite(mp.pausedAt),
+    season: {
+      seasonNumber,
+      key: seasonKey({ year: mp.seasonYear ?? save.year, month: mp.seasonMonth ?? 1 }),
+      completedRounds,
+      joinLockRound: mp.joinLockRound ?? 0,
+      joinState,
+      seasonDay: seasonDayIndex + 1,
+      seasonDays: calendar.seasonDays,
+      phase: mp.phase ?? phaseForSeasonDayIndex(seasonDayIndex),
+      interseasonStartIndex: calendar.interseasonStartIndex,
+      preparationStartIndex: calendar.preparationStartIndex,
+      lastLeagueMatchDayIndex: calendar.lastLeagueMatchDayIndex,
+    },
+  };
+}
+
 /** Build the small status response without rebuilding the global World. */
 export async function readMpStatus(prisma: PrismaClient, userId: number) {
   const save = await globalSave(prisma);

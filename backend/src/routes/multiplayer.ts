@@ -13,7 +13,7 @@ import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../servic
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
 import { hasPro } from "../services/pro";
-import { readMpStatus, readSeasonHistory, readUserLiveMatch, footmaniaRankingView, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
+import { readMpStatus, readPublicSeasonStatus, readSeasonHistory, readUserLiveMatch, footmaniaRankingView, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 import { isPaused, worldPausedError } from "../services/seasonPause";
 
@@ -64,6 +64,11 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       await app.authenticate(req, reply);
     }
   });
+
+  // --- Public season status (landing page, no auth) -----------------------
+  // Read-only snapshot of the world clock so the login screen can show a
+  // truthful "state of the season" without exposing any account data.
+  app.get("/public/season", async () => readPublicSeasonStatus(app.prisma));
 
   // --- Multiplayer status -------------------------------------------------
   app.get("/mp/status", async (req) => {

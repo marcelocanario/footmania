@@ -171,6 +171,25 @@ export interface MpStatus {
   } | null;
 }
 
+/** Public world-clock snapshot served unauthenticated to the landing page. */
+export interface PublicSeasonStatus {
+  ready: boolean;
+  paused: boolean;
+  season: {
+    seasonNumber: number;
+    key: string;
+    completedRounds: number;
+    joinLockRound: number;
+    joinState: "OPEN" | "LOCKED";
+    seasonDay: number;
+    seasonDays: number;
+    phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
+    interseasonStartIndex: number;
+    preparationStartIndex: number;
+    lastLeagueMatchDayIndex: number;
+  };
+}
+
 export interface MarketUpdate {
   type: "marketUpdated";
   marketType: "TRANSFER" | "FREE_AGENT";
@@ -1223,6 +1242,7 @@ export const api = {
 
   // Multiplayer
   mpStatus: () => request<MpStatus>("/api/mp/status"),
+  publicSeasonStatus: () => request<PublicSeasonStatus>("/api/public/season"),
   join: (payload: { clubName: string; country: string; primaryColor?: string; secondaryColor?: string; kits?: ClubKits; stadiumName: string; coachName: string; preferredHours?: number[] }) =>
     request<{ ok: boolean; clubId: number }>("/api/mp/join", { method: "POST", body: JSON.stringify(payload) }),
   updateClubKit: (kits: ClubKits) =>
