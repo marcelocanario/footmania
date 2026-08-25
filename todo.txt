@@ -92,7 +92,7 @@ Technical/housekeeping:
 		[DONE] create analytics, such as average player quality per division (real) vs projected (using our back-end formula). think of other relevant metrics like that
 	[DONE] remove stadium
 	[DONE] remove fan support level
-	migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)
+	[DONE] migrate DB to postgresql (192.168.0.35, db: footmania, schema: development, user: footmania_dev, pass: df9fa7d6037c4948ba55a4ae98cba6e78a7f813fea20d577)
 	[DONE] when a human player takes place of an AI team, we need to remove their existing bids and also the players they put up for bid. if someone has bid on them, they win automatically and get the player. the reason is that all other players from that AI team will be destroyed for the insertion of the new team
 	[DONE] confirm assumption that, per definition of business rules, there can be no more than 7 AI teams at any given time
 		[DONE] consider not allowing AI teams to trade players (sell, bid, loan) and not allow players to interact with them in such a way, to simplify our logic considerably. the idea is to make AI teams just temporary fillers - they have a roster that won't ever change, since they are ephemeral (1 season or less) anyway

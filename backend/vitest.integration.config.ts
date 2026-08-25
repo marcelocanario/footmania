@@ -18,13 +18,13 @@ export default defineConfig({
     ],
     environment: "node",
     testTimeout: 90000,
-    // These files select their SQLite database through process.env at module
-    // load time; concurrent file execution can cross-contaminate integration state.
+    // All suites share one Postgres "test" schema (see tests/testDbUrl.ts);
+    // concurrent file execution can cross-contaminate integration state.
     fileParallelism: false,
     pool: "forks",
     maxWorkers: 1,
     globalSetup: ["tests/global-setup.ts"],
-    setupFiles: ["tests/setup.ts"],
+    setupFiles: ["tests/setup.ts", "tests/integration-setup.ts"],
     testNamePattern: /^(?!.*\[calibration\])/,
   },
 });

@@ -59,8 +59,7 @@ export async function seedNamePoolsFromArtifact(
     rows += entries.length;
     allEntries.push(...entries);
   }
-  // Keep the number of SQLite write statements small without relying on a
-  // database-specific maximum bind-parameter count.
+  // Batch inserts to stay well under Postgres's per-statement bind-parameter limit.
   for (let offset = 0; offset < allEntries.length; offset += 2000) {
     await prisma.namePoolEntry.createMany({ data: allEntries.slice(offset, offset + 2000) });
   }

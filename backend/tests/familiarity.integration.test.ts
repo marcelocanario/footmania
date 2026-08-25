@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-process.env.DATABASE_URL = "file:./test-familiarity.db";
+import { TEST_DATABASE_URL } from "./testDbUrl";
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.NODE_ENV = "test";
 
 import { PrismaClient } from "@prisma/client";

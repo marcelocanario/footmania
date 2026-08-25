@@ -15,10 +15,10 @@
     "calibrate:match": "tsx scripts/match-calibration-next.ts",
     "regenerate:match-golden": "tsx scripts/regenerate-match-golden.mts",
     "db:generate": "prisma generate",
-    "db:upgrade": "prisma db push && tsx scripts/migrate-contract-market.ts",
+    "db:upgrade": "prisma migrate deploy && tsx scripts/migrate-contract-market.ts",
     "db:push": "prisma db push",
     "db:migrate-contract-market": "tsx scripts/migrate-contract-market.ts",
-    "db:reset": "prisma db push --force-reset",
+    "db:reset": "prisma migrate reset",
     "db:seed-name-pools": "tsx scripts/import-name-pools.mts",
     "db:seed": "tsx prisma/seed.ts"
   },

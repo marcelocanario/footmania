@@ -583,7 +583,7 @@ export const NICKNAME_CONFIG = {
 } as const;
 
 export const LOGO_CONFIG = {
-  // Raster uploads only (SVG rejected to avoid XSS). Stored as base64 TEXT (SQLite).
+  // Raster uploads only (SVG rejected to avoid XSS). Stored as base64 TEXT.
   maxBytes: 262144, // 256 KB
   allowedMimes: ["image/png", "image/jpeg", "image/webp"] as const,
   maxDimension: 512,

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 
-process.env.DATABASE_URL = "file:./test-team-profile.db";
+import { TEST_DATABASE_URL } from "./testDbUrl";
+process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.NODE_ENV = "test";
 
 import { buildServer } from "../src/server";

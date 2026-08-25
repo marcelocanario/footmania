@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -171,7 +171,7 @@ model ScheduledEvent {
   @@index([saveId, status, timeBasis, dueAbsoluteGameDay])
   @@index([saveId, status, timeBasis, dueAt])
   @@index([entityType, entityId])
-  @@index([type, status])
+  @@index([saveId, type, entityType, entityId])
 }
 
 model AdminSchedulerAudit {
@@ -262,7 +262,6 @@ model Club {
   eloRatedMatches  Int      @default(0)
 
   @@id([saveId, id])
-  @@index([saveId])
   @@index([saveId, ownerUserId])
   @@unique([saveId, ownerUserId])
 }
@@ -384,7 +383,6 @@ model Competition {
   groupStandingsJson  String
 
   @@id([saveId, id])
-  @@index([saveId])
   @@index([saveId, seasonId, tier])
   @@unique([saveId, seasonId, tier, groupIndex])
 }
@@ -627,6 +625,7 @@ model TransferAuction {
   @@id([saveId, id])
   @@index([saveId, status])
   @@index([saveId, deadline])
+  @@index([saveId, playerId, status])
 }
 
 // A club's private maximum bid on a transfer or free-agent listing (§11/§69).
@@ -681,6 +680,7 @@ model FreeAgentListing {
   @@id([saveId, id])
   @@index([saveId, status])
   @@index([saveId, deadline])
+  @@index([saveId, playerId, status])
 }
 
 // Durable funds reserved against a club's active market commitments (§23).
@@ -724,6 +724,7 @@ model PlayerMarketTransaction {
   timestamp  BigInt
 
   @@index([saveId, playerId])
+  @@index([saveId, playerId, timestamp])
 }
 
 // ---------------------------------------------------------------------------
@@ -929,6 +930,7 @@ model UserNotification {
   @@index([userId, createdAt])
   @@index([userId, occurredAt])
   @@index([userId, readAt])
+  @@index([userId, readAt, occurredAt])
   @@unique([userId, dedupeKey])
 }
 

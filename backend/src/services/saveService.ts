@@ -461,7 +461,7 @@ export async function persistWorld(
         if (standingsCompetitionIds.size > 0) {
           await tx.standingsRow.deleteMany({ where: { saveId, competitionId: { in: [...standingsCompetitionIds] } } });
           const rows = world.competitions.filter((competition) => standingsCompetitionIds.has(competition.id)).flatMap((competition) => standingsRowsForCompetition(competition, saveId));
-          if (rows.length > 0) await tx.standingsRow.createMany({ data: rows });
+          if (rows.length > 0) await createManyChunked(tx.standingsRow, rows);
         }
         stableDeltaTables.add("standingsRow");
       }
@@ -522,7 +522,7 @@ export async function persistWorld(
         if (ids.size > 0) {
           await tx.ledgerEntry.deleteMany({ where: { saveId, clubId: { in: [...ids] } } });
           const rows = world.clubs.filter((club) => ids.has(club.id)).flatMap((club) => ledgerRowsForClub(club, saveId));
-          if (rows.length > 0) await tx.ledgerEntry.createMany({ data: rows });
+          if (rows.length > 0) await createManyChunked(tx.ledgerEntry, rows);
         }
         stableDeltaTables.add("ledgerEntry");
       }
@@ -531,7 +531,7 @@ export async function persistWorld(
         if (ids.size > 0) {
           await tx.trophy.deleteMany({ where: { saveId, clubId: { in: [...ids] } } });
           const rows = world.clubs.filter((club) => ids.has(club.id)).flatMap((club) => trophyRowsForClub(club, saveId));
-          if (rows.length > 0) await tx.trophy.createMany({ data: rows });
+          if (rows.length > 0) await createManyChunked(tx.trophy, rows);
         }
         stableDeltaTables.add("trophy");
       }
@@ -547,7 +547,7 @@ export async function persistWorld(
             await tx.club.update({ where: { saveId_id: { saveId, id: club.id } }, data: clubRow(club, saveId) });
           }
         }
-        if (creates.length > 0) await tx.club.createMany({ data: creates });
+        if (creates.length > 0) await createManyChunked(tx.club, creates);
       }
       if (rewriteTables.has("player")) {
         const currentIds = world.players.map((player) => player.id);
@@ -561,7 +561,7 @@ export async function persistWorld(
             await tx.player.update({ where: { saveId_id: { saveId, id: player.id } }, data: playerRow(player, saveId) });
           }
         }
-        if (creates.length > 0) await tx.player.createMany({ data: creates });
+        if (creates.length > 0) await createManyChunked(tx.player, creates);
       }
     }
     for (const t of rewriteTables) {
@@ -569,16 +569,16 @@ export async function persistWorld(
       await (tx as unknown as Record<string, { deleteMany: (args: { where: { saveId: number } }) => Promise<unknown> }>)[t].deleteMany({ where: { saveId } });
     }
     if (rewriteTables.has("club") && !previous && world.clubs.length > 0) {
-      await tx.club.createMany({ data: world.clubs.map((c) => clubRow(c, saveId)) });
+      await createManyChunked(tx.club, world.clubs.map((c) => clubRow(c, saveId)));
     }
     if (rewriteTables.has("player") && !previous && world.players.length > 0) {
-      await tx.player.createMany({ data: world.players.map((p) => playerRow(p, saveId)) });
+      await createManyChunked(tx.player, world.players.map((p) => playerRow(p, saveId)));
     }
       if (rewriteTables.has("loan") && world.loans.length > 0 && (!previous || !stableDeltaTables.has("loan"))) {
-       await tx.loan.createMany({ data: world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: Math.max(0, Math.round(l.feeAmount ?? 0)), listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })) });
+       await createManyChunked(tx.loan, world.loans.map((l) => ({ id: l.id, saveId, playerId: l.playerId, fromClubId: l.fromClubId, toClubId: l.toClubId, startDay: l.startDay, endDay: l.endDay, recalled: l.recalled, feeAmount: Math.max(0, Math.round(l.feeAmount ?? 0)), listedAt: BigInt(l.listedAt), claimableAt: BigInt(l.claimableAt) })));
       }
     if (rewriteTables.has("competition") && world.competitions.length > 0) {
-      if (!previous || !stableDeltaTables.has("competition")) await tx.competition.createMany({ data: world.competitions.map((c) => competitionRow(c, saveId)) });
+      if (!previous || !stableDeltaTables.has("competition")) await createManyChunked(tx.competition, world.competitions.map((c) => competitionRow(c, saveId)));
       const rows: { saveId: number; competitionId: number; clubId: number; played: number; wins: number; draws: number; losses: number; goalsFor: number; goalsAgainst: number; points: number; groupName: string | null }[] = [];
       for (const comp of world.competitions) {
         for (const row of Object.values(comp.standings)) {
@@ -590,27 +590,27 @@ export async function persistWorld(
           }
         }
       }
-       if (rewriteTables.has("standingsRow") && (!previous || !stableDeltaTables.has("standingsRow"))) await tx.standingsRow.createMany({ data: rows });
+       if (rewriteTables.has("standingsRow") && (!previous || !stableDeltaTables.has("standingsRow"))) await createManyChunked(tx.standingsRow, rows);
     }
     if (rewriteTables.has("fixture") && world.fixtures.length > 0 && (!previous || !stableDeltaTables.has("fixture"))) {
-      await tx.fixture.createMany({ data: world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, scheduledSeasonDayIndex: f.scheduledSeasonDayIndex ?? null })) });
+      await createManyChunked(tx.fixture, world.fixtures.map((f) => ({ id: f.id, saveId, competitionId: f.competitionId, round: f.round, homeClubId: f.homeClubId, awayClubId: f.awayClubId, dayIndex: f.dayIndex, played: f.played, leg: f.leg ?? null, tie: f.tie ?? null, kickoffAt: f.kickoffAt !== undefined ? BigInt(f.kickoffAt) : null, scheduledSeasonDayIndex: f.scheduledSeasonDayIndex ?? null })));
     }
     if (rewriteTables.has("match") && world.matches.length > 0) {
-       if (!previous || !stableDeltaTables.has("match")) await tx.match.createMany({ data: world.matches.map((m) => matchRow(m, saveId)) });
-         if (rewriteTables.has("matchStat") && (!previous || !stableDeltaTables.has("matchStat"))) await tx.matchStat.createMany({ data: world.matches.map((m) => statRow(m, saveId)) });
+       if (!previous || !stableDeltaTables.has("match")) await createManyChunked(tx.match, world.matches.map((m) => matchRow(m, saveId)));
+         if (rewriteTables.has("matchStat") && (!previous || !stableDeltaTables.has("matchStat"))) await createManyChunked(tx.matchStat, world.matches.map((m) => statRow(m, saveId)));
       const evRows: { saveId: number; matchId: number; minute: number; half: number; type: number; subtype: number; clubId: number; playerId: number | null; player2Id: number | null; goalType: number; ordinal: number }[] = [];
       for (const m of world.matches) {
         m.events.forEach((e, i) => {
           evRows.push({ saveId, matchId: m.id, minute: e.minute, half: e.half, type: e.type, subtype: e.subtype, clubId: e.clubId, playerId: e.playerId, player2Id: e.player2Id, goalType: e.goalType, ordinal: i });
         });
       }
-         if (rewriteTables.has("matchEvent") && (!previous || !stableDeltaTables.has("matchEvent")) && evRows.length > 0) await tx.matchEvent.createMany({ data: evRows });
+         if (rewriteTables.has("matchEvent") && (!previous || !stableDeltaTables.has("matchEvent")) && evRows.length > 0) await createManyChunked(tx.matchEvent, evRows);
       }
        if (rewriteTables.has("clubEloEvent") && (world.clubEloEvents ?? []).length > 0 && (!previous || !stableDeltaTables.has("clubEloEvent"))) {
-        await tx.clubEloEvent.createMany({ data: (world.clubEloEvents ?? []).map((event) => ({ id: event.id, saveId, matchId: event.matchId, clubId: event.clubId, opponentClubId: event.opponentClubId, ratingBefore: event.ratingBefore, ratingAfter: event.ratingAfter, delta: event.delta, expectedScore: event.expectedScore, actualScore: event.actualScore, createdAt: new Date(event.createdAt) })) });
+        await createManyChunked(tx.clubEloEvent, (world.clubEloEvents ?? []).map((event) => ({ id: event.id, saveId, matchId: event.matchId, clubId: event.clubId, opponentClubId: event.opponentClubId, ratingBefore: event.ratingBefore, ratingAfter: event.ratingAfter, delta: event.delta, expectedScore: event.expectedScore, actualScore: event.actualScore, createdAt: new Date(event.createdAt) })));
       }
     if (rewriteTables.has("newsItem") && world.news.length > 0 && (!previous || !stableDeltaTables.has("newsItem"))) {
-      await tx.newsItem.createMany({ data: world.news.map((n) => ({ saveId, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? null, seasonId: n.seasonId ?? null, subject: n.subject ?? null, headline: n.headline ?? null, entriesJson: n.entries ? JSON.stringify(n.entries) : null, recipientClubId: n.recipientClubId ?? null })) });
+      await createManyChunked(tx.newsItem, world.news.map((n) => ({ saveId, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? null, seasonId: n.seasonId ?? null, subject: n.subject ?? null, headline: n.headline ?? null, entriesJson: n.entries ? JSON.stringify(n.entries) : null, recipientClubId: n.recipientClubId ?? null })));
     }
     // Only walk every club's full ledger/trophy history when this persist will
     // actually use the result (fresh save, or an existing save whose ledger/
@@ -623,7 +623,7 @@ export async function persistWorld(
         for (const e of club.ledger.income) ledgerRows.push({ saveId, clubId: club.id, direction: "income", code: e.code, amount: e.amount, day: e.day, label: e.label });
         for (const e of club.ledger.expense) ledgerRows.push({ saveId, clubId: club.id, direction: "expense", code: e.code, amount: e.amount, day: e.day, label: e.label });
       }
-      if (ledgerRows.length > 0) await tx.ledgerEntry.createMany({ data: ledgerRows });
+      if (ledgerRows.length > 0) await createManyChunked(tx.ledgerEntry, ledgerRows);
     }
     if (rewriteTables.has("trophy") && (!previous || !stableDeltaTables.has("trophy"))) {
       const trophyRows: { saveId: number; clubId: number; competitionName: string; count: number }[] = [];
@@ -632,23 +632,23 @@ export async function persistWorld(
           trophyRows.push({ saveId, clubId: club.id, competitionName: name, count });
         }
       }
-      if (trophyRows.length > 0) await tx.trophy.createMany({ data: trophyRows });
+      if (trophyRows.length > 0) await createManyChunked(tx.trophy, trophyRows);
     }
        if (rewriteTables.has("seasonAward") && world.seasonAwards.length > 0 && (!previous || !stableDeltaTables.has("seasonAward"))) {
-       await tx.seasonAward.createMany({ data: world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })) });
+       await createManyChunked(tx.seasonAward, world.seasonAwards.map((a) => ({ saveId, season: a.season, category: a.category, competitionId: a.competitionId, playerId: a.playerId, clubId: a.clubId, playerNameSnapshot: a.playerNameSnapshot, detail: a.detail })));
      }
        if (rewriteTables.has("careerRecord") && world.records.length > 0 && (!previous || !stableDeltaTables.has("careerRecord"))) {
-       await tx.careerRecord.createMany({ data: world.records.map((r) => ({ saveId, category: r.category, value: r.value, holderName: r.holderName })) });
+       await createManyChunked(tx.careerRecord, world.records.map((r) => ({ saveId, category: r.category, value: r.value, holderName: r.holderName })));
     }
       if (rewriteTables.has("liveMatch") && world.liveMatches.length > 0) {
-        await tx.liveMatch.createMany({ data: world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, homeClubId: st.homeClubId, awayClubId: st.awayClubId, stateJson: JSON.stringify(st) })) });
+        await createManyChunked(tx.liveMatch, world.liveMatches.map((st) => ({ saveId, matchId: st.matchId, homeClubId: st.homeClubId, awayClubId: st.awayClubId, stateJson: JSON.stringify(st) })));
      }
       // Normalized multiplayer transfer market (plan §55). Stable listing and
       // bid ids are synchronized above; resolved/cancelled rows are removed
       // when they disappear from the in-memory source of truth.
        if (rewriteTables.has("transferAuction") && world.transferAuctions.length > 0 && (!previous || !stableDeltaTables.has("transferAuction"))) {
-       await tx.transferAuction.createMany({
-         data: world.transferAuctions.map((a) => ({
+       await createManyChunked(tx.transferAuction,
+         world.transferAuctions.map((a) => ({
            id: a.id,
            saveId,
            playerId: a.playerId,
@@ -674,11 +674,11 @@ export async function persistWorld(
             softClosed: a.softClosed,
             deadlineVersion: a.deadlineVersion ?? 0,
           })),
-        });
+        );
       }
        if (rewriteTables.has("marketBid") && world.marketBids.length > 0 && (!previous || !stableDeltaTables.has("marketBid"))) {
-       await tx.marketBid.createMany({
-         data: world.marketBids.map((b) => ({
+       await createManyChunked(tx.marketBid,
+         world.marketBids.map((b) => ({
            id: b.id,
            saveId,
            marketType: b.marketType,
@@ -695,11 +695,11 @@ export async function persistWorld(
            updatedAt: BigInt(b.updatedAt),
            initialPriorityAt: BigInt(b.initialPriorityAt),
          })),
-       });
+       );
      }
        if (rewriteTables.has("freeAgentListing") && world.freeAgentListings.length > 0 && (!previous || !stableDeltaTables.has("freeAgentListing"))) {
-       await tx.freeAgentListing.createMany({
-         data: world.freeAgentListings.map((l) => ({
+       await createManyChunked(tx.freeAgentListing,
+         world.freeAgentListings.map((l) => ({
            id: l.id,
            saveId,
            playerId: l.playerId,
@@ -721,11 +721,11 @@ export async function persistWorld(
              unclaimedSince: l.unclaimedSince !== undefined ? BigInt(l.unclaimedSince) : null,
              softClosed: l.softClosed,
            })),
-        });
+        );
       }
        if (rewriteTables.has("marketReservation") && world.marketReservations.length > 0 && (!previous || !stableDeltaTables.has("marketReservation"))) {
-       await tx.marketReservation.createMany({
-         data: world.marketReservations.map((r) => ({
+       await createManyChunked(tx.marketReservation,
+         world.marketReservations.map((r) => ({
            id: r.id,
            saveId,
            clubId: r.clubId,
@@ -735,11 +735,11 @@ export async function persistWorld(
            createdAt: BigInt(r.createdAt),
            releasedAt: r.releasedAt !== null ? BigInt(r.releasedAt) : null,
          })),
-       });
+       );
      }
        if (rewriteTables.has("playerMarketTransaction") && world.playerMarketHistory.length > 0 && (!previous || !stableDeltaTables.has("playerMarketTransaction"))) {
-        await tx.playerMarketTransaction.createMany({
-          data: world.playerMarketHistory.map((t) => ({
+        await createManyChunked(tx.playerMarketTransaction,
+          world.playerMarketHistory.map((t) => ({
             id: t.id,
             saveId,
             playerId: t.playerId,
@@ -756,7 +756,7 @@ export async function persistWorld(
              contractSalary: t.contractSalary ?? null,
             timestamp: BigInt(t.timestamp),
           })),
-        });
+        );
       }
       if (world.mp.seasonId !== 0 && (!previous || JSON.stringify(previous.mp) !== JSON.stringify(world.mp))) {
        await tx.mpSeason.updateMany({
@@ -780,21 +780,21 @@ export async function persistWorld(
     if (mpQueueChanged) await tx.mpQueue.deleteMany({});
     if (allocationsChanged) await tx.mpAllocation.deleteMany({});
     if (mpQueueChanged && world.mpQueue.length > 0) {
-      await tx.mpQueue.createMany({
-        data: world.mpQueue.map((q) => ({ clubId: q.clubId, source: q.source, queuedAt: new Date(q.queuedAt), preferredSeasonId: q.preferredSeasonId })),
-      });
+      await createManyChunked(tx.mpQueue,
+        world.mpQueue.map((q) => ({ clubId: q.clubId, source: q.source, queuedAt: new Date(q.queuedAt), preferredSeasonId: q.preferredSeasonId })),
+      );
     }
     if (allocationsChanged && world.seasonAllocations.length > 0) {
-      await tx.mpAllocation.createMany({
-        data: world.seasonAllocations.map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type, amount: a.amount, issuedAt: new Date(a.issuedAt) })),
-      });
+      await createManyChunked(tx.mpAllocation,
+        world.seasonAllocations.map((a) => ({ clubId: a.clubId, seasonId: a.seasonId, type: a.type, amount: a.amount, issuedAt: new Date(a.issuedAt) })),
+      );
     }
     // Normalized multiplayer records (plan §55). Memberships/season records are
     // disposable between seasons and fully rewritten each persist.
     if (membershipsChanged) await tx.mpMembership.deleteMany({});
     if (membershipsChanged && world.mpMemberships.length > 0) {
-      await tx.mpMembership.createMany({
-        data: world.mpMemberships.map((m) => ({
+      await createManyChunked(tx.mpMembership,
+        world.mpMemberships.map((m) => ({
           divisionId: m.divisionId,
           clubId: m.clubId,
           slotNumber: m.slotNumber,
@@ -802,12 +802,12 @@ export async function persistWorld(
           replacedClubId: m.replacedClubId,
           joinedAt: new Date(m.joinedAt),
         })),
-      });
+      );
     }
     if (clubSeasonsChanged) await tx.mpClubSeason.deleteMany({});
     if (clubSeasonsChanged && world.mpClubSeasons.length > 0) {
-      await tx.mpClubSeason.createMany({
-        data: world.mpClubSeasons.map((cs) => ({
+      await createManyChunked(tx.mpClubSeason,
+        world.mpClubSeasons.map((cs) => ({
           clubId: cs.clubId,
           seasonId: cs.seasonId,
           divisionId: cs.divisionId,
@@ -822,13 +822,13 @@ export async function persistWorld(
           promotionStatus: cs.promotionStatus,
           relegationStatus: cs.relegationStatus,
         })),
-      });
+      );
     }
     if (activitiesChanged) await tx.mpActivity.deleteMany({});
     if (activitiesChanged && world.mpActivities.length > 0) {
-      await tx.mpActivity.createMany({
-        data: world.mpActivities.map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: new Date(a.occurredAt), metadata: a.metadata })),
-      });
+      await createManyChunked(tx.mpActivity,
+        world.mpActivities.map((a) => ({ userId: a.userId, clubId: a.clubId, activityType: a.activityType, occurredAt: new Date(a.occurredAt), metadata: a.metadata })),
+      );
     }
     for (const execution of opts?.dailyExecutions ?? []) {
       await tx.dailyExecution.upsert({
@@ -1139,6 +1139,20 @@ function standingsRowsForCompetition(competition: Competition, saveId: number) {
 
 type AutoEntity = { id?: number };
 
+// Postgres caps a single statement at 65,535 bind parameters. Chunked inserts
+// keep every createMany in the save path below that ceiling even for the
+// widest tables (Player ~60 columns) and the largest worlds.
+const CREATE_MANY_BATCH_ROWS = 500;
+
+async function createManyChunked<D>(
+  model: { createMany: (args: { data: D[] }) => Promise<unknown> },
+  data: readonly D[],
+): Promise<void> {
+  for (let offset = 0; offset < data.length; offset += CREATE_MANY_BATCH_ROWS) {
+    await model.createMany({ data: data.slice(offset, offset + CREATE_MANY_BATCH_ROWS) });
+  }
+}
+
 async function syncAutoEntities<T extends AutoEntity>(
   tx: Tx,
   table: string,
@@ -1166,7 +1180,7 @@ async function syncAutoEntities<T extends AutoEntity>(
       if (JSON.stringify(old) !== JSON.stringify(entity)) await model.update({ where: { id: old.id }, data: rowFor(entity) });
     }
   }
-  if (creates.length > 0) await model.createMany({ data: creates });
+  if (creates.length > 0) await createManyChunked(model, creates);
 }
 
 async function syncStableEntities<T extends StableEntity>(
@@ -1190,7 +1204,7 @@ async function syncStableEntities<T extends StableEntity>(
     if (!old) creates.push(rowFor(entity));
     else if (JSON.stringify(old) !== JSON.stringify(entity)) await model.update({ where: updateWhere(saveId, entity.id), data: rowFor(entity) });
   }
-  if (creates.length > 0) await model.createMany({ data: creates });
+  if (creates.length > 0) await createManyChunked(model, creates);
 }
 
 async function syncMatchEvents(tx: Tx, saveId: number, previous: Match[] | undefined, current: Match[]): Promise<void> {
@@ -1213,7 +1227,7 @@ async function syncMatchEvents(tx: Tx, saveId: number, previous: Match[] | undef
     if (!affectedIds.has(match.id)) continue;
     match.events.forEach((event, ordinal) => rows.push({ saveId, matchId: match.id, minute: event.minute, half: event.half, type: event.type, subtype: event.subtype, clubId: event.clubId, playerId: event.playerId, player2Id: event.player2Id, goalType: event.goalType, ordinal }));
   }
-  if (rows.length > 0) await tx.matchEvent.createMany({ data: rows });
+  if (rows.length > 0) await createManyChunked(tx.matchEvent, rows);
 }
 
 function emptyTeamStats(): MatchStats["home"] {
