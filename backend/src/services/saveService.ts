@@ -316,6 +316,14 @@ export function loadGlobalWorldReadOnly(prisma: PrismaClient): Promise<LoadedWor
  * Detach the cached world for an in-lock mutation. Readers keep using the last
  * committed cache while the caller mutates this detached instance; persistWorld
  * installs a fresh protected cache after the transaction succeeds.
+ *
+ * The caller receives a CLONE of the cached world: the pristine cached object
+ * stays in `mutationBaselines` as the diff baseline so `persistWorld` can
+ * detect exactly which collections changed. Returning the cached object by
+ * reference here would make `previous === world` in `persistWorld`, so the
+ * diff would see "no changes" and skip writing every table (the join bug: a
+ * new club was never inserted, /mp/status saw no club, and the SPA bounced
+ * back to /join forever).
  */
 export async function loadGlobalWorldMutable(prisma: PrismaClient): Promise<LoadedWorld | null> {
   const loaded = await loadGlobalWorldInternal(prisma, false);
@@ -331,6 +339,8 @@ export async function loadGlobalWorldMutable(prisma: PrismaClient): Promise<Load
       baselines.set(loaded.save.id, cached);
     }
     cache?.delete(loaded.save.id);
+    // Return a detached copy for mutation; the baseline above stays pristine.
+    loaded.world = cloneWorld(loaded.world);
   }
   return loaded;
 }

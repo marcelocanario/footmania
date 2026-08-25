@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "@better-auth/prisma-adapter";
 import { getPrisma } from "./plugins/prisma";
-import { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, PUBLIC_ORIGIN, SESSION_TTL_DAYS } from "./config";
+import { BETTER_AUTH_SECRET, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, PUBLIC_ORIGIN, SESSION_TTL_DAYS } from "./config";
 
 // Read lazily: the test harness sets ADMIN_EMAIL after ES module imports are
 // hoisted, so a module-scope const would always see undefined in tests.
@@ -25,6 +25,7 @@ export function adminEmail(): string | undefined {
 function buildAuthConfig() {
   return {
     database: prismaAdapter(getPrisma(), { provider: "postgresql" }),
+    secret: BETTER_AUTH_SECRET,
     basePath: "/api/auth",
     baseURL: PUBLIC_ORIGIN,
     trustedOrigins: [PUBLIC_ORIGIN],

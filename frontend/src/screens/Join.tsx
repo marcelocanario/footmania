@@ -497,7 +497,7 @@ export function Join() {
                   <div className="jm-field">
                     <label className="jm-label" htmlFor="join-coach">
                       <UserRound size={13} /> Manager
-                      <FieldHelp text="Your Google name by default. Choose the name shown as your manager in match coverage and club identity." />
+                      <FieldHelp text="Choose the name shown as your manager in match coverage and club identity." />
                       <span className="jm-req">*</span>
                     </label>
                     <span className="p-input-icon-left jm-input-wrap">

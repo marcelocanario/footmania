@@ -175,6 +175,9 @@ export function Layout({ children }: { children: ReactNode }) {
   useLiveMatchWatcher();
   const club = snapshot?.club;
   const teamCreationRequired = status !== null && !status.club;
+  // Admins always reach the admin page, even before creating a team. Every
+  // other destination stays locked until a club exists.
+  const navLockedFor = (to: string) => teamCreationRequired && to !== "/admin";
   const provisional = club?.competitionState === "PROVISIONAL" || status?.club?.competitionState === "PROVISIONAL";
   const dormant = club?.competitionState === "DORMANT" || status?.club?.competitionState === "DORMANT";
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -276,9 +279,9 @@ export function Layout({ children }: { children: ReactNode }) {
                 to={item.to}
                 className={({ isActive }) => (isActive ? "active" : "") + (item.admin ? " admin" : "")}
                 onClick={(event) => {
-                  if (teamCreationRequired) event.preventDefault();
+                  if (navLockedFor(item.to)) event.preventDefault();
                 }}
-                aria-disabled={teamCreationRequired}
+                aria-disabled={navLockedFor(item.to)}
               >
                 {item.icon}
                 {item.label}
@@ -430,9 +433,9 @@ export function Layout({ children }: { children: ReactNode }) {
               to={item.to}
               className={({ isActive }) => (isActive ? "active" : "")}
               onClick={(event) => {
-                if (teamCreationRequired) event.preventDefault();
+                if (navLockedFor(item.to)) event.preventDefault();
               }}
-              aria-disabled={teamCreationRequired}
+              aria-disabled={navLockedFor(item.to)}
             >
               {item.icon}
               {item.label}

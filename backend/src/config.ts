@@ -7,6 +7,13 @@ import { z } from "zod";
 export const PORT = Number(process.env.PORT ?? 3001);
 export const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS ?? 30);
 
+// better-auth secret used to sign/encrypt session cookies and OAuth state.
+// Production must set BETTER_AUTH_SECRET; dev/test fall back to a stable,
+// well-known value so local runs and the test harness work without config
+// (mirrors the Google stub pattern below).
+const BETTER_AUTH_SECRET_DEV = "dev-only-better-auth-secret-not-for-production";
+export const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET ?? BETTER_AUTH_SECRET_DEV;
+
 // better-auth / OAuth configuration. GOOGLE_CLIENT_ID/SECRET are required in
 // production; dev/test may run with a stub (see backend/src/auth.ts).
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
