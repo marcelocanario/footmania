@@ -177,6 +177,17 @@ export function teamPitchPoints(players: LivePlayer[], side: PitchSide, formatio
     });
   };
 
+  // Collect every player that sits on the same mirrored column first, then
+  // spread once. The previous implementation spread each layout line and each
+  // fallback bucket independently; any fallback column that coincided with a
+  // layout column (e.g. a defender whose tacPos wasn't in the active layout
+  // but whose fallback column is the same x) was spread as a second n=2 group
+  // at the identical y positions (35,65) as the layout's n=2 group, producing
+  // two markers exactly on top of each other. The result looked like a
+  // formation had only 2 defenders instead of 4, which is why a 4-4-2 could
+  // appear as a 2-5-3. Merging per column fixes that and also keeps the
+  // visual density correct for any custom lineup.
+  const colMap = new Map<number, LivePlayer[]>();
   const handled = new Set<number>();
   if (layout) {
     for (const line of layout) {
@@ -185,28 +196,33 @@ export function teamPitchPoints(players: LivePlayer[], side: PitchSide, formatio
         .map((slot) => players.find((p) => p.tacPos === slot))
         .filter((p): p is LivePlayer => !!p);
       for (const p of list) handled.add(p.id);
-      spread(list, x);
+      if (list.length === 0) continue;
+      const arr = colMap.get(x) ?? [];
+      arr.push(...list);
+      colMap.set(x, arr);
     }
   }
 
-  const fallback = new Map<number, LivePlayer[]>();
   for (const player of players) {
     if (handled.has(player.id)) continue;
     const x = FALLBACK_COLUMN_X[player.tacPos] ?? 50;
     const col = side === "home" ? x : 100 - x;
-    const list = fallback.get(col) ?? [];
-    list.push(player);
-    fallback.set(col, list);
+    const arr = colMap.get(col) ?? [];
+    arr.push(player);
+    colMap.set(col, arr);
   }
-  for (const [x, list] of fallback) {
+  for (const [x, list] of colMap) {
     spread(list, x);
   }
   return points;
 }
 
 /** Minimum x-separation (pitch percentage units) kept between a home column
- * and an away column once mirrored into the same shared coordinate space. */
-const MIN_COLUMN_GAP = 7;
+ * and an away column once mirrored into the same shared coordinate space.
+ * Markers are ~8.5% of the pitch width (70px on an 820px surface), so a gap
+ * of 7 still leaves them visually overlapping. 12 guarantees a clear lane
+ * between the two teams' columns. */
+const MIN_COLUMN_GAP = 12;
 
 /**
  * Two independently-authored formations can put a line at nearly the same x

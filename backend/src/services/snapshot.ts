@@ -1,4 +1,5 @@
 import type { World } from "../game/types";
+import { EVENT_CODES, GOAL_SUBTYPES } from "../game/constants";
 import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
@@ -34,8 +35,46 @@ export function newsItemView(n: World["news"][number], dayLabelText: string) {
   };
 }
 
-export function playerView(p: World["players"][number], loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null }, absoluteGameDay = 0) {
+/** Goal/assist counts a player has scored in in-progress live matches. The
+ *  Player rows are only committed at full-time, so cards add these deltas to
+ *  reflect a goal the moment it happens. */
+export interface LivePlayerStatDelta {
+  goals: number;
+  assists: number;
+}
+
+/** Sum goals/assists from the live states' GOAL events, keyed by player id. */
+export function liveMatchStatDeltas(world: World): Map<number, LivePlayerStatDelta> {
+  const out = new Map<number, LivePlayerStatDelta>();
+  for (const st of world.liveMatches) {
+    for (const e of st.events) {
+      if (e.type !== EVENT_CODES.GOAL || e.goalType === GOAL_SUBTYPES.PENALTY) continue;
+      if (e.playerId !== null) {
+        const cur = out.get(e.playerId) ?? { goals: 0, assists: 0 };
+        cur.goals++;
+        out.set(e.playerId, cur);
+      }
+      if (e.player2Id !== null) {
+        const cur = out.get(e.player2Id) ?? { goals: 0, assists: 0 };
+        cur.assists++;
+        out.set(e.player2Id, cur);
+      }
+    }
+  }
+  return out;
+}
+
+export function playerView(
+  p: World["players"][number],
+  loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null },
+  absoluteGameDay = 0,
+  liveDelta?: LivePlayerStatDelta | null
+) {
   const nick = (p.nickname ?? "").trim();
+  const goals = p.seasonGoals + (liveDelta?.goals ?? 0);
+  const assists = p.seasonAssists + (liveDelta?.assists ?? 0);
+  const careerGoals = p.careerGoals + (liveDelta?.goals ?? 0);
+  const careerAssists = p.careerAssists + (liveDelta?.assists ?? 0);
   return {
     id: p.id,
     name: p.name,
@@ -60,10 +99,10 @@ export function playerView(p: World["players"][number], loan?: { onLoan: boolean
     injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
     conditionLabel: conditionLabel(p, absoluteGameDay),
     isYouth: p.isYouth,
-    seasonGoals: p.seasonGoals,
-    seasonAssists: p.seasonAssists,
-    careerGoals: p.careerGoals,
-    careerAssists: p.careerAssists,
+    seasonGoals: goals,
+    seasonAssists: assists,
+    careerGoals,
+    careerAssists,
     yellows: p.yellows,
     reds: p.reds,
     onSale: p.onSale,
@@ -185,14 +224,15 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
     };
     });
 
+  const liveStatDeltas = liveMatchStatDeltas(world);
   const squad = world.players
     .filter((p) => p.clubId === clubId && !p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null));
   const juniors = world.players
     .filter((p) => p.clubId === clubId && p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null));
   // Players the club owns but that are away on loan, so the ceding club can
   // still see them in its roster.
   const loanedOutIds = new Set(
@@ -203,7 +243,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   const loanedOut = world.players
     .filter((p) => p.clubId !== clubId && p.loanId !== null && loanedOutIds.has(p.loanId))
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null));
   // Loaned-out players appear in the senior roster (greyed out in the UI).
   const squadAll = [...squad, ...loanedOut].sort((a, b) => b.overall - a.overall);
 
@@ -264,7 +304,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
         .filter((p) => p.clubId === null && listedPlayerIds.has(p.id))
         .sort((a, b) => b.overall - a.overall)
         .slice(0, 30)
-        .map((p) => playerView(p, undefined, world.mp.absoluteGameDay ?? world.dayIndex));
+        .map((p) => playerView(p, undefined, world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null));
     })()
     : [];
 

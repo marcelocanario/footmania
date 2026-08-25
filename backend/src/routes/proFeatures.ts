@@ -12,7 +12,7 @@ import { displayName } from "../game/displayName";
 import { StaleWorldError } from "../services/saveService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 import { injuryDaysRemaining } from "../game/energyInjury";
-import { playerView } from "../services/snapshot";
+import { liveMatchStatDeltas, playerView } from "../services/snapshot";
 import { matchNotificationKey } from "../services/notifications";
 
 const nicknameBodySchema = z.object({
@@ -199,7 +199,11 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     if (!worldLoaded) return reply.code(500).send({ error: "World unavailable" });
     const player = worldLoaded.world.players.find((p) => p.id === playerId);
     if (!player) return reply.code(404).send({ error: "Player not found" });
-
+    // While the player is in an in-progress live match, the GOAL events of that
+    // live state are the authoritative record of goals/assists scored so far
+    // (the Player rows are only committed at full time). Include them so the
+    // card reflects a goal the moment it happens.
+    const liveDelta = liveMatchStatDeltas(worldLoaded.world).get(player.id) ?? null;
     const isOwner = player.clubId !== null && worldLoaded.world.clubs.find((c) => c.id === player.clubId)?.ownerUserId === req.user!.id;
     const pro = hasPro(req.user);
     let allowHistory = isOwner || pro;
@@ -239,7 +243,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
       };
     });
 
-    const view = playerView(player, undefined, gameDay);
+    const view = playerView(player, undefined, gameDay, liveDelta);
     const clubName = player.clubId === null ? null : worldLoaded.world.clubs.find((club) => club.id === player.clubId)?.name ?? null;
     const playerPayload = allowSkills ? { ...view, clubName, isOwnTeam: isOwner } : (() => {
       const { skills: _skills, ...withoutSkills } = view;
@@ -279,6 +283,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     if (!worldLoaded) return reply.code(500).send({ error: "World unavailable" });
     const player = worldLoaded.world.players.find((p) => p.id === playerId);
     if (!player) return reply.code(404).send({ error: "Player not found" });
+    const liveDelta = liveMatchStatDeltas(worldLoaded.world).get(player.id) ?? null;
     const seasons = await app.prisma.playerSeasonHistory.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { seasonId: "asc" } });
     const transfers = await app.prisma.playerMarketTransaction.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { timestamp: "desc" }, take: 20 });
     const events = await app.prisma.matchEvent.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: [{ id: "desc" }], take: 25 });
@@ -299,10 +304,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         age: player.age,
         position: player.position,
         overall: player.overall,
-        careerGoals: player.careerGoals,
-        careerAssists: player.careerAssists,
-        seasonGoals: player.seasonGoals,
-        seasonAssists: player.seasonAssists,
+        careerGoals: player.careerGoals + (liveDelta?.goals ?? 0),
+        careerAssists: player.careerAssists + (liveDelta?.assists ?? 0),
+        seasonGoals: player.seasonGoals + (liveDelta?.goals ?? 0),
+        seasonAssists: player.seasonAssists + (liveDelta?.assists ?? 0),
         yellows: player.yellows,
         reds: player.reds,
         injuryDays: injuryDaysRemaining(player, worldLoaded.world.mp.absoluteGameDay ?? worldLoaded.world.dayIndex),

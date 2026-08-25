@@ -15,6 +15,7 @@ import { endLoan, processContractExpiry, processContractWarning } from "../game/
 import { executeRolloverStep, ROLLOVER_WORKFLOW_STEPS } from "./seasonRolloverService";
 import { notifyMatchStarted } from "./notifications";
 import { notifyFinishedMatches } from "./matchNotifications";
+import { publishLiveMatchUpdates } from "./liveMatchEvents";
 
 export enum ScheduledEventType {
   GAME_DAY_ADVANCE = "GAME_DAY_ADVANCE",
@@ -610,7 +611,10 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       // An administrator executing a completion event early means "complete
       // now", not "pretend the clock has reached the future due time".
       const advanceAt = context.ignoreDueTime ? now.getTime() : Math.max(now.getTime(), completionAt);
-      const finished = advanceLiveMatches(world, advanceAt);
+      const finished = advanceLiveMatches(world, advanceAt, { forceFinish: context.ignoreDueTime });
+      if (finished.length > 0) {
+        publishLiveMatchUpdates(world, finished.map((match) => ({ matchId: match.id, homeClubId: match.homeClubId, awayClubId: match.awayClubId, eventStart: 0, phaseChanged: true, finished: true })));
+      }
       return { userEvents: await notifyFinishedMatches(prisma, world, finished, now) };
     }
     case ScheduledEventType.AUCTION_END: {

@@ -6,6 +6,12 @@ import { countryFlag } from "../countryFlags";
 import { ClubNameLink } from "./ClubNameLink";
 import { PlayerSkillsRadar } from "./PlayerSkillsRadar";
 
+/** Refresh the card while it is open so a goal scored mid-match (or the
+ *  full-time commit right after) shows up without closing/reopening the dialog.
+ *  The player-history endpoint bypasses the GET cache (it carries live-match
+ *  deltas), so each poll reads the authoritative state. */
+const CARD_REFRESH_MS = 10_000;
+
 export function PlayerDetailsDialog({ target, onClose }: { target: { id: number; name: string } | null; onClose: () => void }) {
   const [player, setPlayer] = useState<PlayerHistoryView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -16,12 +22,24 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
       setPlayer(null);
       return;
     }
+    let alive = true;
     setBusy(true);
     setPlayer(null);
-    api.playerHistory(target.id)
-      .then((result) => setPlayer(result.player))
-      .catch(() => setPlayer(null))
-      .finally(() => setBusy(false));
+    const load = () =>
+      api.playerHistory(target.id)
+        .then((result) => {
+          if (alive) setPlayer(result.player);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (alive) setBusy(false);
+        });
+    void load();
+    const interval = setInterval(load, CARD_REFRESH_MS);
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
   }, [target]);
 
   const ownTeam = player?.isOwnTeam ?? false;

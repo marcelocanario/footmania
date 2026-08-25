@@ -120,7 +120,7 @@ export function startLiveMatch(world: World, fixture: Fixture, startAt = fixture
  * rate or downtime. Auto-plays through halftime (`resume: true`) so matches
  * finish on schedule for unattended clubs.
  */
-export function advanceLiveMatches(world: World, now: number): Match[] {
+export function advanceLiveMatches(world: World, now: number, opts?: { forceFinish?: boolean }): Match[] {
   const finished: Match[] = [];
   const realMsPerMatchMinute = (MP_CONFIG.matchDurationMinutes * 60 * 1000) / 90;
   for (const st of [...world.liveMatches]) {
@@ -132,6 +132,28 @@ export function advanceLiveMatches(world: World, now: number): Match[] {
     const home = findClub(world, st.homeClubId);
     const away = findClub(world, st.awayClubId);
     if (!home || !away) continue;
+
+    // Admin "resolve now": simulate the remainder of the match to full time in
+    // one pass, bypassing wall-clock pacing. The engine advances a continuous
+    // clock and only discovers stoppage time once it reaches the raw boundary,
+    // so loop (bounded) until full time, recomputing the remaining seconds each
+    // pass. `ignoreHalfTime` auto-plays through the halftime pause — resolving
+    // means completing the match now, not waiting on the wall-clock pause.
+    if (opts?.forceFinish && !st.ended) {
+      let guard = 0;
+      while (!st.ended && guard++ < 250) {
+        const totalRegulation = MS.timing.regulationSeconds + (st.firstHalfAddedMinutes ?? 0) * 60 + (st.secondHalfAddedMinutes ?? 0) * 60;
+        const remainingSeconds = Math.max(0, totalRegulation - st.matchClockSeconds);
+        if (remainingSeconds <= 0) break;
+        tickLiveMatch(world.rng, home, away, world.players, st, Math.max(1, Math.ceil(remainingSeconds / 60)), { ignoreHalfTime: true });
+        st.lastAdvancedAt = now;
+      }
+      if (st.ended) {
+        const m = finalizeLiveMatch(world, st);
+        if (m) finished.push(m);
+      }
+      continue;
+    }
 
     // -----------------------------------------------------------------------
     // Halftime wall-clock pause (human-involving only, skippable via both-ready)

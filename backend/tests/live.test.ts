@@ -439,3 +439,49 @@ describe("live match real-time pacing", () => {
     await app.close();
   }, 90_000);
 });
+
+describe("live player card stats", () => {
+  it("reflects a goal scored mid-match on the player history card before full time", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie, clubId } = await setupClub(app, "cardlive");
+    const { matchId } = await makeLiveMatch(app, cookie, clubId);
+
+    const { loadGlobalWorld, persistWorld } = await import("../src/services/saveService");
+    const { EVENT_CODES, GOAL_SUBTYPES } = await import("../src/game/constants");
+    const loaded = await loadGlobalWorld(app.prisma);
+    if (!loaded) throw new Error("no world");
+    const world = loaded.world;
+    const st = world.liveMatches.find((s) => s.matchId === matchId)!;
+    const humanSide = st.homeClubId === clubId ? 0 : 1;
+    const on = humanSide === 0 ? st.homeOn : st.awayOn;
+    const scorerId = on[0];
+    const assisterId = on[1];
+
+    // Inject the goal the engine would have recorded this tick.
+    st.scores[humanSide] = 1;
+    st.events.push({
+      minute: 12,
+      half: 1,
+      type: EVENT_CODES.GOAL,
+      subtype: GOAL_SUBTYPES.NORMAL,
+      clubId: clubId,
+      playerId: scorerId,
+      player2Id: assisterId,
+      goalType: GOAL_SUBTYPES.NORMAL,
+    });
+    await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+
+    const card = await app.inject({ method: "GET", url: `/api/players/${scorerId}/history`, headers: { cookie } });
+    expect(card.statusCode).toBe(200);
+    expect(card.json().player.seasonGoals).toBe(1);
+    expect(card.json().player.careerGoals).toBe(1);
+
+    const assister = await app.inject({ method: "GET", url: `/api/players/${assisterId}/history`, headers: { cookie } });
+    expect(assister.statusCode).toBe(200);
+    expect(assister.json().player.seasonAssists).toBe(1);
+    expect(assister.json().player.careerAssists).toBe(1);
+
+    await app.close();
+  });
+});

@@ -179,12 +179,12 @@
   // and youth from the same model with an academy-pedigree mean shift.
   "playerGeneration": {
     // Mean OVR of all generated senior players in Division 1. Because the best
-    // players are selected for the lineup, 73.5 produces an automatic starting
-    // XI close to 78 OVR with the spread configured below.
-    "topDivisionMeanOverall": 73.5,
+    // players are selected for the lineup, 70 produces an automatic starting
+    // XI close to 74 OVR with the spread configured below.
+    "topDivisionMeanOverall": 70,
     // Standard deviation of individual player quality, directly in OVR points.
-    // (e.g. 6 = most players fall within roughly ±6 OVR of their environment.)
-    "playerQualitySpreadOverall": 6,
+    // (e.g. 4 = most players fall within roughly ±4 OVR of their environment.)
+    "playerQualitySpreadOverall": 4,
     // Total mean OVR difference from Division 1 to the current bottom division.
     // This remains 18 as divisions are added; the division curve automatically
     // redistributes the intermediate means across the larger pyramid.

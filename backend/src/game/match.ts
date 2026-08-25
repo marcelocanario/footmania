@@ -1,7 +1,7 @@
 import type { Club, LiveMatchState, LiveTactics, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
 import { nextInt } from "./rng";
 import { chooseAiTactics, lineupForMatch } from "./club";
-import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
+import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, GOAL_SUBTYPES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import {
   advancePossessionMatch,
   computeAttributeCenters,
@@ -516,6 +516,10 @@ export function simulateMatch(
   applyLiveMatchEnergy(st, allPlayers);
   const match = buildMatchFromState(st, home, away, allPlayers);
   if (simulationDiagnostics) match.simulationDiagnostics = simulationDiagnostics;
+  // The possession engine no longer credits goals directly (instant runs share
+  // the same engine as live ticks, where per-tick Player mutations would be
+  // lost). Attribute this match's goals/assists from its authoritative events.
+  applyMatchGoalsToPlayers(match, allPlayers);
   return {
     match,
     homeGoals: st.scores[0],
@@ -741,8 +745,36 @@ export function tribunalSuspension(rng: RngState): number {
   return 10;
 }
 
+/** Credit a finalized match's goals and assists to player counters, from the
+ *  authoritative GOAL events. Shootout penalties never count toward season or
+ *  career totals (regulation penalties carry goalType NORMAL and do count).
+ *  Shared by the live full-time commit (applyMatchToPlayers) and instant
+ *  simulations (simulateMatch), which the possession engine no longer credits
+ *  directly because live ticks persist only the match state, not Player rows. */
+export function applyMatchGoalsToPlayers(match: Match, players: Player[]): void {
+  const byId = new Map(players.map((p) => [p.id, p]));
+  for (const ev of match.events) {
+    if (ev.type !== EVENT_CODES.GOAL || ev.goalType === GOAL_SUBTYPES.PENALTY) continue;
+    if (ev.playerId !== null) {
+      const scorer = byId.get(ev.playerId);
+      if (scorer) {
+        scorer.seasonGoals++;
+        scorer.careerGoals++;
+      }
+    }
+    if (ev.player2Id !== null) {
+      const assister = byId.get(ev.player2Id);
+      if (assister) {
+        assister.seasonAssists++;
+        assister.careerAssists++;
+      }
+    }
+  }
+}
+
 export function applyMatchToPlayers(match: Match, world: World) {
   const byId = new Map(world.players.map((p) => [p.id, p]));
+  applyMatchGoalsToPlayers(match, world.players);
   if (match.minutes) {
     for (const [id, minutes] of Object.entries(match.minutes)) {
       const p = byId.get(Number(id));

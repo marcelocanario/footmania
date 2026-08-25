@@ -1035,7 +1035,9 @@ const marketUpdateListeners = new Set<(event: MarketUpdate) => void>();
 // a finished (immutable) match its response never changes, so it can safely
 // flow through the normal GET cache — only the genuinely-live endpoints
 // (live state, subs, halftime, the WS handshake path) need to bypass it.
-const NEVER_CACHE = /^api\/(auth|account|mp\/live-match$|matches\/.*\/(live|sub|halftime|ws)|settings)/;
+// Player history is also never cached: the card it feeds must reflect a goal
+// scored in an in-progress live match (and the full-time commit right after).
+const NEVER_CACHE = /^api\/(auth|account|mp\/live-match$|matches\/.*\/(live|sub|halftime|ws)|settings|players\/.*\/history)/;
 
 function shouldCache(url: string): boolean {
   const path = url.split("?", 1)[0].replace(/^\//, "");

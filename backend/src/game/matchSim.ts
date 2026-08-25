@@ -1966,20 +1966,14 @@ function stepPossession(eng: Engine): void {
         clubId: club.id, playerId: result.shooter?.id ?? null, player2Id: assistId, goalType: GOAL_SUBTYPES.NORMAL,
         ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
       });
-      if (result.shooter) {
-        const p = eng.onPitchBySide[attSide].find((p) => p.id === result.shooter?.id);
-        if (p) {
-          p.seasonGoals++;
-          p.careerGoals++;
-        }
-      }
-      if (assistId !== null) {
-        const a = eng.onPitchBySide[attSide].find((p) => p.id === assistId);
-        if (a) {
-          a.seasonAssists++;
-          a.careerAssists++;
-        }
-      }
+      // Goal/assist attribution: the scorer and assister are recorded in the
+      // GOAL event above. The engine deliberately does NOT increment the live
+      // Player counters here — a live tick persists only the match state, so an
+      // in-memory Player mutation would be silently lost on the next reload.
+      // Goals and assists are credited to the authoritative Player rows from
+      // these events at the match boundary (applyMatchGoalsToPlayers from
+      // applyMatchToPlayers at live full-time and from simulateMatch for
+      // instant simulation).
       eng.commentary.push(`${result.shooter ? sideOf(eng, attSide).club.name : ""} score`);
       // KICK_OFF for opponent
       eng.possessionSide = attSide === 0 ? 1 : 0;
