@@ -466,16 +466,6 @@ export function LiveMatch() {
           {/* Lineup editing is for participants only; spectators just see the pitch. */}
           {!isSpectator && <TacticsBoard mode="match" matchId={state.matchId} liveState={state} />}
         </div>
-        <MatchPitch
-          home={home!}
-          away={away!}
-          missing={state.missingPlayers ?? []}
-          events={state.events}
-          phase={state.phase}
-          minute={state.minute}
-          addedTime={state.currentAddedTime ?? null}
-          ball={state.ball ?? null}
-        />
       </div>
     );
   }

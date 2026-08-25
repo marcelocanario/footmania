@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { GripVertical, Target, Wand2 } from "lucide-react";
 import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
-import { kitDotBackground } from "./kit/kitCss";
+import { FootballKit } from "./kit/FootballKit";
 import { slotPointsForFormation } from "./matchPitchUtils";
 import { FORMATIONS } from "../tacticsOptions";
 
@@ -52,6 +52,7 @@ interface BoardPlayer {
   energy: number;
   injuryDays: number;
   suspended: boolean;
+  number?: number | null;
 }
 
 interface Props {
@@ -105,12 +106,6 @@ function isBoardPlayer(player: BoardPlayer | null | undefined): player is BoardP
 
 function positionLabel(position: number): string {
   return ["GK", "FB", "CB", "MF", "FW"][position] ?? "PLAYER";
-}
-
-function playerInitials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length < 2) return name.slice(0, 2).toUpperCase();
-  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
 export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange }: Props) {
@@ -232,6 +227,9 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
   const kit = mode === "match" && liveState
     ? liveState.humanSide === 0 ? liveState.homeKit : liveState.awayKit
     : snapshot?.club?.kits?.home ?? { ...EMPTY_KIT, primary: snapshot?.club?.primaryColor ?? EMPTY_KIT.primary, secondary: snapshot?.club?.secondaryColor ?? EMPTY_KIT.secondary };
+  const gkKit = mode === "match" && liveState
+    ? liveState.humanSide === 0 ? liveState.homeGkKit : liveState.awayGkKit
+    : snapshot?.club?.kits?.gk ?? kit;
 
   const findDropTarget = useCallback((clientX: number, clientY: number): DropLocation | null => {
     const element = document.elementFromPoint(clientX, clientY);
@@ -405,16 +403,9 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     const point = slotPoints[index] ?? { x: 50, y: 50 };
     return { left: `${point.x}%`, top: `${point.y}%` };
   };
-  const playerStyle = (): CSSProperties => ({
-    "--tb-kit": kit.primary,
-    "--tb-kit-2": kit.secondary,
-    "--tb-kit-dot": kitDotBackground(kit),
-  } as CSSProperties);
   const isOver = (area: BoardArea, index: number) => dragging?.over?.area === area && dragging.over.index === index;
-  // playerStyle() only depends on `kit`, which is identical for every starter
-  // row — compute the CSS-vars object once instead of allocating a fresh one
-  // per row on every render.
-  const starterChipStyle = playerStyle();
+  // The jersey marker needs no per-player CSS vars (the FootballKit SVG carries
+  // its own colors); the chip itself is plain so no style prop is required.
 
   return (
     <div className="tb-root">
@@ -458,6 +449,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
               {starters.map((player, index) => {
                 const location: BoardLocation = { area: "starter", index, id: player?.id ?? -1 };
                 const active = selected?.area === "starter" && selected.index === index;
+                const isGoalkeeper = (data?.slots?.[index] ?? 0) === 1;
                 return (
                   <button
                     key={`starter-${index}`}
@@ -473,8 +465,10 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                   >
                     <span className="tb-slot-role">{slotNames[index] ?? `#${index + 1}`}</span>
                     {player ? (
-                      <span className="tb-player-chip" style={starterChipStyle}>
-                        <span className="tb-player-dot">{playerInitials(player.name)}</span>
+                      <span className="tb-player-chip">
+                        <span className="tb-player-kit">
+                          <FootballKit {...(isGoalkeeper ? gkKit : kit)} number={player.number ?? (isGoalkeeper ? 1 : undefined)} size="100%" flat />
+                        </span>
                         <span className="tb-player-name">{player.name}</span>
                         <span className="tb-player-rating">{player.overall}</span>
                       </span>

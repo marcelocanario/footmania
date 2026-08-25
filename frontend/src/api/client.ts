@@ -955,6 +955,8 @@ export interface LineupPlayer {
   energy: number;
   injuryDays: number;
   suspended: boolean;
+  /** Squad shirt number shown on the lineup board jersey marker. */
+  number?: number | null;
 }
 
 export interface LineupView {
@@ -964,7 +966,7 @@ export interface LineupView {
   penaltyTakerId: number | null;
   freeKickTakerId: number | null;
   slots: number[];
-  squad: { id: number; name: string; position: number; overall: number; energy: number; tacPosName: string; injuryDays: number; suspended: boolean }[];
+  squad: { id: number; name: string; position: number; overall: number; energy: number; tacPosName: string; injuryDays: number; suspended: boolean; number?: number | null }[];
 }
 
 export interface MatchEvents {

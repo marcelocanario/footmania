@@ -275,6 +275,7 @@ export async function gameRoutes(app: FastifyInstance) {
             injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
             conditionLabel: conditionLabel(p, gameDay),
             suspended: p.suspendedGames > 0,
+            number: p.squadNumber ?? null,
           }
         : null;
     };
@@ -300,6 +301,7 @@ export async function gameRoutes(app: FastifyInstance) {
           injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
           conditionLabel: conditionLabel(p, gameDay),
           suspended: p.suspendedGames > 0,
+          number: p.squadNumber ?? null,
         })),
     };
   });
