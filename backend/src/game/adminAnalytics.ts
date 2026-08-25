@@ -4,7 +4,7 @@ import { totalDivisionsForGeneration, ACADEMY_POSITION_WEIGHTS } from "./clubGen
 import { divisionMean, SENIOR_POSITION_WEIGHTS } from "./playerGeneration";
 import { getCommitmentTotals } from "./finance";
 import { isEphemeralAI } from "./club";
-import { retirementProbability } from "./player";
+import { seniorSurvivalWeights } from "./careerCurves";
 import { calculateBaseSalary } from "./economy";
 import { POSITION_NAMES } from "./constants";
 import { gameConfig } from "../config";
@@ -162,29 +162,24 @@ const AGE_BUCKETS: { label: string; min: number; max: number }[] = [
 ];
 
 /**
- * Steady-state share of the standing senior population at each age from
- * academyPromotionAge to a practical ceiling, under constant academy intake
- * and the live per-position retirement odds (player.ts retirementProbability).
- * This is the same survivorship math as clubGenerator's
- * expectedSeniorCareerSeasons, evaluated per age instead of summed, and
- * weighted by the academy intake position mix (who actually enters).
+ * Steady-state share of the standing senior population at each age, from the
+ * SAME authoritative active-career survival model that initial senior age
+ * generation and academy intake planning use. Real-vs-projected age deltas
+ * therefore measure world drift, not a disagreement between two models.
  */
 function equilibriumAgeShares(): { age: number; share: number }[] {
-  const promotionAge = gameConfig.playerGenerationRules.academyPromotionAge;
-  const maxAge = 45;
   const weightSum = ACADEMY_POSITION_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
-  const survivorshipByAge: number[] = [];
-  for (let age = promotionAge; age <= maxAge; age++) {
-    let survivorship = 0;
-    for (let position = 0; position < ACADEMY_POSITION_WEIGHTS.length; position++) {
-      let s = 1;
-      for (let a = promotionAge; a < age; a++) s *= 1 - retirementProbability(a + 1, position as Position);
-      survivorship += (ACADEMY_POSITION_WEIGHTS[position] / weightSum) * s;
+  const blended = new Map<number, number>();
+  for (let position = 0; position < ACADEMY_POSITION_WEIGHTS.length; position++) {
+    const share = ACADEMY_POSITION_WEIGHTS[position] / weightSum;
+    for (const [age, weight] of seniorSurvivalWeights(position as Position)) {
+      blended.set(age, (blended.get(age) ?? 0) + share * weight);
     }
-    survivorshipByAge.push(survivorship);
   }
-  const total = survivorshipByAge.reduce((sum, s) => sum + s, 0);
-  return survivorshipByAge.map((s, i) => ({ age: promotionAge + i, share: total > 0 ? s / total : 0 }));
+  const total = [...blended.values()].reduce((sum, weight) => sum + weight, 0);
+  return [...blended.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([age, weight]) => ({ age, share: total > 0 ? weight / total : 0 }));
 }
 
 function ageDistribution(world: World, realClubIds: Set<number>): AgeBucketRow[] {

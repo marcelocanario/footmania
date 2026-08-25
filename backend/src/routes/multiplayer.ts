@@ -6,6 +6,7 @@ import { createHumanClub } from "../game/worldgen";
 import { withGlobalLock } from "../services/lock";
 import { seasonKey } from "../game/clock";
 import { gameConfig, MP_CONFIG } from "../config";
+import { SENIOR_SQUAD_LIMIT } from "../game/constants";
 import { clubKitsSchema } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
@@ -378,6 +379,9 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     maxContractSeasons: gameConfig.maxContractSeasons,
     matchDurationMinutes: MP_CONFIG.matchDurationMinutes,
     pregameWindowMinutes: MP_CONFIG.pregameWindowMinutes,
+    seniorSquadLimit: SENIOR_SQUAD_LIMIT,
+    academyVoluntaryPromotionAge: gameConfig.playerGenerationRules.academyVoluntaryPromotionAge,
+    academyAutomaticPromotionAge: gameConfig.playerGenerationRules.academyAutomaticPromotionAge,
   }));
 
   // Countries list for club creation.

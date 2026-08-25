@@ -247,7 +247,7 @@ describe("engine injury auto-substitution", () => {
           skills: { ...p.skills },
           skillAcc: [...p.skillAcc],
           recentMinutes: [...p.recentMinutes],
-          developmentProfile: { ...p.developmentProfile },
+          careerProfile: { ...p.careerProfile },
           energy: 100,
           tacPos: -1,
           starter: false,

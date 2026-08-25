@@ -47,7 +47,6 @@ describe("skill-based overall and training", () => {
     const player = world.players.find((candidate) => candidate.clubId === club.id && !candidate.isYouth)!;
     player.skills = { gol: 10, vel: 10, tec: 10, pas: 10, des: 10, arm: 10, fin: 10 };
     player.overall = overallFromSkills(player.position, player.skills);
-    player.potential = 100;
     player.age = 20;
     player.starter = true;
     player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
@@ -57,7 +56,7 @@ describe("skill-based overall and training", () => {
     // One season of daily development is below a single skill point for most
     // focus targets; run several seasons to observe a deterministic bump.
     for (let season = 0; season < 5; season++) {
-      for (let day = 1; day <= 30; day++) applyDevelopment(world.rng, player, club, day);
+      for (let day = 1; day <= 30; day++) applyDevelopment(player, club, day);
     }
     expect(player.skills).not.toEqual(before);
     expect(player.overall).toBe(overallFromSkills(player.position, player.skills));

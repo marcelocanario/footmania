@@ -135,6 +135,8 @@ export function Squad() {
   const refresh = useGame((s) => s.refresh);
   const isMobile = useIsMobile();
   const maxContractSeasons = useSettings((s) => s.maxContractSeasons);
+  const seniorSquadLimit = useSettings((s) => s.seniorSquadLimit);
+  const academyAutomaticPromotionAge = useSettings((s) => s.academyAutomaticPromotionAge);
   const [selected, setSelected] = useState<PlayerView | null>(null);
   const [showRenew, setShowRenew] = useState(false);
   const [renewSeasons, setRenewSeasons] = useState(1);
@@ -304,15 +306,49 @@ export function Squad() {
   };
 
   const academyAction = async (p: PlayerView, action: "promote" | "dismiss") => {
-    if (false) return;
+    if (action === "dismiss") {
+      confirm(
+        "Release from academy",
+        `Release ${p.name} from the youth academy?`,
+        async () => {
+          await api.academyAction(p.id, "dismiss");
+          toast.current?.show({ severity: "success", summary: "Player released" });
+          await refresh();
+        },
+      );
+      return;
+    }
+    // Promotion neither negotiates a salary nor asks for a term, so the only
+    // thing to confirm is that the existing academy deal carries over unchanged.
+    let preview: Awaited<ReturnType<typeof api.academyPromotionPreview>> | null = null;
+    try {
+      preview = await api.academyPromotionPreview(p.id);
+    } catch (e) {
+      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      return;
+    }
+    if (!preview.eligibleForVoluntaryPromotion) {
+      toast.current?.show({
+        severity: "warn",
+        summary: "Not yet eligible",
+        detail: `${p.name} can be promoted from age ${preview.voluntaryPromotionAge}. Every academy player is promoted automatically at ${preview.automaticPromotionAge}.`,
+      });
+      return;
+    }
+    if (preview.seniorRosterError) {
+      toast.current?.show({ severity: "warn", summary: "No senior slot", detail: preview.seniorRosterError });
+      return;
+    }
     confirm(
-      action === "promote" ? "Promote player" : "Release from academy",
-      action === "promote" ? `Promote ${p.name} to the senior squad?` : `Release ${p.name} from the youth academy?`,
+      "Promote player",
+      `Promote ${p.name} to the senior squad? He keeps his current deal exactly: ${money(preview.retainedSalary)}/season `
+      + `with ${seasonsOf(preview.retainedContractDays)} remaining, ending at age ${preview.contractEndAge}. `
+      + "Neither the salary nor the expiry date changes on promotion.",
       async () => {
-        await api.academyAction(p.id, action);
-        toast.current?.show({ severity: "success", summary: action === "promote" ? "Player promoted" : "Player released" });
+        await api.academyAction(p.id, "promote");
+        toast.current?.show({ severity: "success", summary: "Player promoted" });
         await refresh();
-      }
+      },
     );
   };
 
@@ -437,6 +473,15 @@ export function Squad() {
           ]}
         />
       </div>
+
+      {seniors.length > seniorSquadLimit && (
+        <div className="card" style={{ marginBottom: 12, padding: 12, borderColor: "var(--gold-2)", color: "var(--gold-2)" }}>
+          <b>Squad over the limit ({seniors.length}/{seniorSquadLimit}).</b> An academy player reaching
+          age {academyAutomaticPromotionAge} is always promoted, even into a full squad — nobody is ever
+          released to make room. Until you are back at the limit you cannot bid, sign, borrow, promote
+          another youth player, or renew a contract. Selling, loaning out and releasing all still work.
+        </div>
+      )}
 
       {tab === "tactics" ? (
         <>

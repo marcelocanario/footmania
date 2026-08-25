@@ -1,18 +1,13 @@
 import type { Club, Player, World } from "./types";
-import { chance, nextInt } from "./rng";
-import {
-  aging,
-  potentialGrowth,
-  shouldRetire,
-} from "./player";
-import { DAYS_PER_YEAR } from "./constants";
+import { chance } from "./rng";
+import { aging, shouldRetire } from "./player";
+import { DAYS_PER_YEAR, SENIOR_SQUAD_FLOOR } from "./constants";
 import { ensureClubSquadNumbers } from "./squadNumbers";
-import { gameConfig, scaleReferenceSeasonFlow } from "../config";
+import { gameConfig } from "../config";
 import { resetPayrollPeriod, settlePayrollThrough, settlePlayerPayroll } from "./payroll";
 import {
-  calculateBaseSalary,
-  calculateContractDemand,
   calculatePlayerValue,
+  calculateProfessionalContractSalary,
   calculateReleaseClause,
   remainingSeasons,
 } from "./economy";
@@ -22,7 +17,23 @@ import { bumpSkillsVersion } from "./skillsVersion";
 import { generateSeniorPlayer } from "./playerGeneration";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { playerHasActiveListing } from "./market";
-import { isEphemeralAI } from "./club";
+import { isEphemeralAI, seniorRosterFullError } from "./club";
+import {
+  activePersistentClubs,
+  activePopulation,
+  allocatedIntakeForClub,
+  commitSeasonalIntake,
+  ensurePopulationLedger,
+  expectedEligibleRetirements,
+  isActivePersistentClub,
+  pendingYouthDismissalCount,
+  planSeasonalIntake,
+  recordExtraNonAcademyGeneration,
+  recordRetirementOutcome,
+  recordYouthDismissal,
+  targetActivePopulation,
+  type IntakePlan,
+} from "./population";
 import { NEWS_SUBJECTS, publishNews } from "./news";
 
 /** Add game-days without wrapping at a civil-month or season boundary. */
@@ -41,28 +52,36 @@ export function loanFitsContract(startDay: number, endDay: number, contractDays:
 }
 
 export { SENIOR_SQUAD_LIMIT } from "./constants";
-import { SENIOR_SQUAD_LIMIT } from "./constants";
 
-export function fairSalaryForPlayer(player: Player): number {
-  return calculateBaseSalary(player.overall, player.age);
-}
-
-export function promotedYouthSalary(player: Player): number {
-  return Math.max(scaleReferenceSeasonFlow(gameConfig.salaryFloor), Math.round(fairSalaryForPlayer(player) * 0.8));
-}
-
+/**
+ * Promote a youth player into the senior squad.
+ *
+ * Promotion is a STATUS CHANGE, not a negotiation. It accepts no contract term
+ * and performs no salary calculation: the player's salary, contract start and
+ * end boundaries, and remaining duration all carry over exactly. That is what
+ * gives a lower-division club a real window to use an excellent homegrown
+ * player on academy wages before a normal professional renewal turns it into a
+ * genuine keep-or-sell decision — and why his release clause stays low.
+ *
+ * `reason: "age"` is the mandatory boundary promotion. It cannot be blocked by
+ * the senior cap: it may create a temporary overflow rather than release, list,
+ * replace, or overwrite anybody.
+ */
 export function promoteYouthPlayer(world: World, player: Player, reason: "manual" | "age" = "manual"): { ok: boolean; error?: string } {
   const club = world.clubs.find((c) => c.id === player.clubId);
   if (!club || !player.isYouth) return { ok: false, error: "Player is not in the youth academy" };
-  const seniorCount = world.players.filter((p) => p.clubId === club.id && !p.isYouth).length;
-  if (seniorCount >= SENIOR_SQUAD_LIMIT) return { ok: false, error: "Professional squad is full" };
+  if (reason === "manual") {
+    const { academyVoluntaryPromotionAge } = gameConfig.playerGenerationRules;
+    if (player.age < academyVoluntaryPromotionAge) {
+      return { ok: false, error: `Players can only be promoted from age ${academyVoluntaryPromotionAge}` };
+    }
+    const rosterFull = seniorRosterFullError(world, club.id);
+    if (rosterFull) return { ok: false, error: rosterFull };
+  }
 
   settlePlayerPayroll(world, player);
   player.isYouth = false;
   resetPayrollPeriod(player, world.dayIndex);
-  player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
-  player.salary = promotedYouthSalary(player);
-  player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   player.tacPos = -1;
   player.starter = false;
   // Promoted youth need a squad number that no senior currently wears.
@@ -75,7 +94,9 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
     entries: [{
       key: `promote:${player.id}`,
       label: player.name,
-      detail: reason === "age" ? `promoted from the academy at age ${player.age}` : "promoted from the academy to the senior squad",
+      detail: reason === "age"
+        ? `promoted from the academy at age ${player.age} on his existing terms`
+        : "promoted from the academy to the senior squad on his existing terms",
     }],
   });
   return { ok: true };
@@ -86,6 +107,11 @@ export function dismissYouthPlayer(world: World, player: Player): { ok: boolean;
   if (!club || !player.isYouth) return { ok: false, error: "Player is not in the youth academy" };
   settlePlayerPayroll(world, player);
   world.players = world.players.filter((p) => p.id !== player.id);
+  // A dismissal must not hand this club a replacement — now or next season —
+  // but it must not permanently drain the world either. It becomes ONE extra
+  // player in the GLOBAL pool at the very next seasonal intake, shared out by
+  // the seeded allocation like every other recruit.
+  recordYouthDismissal(world);
   publishNews(world, {
     kind: "academy",
     subject: NEWS_SUBJECTS.academy,
@@ -94,12 +120,6 @@ export function dismissYouthPlayer(world: World, player: Player): { ok: boolean;
     entries: [{ key: `dismiss:${player.id}`, label: player.name, detail: "released from the youth academy" }],
   });
   return { ok: true };
-}
-
-export function weeklyUpdate(rng: World["rng"], world: World) {
-  for (const player of world.players) {
-    potentialGrowth(rng, player);
-  }
 }
 
 /** Pays wages accrued since the previous payroll boundary. */
@@ -249,11 +269,23 @@ export function contractCycle(rng: World["rng"], world: World) {
 }
 
 /**
- * Per-season salary the player requests for a renewal of `seasons` seasons,
- * based on his current salary, overall, and age. Shared by human and AI clubs.
+ * Per-season salary a club must pay to renew this player for `futureCompleteSeasons`
+ * complete seasons beyond the current one.
+ *
+ * Because this is a CLUB RENEWAL, the baseline is the greater of what the club
+ * already pays and the market salary implied by his CURRENT overall — so a
+ * renewal can never cut a player's wage, and a player who has improved a lot
+ * since signing can no longer be kept on a stale cheap deal. A promoted academy
+ * player keeps his academy rate only until this is invoked.
  */
-export function contractDemand(player: Player, seasons: number, currentSeasonFraction = 0): number {
-  return calculateContractDemand(player.salary, player.overall, player.age, seasons, currentSeasonFraction);
+export function contractDemand(player: Player, futureCompleteSeasons: number, currentSeasonFraction = 0): number {
+  return calculateProfessionalContractSalary({
+    currentOverall: player.overall,
+    currentAge: player.age,
+    futureCompleteSeasons,
+    currentSeasonFraction,
+    currentSalary: player.salary,
+  });
 }
 
 /** Emit the ordinary player-facing warning for a contract nearing expiry. */
@@ -343,9 +375,13 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
     // Aging, value recalculation and retirement must not mutate or delete
     // players from a roster that stays fixed until wholesale replacement.
     if (club && isEphemeralAI(club)) continue;
-    aging(rng, player, club ?? world.clubs[0]);
-    // Contracts elapse only for clubs participating in the season (plan
-    // §18/§45): provisional and dormant clubs keep their contract time frozen.
+    // A dormant club is frozen whole: its players do not age, so they also
+    // cannot develop, decline, retire, or reach contract expiry while away.
+    // Their clocks resume only when the club becomes active again.
+    if (club && club.competitionState === "DORMANT") continue;
+    aging(player);
+    // Contracts elapse only for clubs participating in the season: provisional
+    // clubs keep their contract time frozen too.
     if (player.contractDays > 0 && (!club || club.competitionState === "ACTIVE")) {
       player.contractDays = Math.max(0, player.contractDays - DAYS_PER_YEAR);
     }
@@ -354,6 +390,10 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
     player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
     player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
   }
+  // Measured BEFORE any retirement roll: the realized count is compared against
+  // this so an unusually high-retirement season is fully replenished and an
+  // unusually low one creates no permanent surplus.
+  const expectedRetirements = expectedEligibleRetirements(world);
   const retirees: number[] = [];
   for (const player of world.players) {
     if (player.clubId !== null && !player.isYouth) {
@@ -361,6 +401,7 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
       // Invariant #28: filler players never retire out of their static
       // roster; the whole squad is replaced with the club at rollover.
       if (club && isEphemeralAI(club)) continue;
+      if (club && club.competitionState === "DORMANT") continue;
       if (player.age >= 33 && chance(rng, 25)) {
         publishNews(world, {
           kind: "retirement",
@@ -380,43 +421,46 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
   // load) so the combined population snapshot can report retirees alongside
   // that step's promotions/intake/replacement counts.
   world.mp.pendingSeasonRetirees = retirees.length;
+  recordRetirementOutcome(world, retirees.length, expectedRetirements);
 }
 
-/** Run youth promotion, seasonal academy intake, and roster replacement. */
+/**
+ * Run mandatory youth promotion, the single seasonal academy intake, and the
+ * senior-floor replacement pass.
+ *
+ * This is the ONLY step that converts pending population compensation into new
+ * players. The exact global integer total is resolved first, then expressed as
+ * an equal per-club base plus a seeded-random remainder, so the realized total
+ * matches the resolved figure exactly instead of drifting.
+ */
 export function processSeasonalAcademyIntake(rng: World["rng"], world: World): void {
+  void rng;
+  const seasonId = world.mp.seasonId;
+  const { academyAutomaticPromotionAge } = gameConfig.playerGenerationRules;
   let promotions = 0;
   let seasonalIntakeGenerated = 0;
   let replacementsGenerated = 0;
+  const plan = planSeasonalIntake(world, seasonId);
   // Per-club flow consumed by the preseason report at SEASON_ROLLOVER_COMMIT.
   const flowByClub: Record<string, { promotions: number; intake: number; replacements: number }> = {};
   for (const club of world.clubs) {
     // Ephemeral AI squads are static (invariant #28): no promotions, no
-    // academy intake and no replacement generation for filler clubs.
-    if (isEphemeralAI(club)) continue;
-    let squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
-    let juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
+    // academy intake and no replacement generation for filler clubs. Dormant
+    // clubs are frozen and sit outside the active population entirely.
+    if (!isActivePersistentClub(club)) continue;
+    const juniors = world.players.filter((p) => p.clubId === club.id && p.isYouth);
     let clubPromotions = 0;
-    const juniorsToPromote = juniors.filter((p) => p.age >= 21);
-    for (const j of juniorsToPromote) {
-      const result = promoteYouthPlayer(world, j, "age");
+    // Mandatory and atomic: it cannot be blocked by the senior cap and never
+    // releases, lists, replaces or overwrites anyone. A full squad simply goes
+    // into temporary overflow, which the manager resolves by selling, loaning
+    // out or releasing.
+    for (const junior of juniors.filter((p) => p.age >= academyAutomaticPromotionAge)) {
+      const result = promoteYouthPlayer(world, junior, "age");
       if (result.ok) {
         promotions++;
         clubPromotions++;
-      } else {
-        publishNews(world, {
-          kind: "academy",
-          subject: NEWS_SUBJECTS.academy,
-          recipientClubId: club.id,
-          headline: "Academy and squad movement",
-          entries: [{ key: `blocked:${j.id}`, label: j.name, detail: "reached 21 but could not be promoted because the professional squad is full" }],
-        });
       }
     }
-    // Seasonal academy intake (player-generation §42-§45): after aging and
-    // promotion, generate the resolved deterministic quota subject only to
-    // academy roster slots. Unused intake slots are lost — never banked, and
-    // releasing youth cannot increase the quota. Idempotent per club/season.
-    const seasonId = world.mp.seasonId;
     let clubIntake = 0;
     if (seasonId !== 0 && !academyIntakeDone(world, club.id, seasonId)) {
       const intake = generateSeasonalAcademyIntake({
@@ -426,18 +470,18 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
         highestDivisionReached: club.highestDivision,
         totalDivisions: Math.max(1, lowestActiveTier(world, seasonId)),
         seasonId,
+        allocated: allocatedIntakeForClub(plan, club.id),
       });
       seasonalIntakeGenerated += intake.length;
       clubIntake = intake.length;
       markAcademyIntakeDone(world, club.id, seasonId);
     }
-    squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+    const squad = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
     let clubReplacements = 0;
-    if (squad.length < 20) {
+    if (squad.length < SENIOR_SQUAD_FLOOR) {
       const division = divisionForClub(world, club.id);
       const totalDivisions = Math.max(1, lowestActiveTier(world, seasonId));
-      for (let i = squad.length; i < 20; i++) {
-        const slot = i;
+      for (let i = squad.length; i < SENIOR_SQUAD_FLOOR; i++) {
         const p = generateSeniorPlayer({
           id: world.nextId++,
           clubId: club.id,
@@ -450,7 +494,7 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
           seasonId,
           generationType: "replacement",
           seed: world.seed,
-          slot,
+          slot: i,
         });
         resetPayrollPeriod(p, world.dayIndex);
         world.players.push(p);
@@ -461,8 +505,13 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
     }
     flowByClub[String(club.id)] = { promotions: clubPromotions, intake: clubIntake, replacements: clubReplacements };
   }
+  commitSeasonalIntake(world, seasonId, plan, seasonalIntakeGenerated);
+  // Recorded AFTER the commit that clears the consumed counters: replacements
+  // created during this step are non-academy persistent generation and must
+  // reduce the NEXT cycle's correction, not the one just settled.
+  recordExtraNonAcademyGeneration(world, replacementsGenerated, "seniorFloorReplacements");
   world.mp.pendingPreseasonFlow = flowByClub;
-  recordPopulationSnapshot(world, { promotions, seasonalIntakeGenerated, replacementsGenerated });
+  recordPopulationSnapshot(world, { promotions, seasonalIntakeGenerated, replacementsGenerated, plan });
 }
 
 /**
@@ -471,26 +520,40 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
  * step's promotions/intake/replacements). Idempotent per season so a retried
  * step cannot duplicate an entry.
  */
-function recordPopulationSnapshot(world: World, flow: { promotions: number; seasonalIntakeGenerated: number; replacementsGenerated: number }): void {
+function recordPopulationSnapshot(
+  world: World,
+  flow: { promotions: number; seasonalIntakeGenerated: number; replacementsGenerated: number; plan: IntakePlan },
+): void {
   const seasonId = world.mp.seasonId;
   world.mp.populationHistory ??= [];
   if (world.mp.populationHistory.some((entry) => entry.seasonId === seasonId)) return;
-  const realClubIds = new Set(world.clubs.filter((c) => !isEphemeralAI(c)).map((c) => c.id));
-  const seniors = world.players.filter((p) => p.clubId !== null && realClubIds.has(p.clubId) && !p.isYouth);
-  const youth = world.players.filter((p) => p.clubId !== null && realClubIds.has(p.clubId) && p.isYouth);
+  const activeClubIds = new Set(activePersistentClubs(world).map((c) => c.id));
+  const seniors = world.players.filter((p) => p.clubId !== null && activeClubIds.has(p.clubId) && !p.isYouth);
+  const youth = world.players.filter((p) => p.clubId !== null && activeClubIds.has(p.clubId) && p.isYouth);
+  const stock = activePopulation(world);
+  const ledger = ensurePopulationLedger(world);
   world.mp.populationHistory.push({
     seasonId,
     seasonKey: `${world.mp.seasonYear}-${String(world.mp.seasonMonth).padStart(2, "0")}`,
     recordedAt: Date.now(),
-    clubCount: realClubIds.size,
+    clubCount: activeClubIds.size,
     seniorCount: seniors.length,
     youthCount: youth.length,
+    freeAgentCount: stock.freeAgents,
+    targetActivePopulation: Math.round(targetActivePopulation(activeClubIds.size) * 100) / 100,
     meanAge: seniors.length > 0 ? Math.round((seniors.reduce((sum, p) => sum + p.age, 0) / seniors.length) * 100) / 100 : 0,
     meanOverall: seniors.length > 0 ? Math.round((seniors.reduce((sum, p) => sum + p.overall, 0) / seniors.length) * 100) / 100 : 0,
     retirees: world.mp.pendingSeasonRetirees ?? 0,
+    expectedRetirees: Math.round(((world.mp.pendingSeasonRetirees ?? 0) - flow.plan.retirementVarianceCorrection) * 100) / 100,
+    terminalDeletions: ledger.cumulative.eligibleTerminalDeletions ?? 0,
     promotions: flow.promotions,
     seasonalIntakeGenerated: flow.seasonalIntakeGenerated,
     replacementsGenerated: flow.replacementsGenerated,
+    rawExpectedGlobalIntake: Math.round(flow.plan.rawExpectedGlobalIntake * 100) / 100,
+    minimumGlobalIntake: flow.plan.minimumGlobalIntake,
+    resolvedGlobalIntake: flow.plan.resolvedGlobalIntake,
+    correctionCarriedForward: Math.round(ledger.carriedCorrection * 100) / 100,
+    pendingYouthDismissals: pendingYouthDismissalCount(world),
   });
   world.mp.pendingSeasonRetirees = null;
   // Bounded history: keep the most recent seasons only.

@@ -211,25 +211,47 @@ whichever relevant skill they're currently weakest in.
 Every new player, whether joining a human club, an AI club, replacing someone, or
 arriving through the youth academy, is generated through the same underlying process.
 
+The key idea is that a player is generated **as a point on a career**, not as a
+standalone ability score. Before working out how good he is *today*, the game draws
+the whole shape of his career, then asks where his generated age puts him on it. That
+is why a generated 18-year-old and a generated 28-year-old of the same underlying
+quality look nothing alike: the teenager is early on his curve with most of his
+improvement still ahead of him, while the 28-year-old is at or just past his best.
+
 - **Division quality**: divisions form a quality gradient from the very best
   (Division 1) to the weakest, with the average ability level declining smoothly as
-  you go down the pyramid, and with some deliberate randomness/spread of talent within
-  any one division.
-- **Senior signings** are given a target ability level drawn from a bell curve
-  centered on their division's average, with a random age between roughly 18 and 38,
-  weighted toward the mid-20s.
-- **Youth players** get a target ability level based on where they'd expect to land at
-  age 21 if they developed naturally from a lower starting point, further boosted by
-  "academy pedigree" — a measure of how strong the generating club's division has been
-  recently, so stronger clubs tend to produce more promising youth prospects.
-- Each new player also receives a hidden, invisible "growth tier" (from a wide range
-  down to an unlucky one) that quietly influences how much further their ceiling can
-  rise as they develop — this tier is never shown to anyone and can't be inferred from
-  anything visible, so a scout can't game it.
+  you go down the pyramid, and with some deliberate spread of talent within any one
+  division.
+- **Career profile first**: every player is given a hidden career shape — how much
+  total improvement he has in him, how front-loaded that improvement is, the exact age
+  he peaks at, how much decline he suffers afterwards, and how quickly that decline
+  arrives. All of it is invisible and permanent. Crucially, "how much" and "how fast"
+  are separate: a fast developer reaches his ceiling earlier, but he does not reach a
+  *higher* ceiling than a slow developer with the same potential.
+- **The career peak is what gets anchored on the division**, not current ability. A
+  senior generated in a division is heading for a peak somewhat above that division's
+  all-round average, because a real squad is a mix of players still improving, players
+  at their best, and players on the way down — and that mix averages back down to the
+  division's figure.
+- **Youth players** are anchored on their club's **academy pedigree** — a blend of the
+  club's current division and the strongest division it has *ever* reached (a
+  permanent ratchet: once a club has been in Division 1, that stays in its academy's
+  favour forever). Pedigree lifts the *career peak* a prospect is heading for, never
+  his ability on the day he arrives. A strong academy therefore produces better
+  **prospects**, not ready-made first-team stars.
+- **Academy recruits are always 16 to 19 years old.** No intake path ever produces a
+  20-year-old academy player, because everyone is promoted by then (§3.7).
+- **Senior ages** are drawn from a survivorship curve: the realistic chance that a
+  player who entered the senior population at the promotion age is *still in the game*
+  at each later age, accounting for both retirement and players who quietly drop out
+  of the game after going unsigned. The same curve is reused for academy intake
+  planning and for the admin analytics view, so those three can never disagree.
 - A player's actual seven skills are then shaped, through a short trial-and-improve
-  process, to land as close as possible to their intended overall rating for their role.
+  process, to land as close as possible to his intended overall rating for his role.
+  His overall is always recomputed *from* those skills — the game never writes an
+  overall rating directly.
 - There's a small (5%) chance a new player is given a different nationality than the
-  club generating them, drawn from anywhere else in the world, so rosters aren't
+  club generating him, drawn from anywhere else in the world, so rosters aren't
   entirely homogeneous.
 - New rosters follow a standard positional mix: roughly 10% goalkeepers, 14%
   full-backs, 18% center-backs, 32% midfielders, 26% forwards.
@@ -237,34 +259,64 @@ arriving through the youth academy, is generated through the same underlying pro
   interruption mid-process) always produces the exact same result rather than a new
   random roll.
 
+Adjacent divisions overlap substantially by design — an exceptional lower-division
+player really can be useful several tiers up. There is deliberately **no** notion of a
+player "belonging" to a division: the game never labels a player with a division,
+recommends one, refuses a contract because of one, or lists a human club's player for
+it. Managers judge players on what they can see.
+
 ### 3.3 Growing older: development, growth, and decline
 
-Each player has their own hidden "development profile," set once when they're
-generated and never changed: the age at which their decline begins (typically
-somewhere between 24 and 38, centered around 30); how fast they develop relative to
-other players their age (some players simply improve faster or slower than others
-with identical attributes); and how much random week-to-week noise their progress has.
+A player's whole career is described by five hidden numbers, fixed once at generation
+and never changed:
 
-A player's growth or decline in any given period follows a smooth curve: growth is
-strongest right after age 18 and fades gradually to nothing by the time their personal
-decline age arrives; from that point on, decline accelerates the longer they stay past
-it. There is no single universal "peak age" — it's personal to each player, driven by
-their own decline age.
+- how much **total improvement** he has available;
+- how **front-loaded** that improvement is;
+- the exact **age he peaks** at;
+- how much **total decline** he suffers afterwards;
+- how **quickly** that decline arrives.
 
-How much a player actually improves or worsens in a given stretch also depends on how
-much they've been playing: players getting regular minutes develop faster and decline
-slower than players warming the bench, based on their playing time over their last
-five matches (weighted toward the most recent).
+Improvement and decline each work as a *budget*. Potential sets the size of the
+budget; speed only changes when it gets spent. A fast developer and a slow developer
+with the same potential end up in the same place — the fast one just gets there
+sooner. There is deliberately no second ceiling, no growth tier, and no separate
+development-rate multiplier anywhere in the system: any of those would let the same
+improvement be granted twice.
 
-Whatever growth or decline a player is due gets spread across their seven skills in
-proportion to how important each skill is to their role (§3.1), with extra weight on
-whichever skill their club's training focus targets. A skill can never rise past the
-point where the player's overall rating would exceed their personal potential
-ceiling, and no skill ever drops below the minimum.
+Peak age is personal, drawn from a bell curve centered in the late twenties with real
+tails in both directions. Before it, a player spends from his improvement budget;
+from that age onward he spends from his decline budget instead. **Improvement not
+realized before his peak is simply lost** — it is never banked for later.
 
-A young player's *potential ceiling itself* also creeps upward over time — fastest for
-teenagers, slower through their late teens, and frozen entirely once they turn 21 —
-with an extra boost for players who drew a luckier hidden growth tier at generation (§3.2).
+How much of the budget a player actually realizes depends on how much he plays, based
+on his minutes over his last five matches (weighted toward the most recent). Regular
+starters realize more of their improvement; bench players realize less. Veterans who
+keep playing decline more slowly than veterans who don't. Note the direction of that
+effect carefully: sitting on the bench makes a young player realize **less** of his
+potential — it never moves him closer to his peak.
+
+Whatever a player is due in a given period is expressed as an amount of *overall
+rating*, then converted into actual skill progress before anything changes. That
+conversion accounts for how much each skill is worth to his role, so an identical
+budget produces comparable overall movement whichever position a player plays — a
+midfielder and a goalkeeper improve at the same rate for the same budget, even though
+their overall ratings weigh completely different skills.
+
+The progress is spread across his seven skills in proportion to how important each is
+to his role, with extra weight on whichever skill his club's training focus targets.
+If a skill is already pinned at its maximum, its share is **redistributed** across the
+skills that can still move — otherwise a training focus aimed at an already-maxed
+skill would quietly waste most of a player's development. Running out of *career
+budget* is a different matter entirely: there, progress simply stops, because there is
+no capacity left to spend anywhere.
+
+Progress accumulates fractionally and only turns into a whole skill point when it
+crosses the threshold, and the player's overall rating is always recomputed from his
+skills afterwards.
+
+**Long-term injuries** can permanently take some of this away: part of the ability
+lost to a serious injury is burned out of the player's remaining improvement budget,
+so his career curve never simply regrows the whole loss.
 
 **Retirement**: below age 33, a player never retires. From 33 onward, each season
 carries a rising chance of retirement that climbs steeply with age — modest in the
@@ -284,6 +336,11 @@ Value = base value for their overall rating
         × a small contract-length adjustment (more contract time left is worth slightly
           more, capped at a ±10% swing)
 ```
+The contract adjustment's neutral point — the length that leaves a player's value
+unchanged — is not configured separately: it is derived as the midpoint between the
+shortest possible deal (one season) and the longest allowed one
+(`maxContractSeasons`), so the per-season adjustment lands exactly on the configured
+minimum and maximum multiplier bounds at both extremes of the range.
 The base value itself grows steeply with ability — going from an average player to an
 elite one is worth far more than proportionally, since the underlying formula raises
 overall rating to a high power. A player's value is recalculated automatically any
@@ -297,28 +354,164 @@ contract.
 
 Salary follows the same shape as value — it grows steeply with overall ability and is
 adjusted by an age curve that peaks in the mid-20s — with a guaranteed floor so no
-player, however weak, is paid nothing. Youth academy players are paid a small fraction
-(about a tenth) of what an equivalent senior player of their ability and age would earn.
+senior player, however weak, is paid nothing.
 
 The salary formula's baseline figures are calibrated against a "reference" season
 length and automatically rescaled if the game's actual season length is ever
 configured differently — so changing how long a season lasts doesn't accidentally
 change how much money flows through the game each day.
 
-### 3.6 Renewing a contract
+**Academy wages** are a configurable small fraction (about a tenth) of what the *same
+player* would be paid under the complete professional contract calculation, for his
+own current ability, age, and exact contract length. No professional floor is
+reapplied on top, so that fraction is exact. One deliberate consequence: because a
+release clause is derived from salary, an academy-origin contract also carries a very
+low release clause — that is an intentional mobility mechanism for a promoted
+homegrown player whose club doesn't value him enough to put him on professional terms,
+and it is never quietly swapped for a professional-sized clause.
 
-When a club renews a player's contract, the size of the pay raise depends on how good
-the player is (better players demand more, and the effect grows sharply once a player
-is genuinely elite rather than merely good) and their age (young, developing players
-push for much bigger raises than players in their thirties), within a floor of about
-2% and a ceiling of about 15% per season.
+### 3.6 Contracts and renewals
 
-When a renewal covers several seasons at once, that raise is converted into one flat,
-constant salary figure for the whole new deal rather than a rising, compounding one —
-which has a quirk worth knowing: renewing right at the very start of a season works
-out slightly cheaper per season than renewing right at the end, even though the
-earlier renewal actually covers more playing time. This is an intentional, accepted
-feature of how the math works, not a bug to be fixed.
+**Every** newly negotiated professional contract in the game goes through one shared
+calculation — a club renewal, the renewal of a promoted academy player's retained
+deal, the contract attached to a winning transfer bid, a free-agent signing, and the
+first contract of a generated player. It takes the player's *current* ability and age,
+the number of complete seasons the deal covers beyond the current one, and how much of
+the current season is left.
+
+The annual figure a player asks for is built from three parts: a floor that everyone
+gets, a component that rises steeply with his visible ability, and a **youth premium**
+that peaks just before first-team age and fades to nothing through the mid-twenties.
+That premium reads visible age *only* — never a player's hidden potential — because
+feeding hidden information into a public salary quote would leak scouting information.
+Its effect is to make locking a promising young player into a long deal genuinely
+expensive, without erasing the advantage of promoting and using him in the first place.
+
+That annual figure is then levelled into a single flat salary across the exact
+contract horizon, rather than a rising, compounding one. This has a quirk worth
+knowing: renewing right at the very start of a season works out slightly cheaper per
+season than renewing right at the end, even though the earlier renewal actually covers
+more playing time. That is intentional pro-rating, not a bug.
+
+**Contract length always means complete seasons *in addition to* the remainder of the
+current one.** A five-season academy deal signed at the season boundary is the current
+season plus four more — never six seasons of service.
+
+**Nobody ever takes a pay cut to stay or to move.** Two of the paths above apply a
+no-pay-cut floor, meaning the new deal can never be worth less per season than the
+player already earns:
+
+- a **club renewal** — so a player who has improved a lot since signing can no longer
+  be kept on a stale cheap deal, and one who is being paid above his worth keeps it;
+- a **transfer** — a player under contract does not accept less to change clubs, so a
+  buying club must at least match what he already earns.
+
+A **free-agent signing** is the exception. An expired salary does not follow a player
+into free agency, so a player can quite legitimately reject a renewal at one price and
+later ask for less once his contract has actually run out.
+
+Once signed, a salary is fixed. Daily development never silently re-prices a contract;
+the player's current ability is consulted again only when the *next* contract is
+negotiated.
+
+### 3.7 The youth academy
+
+Academy players are always aged 16 to 19. An academy contract's length is **derived**,
+not configured: it always runs to the age-21 boundary, so a 16-year-old gets five
+seasons, a 17-year-old four, an 18-year-old three, and a 19-year-old two. An academy
+contract can never be renewed or extended while the player is still in the academy.
+
+**Promotion is a status change, not a negotiation.** It accepts no contract term and
+makes no salary offer: the player's wage, contract start, expiry date, and remaining
+duration all carry over exactly. That is what gives a lower-division club a real
+window to use an excellent homegrown player on academy wages before an ordinary
+professional renewal turns it into a genuine keep-or-sell decision.
+
+- A manager may **voluntarily** promote a player from age 18, provided there's a free
+  senior squad slot.
+- At the age-20 boundary, **every** remaining academy player is promoted
+  automatically. This is mandatory and cannot be blocked by a full senior squad.
+
+If a full squad receives a mandatory promotion, the club goes into a temporary
+**overflow** — it is never resolved by releasing, listing, replacing, or overwriting
+anybody. While a club is over the squad limit it may not submit or settle transfer
+bids, bid for or sign free agents, take a player on loan, voluntarily promote another
+youth player, or renew any senior contract. Selling, loaning out, and releasing all
+stay available, so the manager always has a way out. Settlement re-checks the limit,
+so a bid placed before the overflow arose still can't sneak through afterwards.
+
+Once promoted, a player is an ordinary senior in every respect. A renewal may be
+offered only *after* promotion, and it uses exactly the same shared salary calculation
+and validation as any other senior renewal (§3.6). If his retained contract reaches
+age 21 unrenewed, it expires through the ordinary senior route and he becomes a free
+agent — there is no separate academy expiry path and no age-21 youth state, because
+everybody was already promoted by 20.
+
+A manager can also **dismiss** a youth player. That never entitles the dismissing club
+to a replacement of its own — but it doesn't permanently shrink the world either. See §3.8.
+
+### 3.8 Keeping the player population stable
+
+The game actively manages the total number of persistent players so the world neither
+quietly drains away nor inflates over time.
+
+Only the **active** world counts: players owned by active clubs, plus professional
+free agents still inside their retention window. Filler AI clubs, temporary
+provisional teams, and dormant clubs and their frozen squads are all outside that
+boundary. When a club goes dormant, its target contribution and its frozen squad leave
+the boundary *together* — that's a change of boundary, not destruction, so it needs no
+compensation. Reactivation brings the same stock back.
+
+The target is a per-club figure for owned players plus an expected free-agent pool.
+The pool expectation is **measured, not assumed**: no rates are configured for how
+often contracts expire or how quickly players get signed. Instead the game records
+every professional that enters the listed free-agent pool (countered in the same step
+as the listing) and, at each season snapshot, multiplies the trailing window's expiry
+count by the average time the *currently listed* free agents have spent in the pool —
+a stock = flow × residence estimate from realized data. A faster market therefore
+lowers the expectation and a slower one raises it, so the benchmark self-calibrates
+instead of drifting away from reality. The free-agent pool is part of the target, not
+an untracked surplus sitting on top of a club-only one.
+
+Every structural event that changes the population increments a durable counter *in
+the same step that performs the change*, and nothing generates a player on the spot.
+The single seasonal academy intake is the only thing that ever converts those counters
+into new players. That includes:
+
+- **expected retirements**, which set the smooth baseline;
+- **actual minus expected retirements**, so an unusually heavy retirement season is
+  fully replenished and an unusually light one creates no permanent surplus;
+- **free agents deleted** after going unsigned for their whole retention period;
+- **youth dismissals**, which are replenished through the *global* pool at the very
+  next season-boundary intake — the extra recruit is shared out among all clubs by the
+  usual seeded split, so a club can never dismiss and reroll a better prospect for
+  itself, while the world still doesn't lose a player permanently;
+- **players created outside the academy** (senior-squad top-ups, financial-rescue
+  replacements), which *reduce* the next intake;
+- **clubs genuinely joining or returning**, counted as their target contribution minus
+  whatever squad arrives with them.
+
+Academy promotion is never a population event — it only reclassifies a player who was
+already there. Neither are transfers, signings, or loans: those change ownership, not
+population.
+
+The resulting correction is **signed** and can legitimately be negative. Generated
+intake never is: every active club is guaranteed a configurable minimum number of new
+prospects every season even during a surplus, and any negative balance that can't be
+worked off because of that floor is carried forward rather than forgotten.
+
+Because players are indivisible, the exact global total is resolved **first** and only
+then split across clubs: everyone gets the whole-number share, and the leftover goes
+to a seeded-random selection of clubs — one extra player each at most. Twenty-one
+players across ten clubs is two each plus exactly one club getting the twenty-first.
+The same world seed, season, and intake produce the same recipients every time, and
+the result doesn't depend on what order clubs happen to be processed in. Slots blocked
+by a full academy carry forward into the correction rather than being rerolled or
+silently lost.
+
+The whole intake — consuming the counters, generating the players, recording the carry
+and the seeded allocation — commits atomically, so a retry sees either all of it or
+none of it and can never convert the same deletion into players twice.
 
 ---
 
@@ -585,6 +778,13 @@ now. If a competitive bid comes in with less than 30 minutes left on the clock, 
 deadline extends by another 30 minutes — with no limit on how many times this can
 happen, so a genuine bidding war can run as long as it needs to.
 
+**The contract the winner signs** is calculated from the player's ability and age as
+frozen at listing time, and honours the no-pay-cut floor (§3.6): a player under
+contract will not accept less per season to change clubs, so the buying club must at
+least match what he already earns. A bidder's term and salary are both locked in the
+moment their first bid lands, so nobody ever finds out what they committed to only at
+settlement.
+
 When the auction settles, **5% of the final price is deducted as a transaction fee
 that simply leaves the economy entirely** — it isn't paid to anyone; it's the game's
 main way of keeping the total money in the world from spiraling upward over time. The
@@ -605,6 +805,11 @@ on the early 30s — a fresh-faced 20-year-old free agent will typically be offe
 close to the maximum contract length, while a 34-year-old will typically only get the
 shortest one on offer.
 
+Unlike a transfer, a free-agent contract carries **no** no-pay-cut floor: an expired
+salary doesn't follow a player into free agency, so a player who turned down a renewal
+may quite legitimately end up asking for less once his contract has actually run out
+(§3.6).
+
 Unlike an open auction, money paid to sign a free agent doesn't go to any club — it's
 paid directly out to the wider game economy, since there's no selling club on the
 other side of the deal.
@@ -615,7 +820,18 @@ A club can loan out a player it owns, choosing a fee for whoever eventually borr
 him — somewhere between 10% and 30% of his value — locked in at the moment of
 listing. A newly listed loan can't be claimed for the first 30 minutes (giving
 everyone a fair chance to see it), and loans are always structured to run through to
-the end of the current season. A club can only borrow up to five players on loan at
+the end of the current season.
+
+Two guards stop a loan listing that could never make sense:
+
+- **The listing itself must finish inside the player's contract.** A listing whose
+  public exposure window would outlast his deal could only ever be claimed after he
+  had already left, so it is refused outright.
+- **A player in his final contractual season can't be listed once the season is
+  past the join threshold.** At that point he is on course to leave as a free
+  agent at the rollover unless he's renewed — and he can't be renewed while
+  he's listed, whether for loan or for open sale. The club has to sort out his
+  contract first. A club can only borrow up to five players on loan at
 once, and the same senior-roster-size limits that apply to every other way of
 acquiring a player apply here too. Whoever borrows a player pays that fee immediately
 and takes over paying his full wages for as long as the loan lasts; loans don't count
@@ -646,6 +862,12 @@ itself* is currently in the lead, never what any other club has bid.
 ## 7. Club Finance & Economy
 
 ### 7.1 Season budgets
+
+Budget figures are **derived from the live player-generation configuration**, not
+hard-coded: what a healthy Division 1 squad averages, what its automatic XI averages,
+and what counts as a meaningful signing or an elite player are all read off the same
+generation projection the game actually uses. Retuning player quality therefore moves
+the budget curve with it, instead of silently invalidating it.
 
 Every club receives a budget once per season, added on top of whatever cash it
 already has — it's never a reset to zero. Division 1 gets the largest budget; every
@@ -759,9 +981,11 @@ specifically, there's a small chance of a training injury; and every player's
 development or decline for the day is applied (§3.3).
 
 On top of that, once a week: full wages are settled for every club (triggering a
-financial rescue if needed, §7.4), every player's long-term potential ceiling gets its
-periodic nudge upward (§3.3), and any player whose contract has fully run out formally
-leaves their club.
+financial rescue if needed, §7.4), and any player whose contract has fully run out
+formally leaves their club.
+
+Players belonging to a **dormant** club are skipped entirely — they don't develop or
+decline at all while their club is frozen (§10.2).
 
 Nothing related to aging a full year, retirement, youth academy intake, or
 end-of-season awards happens during the regular season at all — those are strictly
@@ -795,10 +1019,15 @@ its own if anything gets interrupted partway through:
 5. **Hand out next season's budgets**.
 6. **Wrap up contracts**: age every player by a full year, count down every remaining
    contract by a season, roll the dice on retirement for players 33 and over, and
-   formally release anyone whose contract has now fully expired.
-7. **Youth academy intake**: promote any eligible academy prospects up to the senior
-   squad, generate a fresh batch of new academy recruits for the season ahead, and top
-   up any club whose senior squad has fallen below a healthy minimum size.
+   formally release anyone whose contract has now fully expired. Expected retirements
+   are measured before the dice are rolled so the difference can be replenished
+   exactly (§3.8). Dormant clubs are skipped completely — their players don't age,
+   retire, or lose contract time.
+7. **Youth academy intake**: promote every academy player who has reached the
+   automatic promotion age (§3.7), resolve the exact global intake total and its
+   per-club allocation (§3.8), generate each club's share, and top up any club whose
+   senior squad has fallen below a healthy minimum size. Those top-ups are recorded so
+   they reduce the *next* season's intake rather than the one just settled.
 8. **Open the new season for joining**.
 9. **Generate next season's fixtures** for every division.
 10. **Double-check** that every division's fixture list is complete and correctly
@@ -909,10 +1138,24 @@ the season has actually been played.
 Each tier has its own threshold for how long a club can go without any meaningful
 activity before it's flagged as potentially abandoned — a bit under two months at the
 very top of the pyramid, a bit under a month everywhere else. Being flagged never
-removes a club mid-season — it's purely a heads-up that gets acted on only at the next
-end-of-season sequence, at which point a still-flagged club is formally marked
-dormant, with its squad, finances, and progress completely preserved exactly as they
-were, frozen in place. Any renewed activity clears the flag immediately.
+removes a club mid-season: a club flagged during a season stays fully active right
+through to the end of it. It's purely a heads-up that gets acted on only at the next
+end-of-season sequence. Any renewed activity clears the flag immediately.
+
+When a still-flagged club is finally marked dormant, it leaves its division and group
+and is **frozen whole**:
+
+- its players don't age, develop, decline, retire, or reach contract expiry;
+- contracts, wages, payroll, cash and budgets don't move;
+- it receives no academy intake, no automatic promotions, and no replacement players;
+- it plays no fixtures and takes no part in the market;
+- and none of this is caught up on later — there is no offline back-pay or back-growth.
+
+Anything it was still involved in on the market is settled or withdrawn *before* the
+frozen snapshot becomes authoritative — its own listings are cancelled, its bids are
+withdrawn and their reservations released, and any loan boundary involving it is
+closed. That way no deadline can ever fire later against a club whose clocks have
+stopped.
 
 A dormant club can return at any time — but always re-enters at the very bottom of the
 current pyramid, never back at whatever tier it left from, and doesn't receive a fresh
@@ -1035,6 +1278,18 @@ predict in a perfectly balanced world — average ability by division, financial
 distress across clubs, squad sizes, how the mix of positions compares to the intended
 template, how actual salaries compare to the formula, the age spread of the whole
 population versus a theoretical steady state, and the health of the free-agent pool.
+The projected age spread comes from the very same survivorship model that generates
+initial senior ages and plans academy intake, so a real-versus-projected gap always
+means the living world has drifted — never that two models disagree.
+
+Alongside those stocks, the view reports the **flows** behind them season by season:
+expected and actual retirements, free agents deleted after going unsigned, youth
+dismissals recorded but not yet converted by an intake, players created outside the
+academy, the raw, floor-clamped and final intake totals, and the signed balance carried
+forward. An observed gap against the target is expected to reconcile exactly against
+that ledger plus the not-yet-converted youth dismissals; anything else is a bug, not a
+bonus.
+
 None of this feeds back into how the game actually plays — it exists purely so
 administrators can spot the population quietly drifting out of balance over time and
 step in if needed.
@@ -1095,9 +1350,13 @@ settings with no real effect today:
 - **Every country in the game has a "footballing strength" rating attached to it, but
   nothing currently uses it** — when an AI club's home country is chosen, it's picked
   with equal likelihood from the featured list, not weighted by this rating at all.
-- Player potential growth and retirement (§3.3–§3.4) went further than an earlier
-  design note suggested they would — both are fully present and active in the game
-  today, more so than that note anticipated.
+- **The separate "potential ceiling" a player used to carry is gone.** Improvement is
+  now bounded by a single career budget (§3.3) rather than by a second, separately
+  growing ceiling. Nothing in the game grows a player's capacity a second time, and
+  nothing exposes a potential figure.
+- **The old hidden "growth tier" and per-player development-rate multiplier are also
+  gone**, for the same reason: they were additional capacity authorities sitting
+  alongside the career budget.
 - A handful of numbers quoted in earlier design notes turned out slightly different
   from what actually shipped (for example, an illustrative example figure for how
   strong Division 1 players should be) — where this document's numbers disagree with

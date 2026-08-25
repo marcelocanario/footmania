@@ -1,6 +1,6 @@
 import type { Player, World } from "./types";
 import { applyDevelopment } from "./player";
-import { contractCycle, settlePayroll, weeklyUpdate } from "./season";
+import { contractCycle, settlePayroll } from "./season";
 import { gameConfig } from "../config";
 import { evaluateInactivity } from "./multiplayer";
 import { runFinancialIntervention } from "./finance";
@@ -40,7 +40,10 @@ function dailyDevelopment(world: World) {
   for (const club of world.clubs) {
     const squad = squads.get(club.id);
     if (!squad) continue;
-    for (const player of squad) applyDevelopment(world.rng, player, club, world.dayIndex);
+    // A dormant club and its players are frozen exactly as stored: no growth,
+    // no decline, and no offline catch-up when the owner returns.
+    if (club.competitionState === "DORMANT") continue;
+    for (const player of squad) applyDevelopment(player, club, world.dayIndex);
   }
 }
 
@@ -170,7 +173,6 @@ export function processGameDayPayroll(world: World, seasonDayIndex: number, now 
 /** Run weekly-only systems for a game day, if that day is a weekly boundary. */
 export function processGameDayWeekly(world: World, seasonDayIndex: number): void {
   if ((seasonDayIndex + 1) % gameConfig.weeklyIntervalDays !== 0) return;
-  weeklyUpdate(world.rng, world);
   contractCycle(world.rng, world);
 }
 

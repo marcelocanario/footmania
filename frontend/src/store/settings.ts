@@ -25,6 +25,10 @@ interface SettingsState {
   matchDurationMinutes: number;
   maxContractSeasons: number;
   pregameWindowMinutes: number;
+  /** Senior squad cap. A mandatory age promotion can legally exceed it. */
+  seniorSquadLimit: number;
+  academyVoluntaryPromotionAge: number;
+  academyAutomaticPromotionAge: number;
   loading: boolean;
   load: () => Promise<void>;
 }
@@ -33,6 +37,9 @@ export const useSettings = create<SettingsState>((set) => ({
   matchDurationMinutes: typeof window !== "undefined" ? read() : 30,
   maxContractSeasons: 5,
   pregameWindowMinutes: 60,
+  seniorSquadLimit: 35,
+  academyVoluntaryPromotionAge: 18,
+  academyAutomaticPromotionAge: 20,
   loading: false,
 
   load: async () => {
@@ -52,6 +59,13 @@ export const useSettings = create<SettingsState>((set) => ({
       const pregameWindow = Math.round(res.pregameWindowMinutes ?? 60);
       if (Number.isFinite(pregameWindow) && pregameWindow >= 0) {
         set({ pregameWindowMinutes: pregameWindow });
+      }
+      const squadLimit = Math.round(res.seniorSquadLimit ?? 35);
+      if (Number.isFinite(squadLimit) && squadLimit >= 11) set({ seniorSquadLimit: squadLimit });
+      const voluntaryAge = Math.round(res.academyVoluntaryPromotionAge ?? 18);
+      const automaticAge = Math.round(res.academyAutomaticPromotionAge ?? 20);
+      if (Number.isFinite(voluntaryAge) && Number.isFinite(automaticAge) && voluntaryAge < automaticAge) {
+        set({ academyVoluntaryPromotionAge: voluntaryAge, academyAutomaticPromotionAge: automaticAge });
       }
     } catch {
       /* keep local value */

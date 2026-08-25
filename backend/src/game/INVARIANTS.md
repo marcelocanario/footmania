@@ -59,8 +59,14 @@ These invariants are the non-negotiable rules of the multiplayer league engine
 16. **Abandoned clubs are never removed mid-season.** Inactivity only flags a
     club; removal to DORMANT happens at season rollover.
 
-17. **Abandoned clubs retain their underlying club, squad, finances and
-    progression.** DORMANT preserves everything; the club can return.
+17. **A DORMANT club is frozen whole.** Its players do not age, develop,
+    decline, retire or reach contract expiry; contracts, wages, payroll, cash
+    and budgets do not move; it receives no academy intake, no automatic
+    promotion and no replacement generation; and no offline catch-up is applied
+    when it returns. Any listing, unresolved bid, reservation or loan boundary
+    involving it is settled or closed BEFORE the frozen snapshot becomes
+    authoritative, so no deadline can later fire against a stopped clock.
+    Reactivation restores exactly that state.
 
 18. **Returning abandoned clubs re-enter at the lowest available competitive
     level.** They do not reclaim their historical tier.
@@ -91,12 +97,18 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     rows (a mid-season joiner inherits the replaced AI's record but none of
     its played matches). Filler AI is exempt.
 
-23. **One senior-roster cap governs every acquisition path.**
-    `SENIOR_SQUAD_LIMIT` bounds youth promotions, transfer-auction wins,
-    free-agent signings and loan claims alike. Loaned-in players occupy squad
-    slots and count; loaned-out players do not. Bid-time checks fail early;
-    settlement re-checks fail closed (terminal: the listing is cancelled, the
-    player stays with the seller).
+23. **One senior-roster cap governs every VOLUNTARY acquisition path.**
+    `SENIOR_SQUAD_LIMIT` bounds voluntary youth promotions, transfer-auction
+    bids and wins, free-agent bids and signings, and loan claims alike.
+    Loaned-in players occupy squad slots and count; loaned-out players do not.
+    Bid-time checks fail early; settlement re-checks fail closed (terminal: the
+    listing is cancelled, the player stays with the seller).
+
+    Mandatory age promotion is the single exception: it may push a club ABOVE
+    the cap rather than releasing, listing, replacing or overwriting anyone.
+    While a club is over the cap, every voluntary acquisition AND every senior
+    renewal is blocked; selling, loaning out and releasing stay available so the
+    overflow is always resolvable.
 
 24. **Loans cost a lender-chosen fee within a configured band.** The listing
     owner picks a claim fee between `MARKET_CONFIG.loans.feeMinValueRatio` and
@@ -105,14 +117,24 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     unreserved cash (§9 immediate-cash rule); a club may hold at most
     `maxLoanedInPerClub` borrowed players.
 
+    A loan listing may never outlive the contract behind it. Both the loan
+    period AND the listing's own public exposure window must finish inside the
+    player's remaining contract, and a player in his final contractual season
+    may not be listed (for loan or for sale) once the season has passed the
+    join threshold — at that point he is on course to leave as a free agent,
+    and he cannot be renewed while listed.
+
 25. **Live matches advance only on the server clock.** Clients may request an
     elapsed-time catch-up but can never accelerate, pause for advantage, or
     force-finish a match; the worker's real-time pacing is authoritative.
 
-26. **No hidden quality flags on players.** Birth-quality/potential indicators
-    are server-private development inputs derived from persisted generation
-    data (`rawZ`); they are never stored as a player field nor exposed through
-    any API view.
+26. **No hidden quality flags are exposed.** Birth-quality Z and the five
+    career-profile attributes are server-private development inputs. They are
+    never surfaced through any API view, and nothing derived from them (a star
+    rating, a potential figure, a growth tier) is stored on the player or shown
+    to a manager. There is exactly ONE growth capacity authority — the career
+    growth budget — and one decline authority; no second ceiling, growth tier or
+    development-rate multiplier may exist alongside them.
 
 27. **Financial interventions pay the auction floor, never full value.**
     System liquidation credits the distressed club at the minimum acceptable
@@ -136,3 +158,75 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     tier ABOVE the deepest populated tier is not extinct: it still receives
     relegations from above and promotions from below and repopulates that way.
     The same rule is projected live into `relegationStatus` during the season.
+
+30. **Overall is always derived from the seven persisted skills.** Generation
+    and development may target an OVR-equivalent amount, but no code path may
+    add to or subtract from `player.overall` independently of the skills. Every
+    mutation recomputes it with `overallFromSkills(position, skills)`.
+
+31. **One professional-salary authority.** Every newly negotiated professional
+    contract — ordinary renewal, renewal of a promoted academy player's retained
+    deal, the contract attached to a winning transfer bid, a free-agent signing,
+    and a generated first contract — resolves through
+    `calculateProfessionalContractSalary`. Contract length always means complete
+    seasons IN ADDITION TO the remainder of the current season; a total length
+    may never be passed in its place. Club renewals and transfers apply the
+    no-pay-cut floor (the greater of the current salary and the current-OVR
+    market salary); free-agent signings and generated contracts do not, so an
+    expired salary never follows a player into free agency.
+
+32. **Academy terms and wages are derived, and promotion renegotiates nothing.**
+    An academy contract always ends at `academyContractEndAge`, so its length is
+    `academyContractEndAge - currentAge`; it can never be renewed or extended
+    while the player is in the academy. Academy salary is exactly
+    `academySalaryMultiplier` of the full professional calculation for the same
+    player, with no professional floor reapplied — and therefore also produces a
+    deliberately low release clause. Promotion (voluntary from
+    `academyVoluntaryPromotionAge`, mandatory at `academyAutomaticPromotionAge`)
+    preserves salary, contract start, contract end and remaining duration
+    exactly, accepts no contract term and performs no salary calculation. No
+    player remains `isYouth` at or beyond the automatic promotion age.
+
+33. **Player movement is manager-driven only.** The game exposes no division-fit
+    field, no division recommendation, no automatic listing of a human club's
+    player, no forced sale, and no division-based contract refusal. Upward
+    careers emerge from overlapping division distributions, uncapped
+    development, value and salary tracking current OVR, larger higher-tier
+    budgets, and the existing cross-division bid cap.
+
+34. **Population events increment durable counters; only the seasonal intake
+    creates players.** Every terminal or structural population event increments
+    its pending counter exactly once, in the same transaction that performs the
+    change. Deleting or signing a player, or activating a club, never generates
+    a player immediately. The single seasonal academy intake snapshots and
+    consumes the counters, generates the players, updates the signed carry and
+    the seeded allocation record, and marks its idempotency key in one atomic
+    locked commit — so a retry observes either all of those effects or none, and
+    can never convert the same deletion into intake twice.
+
+35. **The active-population boundary excludes filler, provisional and dormant
+    stock.** Population control counts only players owned by active persistent
+    clubs plus professional free agents inside their retention period. A dormant
+    transition removes a club's target contribution and its frozen stock
+    together and therefore adds no correction; provisional and filler creation
+    and destruction are always zero. Academy promotion reclassifies an existing
+    active player and is never a population flow, and transfers, signings and
+    loans change ownership rather than population.
+
+36. **Intake is an exact global total, then an allocation.** The signed
+    correction may be negative, but generated intake never is: a configurable
+    positive minimum per active club is always honoured and any unserved balance
+    is carried forward. The resolved integer total is split as an equal
+    whole-number share plus a seeded-random remainder of at most one extra
+    player per club, reproducible from the world seed, season and intake key,
+    and independent of club processing order. Slots blocked by a full academy
+    carry into the correction rather than rerolling or disappearing.
+
+37. **A youth dismissal is compensated globally, never locally.** It creates no
+    credit for the dismissing club and no targeted replacement. The loss becomes
+    one extra player in the GLOBAL correction at the first seasonal intake of
+    the following season — the intake that accounts for the completed season's
+    drain — and is shared out through the seeded allocation like every other
+    recruit, so a club can never dismiss and reroll for itself. Between the
+    dismissal and that intake, reconciliation treats the pending count as
+    deliberately unavailable stock rather than unexplained drift.

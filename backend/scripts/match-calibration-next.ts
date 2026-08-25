@@ -145,7 +145,6 @@ function makePlayer(id: number, clubId: number, position: Position, strength: nu
     side: 0,
     skills,
     overall: overallFromSkills(position, skills),
-    potential: 99,
     energy,
     salary: 100000,
     payrollPaidThroughDay: 0,
@@ -157,8 +156,8 @@ function makePlayer(id: number, clubId: number, position: Position, strength: nu
     contractDays: 1000,
     isYouth: false,
     starter: false,
-    growthAcc: 0,
-    potentialAcc: 0,
+    careerGrowthConsumed: 0,
+    careerDeclineConsumed: 0,
     skillAcc: [0, 0, 0, 0, 0, 0, 0],
     careerGoals: 0,
     careerAssists: 0,
@@ -171,7 +170,9 @@ function makePlayer(id: number, clubId: number, position: Position, strength: nu
     onSale: false,
     suspendedGames: 0,
     loanId: null,
-    developmentProfile: { declineStartAge: 32, developmentRate: 0, developmentVolatility: 0 },
+    // Neutral career shape: match calibration never develops players, so only
+    // the type contract matters here.
+    careerProfile: { growthPotential: 0, growthSpeed: 0, peakAge: 27, declinePotential: 0, declineSpeed: 0 },
     recentMinutes: [],
   };
 }
@@ -190,7 +191,7 @@ function clone(players: Player[]): Player[] {
     skills: { ...player.skills },
     skillAcc: [...player.skillAcc],
     recentMinutes: [...player.recentMinutes],
-    developmentProfile: { ...player.developmentProfile },
+    careerProfile: { ...player.careerProfile },
   }));
 }
 

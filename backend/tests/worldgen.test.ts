@@ -94,22 +94,50 @@ describe("game config validation", () => {
     renewalSkillRaiseWeight: 0.08,
     renewalSkillExponent: 1.6,
     renewalMaxRaise: 0.15,
-    renewalAgeCurve: { 20: 1.3, 28: 1 },
+    renewalYouthPremiumWeight: 0.05,
+    renewalYouthPremiumAgeCurve: { 18: 1, 27: 0 },
     releaseClauseRemainingValuePct: 0.5,
+    freeAgentPool: {
+      expectedExpiriesPerActiveClubPerSeason: 4,
+      signingProbability: 0.6,
+      signedResidenceSeasons: 0.1,
+    },
     playerGeneration: {
-      playerQualitySpreadOverall: 6,
+      topDivisionMeanOverall: 74,
+      playerQualitySpreadOverall: 5.5,
+      academyQualitySpreadOverall: 6,
       divisionOverallSpan: 18,
-      academyPedigreeOverallBoost: 1.8,
+      seniorPeakOverallOffset: 6.7,
+      academyPedigreeOverallBoost: 18,
+      academyCurrentDivisionWeight: 0.65,
+      academyHighestEverDivisionWeight: 0.35,
+    },
+    playerCareer: {
+      maximumCareerGrowthOverall: 30,
+      maximumCareerDeclineOverall: 26,
+      growthPotentialDistribution: [[0, 0.5], [1, 1]],
+      growthSpeedDistribution: [[0, 1], [1, 1]],
+      declinePotentialDistribution: [[0, 1], [1, 1]],
+      declineSpeedDistribution: [[0, 1], [1, 1]],
+      growthSlowCurve: [[0, 0], [0.5, 0.3], [1, 1]],
+      growthFastCurve: [[0, 0], [0.5, 0.7], [1, 1]],
+      peakAgeDistribution: { mean: 27, stdDev: 2.4, min: 23, max: 33 },
+      declineSlowCurve: [[0, 0], [6, 0.3], [14, 1]],
+      declineFastCurve: [[0, 0], [6, 0.7], [14, 1]],
+      generationHistoricalActivity: 0.7,
+      freeAgentTerminalLossAgeCurve: { 20: 0.01, 34: 0.1 },
     },
     playerGenerationRules: {
       initialSeniorSquadSize: 28,
       initialAcademySize: 8,
       academyRosterLimit: 12,
-      seasonalAcademyIntake: 2,
       academyMinAge: 16,
       academyMaxAge: 19,
-      academyPromotionAge: 21,
-      academyContractSeasons: 4,
+      academyVoluntaryPromotionAge: 18,
+      academyAutomaticPromotionAge: 20,
+      academyContractEndAge: 21,
+      targetOwnedPlayersPerActiveClub: 36,
+      minimumAcademyIntakePerActiveClub: 1,
     },
   };
 
@@ -130,24 +158,57 @@ describe("game config validation", () => {
     expect(cfg.league.teams).toBe(8);
   });
 
-  it("migrates legacy fraction and sigma-span quality settings into OVR units", () => {
-    const legacyPlayerGeneration = {
-      playerQualitySpreadFraction: 0.06,
-      divisionSpanSigmas: 3,
-      academyPedigreeSigmas: 0.3,
-    };
-    const cfg = parseGameConfig({
-      seasonDays: 30,
-      league: { teams: 8, turns: 2, startDay: 1, matchIntervalDays: 2 },
-      payrollIntervalDays: 7,
-      weeklyIntervalDays: 7,
-      contractWarningSeasons: 2,
-      ...economyFields,
-      playerGeneration: legacyPlayerGeneration,
-    });
-    expect(cfg.playerGeneration.playerQualitySpreadOverall).toBeCloseTo(5.94, 10);
-    expect(cfg.playerGeneration.divisionOverallSpan).toBeCloseTo(17.82, 10);
-    expect(cfg.playerGeneration.academyPedigreeOverallBoost).toBeCloseTo(1.782, 10);
+  it("rejects malformed career potential densities and cumulative curves", () => {
+    const withCareer = (career: Record<string, unknown>) => () =>
+      parseGameConfig({
+        seasonDays: 30,
+        league: { teams: 8, turns: 2, startDay: 1, matchIntervalDays: 2 },
+        payrollIntervalDays: 7,
+        weeklyIntervalDays: 7,
+        contractWarningSeasons: 2,
+        ...economyFields,
+        playerCareer: { ...economyFields.playerCareer, ...career },
+      });
+    // A density outside 0-1, with negative mass, or not spanning the interval.
+    expect(withCareer({ growthPotentialDistribution: [[0, 1], [1.5, 1]] })).toThrow();
+    expect(withCareer({ growthPotentialDistribution: [[0, -1], [1, -1]] })).toThrow();
+    expect(withCareer({ growthPotentialDistribution: [[0, 0], [1, 0]] })).toThrow();
+    expect(withCareer({ growthSpeedDistribution: [[0.2, 1], [1, 1]] })).toThrow();
+    // Curves must start at zero, terminate at one, and stay monotonic.
+    expect(withCareer({ growthSlowCurve: [[0, 0.2], [1, 1]] })).toThrow();
+    expect(withCareer({ growthSlowCurve: [[0, 0], [1, 0.9]] })).toThrow();
+    expect(withCareer({ growthSlowCurve: [[0, 0], [0.5, 0.6], [1, 1]], growthFastCurve: [[0, 0], [0.5, 0.4], [1, 1]] })).toThrow();
+    expect(withCareer({ declineSlowCurve: [[0, 0], [6, 0.9], [14, 1]], declineFastCurve: [[0, 0], [6, 0.3], [14, 1]] })).toThrow();
+    // Peak age needs a positive deviation and ordered bounds.
+    expect(withCareer({ peakAgeDistribution: { mean: 27, stdDev: 0, min: 23, max: 33 } })).toThrow();
+    expect(withCareer({ peakAgeDistribution: { mean: 27, stdDev: 2, min: 33, max: 23 } })).toThrow();
+  });
+
+  it("rejects inconsistent academy age boundaries and an out-of-range academy multiplier", () => {
+    const withOverrides = (overrides: Record<string, unknown>) => () =>
+      parseGameConfig({
+        seasonDays: 30,
+        league: { teams: 8, turns: 2, startDay: 1, matchIntervalDays: 2 },
+        payrollIntervalDays: 7,
+        weeklyIntervalDays: 7,
+        contractWarningSeasons: 2,
+        ...economyFields,
+        ...overrides,
+      });
+    const rules = economyFields.playerGenerationRules;
+    // Automatic promotion must come after the oldest generated academy age.
+    expect(withOverrides({ playerGenerationRules: { ...rules, academyAutomaticPromotionAge: 19 } })).toThrow(/academyAutomaticPromotionAge/);
+    // Contract expiry must come after automatic promotion.
+    expect(withOverrides({ playerGenerationRules: { ...rules, academyContractEndAge: 20 } })).toThrow(/academyContractEndAge/);
+    // Voluntary promotion must sit inside the academy age range.
+    expect(withOverrides({ playerGenerationRules: { ...rules, academyVoluntaryPromotionAge: 15 } })).toThrow(/academyVoluntaryPromotionAge/);
+    // The academy salary fraction must be strictly inside 0..1.
+    expect(withOverrides({ academySalaryMultiplier: 0 })).toThrow(/academySalaryMultiplier/);
+    expect(withOverrides({ academySalaryMultiplier: 1 })).toThrow(/academySalaryMultiplier/);
+    // Pedigree weights must have a positive sum.
+    expect(withOverrides({
+      playerGeneration: { ...economyFields.playerGeneration, academyCurrentDivisionWeight: 0, academyHighestEverDivisionWeight: 0 },
+    })).toThrow(/pedigree/);
   });
 
   it("rejects a calendar where lastMatchDay >= seasonDays", () => {

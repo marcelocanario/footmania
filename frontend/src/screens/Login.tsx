@@ -107,7 +107,7 @@ export function Login() {
           <div className="landing-masthead-lockup">
             <img src="/footmania-logo.svg" alt="Footmania" className="logo-img" />
             <div className="landing-masthead-name">
-              <b>Footmania</b>
+              <b>Footmania<sup className="logo-alpha">ALPHA</sup></b>
               <span>{strings.app.tagline}</span>
             </div>
           </div>

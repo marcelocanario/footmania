@@ -161,6 +161,19 @@ a { color: var(--grass-2); text-decoration: none; }
   filter: drop-shadow(0 4px 12px -4px rgba(0, 0, 0, 0.6));
 }
 
+.logo-alpha {
+  font-family: var(--font-display);
+  font-size: 0.55em;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: var(--gold-2);
+  line-height: 1;
+  margin-left: 1px;
+  align-self: flex-start;
+  margin-top: 0.35em;
+  text-decoration: none;
+}
+
 .topbar nav.top-nav {
   display: flex;
   gap: 3px;

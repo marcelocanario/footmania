@@ -5,6 +5,7 @@ import { tacticsForClub } from "../game/club";
 import { generateName } from "../game/names";
 import { ELO_CONFIG, MP_CONFIG } from "../config";
 import { generateNewClubRoster, totalDivisionsForGeneration } from "./clubGenerator";
+import { emptyPopulationLedger } from "./population";
 
 /**
  * World generation for the multiplayer game. The world is a single shared
@@ -68,6 +69,7 @@ export function generateWorld(seed: number): World {
       contractMarketMigrationVersion: 1,
       loanEndAbsoluteGameDays: {},
       pendingSeasonRetirees: null,
+      population: emptyPopulationLedger(),
       populationHistory: [],
     },
     mpQueue: [],
@@ -166,5 +168,10 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     totalDivisions: initialDivision,
     seasonId: null,
   });
+  // NOTE: the population-boundary correction is NOT recorded here. A club that
+  // joins after the roster lock stays PROVISIONAL — outside the active
+  // boundary — until the rollover activates it. The signed gap is recorded at
+  // that activation moment (placeNewClub / WAITING_POOL_ASSIGNMENT /
+  // returnDormantClub), never at creation.
   return club;
 }

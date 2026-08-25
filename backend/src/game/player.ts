@@ -1,19 +1,30 @@
-import type { Club, Player, PlayerDevelopmentProfile, Position, RngState } from "./types";
-import { beta, createRng, nextInt, truncatedNormal } from "./rng";
+import type { Club, Player, PlayerCareerProfile, Position, RngState } from "./types";
+import { nextInt } from "./rng";
 import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
-import { overallFromSkills, SKILL_KEYS, trainingWeights } from "./rating";
+import { overallFromSkills, OVERALL_SCALE, OVERALL_WEIGHTS, SKILL_KEYS, trainingWeights, type SkillKey } from "./rating";
 import { calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
-import { generateSeniorPlayer, generateYouthPlayer, tierFromZ } from "./playerGeneration";
+import { generateSeniorPlayer, generateYouthPlayer } from "./playerGeneration";
+import {
+  calculateDeclineActivityModifier,
+  calculateGrowthActivityModifier,
+  careerDeclineBudget,
+  careerGrowthBudget,
+  careerSeasonalRate,
+  generateCareerProfile,
+  retirementProbability,
+  retirementRollThreshold,
+} from "./careerCurves";
 import { bumpSkillsVersion } from "./skillsVersion";
 
 export { overallFromSkills } from "./rating";
+export { generateCareerProfile, retirementProbability } from "./careerCurves";
 
 /**
- * Compatibility wrapper for the canonical division-driven generator
- * (player-generation spec §70/§71). New players are always created through the
- * canonical generator; this wrapper adapts the old per-player call shape used
- * by tests and legacy call sites. When no division context is available it
- * falls back to the weakest-division expectation.
+ * Compatibility wrapper for the canonical division-driven generator. New
+ * players are always created through the canonical generator; this wrapper
+ * adapts the old per-player call shape used by tests and legacy call sites.
+ * When no division context is available it falls back to the weakest-division
+ * expectation.
  */
 export function generatePlayer(rng: RngState, club: Club, opts: { position?: Position; isYouth?: boolean; id: number; seed?: number }): Player {
   const division = club.highestDivision ?? 1;
@@ -33,29 +44,8 @@ export function generatePlayer(rng: RngState, club: Club, opts: { position?: Pos
   };
   // NOTE: the passed `rng` stream is intentionally not consumed for quality
   // draws — the canonical generator derives its own server-private per-player
-  // seed (spec §47). The rng argument is retained for API compatibility.
+  // seed. The rng argument is retained for API compatibility.
   return opts.isYouth ? generateYouthPlayer(base) : generateSeniorPlayer(base);
-}
-
-export function generateDevelopmentProfile(rng: RngState): PlayerDevelopmentProfile {
-  const declineStartAge = truncatedNormal(rng, DEVELOPMENT.declineAge.mean, DEVELOPMENT.declineAge.stdDev, DEVELOPMENT.declineAge.min, DEVELOPMENT.declineAge.max);
-  const developmentRate = DEVELOPMENT.developmentRate.min + (DEVELOPMENT.developmentRate.max - DEVELOPMENT.developmentRate.min) * beta(rng, DEVELOPMENT.developmentRate.alpha, DEVELOPMENT.developmentRate.beta);
-  const developmentVolatility = DEVELOPMENT.volatility.min + (DEVELOPMENT.volatility.max - DEVELOPMENT.volatility.min) * beta(rng, DEVELOPMENT.volatility.alpha, DEVELOPMENT.volatility.beta);
-  return { declineStartAge, developmentRate, developmentVolatility };
-}
-
-function fnv1a(str: string): number {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < str.length; i++) {
-    hash ^= str.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
-}
-
-export function backfillDevelopmentProfile(worldSeed: number, playerId: number): PlayerDevelopmentProfile {
-  const hash = fnv1a(`${worldSeed}|${playerId}|${DEVELOPMENT.backfillVersion}`);
-  return generateDevelopmentProfile(createRng(hash));
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -64,16 +54,6 @@ function clamp(v: number, lo: number, hi: number): number {
 
 export function calculatePreciseAge(player: Player, dayIndex: number): number {
   return player.age + dayIndex / DAYS_PER_YEAR;
-}
-
-export function calculateAgeDevelopment(age: number, declineStartAge: number): number {
-  if (age < declineStartAge) {
-    const span = declineStartAge - DEVELOPMENT.growthCurve.referenceAge;
-    const p = span > 0 ? clamp((age - DEVELOPMENT.growthCurve.referenceAge) / span, 0, 1) : 0;
-    return DEVELOPMENT.growthCurve.maxSeasonalGrowth * Math.pow(1 - p, DEVELOPMENT.growthCurve.exponent);
-  }
-  const t = age - declineStartAge;
-  return -(DEVELOPMENT.declineCurve.initialDecline + DEVELOPMENT.declineCurve.coefficient * Math.pow(t, DEVELOPMENT.declineCurve.exponent));
 }
 
 export function calculateRecentActivity(player: Player): number {
@@ -91,95 +71,105 @@ export function calculateRecentActivity(player: Player): number {
   return totalWeight > 0 ? weighted / totalWeight : DEVELOPMENT.activity.defaultActivity;
 }
 
-export function calculateGrowthActivityModifier(activity: number): number {
-  return DEVELOPMENT.activity.inactiveGrowthMultiplier + (1 - DEVELOPMENT.activity.inactiveGrowthMultiplier) * clamp(activity, 0, 1);
+export { calculateGrowthActivityModifier, calculateDeclineActivityModifier } from "./careerCurves";
+
+export function calculateActivityModifier(careerRate: number, activity: number): number {
+  if (Math.abs(careerRate) < DEVELOPMENT.developmentEpsilon) return 1;
+  return careerRate > 0 ? calculateGrowthActivityModifier(activity) : calculateDeclineActivityModifier(activity);
 }
 
-export function calculateDeclineActivityModifier(activity: number): number {
-  return 1 + (DEVELOPMENT.activity.inactiveDeclineMultiplier - 1) * (1 - clamp(activity, 0, 1));
+/** OVR-equivalent budget still available inside the player's career budgets. */
+export function remainingCareerBudget(player: Player, growing: boolean): number {
+  const profile = player.careerProfile;
+  return growing
+    ? Math.max(0, careerGrowthBudget(profile) - player.careerGrowthConsumed)
+    : Math.max(0, careerDeclineBudget(profile) - player.careerDeclineConsumed);
 }
 
-export function calculateActivityModifier(careerAdjusted: number, activity: number): number {
-  if (Math.abs(careerAdjusted) < DEVELOPMENT.developmentEpsilon) return 1;
-  return careerAdjusted > 0 ? calculateGrowthActivityModifier(activity) : calculateDeclineActivityModifier(activity);
-}
-
-export function generateDevelopmentRandomFactor(rng: RngState, player: Player): number {
-  return truncatedNormal(
-    rng,
-    DEVELOPMENT.randomFactor.mean,
-    player.developmentProfile.developmentVolatility,
-    DEVELOPMENT.randomFactor.min,
-    DEVELOPMENT.randomFactor.max
-  );
-}
-
-export function applyDevelopment(rng: RngState, player: Player, club: Club, dayIndex: number): void {
-  const age = calculatePreciseAge(player, dayIndex);
-  const base = calculateAgeDevelopment(age, player.developmentProfile.declineStartAge);
-  if (Math.abs(base) < DEVELOPMENT.developmentEpsilon) return;
-  const career = base * player.developmentProfile.developmentRate;
-  // A provisional/dormant club cannot participate in league fixtures.  Treat
-  // that unavoidable lack of appearances as neutral rather than applying the
-  // inactive-player penalty; natural biological development still runs.
-  const activity = club.competitionState === "ACTIVE" || club.competitionState === undefined ? calculateRecentActivity(player) : 1;
-  const modifier = calculateActivityModifier(career, activity);
-  let budget = career * modifier * DEVELOPMENT.tickFraction;
-  budget *= generateDevelopmentRandomFactor(rng, player);
+/**
+ * Effective per-skill training weights after removing skills that are pinned at
+ * a hard bound in the direction of travel.
+ *
+ * Redistribution matters: without it, a focus sending 70% of growth into a skill
+ * already at 100 would realize only the remaining 30% of the budget, while a
+ * different focus realized all of it. Hitting the player's total remaining
+ * CAREER budget is a different thing entirely — that progress stops rather than
+ * redistributing, because no capacity remains to spend anywhere.
+ */
+export function effectiveSkillWeights(player: Player, club: Club, growing: boolean): Record<SkillKey, number> {
   const weights = trainingWeights(player.position, club.trainingFocus ?? "assistant", player.skills);
-  const ceiling = developmentCeiling(player, club);
+  const eligible = SKILL_KEYS.filter((key) => (growing ? player.skills[key] < 100 : player.skills[key] > 1));
+  const eligibleWeight = eligible.reduce((sum, key) => sum + weights[key], 0);
+  const effective = Object.fromEntries(SKILL_KEYS.map((key) => [key, 0])) as Record<SkillKey, number>;
+  if (eligibleWeight <= 0) return effective;
+  for (const key of eligible) effective[key] = weights[key] / eligibleWeight;
+  return effective;
+}
+
+/**
+ * How much OVR one raw skill point of weighted progress is worth for this
+ * position and training distribution. Dividing the OVR-equivalent budget by this
+ * converts it into the raw skill progress needed for comparable expected OVR
+ * movement across every position.
+ *
+ * This never sets OVR directly — OVR is always recomputed from the skills.
+ */
+export function overallSensitivity(position: Position, weights: Record<SkillKey, number>): number {
+  const overallWeights = OVERALL_WEIGHTS[position];
+  const weighted = SKILL_KEYS.reduce((sum, key) => sum + (overallWeights[key] ?? 0) * weights[key], 0);
+  return OVERALL_SCALE[position] * weighted;
+}
+
+export function applyDevelopment(player: Player, club: Club, dayIndex: number): void {
+  const age = calculatePreciseAge(player, dayIndex);
+  const rate = careerSeasonalRate(player.careerProfile, age);
+  if (Math.abs(rate) < DEVELOPMENT.developmentEpsilon) return;
+  // A provisional/dormant club cannot participate in league fixtures. Treat
+  // that unavoidable lack of appearances as neutral rather than applying the
+  // inactive-player penalty.
+  const activity = club.competitionState === "ACTIVE" || club.competitionState === undefined ? calculateRecentActivity(player) : 1;
+  const growing = rate > 0;
+  let budget = rate * calculateActivityModifier(rate, activity) * DEVELOPMENT.tickFraction;
+
+  // Respect the player's remaining career budget. Progress stops here; it is
+  // never redistributed, because no capacity remains.
+  const remaining = remainingCareerBudget(player, growing);
+  if (remaining <= 0) return;
+  budget = growing ? Math.min(budget, remaining) : Math.max(budget, -remaining);
+  if (Math.abs(budget) < DEVELOPMENT.developmentEpsilon) return;
+
+  const weights = effectiveSkillWeights(player, club, growing);
+  const sensitivity = overallSensitivity(player.position, weights);
+  if (sensitivity <= DEVELOPMENT.developmentEpsilon) return;
+  const rawSkillBudget = budget / sensitivity;
+
   ensureSkillAcc(player);
   for (const [i, key] of SKILL_KEYS.entries()) {
-    player.skillAcc[i] += budget * weights[key];
-    if (budget >= 0) {
-      while (player.skillAcc[i] >= 1) {
-        if (player.skills[key] >= 100 || overallFromSkills(player.position, { ...player.skills, [key]: player.skills[key] + 1 }) > ceiling) {
-          player.skillAcc[i] = Math.min(player.skillAcc[i], 0.999999);
-          break;
-        }
+    const progress = rawSkillBudget * weights[key];
+    if (progress === 0) continue;
+    player.skillAcc[i] += progress;
+    if (growing) {
+      while (player.skillAcc[i] >= 1 && player.skills[key] < 100) {
         player.skills[key] += 1;
         player.skillAcc[i] -= 1;
       }
+      if (player.skills[key] >= 100) player.skillAcc[i] = Math.min(player.skillAcc[i], 0.999999);
     } else {
-      while (player.skillAcc[i] <= -1) {
-        if (player.skills[key] <= 1) {
-          player.skillAcc[i] = -0.999999;
-          break;
-        }
+      while (player.skillAcc[i] <= -1 && player.skills[key] > 1) {
         player.skills[key] -= 1;
         player.skillAcc[i] += 1;
       }
+      if (player.skills[key] <= 1) player.skillAcc[i] = Math.max(player.skillAcc[i], -0.999999);
     }
   }
-  // Development can change tec/vel/des/arm/fin/gol, which computeAttributeCenters
+
+  if (growing) player.careerGrowthConsumed += budget;
+  else player.careerDeclineConsumed += -budget;
+
+  // Development changes tec/vel/des/arm/fin/gol, which computeAttributeCenters
   // draws on; invalidate any cached centers so the next tick recomputes them.
   bumpSkillsVersion();
   refreshPlayerDerived(club, player);
-}
-
-export function potentialGrowth(rng: RngState, player: Player) {
-  if (player.potential < player.overall) player.potential = player.overall;
-  if (player.age > 20) return;
-  let rate = 0.01;
-  if (player.age <= 17) rate = 20 / 40;
-  else if (player.age === 18) rate = 15 / 40;
-  else if (player.age === 19) rate = 14 / 40;
-  else if (player.age === 20) rate = 5 / 40;
-  // Hidden growth tier (player-generation §37): derived on the fly from the
-  // persisted birth-quality Z so no star/quality flag is ever stored on the
-  // player or exposed through an API view. Z=0 (mid tier) covers legacy rows
-  // generated before rawZ was recorded.
-  const tier = tierFromZ(player.rawZ ?? 0);
-  if (tier <= 2) rate += 0.03;
-  else if (tier === 3) rate += 0.04;
-  else if (tier === 4) rate += 0.07;
-  else rate += 0.11;
-  player.potentialAcc += rate;
-  if (player.potentialAcc > 1 && player.potential < 100) {
-    player.potential += 1;
-    player.potentialAcc -= 1;
-  }
-  if (player.potential > 100) player.potential = 100;
 }
 
 function ensureSkillAcc(player: Player): void {
@@ -189,13 +179,6 @@ function ensureSkillAcc(player: Player): void {
   });
 }
 
-// Development ceiling (player-generation §41): the player's own potential plus
-// the global OVR maximum. The obsolete club-level cap was removed; no
-// division-based cap replaces it.
-function developmentCeiling(player: Player, club: Club): number {
-  return Math.max(player.overall, Math.min(100, player.potential));
-}
-
 /**
  * Refreshes derived values. Player market value follows overall/age/contract;
  * the contract salary is contractual and is NOT recalculated here. The release
@@ -203,30 +186,8 @@ function developmentCeiling(player: Player, club: Club): number {
  */
 export function refreshPlayerDerived(club: Club, player: Player): void {
   player.overall = overallFromSkills(player.position, player.skills);
-  player.potential = Math.max(player.overall, Math.min(100, player.potential));
   player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
   player.releaseClause = calculateReleaseClause(player.salary, remainingSeasons(player.contractDays));
-}
-
-function retirementRollThreshold(age: number, position: Position): number {
-  if (age <= 32) return 100;
-  const retirementAge = position === 0 ? age - 3 : age;
-  if (retirementAge < 32) return 100;
-  if (retirementAge === 32) return 99;
-  if (retirementAge <= 34) return 90;
-  if (retirementAge <= 35) return 55;
-  if (retirementAge <= 36) return 30;
-  if (retirementAge <= 38) return 15;
-  if (retirementAge <= 39) return 5;
-  if (retirementAge <= 40) return 3;
-  if (retirementAge <= 42) return 2;
-  if (retirementAge <= 48) return 1;
-  return 0;
-}
-
-/** Exact season-end retirement probability used by simulation and intake planning. */
-export function retirementProbability(age: number, position: Position): number {
-  return (100 - retirementRollThreshold(age, position)) / 100;
 }
 
 export function shouldRetire(rng: RngState, player: Player): boolean {
@@ -236,7 +197,7 @@ export function shouldRetire(rng: RngState, player: Player): boolean {
   return roll > retirementRollThreshold(player.age, player.position);
 }
 
-export function aging(rng: RngState, player: Player, club: Club) {
+export function aging(player: Player) {
   player.age += 1;
   player.seasonGoals = 0;
   player.seasonAssists = 0;
@@ -244,3 +205,5 @@ export function aging(rng: RngState, player: Player, club: Club) {
   player.yellows = 0;
   player.reds = 0;
 }
+
+export type { PlayerCareerProfile };

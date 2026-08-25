@@ -95,7 +95,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
     const player = await app.prisma.player.findFirstOrThrow({ where: { saveId: worldBefore.save.id, clubId: { not: null } }, select: { id: true } });
     const release = await app.inject({ method: "POST", url: `/api/players/${player.id}/release`, headers: { cookie: userCookie } });
     expect(release.statusCode).toBe(409);
-    const contract = await app.inject({ method: "POST", url: `/api/players/${player.id}/contract`, headers: { cookie: userCookie }, payload: { length: 2 } });
+    const contract = await app.inject({ method: "POST", url: `/api/players/${player.id}/contract`, headers: { cookie: userCookie }, payload: { contractSeasons: 2 } });
     expect(contract.statusCode).toBe(409);
 
     // ...while setup mutations stay available.

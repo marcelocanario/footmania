@@ -269,6 +269,7 @@ export function Layout({ children }: { children: ReactNode }) {
           >
           <img src="/footmania-logo.svg" alt="" className="logo-img" />
           {strings.app.name}
+          <sup className="logo-alpha">ALPHA</sup>
         </NavLink>
 
         {!isMobile && (

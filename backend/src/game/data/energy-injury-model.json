@@ -62,6 +62,6 @@
     "magnitudeSeverityScaleDays": 60.0,
     "outfieldWeights": { "pace": 0.45, "physical": 0.45, "technical": 0.10 },
     "goalkeeperWeights": { "pace": 0.20, "physical": 0.50, "goalkeeping": 0.30 },
-    "potentialLossShare": 0.50
+    "careerGrowthLossShare": 0.50
   }
 }

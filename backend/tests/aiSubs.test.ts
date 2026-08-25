@@ -96,7 +96,7 @@ function freshState(scenario_: Scenario, seed: number): { st: LiveMatchState; pl
     skills: { ...p.skills },
     skillAcc: [...p.skillAcc],
     recentMinutes: [...p.recentMinutes],
-    developmentProfile: { ...p.developmentProfile },
+    careerProfile: { ...p.careerProfile },
     energy: 100,
     tacPos: -1,
     starter: false,
@@ -129,28 +129,54 @@ function applyEnergy(st: LiveMatchState, players: Player[], homeEnergy: number, 
 
 describe("AI tactical substitutions", () => {
   const cfg = MS.substitutionAi;
+  // Built ONCE and shared by both exhaustion runs: club ids feed each player's
+  // generation seed, so a second scenario() call would produce different
+  // squads and break the like-for-like comparison.
+  const sharedScenario = scenario(101);
+
+  /**
+   * Run one full possession sim with the given starting energies and return
+   * each AI side's substitution minutes. Injuries are off, so every SUB is a
+   * tactical decision. Fixed squads and seeds make the outcome deterministic;
+   * swapping ONLY the energies must swap which side reacts first.
+   */
+  function runExhaustionMatch(homeEnergy: number, awayEnergy: number) {
+    const { st, players } = freshState(sharedScenario, 102);
+    applyEnergy(st, players, homeEnergy, awayEnergy);
+    const centers = computeAttributeCenters(players);
+    simulatePossessionMatch(createRng(103), sharedScenario.home, sharedScenario.away, players, st, centers);
+    const minutesFor = (clubId: number) =>
+      st.events.filter((event) => event.type === EVENT_CODES.SUB && event.clubId === clubId).map((event) => event.minute);
+    return { st, homeMinutes: minutesFor(st.homeClubId), awayMinutes: minutesFor(st.awayClubId) };
+  }
+
+  function assertTacticalWindow(minutes: number[]): void {
+    for (const minute of minutes) {
+      expect(minute).toBeGreaterThanOrEqual(cfg.earliestMatchMinute);
+      expect(minute).toBeLessThanOrEqual(cfg.latestMatchMinute);
+    }
+  }
 
   it("substitutes exhausted AI sides after the earliest minute and inside the window", () => {
     withInjuriesOff(() => {
-      const s = scenario(101);
-      const { st, players } = freshState(s, 102);
-      applyEnergy(st, players, 25, 100);
-      const centers = computeAttributeCenters(players);
-      simulatePossessionMatch(createRng(103), s.home, s.away, players, st, centers);
-
-      const subs = st.events.filter((event) => event.type === EVENT_CODES.SUB && event.clubId === st.homeClubId);
-      expect(subs.length).toBeGreaterThan(0);
-      for (const sub of subs) {
-        expect(sub.minute).toBeGreaterThanOrEqual(cfg.earliestMatchMinute);
-        expect(sub.minute).toBeLessThanOrEqual(cfg.latestMatchMinute);
+      const { st, homeMinutes, awayMinutes } = runExhaustionMatch(25, 100);
+      expect(homeMinutes.length).toBeGreaterThan(0);
+      assertTacticalWindow(homeMinutes);
+      assertTacticalWindow(awayMinutes);
+      // Fatigue is the dominant need signal: the side that started exhausted
+      // must reach for the bench EARLIER than the fresh one. A fresh side may
+      // still legitimately substitute late (its own energy drains below the
+      // fatigue threshold and score urgency adds need while trailing), so this
+      // compares first-reaction timing rather than demanding zero changes.
+      if (awayMinutes.length > 0) {
+        expect(Math.min(...homeMinutes)).toBeLessThan(Math.min(...awayMinutes));
       }
-      // A fresh opponent never crosses the need threshold.
-      const awaySubs = st.events.filter((event) => event.type === EVENT_CODES.SUB && event.clubId === st.awayClubId);
-      expect(awaySubs).toHaveLength(0);
       // Bookkeeping mirrors manual subs.
+      const subs = st.events.filter((event) => event.type === EVENT_CODES.SUB && event.clubId === st.homeClubId);
+      const awaySubs = st.events.filter((event) => event.type === EVENT_CODES.SUB && event.clubId === st.awayClubId);
       expect(st.usedSubs[0]).toBe(subs.length);
-      expect(st.usedSubs[1]).toBe(0);
-      expect(st.substitutions.length).toBe(subs.length);
+      expect(st.usedSubs[1]).toBe(awaySubs.length);
+      expect(st.substitutions.length).toBe(subs.length + awaySubs.length);
       for (const sub of subs) {
         expect(st.homeOn).toContain(sub.player2Id!);
         expect(st.homeOn).not.toContain(sub.playerId);
@@ -160,8 +186,26 @@ describe("AI tactical substitutions", () => {
         expect(st.homeSubs).not.toContain(sub.player2Id!);
       }
       // One substitution per match minute at most.
-      const minutes = subs.map((sub) => `${sub.minute}:${sub.addedTime ?? ""}`);
+      const minutes = [...subs, ...awaySubs].map((sub) => `${sub.clubId}:${sub.minute}:${sub.addedTime ?? ""}`);
       expect(new Set(minutes).size).toBe(minutes.length);
+    });
+  });
+
+  it("reverses the reaction order when the starting energies are swapped", () => {
+    withInjuriesOff(() => {
+      // Identical squads, seeds and tactics — only the energies move. If
+      // exhaustion (and not some side/seed bias) drives the timing, whichever
+      // side starts drained must react first in BOTH runs.
+      const normal = runExhaustionMatch(25, 100);
+      const swapped = runExhaustionMatch(100, 25);
+      expect(normal.homeMinutes.length).toBeGreaterThan(0);
+      expect(swapped.awayMinutes.length).toBeGreaterThan(0);
+      if (normal.awayMinutes.length > 0) {
+        expect(Math.min(...normal.homeMinutes)).toBeLessThan(Math.min(...normal.awayMinutes));
+      }
+      if (swapped.homeMinutes.length > 0) {
+        expect(Math.min(...swapped.awayMinutes)).toBeLessThan(Math.min(...swapped.homeMinutes));
+      }
     });
   });
 

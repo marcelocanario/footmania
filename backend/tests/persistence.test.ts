@@ -173,7 +173,6 @@ describe("global multiplayer world persistence", () => {
     const skillAcc = [0.11, 0.22, 0.33, 0.44, 0.55, 0.66, 0.77];
     player.skills = skills;
     player.overall = 77;
-    player.potential = 88;
     player.salary = 123456;
     player.value = 654321;
     player.skillAcc = skillAcc;
@@ -184,7 +183,6 @@ describe("global multiplayer world persistence", () => {
     const saved = reloaded!.world.players.find((candidate) => candidate.id === player.id)!;
     expect(saved.skills).toEqual(skills);
     expect(saved.overall).toBe(77);
-    expect(saved.potential).toBe(88);
     expect(saved.salary).toBe(123456);
     expect(saved.value).toBe(654321);
     expect(saved.skillAcc).toEqual(skillAcc);
@@ -277,15 +275,37 @@ describe("global multiplayer world persistence", () => {
       expect(st2!.substitutions.length).toBe(subsBefore);
       expect(st2!.events.filter((event) => event.type === EVENT_CODES.SUB)).toHaveLength(subsBefore);
 
-      // Resume on the reloaded world: the persisted injury must not re-fire.
+      // Resume on the reloaded world. Two things must hold:
+      //  1. The persisted injury must NOT re-fire — checked two ways below.
+      //  2. Any NEW substitution during the resume ticks must be caused by a
+      //     NEWLY recorded injury (the forced injury rate makes those legit),
+      //     never by an injury whose event predates the resume point.
+      const subsAtResume = st2!.substitutions.map((substitution) => ({ ...substitution }));
+      const subEventsAtResume = st2!.events.filter((event) => event.type === EVENT_CODES.SUB).length;
+      const eventsAtResume = st2!.events.length;
       const home2 = reloaded!.world.clubs.find((c) => c.id === home.id)!;
       const away2 = reloaded!.world.clubs.find((c) => c.id === away.id)!;
       tickLiveMatch(reloaded!.world.rng, home2, away2, reloaded!.world.players, st2!, 3, { ignoreHalfTime: true });
-      expect(st2!.events.filter((event) => event.type === EVENT_CODES.SUB)).toHaveLength(subsBefore);
-      expect(st2!.substitutions.length).toBe(subsBefore);
-      // Each substitution replaces a distinct injured player.
+      // 1a. The already-recorded substitutions are untouched.
+      expect(st2!.substitutions.slice(0, subsAtResume.length)).toEqual(subsAtResume);
+      // 1b. No player is substituted off twice: a replayed persisted injury
+      // would substitute the same player again.
       const outs = st2!.substitutions.map((substitution) => substitution.outId);
       expect(new Set(outs).size).toBe(outs.length);
+      // 2. Every new SUB event is backed by an INJURY event recorded during the
+      //    resume ticks, for the same player and club. The structured list must
+      //    mirror the event log one-to-one as well.
+      const allSubEvents = st2!.events.filter((event) => event.type === EVENT_CODES.SUB);
+      const newSubEvents = allSubEvents.slice(subEventsAtResume);
+      const injuriesDuringResume = st2!.events
+        .slice(eventsAtResume)
+        .filter((event) => event.type === EVENT_CODES.INJURY);
+      for (const sub of newSubEvents) {
+        expect(
+          injuriesDuringResume.some((injury) => injury.clubId === sub.clubId && injury.playerId === sub.playerId),
+        ).toBe(true);
+      }
+      expect(st2!.substitutions.length).toBe(allSubEvents.length);
     } finally {
       gameConfig.injuries.matchTargetPerMatch = prevTarget;
     }
@@ -315,7 +335,7 @@ describe("global multiplayer world persistence", () => {
     const { world } = await withSeason(saveId);
     const club = world.clubs[0];
     const p = world.players.find((x) => x.clubId === club.id && !x.isYouth)!;
-    for (let day = 1; day <= 10; day++) applyDevelopment(world.rng, p, club, day);
+    for (let day = 1; day <= 10; day++) applyDevelopment(p, club, day);
     const expected = Math.round(p.salary * (p.contractDays / gameConfig.seasonDays) * 0.5);
     await persistWorld(prisma, saveId, saveId, world);
     const reloaded = await loadGlobalWorld(prisma);

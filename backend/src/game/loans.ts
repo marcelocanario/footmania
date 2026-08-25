@@ -88,8 +88,24 @@ export function offerPlayerForLoan(
   if (!loanFitsContract(startDay, endDay, player.contractDays)) {
     return { ok: false, error: "Loan duration exceeds the player's remaining contract" };
   }
-
+  // The listing itself must finish inside the contract. A listing whose public
+  // exposure window outlives the player's deal could only ever be claimed after
+  // he had already left, so it must never be created.
   const exposureMs = MARKET_CONFIG.loans.exposureMinutes * 60 * 1000;
+  const exposureGameDays = Math.ceil(MARKET_CONFIG.loans.exposureMinutes / (24 * 60));
+  if (player.contractDays <= exposureGameDays) {
+    return { ok: false, error: "The loan listing would outlast the player's remaining contract" };
+  }
+  // A player in his final contractual season cannot be loaned out once the
+  // season is past the join threshold: he would become a free agent at rollover
+  // unless renewed, and a renewal is impossible while he is listed.
+  if (player.contractDays <= gameConfig.seasonDays && world.mp.completedRounds >= world.mp.joinLockRound) {
+    return {
+      ok: false,
+      error: "This is the player's final contractual season and the season is too far advanced; renew his contract before loaning him out",
+    };
+  }
+
   const loan: Loan = {
     id: world.nextId++,
     playerId: player.id,

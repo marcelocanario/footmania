@@ -24,7 +24,7 @@ const modelSchema = z.object({
   trainingInjuries: z.object({ referenceRecentLoad: z.number(), includeAcademyPlayers: z.boolean() }),
   severity: z.object({ minorProbability: z.number(), moderateProbability: z.number(), severeProbability: z.number(), minorMinRealDays: z.number(), minorMaxRealDays: z.number(), minorBetaAlpha: z.number(), minorBetaBeta: z.number(), moderateMinRealDays: z.number(), moderateMaxRealDays: z.number(), moderateBetaAlpha: z.number(), moderateBetaBeta: z.number(), severeMedianRealDays: z.number(), severeLogSigma: z.number(), severeMinRealDays: z.number(), severeMaxRealDays: z.number(), ageSeverityReference: z.number(), ageSeverityLogPerYear: z.number(), ageSeverityMin: z.number(), ageSeverityMax: z.number(), referenceProMatchesPerSeason: z.number(), referenceProMatchSpacingDays: z.number() }),
   returnToFitness: z.object({ freshReturnEnergy: z.number(), maxReturnEnergyPenalty: z.number(), severityScaleMatchIntervals: z.number() }),
-  lastingSetback: z.object({ minimumEquivalentRealDays: z.number(), probabilityMaximum: z.number(), probabilityScaleDays: z.number(), probabilityExponent: z.number(), magnitudeBase: z.number(), magnitudeScale: z.number(), magnitudeBetaAlpha: z.number(), magnitudeBetaBeta: z.number(), magnitudeSeverityScaleDays: z.number(), outfieldWeights: z.record(z.string(), z.number()), goalkeeperWeights: z.record(z.string(), z.number()), potentialLossShare: z.number() }),
+  lastingSetback: z.object({ minimumEquivalentRealDays: z.number(), probabilityMaximum: z.number(), probabilityScaleDays: z.number(), probabilityExponent: z.number(), magnitudeBase: z.number(), magnitudeScale: z.number(), magnitudeBetaAlpha: z.number(), magnitudeBetaBeta: z.number(), magnitudeSeverityScaleDays: z.number(), outfieldWeights: z.record(z.string(), z.number()), goalkeeperWeights: z.record(z.string(), z.number()), careerGrowthLossShare: z.number() }),
 });
 
 function loadModel(): z.infer<typeof modelSchema> {
@@ -217,7 +217,10 @@ export function applyLastingSetback(rng: RngState, player: Player, equivalentRea
   bumpSkillsVersion();
   const after = overallFromSkills(player.position, player.skills);
   player.overall = after;
-  player.potential = Math.max(after, player.potential - stochasticRound(rng, s.potentialLossShare * Math.max(0, before - after)));
+  // Part of the lost ground is gone for good: it is burned out of the player's
+  // remaining career growth budget rather than reduced from a separate ceiling.
+  // Without this the curve would simply regrow the whole loss.
+  player.careerGrowthConsumed += s.careerGrowthLossShare * Math.max(0, before - after);
   // Derived economics must track the reduced overall. The daily development
   // refresh skips prime-age players entirely, so without this the market value
   // and release clause would stay stale for seasons after a lasting setback.

@@ -198,7 +198,7 @@ function generatedSquad(clubId: number, division: number, seedBase: number, offs
 }
 
 function clonePlayers(players: Player[]): Player[] {
-  return players.map((p) => ({ ...p, skills: { ...p.skills }, skillAcc: [...p.skillAcc], recentMinutes: [...p.recentMinutes], developmentProfile: { ...p.developmentProfile } }));
+  return players.map((p) => ({ ...p, skills: { ...p.skills }, skillAcc: [...p.skillAcc], recentMinutes: [...p.recentMinutes], careerProfile: { ...p.careerProfile } }));
 }
 
 function energyMap(players: Player[]): Record<number, number> {

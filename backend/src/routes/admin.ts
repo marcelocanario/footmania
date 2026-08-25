@@ -161,7 +161,7 @@ export async function adminRoutes(app: FastifyInstance) {
 
   app.get("/admin/league-settings", async () => ({
     settings: {
-      joinThresholdPercent: await readNumberSetting(app.prisma, "JOIN_THRESHOLD_PERCENT", 0.5),
+      joinThresholdPercent: await readNumberSetting(app.prisma, "JOIN_THRESHOLD_PERCENT", gameConfig.joinThresholdPercent),
       inactivityThresholds: await configuredInactivityThresholds(app.prisma),
       matchTiming: await configuredMatchTiming(app.prisma),
     },

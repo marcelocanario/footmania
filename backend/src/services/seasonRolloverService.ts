@@ -17,7 +17,9 @@ import {
   tierOf,
 } from "../game/multiplayer";
 import { standingsTiebreak, validateDoubleRoundRobinFixtures } from "../game/league";
-import { commitSeasonRollover, computeSeasonAwards, processContractExpiry, processSeasonEndContracts, processSeasonalAcademyIntake, updateCareerRecords } from "../game/season";
+import { commitSeasonRollover, computeSeasonAwards, endLoan, processContractExpiry, processSeasonEndContracts, processSeasonalAcademyIntake, updateCareerRecords } from "../game/season";
+import { closeMarketInvolvementForFreeze } from "../game/market";
+import { recordActiveClubBoundaryChange } from "../game/population";
 import { applySeasonalEloRegression, eloRatings } from "../game/elo";
 import { revokeUnclaimedLoans } from "../game/loans";
 import { NEWS_SUBJECTS, publishNews } from "../game/news";
@@ -227,6 +229,14 @@ export async function executeRolloverStep(
     for (const clubId of computed.abandonedClubIds) {
       const club = world.clubs.find((candidate) => candidate.id === clubId);
       if (!club) continue;
+      // The club stayed fully active through the end of the season; only now
+      // does it leave the pyramid. Close every live market involvement BEFORE
+      // the frozen snapshot becomes authoritative, and end any loan boundary,
+      // so nothing can later fire a deadline against a stopped clock.
+      closeMarketInvolvementForFreeze(world, club.id, Date.now());
+      for (const loan of world.loans.filter((l) => !l.recalled && (l.fromClubId === club.id || l.toClubId === club.id))) {
+        endLoan(world, loan);
+      }
       club.competitionState = "DORMANT";
       club.abandonmentEligibleAt = null;
       club.lastMeaningfulActivityAt = null;
@@ -294,6 +304,14 @@ export async function executeRolloverStep(
       const club = world.clubs.find((candidate) => candidate.id === clubId);
       if (!club) continue;
       club.competitionState = "ACTIVE";
+      // A queued club enters the active persistent boundary only now. Its
+      // target contribution minus the stock it arrived with goes into the
+      // ledger; creation deliberately recorded nothing for it.
+      recordActiveClubBoundaryChange(
+        world,
+        world.players.filter((p) => p.clubId === club.id).length,
+        1,
+      );
       world.mpQueue = world.mpQueue.filter((entry) => entry.clubId !== clubId);
       const division = divisionsInSeason(world, context.targetSeasonId).find((candidate) => candidate.standings[clubId] !== undefined);
       if (division) recordInitialDivision(world, clubId, tierOf(division));

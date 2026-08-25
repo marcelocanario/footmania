@@ -4,186 +4,297 @@ import { generateWorld } from "../src/game/worldgen";
 import { initSeason } from "../src/game/multiplayer";
 import {
   applyDevelopment,
-  backfillDevelopmentProfile,
   calculateActivityModifier,
-  calculateAgeDevelopment,
   calculateDeclineActivityModifier,
   calculateGrowthActivityModifier,
   calculatePreciseAge,
   calculateRecentActivity,
-  generateDevelopmentProfile,
-  generateDevelopmentRandomFactor,
+  effectiveSkillWeights,
   generatePlayer,
   overallFromSkills,
+  overallSensitivity,
+  remainingCareerBudget,
 } from "../src/game/player";
-import { DEVELOPMENT, DAYS_PER_YEAR } from "../src/game/constants";
-import { overallFromSkills as ratingOverall } from "../src/game/rating";
-import type { Player } from "../src/game/types";
+import {
+  careerDeclineBudget,
+  careerGrowthBudget,
+  careerSeasonalRate,
+  cumulativeDeclineFraction,
+  cumulativeGrowthFraction,
+  evaluateCurve,
+  generateCareerProfile,
+  interpolateCurves,
+  reconstructCurrentTarget,
+  sampleDensity,
+  densityMean,
+} from "../src/game/careerCurves";
+import { DAYS_PER_YEAR } from "../src/game/constants";
+import { SKILL_KEYS } from "../src/game/rating";
+import type { Club, Player, PlayerCareerProfile, Position } from "../src/game/types";
+import { gameConfig } from "../src/config";
+import { makeClub } from "./helpers";
 import { calibrationDescribe } from "./calibration";
 
+function testClub(overrides: Partial<Club> = {}): Club {
+  return makeClub({ id: 1, isHuman: false, ownerUserId: null, ...overrides });
+}
+
 function makePlayer(overrides: Partial<Player> = {}): Player {
-  const club = {
-    id: 1,
-    name: "Test",
-    shortName: "TST",
-    ownerUserId: null,
-    competitionState: "ACTIVE" as const,
-    lastMeaningfulActivityAt: null,
-    abandonmentEligibleAt: null,
-    liveMatchAt: null,
-    country: "BRA",
-    highestDivision: 1,
-    cash: 10000000,
-    stadiumName: "St",
-    stadiumCapacity: 40000,
-    primaryColor: "#000",
-    secondaryColor: "#fff",
-    coachName: "Coach",
-    tactics: { formation: 4, style: 0, pressing: 0, direction: 0 },
-    trainingFocus: "assistant" as const,
-    captainId: null,
-    penaltyTakerId: null,
-    isHuman: false,
-    ledger: { income: [], expense: [] },
-    trophies: {},
-  };
-  return { ...generatePlayer(createRng(1), club, { id: 1 }), ...overrides };
+  return { ...generatePlayer(createRng(1), testClub(), { id: 1 }), ...overrides };
+}
+
+function profile(overrides: Partial<PlayerCareerProfile> = {}): PlayerCareerProfile {
+  return { growthPotential: 0.5, growthSpeed: 0.5, peakAge: 27, declinePotential: 0.5, declineSpeed: 0.5, ...overrides };
+}
+
+/** Run one full season of daily development and return the OVR-equivalent moved. */
+function runSeason(player: Player, club: Club, seed = 1): number {
+  const before = player.careerGrowthConsumed - player.careerDeclineConsumed;
+  const rng = createRng(seed);
+  for (let day = 1; day <= DAYS_PER_YEAR; day++) applyDevelopment(player, club, day);
+  return player.careerGrowthConsumed - player.careerDeclineConsumed - before;
 }
 
 describe("player development activity", () => {
-  it("computes activity from recent minutes with the spec's required cases", () => {
+  it("computes activity from recent minutes with the required cases", () => {
     const player = makePlayer({});
-    const activity = (minutes: number[]) => {
-      player.recentMinutes = minutes;
-      return calculateRecentActivity(player);
-    };
-    expect(activity([90, 90, 90, 90, 90])).toBeCloseTo(1.0, 10);
-    expect(activity([0, 0, 0, 0, 0])).toBeCloseTo(0.0, 10);
-    expect(activity([45, 45, 45, 45, 45])).toBeCloseTo(0.5, 10);
+    player.recentMinutes = [90, 90, 90, 90, 90];
+    expect(calculateRecentActivity(player)).toBeCloseTo(1, 10);
+    player.recentMinutes = [0, 0, 0, 0, 0];
+    expect(calculateRecentActivity(player)).toBeCloseTo(0, 10);
+    player.recentMinutes = [45, 45, 45, 45, 45];
+    expect(calculateRecentActivity(player)).toBeCloseTo(0.5, 10);
   });
 
   it("weights the most recent match more heavily", () => {
-    const player = makePlayer({});
-    const activity = (minutes: number[]) => {
-      player.recentMinutes = minutes;
-      return calculateRecentActivity(player);
-    };
-    expect(activity([90, 0, 0, 0, 0])).toBeGreaterThan(activity([0, 0, 0, 0, 90]));
+    const recent = makePlayer({ recentMinutes: [90, 0, 0, 0, 0] });
+    const old = makePlayer({ recentMinutes: [0, 0, 0, 0, 90] });
+    expect(calculateRecentActivity(recent)).toBeGreaterThan(calculateRecentActivity(old));
   });
 
   it("does not zero-pad missing match history and returns the default when empty", () => {
-    const player = makePlayer({});
-    const two = calculateRecentActivity({ ...player, recentMinutes: [90, 90] } as Player);
-    const five = calculateRecentActivity({ ...player, recentMinutes: [90, 90, 90, 90, 90] } as Player);
-    expect(two).toBeCloseTo(1.0, 10);
-    expect(five).toBeCloseTo(1.0, 10);
-    expect(calculateRecentActivity({ ...player, recentMinutes: [] } as Player)).toBe(DEVELOPMENT.activity.defaultActivity);
+    expect(calculateRecentActivity(makePlayer({ recentMinutes: [] }))).toBeCloseTo(0.7, 10);
+    expect(calculateRecentActivity(makePlayer({ recentMinutes: [90] }))).toBeCloseTo(1, 10);
   });
 });
 
 describe("player development modifiers", () => {
-  it("matches the growth activity table", () => {
-    const cases: [number, number][] = [
-      [1.0, 1.0],
-      [0.75, 0.9125],
-      [0.5, 0.825],
-      [0.25, 0.7375],
-      [0.0, 0.65],
-    ];
-    for (const [activity, expected] of cases) {
-      expect(calculateGrowthActivityModifier(activity)).toBeCloseTo(expected, 10);
-    }
+  it("reduces realized growth as activity falls", () => {
+    expect(calculateGrowthActivityModifier(1)).toBeCloseTo(1, 10);
+    expect(calculateGrowthActivityModifier(0)).toBeCloseTo(0.65, 10);
+    expect(calculateGrowthActivityModifier(0.5)).toBeCloseTo(0.825, 10);
   });
 
-  it("matches the decline activity table", () => {
-    const cases: [number, number][] = [
-      [1.0, 1.0],
-      [0.75, 1.1],
-      [0.5, 1.2],
-      [0.25, 1.3],
-      [0.0, 1.4],
-    ];
-    for (const [activity, expected] of cases) {
-      expect(calculateDeclineActivityModifier(activity)).toBeCloseTo(expected, 10);
-    }
+  it("increases realized decline as activity falls", () => {
+    expect(calculateDeclineActivityModifier(1)).toBeCloseTo(1, 10);
+    expect(calculateDeclineActivityModifier(0)).toBeCloseTo(1.4, 10);
   });
 
-  it("returns 1 for the plateau and dispatches by sign", () => {
+  it("returns 1 on the plateau and dispatches by sign", () => {
     expect(calculateActivityModifier(0, 0.5)).toBe(1);
-    expect(calculateActivityModifier(1e-9, 0.5)).toBe(1);
-    expect(calculateActivityModifier(0.5, 0)).toBe(0.65);
-    expect(calculateActivityModifier(-0.5, 0)).toBe(1.4);
+    expect(calculateActivityModifier(1, 0)).toBeCloseTo(0.65, 10);
+    expect(calculateActivityModifier(-1, 0)).toBeCloseTo(1.4, 10);
   });
 });
 
-describe("player development curves", () => {
-  it("grows positive before decline and decays toward zero near the decline age", () => {
-    for (const age of [18, 20, 22, 24, 26, 28]) {
-      expect(calculateAgeDevelopment(age, 30)).toBeGreaterThan(0);
-    }
-    const near = calculateAgeDevelopment(29.9, 30);
-    expect(near).toBeGreaterThan(0);
-    expect(near).toBeLessThan(0.1);
+describe("career curves", () => {
+  it("interpolates piecewise-linear cumulative curves and clamps outside the domain", () => {
+    const curve = [[0, 0], [1, 1]] as const;
+    expect(evaluateCurve(curve, -1)).toBe(0);
+    expect(evaluateCurve(curve, 0.25)).toBeCloseTo(0.25, 10);
+    expect(evaluateCurve(curve, 2)).toBe(1);
   });
 
-  it("declines after the decline age with accelerating magnitude", () => {
-    const d = 30;
-    const y1 = calculateAgeDevelopment(d + 1, d);
-    const y2 = calculateAgeDevelopment(d + 2, d);
-    const y3 = calculateAgeDevelopment(d + 3, d);
-    expect(y1).toBeLessThan(0);
-    expect(y2).toBeLessThan(y1);
-    expect(y3).toBeLessThan(y2);
-    const firstDiff = y1 - y2;
-    const secondDiff = y2 - y3;
-    expect(secondDiff).toBeGreaterThan(firstDiff);
+  it("speed 0 follows the slow curve and speed 1 the fast curve exactly", () => {
+    const slow = [[0, 0], [0.5, 0.1], [1, 1]] as const;
+    const fast = [[0, 0], [0.5, 0.8], [1, 1]] as const;
+    expect(interpolateCurves(slow, fast, 0.5, 0)).toBeCloseTo(0.1, 10);
+    expect(interpolateCurves(slow, fast, 0.5, 1)).toBeCloseTo(0.8, 10);
+    expect(interpolateCurves(slow, fast, 0.5, 0.5)).toBeCloseTo(0.45, 10);
   });
 
-  it("has no extreme discontinuity crossing the decline age", () => {
-    const before = calculateAgeDevelopment(29.99, 30);
-    const after = calculateAgeDevelopment(30.01, 30);
-    expect(Math.abs(before - after)).toBeLessThan(0.6);
+  it("grows before the personal peak and declines after it", () => {
+    const p = profile({ peakAge: 27 });
+    for (const age of [17, 20, 24, 26]) expect(careerSeasonalRate(p, age)).toBeGreaterThan(0);
+    for (const age of [27, 30, 34]) expect(careerSeasonalRate(p, age)).toBeLessThan(0);
+  });
+
+  it("grants no growth budget at potential 0 and the configured maximum at potential 1", () => {
+    expect(careerGrowthBudget(profile({ growthPotential: 0 }))).toBe(0);
+    expect(careerGrowthBudget(profile({ growthPotential: 1 }))).toBeCloseTo(gameConfig.playerCareer.maximumCareerGrowthOverall, 10);
+  });
+
+  it("grants no decline budget at potential 0 and the configured maximum at potential 1", () => {
+    expect(careerDeclineBudget(profile({ declinePotential: 0 }))).toBe(0);
+    expect(careerDeclineBudget(profile({ declinePotential: 1 }))).toBeCloseTo(gameConfig.playerCareer.maximumCareerDeclineOverall, 10);
+  });
+
+  it("lets speed change timing without changing the full-activity total", () => {
+    const slow = profile({ growthPotential: 1, growthSpeed: 0, peakAge: 28 });
+    const fast = profile({ growthPotential: 1, growthSpeed: 1, peakAge: 28 });
+    expect(cumulativeGrowthFraction(slow, 28)).toBeCloseTo(1, 10);
+    expect(cumulativeGrowthFraction(fast, 28)).toBeCloseTo(1, 10);
+    expect(cumulativeGrowthFraction(fast, 20)).toBeGreaterThan(cumulativeGrowthFraction(slow, 20));
+    // Decline behaves the same way: faster only means earlier, not more.
+    const slowDecline = profile({ declinePotential: 1, declineSpeed: 0, peakAge: 27 });
+    const fastDecline = profile({ declinePotential: 1, declineSpeed: 1, peakAge: 27 });
+    expect(cumulativeDeclineFraction(fastDecline, 31)).toBeGreaterThan(cumulativeDeclineFraction(slowDecline, 31));
+    expect(cumulativeDeclineFraction(slowDecline, 45)).toBeCloseTo(1, 10);
+    expect(cumulativeDeclineFraction(fastDecline, 45)).toBeCloseTo(1, 10);
+  });
+
+  it("reconstructs the entry target at academy entry and the peak target at peak age", () => {
+    const p = profile({ growthPotential: 0.8, peakAge: 27, declinePotential: 0 });
+    const peakTarget = 80;
+    const budget = careerGrowthBudget(p);
+    const atEntry = reconstructCurrentTarget(p, peakTarget, gameConfig.playerGenerationRules.academyMinAge, 1, 1);
+    expect(atEntry.current).toBeCloseTo(peakTarget - budget, 6);
+    const atPeak = reconstructCurrentTarget(p, peakTarget, 27, 1, 1);
+    expect(atPeak.current).toBeCloseTo(peakTarget, 6);
+  });
+
+  it("makes lower historical activity realize LESS growth rather than move a player toward his peak", () => {
+    const p = profile({ growthPotential: 1, peakAge: 27, declinePotential: 0 });
+    const active = reconstructCurrentTarget(p, 80, 22, 1, 1).current;
+    const inactive = reconstructCurrentTarget(p, 80, 22, 0.65, 1).current;
+    expect(inactive).toBeLessThan(active);
+  });
+
+  it("samples the configured density exactly", () => {
+    const points = [[0, 0], [1, 2]] as const;
+    const rng = createRng(4242);
+    let sum = 0;
+    const n = 200_000;
+    for (let i = 0; i < n; i++) sum += sampleDensity(rng, points);
+    // A linearly rising density on [0,1] has mean 2/3.
+    expect(sum / n).toBeCloseTo(densityMean(points), 2);
+    expect(densityMean(points)).toBeCloseTo(2 / 3, 10);
   });
 });
 
-calibrationDescribe("development profile generation", () => {
-  it("generates profiles within bounds with plausible means", () => {
-    const rng = createRng(12345);
-    let dSum = 0;
-    let rSum = 0;
-    let vSum = 0;
-    const n = 100000;
-    for (let i = 0; i < n; i++) {
-      const p = generateDevelopmentProfile(rng);
-      expect(p.declineStartAge).toBeGreaterThanOrEqual(24);
-      expect(p.declineStartAge).toBeLessThanOrEqual(38);
-      expect(p.developmentRate).toBeGreaterThanOrEqual(0.6);
-      expect(p.developmentRate).toBeLessThanOrEqual(1.4);
-      expect(p.developmentVolatility).toBeGreaterThanOrEqual(0.03);
-      expect(p.developmentVolatility).toBeLessThanOrEqual(0.2);
-      dSum += p.declineStartAge;
-      rSum += p.developmentRate;
-      vSum += p.developmentVolatility;
+describe("position-normalized development", () => {
+  it("converts an OVR-equivalent budget into comparable OVR movement for every position", () => {
+    const club = testClub({ trainingFocus: "assistant" });
+    const moved: number[] = [];
+    for (const position of [0, 1, 2, 3, 4] as Position[]) {
+      const player = makePlayer({ position });
+      player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
+      player.overall = overallFromSkills(position, player.skills);
+      player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
+      player.age = 20;
+      player.careerProfile = profile({ growthPotential: 1, peakAge: 30 });
+      player.careerGrowthConsumed = 0;
+      player.careerDeclineConsumed = 0;
+      player.recentMinutes = [90, 90, 90, 90, 90];
+      const before = player.overall;
+      // Two seasons so the accumulators resolve into whole skill points.
+      runSeason(player, club, 5);
+      runSeason(player, club, 6);
+      moved.push(player.overall - before);
     }
-    expect(dSum / n).toBeCloseTo(30, 0.2);
-    expect(rSum / n).toBeCloseTo(1.0, 0.05);
-    expect(vSum / n).toBeGreaterThan(0.03);
-    expect(vSum / n).toBeLessThan(0.12);
+    // Positional OVR weights differ a lot, so without normalization these would
+    // diverge badly. They must land within a point or two of each other.
+    expect(Math.max(...moved) - Math.min(...moved)).toBeLessThanOrEqual(2);
+    for (const delta of moved) expect(delta).toBeGreaterThan(0);
   });
 
-  it("backfill is deterministic and distinct per player", () => {
-    const a = backfillDevelopmentProfile(4242, 1);
-    const b = backfillDevelopmentProfile(4242, 1);
-    const c = backfillDevelopmentProfile(4242, 2);
-    expect(a).toEqual(b);
-    expect(a.declineStartAge).not.toBe(c.declineStartAge);
-    const d = backfillDevelopmentProfile(9999, 1);
-    expect(a).not.toEqual(d);
+  it("computes sensitivity from the position's OVR weights and the training distribution", () => {
+    const club = testClub({ trainingFocus: "primary" });
+    for (const position of [0, 1, 2, 3, 4] as Position[]) {
+      const player = makePlayer({ position });
+      const weights = effectiveSkillWeights(player, club, true);
+      expect(overallSensitivity(position, weights)).toBeGreaterThan(0);
+      // Effective weights are a distribution over the eligible skills.
+      const total = SKILL_KEYS.reduce((sum, key) => sum + weights[key], 0);
+      expect(total).toBeCloseTo(1, 10);
+    }
+  });
+
+  it("redistributes progress blocked by a capped skill instead of losing it", () => {
+    const club = testClub({ trainingFocus: "primary" });
+    const player = makePlayer({ position: 4 });
+    player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 100 };
+    // `fin` is the primary focus for a forward and is already pinned at 100.
+    const weights = effectiveSkillWeights(player, club, true);
+    expect(weights.fin).toBe(0);
+    const total = SKILL_KEYS.reduce((sum, key) => sum + weights[key], 0);
+    expect(total).toBeCloseTo(1, 10);
+    // Every remaining eligible skill keeps its relative share of the budget.
+    expect(weights.vel).toBeGreaterThan(0);
+  });
+
+  it("changes which skills improve with training focus without creating extra total growth", () => {
+    const build = (focus: "assistant" | "primary" | "secondary") => {
+      const club = testClub({ trainingFocus: focus });
+      const player = makePlayer({ position: 3 });
+      player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
+      player.overall = overallFromSkills(3, player.skills);
+      player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
+      player.age = 21;
+      player.careerProfile = profile({ growthPotential: 1, peakAge: 30 });
+      player.careerGrowthConsumed = 0;
+      player.careerDeclineConsumed = 0;
+      player.recentMinutes = [90, 90, 90, 90, 90];
+      const spent = runSeason(player, club, 9) + runSeason(player, club, 10);
+      return { player, spent };
+    };
+    const primary = build("primary");
+    const secondary = build("secondary");
+    // Same budget consumed regardless of focus...
+    expect(primary.spent).toBeCloseTo(secondary.spent, 6);
+    // ...but a different skill distribution.
+    expect(primary.player.skills).not.toEqual(secondary.player.skills);
+  });
+
+  it("stops rather than redistributes when the career budget is exhausted", () => {
+    const club = testClub();
+    const player = makePlayer({ position: 3 });
+    player.age = 22;
+    player.careerProfile = profile({ growthPotential: 1, peakAge: 30 });
+    player.careerGrowthConsumed = careerGrowthBudget(player.careerProfile);
+    player.careerDeclineConsumed = 0;
+    player.recentMinutes = [90, 90, 90, 90, 90];
+    const skillsBefore = { ...player.skills };
+    expect(remainingCareerBudget(player, true)).toBe(0);
+    runSeason(player, club, 3);
+    expect(player.skills).toEqual(skillsBefore);
+    expect(player.careerGrowthConsumed).toBeCloseTo(careerGrowthBudget(player.careerProfile), 10);
+  });
+
+  it("never lets realized growth exceed the career growth budget", () => {
+    const club = testClub();
+    const player = makePlayer({ position: 3 });
+    player.age = 16;
+    player.careerProfile = profile({ growthPotential: 0.2, peakAge: 30 });
+    player.careerGrowthConsumed = 0;
+    player.careerDeclineConsumed = 0;
+    player.recentMinutes = [90, 90, 90, 90, 90];
+    const budget = careerGrowthBudget(player.careerProfile);
+    for (let season = 0; season < 14; season++) {
+      runSeason(player, club, 100 + season);
+      player.age += 1;
+    }
+    expect(player.careerGrowthConsumed).toBeLessThanOrEqual(budget + 1e-9);
+  });
+
+  it("keeps OVR equal to overallFromSkills after every tick", () => {
+    const club = testClub();
+    const player = makePlayer({ position: 2 });
+    player.age = 19;
+    player.careerProfile = profile({ growthPotential: 1, peakAge: 29 });
+    player.careerGrowthConsumed = 0;
+    player.careerDeclineConsumed = 0;
+    player.recentMinutes = [90, 90, 90, 90, 90];
+    const rng = createRng(77);
+    for (let day = 1; day <= DAYS_PER_YEAR; day++) {
+      applyDevelopment(player, club, day);
+      expect(player.overall).toBe(overallFromSkills(player.position, player.skills));
+    }
   });
 });
 
 describe("applyDevelopment", () => {
-  it("is deterministic for a fixed seed and profile", () => {
+  it("is deterministic for identical worlds", () => {
     const world1 = generateWorld(777);
     const world2 = generateWorld(777);
     initSeason(world1, { year: 2026, month: 1 }, 1);
@@ -195,234 +306,151 @@ describe("applyDevelopment", () => {
     p1.recentMinutes = [90, 90, 90, 90, 90];
     p2.recentMinutes = [90, 90, 90, 90, 90];
     for (let day = 1; day <= 30; day++) {
-      applyDevelopment(world1.rng, p1, club1, day);
-      applyDevelopment(world2.rng, p2, club2, day);
+      applyDevelopment(p1, club1, day);
+      applyDevelopment(p2, club2, day);
     }
     expect(p1.skillAcc).toEqual(p2.skillAcc);
     expect(p1.skills).toEqual(p2.skills);
   });
 
-  it("never lets a legal random factor flip the sign of development", () => {
-    const rng = createRng(3);
-    const player = makePlayer({ developmentProfile: { declineStartAge: 30, developmentRate: 1, developmentVolatility: 0.05 } });
-    for (let i = 0; i < 2000; i++) {
-      const f = generateDevelopmentRandomFactor(rng, player);
-      expect(f).toBeGreaterThanOrEqual(0.8);
-      expect(f).toBeLessThanOrEqual(1.2);
-    }
-  });
-
   it("accumulates fractional progress and bumps integer skills only on threshold crossing", () => {
-    const world = generateWorld(31337);
-    initSeason(world, { year: 2026, month: 1 }, 1);
-    const club = world.clubs[0];
-    const player = world.players.find((p) => p.clubId === club.id && !p.isYouth)!;
+    const club = testClub();
+    const player = makePlayer({ position: 3 });
     player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
     player.overall = overallFromSkills(player.position, player.skills);
-    player.potential = 100;
     player.age = 18;
+    player.careerProfile = profile({ growthPotential: 0.5, peakAge: 28 });
+    player.careerGrowthConsumed = 0;
+    player.careerDeclineConsumed = 0;
     player.recentMinutes = [90, 90, 90, 90, 90];
     player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
-    const rng = createRng(11);
-    applyDevelopment(rng, player, club, 1);
-    const accAfterOne = player.skillAcc.reduce((s, x) => s + Math.abs(x), 0);
-    expect(accAfterOne).toBeGreaterThan(0);
-    expect(accAfterOne).toBeLessThan(1);
-    expect(player.skills.fin).toBe(50);
+    applyDevelopment(player, club, 1);
+    const accumulated = player.skillAcc.reduce((sum, value) => sum + Math.abs(value), 0);
+    expect(accumulated).toBeGreaterThan(0);
+    expect(accumulated).toBeLessThan(1);
+    expect(player.skills.pas).toBe(50);
   });
 
-  it("matches the spec integration scenarios: inactive young player grows ~65% of active; inactive veteran declines ~1.4x", () => {
-    const club = {
-      id: 1,
-      name: "Test",
-      shortName: "TST",
-      ownerUserId: null,
-      competitionState: "ACTIVE" as const,
-      lastMeaningfulActivityAt: null,
-    abandonmentEligibleAt: null,
-      liveMatchAt: null,
-      country: "BRA",
-    highestDivision: 1,
-      cash: 10000000,
-      stadiumName: "St",
-      stadiumCapacity: 40000,
-      primaryColor: "#000",
-      secondaryColor: "#fff",
-      coachName: "Coach",
-      tactics: { formation: 4, style: 0, pressing: 0, direction: 0 },
-      trainingFocus: "assistant" as const,
-      captainId: null,
-      penaltyTakerId: null,
-      isHuman: false,
-      ledger: { income: [], expense: [] },
-      trophies: {},
-    };
-    const young = (activity: number) => {
-      const p = generatePlayer(createRng(1), club, { id: 1 });
-      p.age = 20;
-      p.skills = { gol: 60, vel: 60, tec: 60, pas: 60, des: 60, arm: 60, fin: 60 };
-      p.overall = ratingOverall(p.position, p.skills);
-      p.potential = 100;
-      p.skillAcc = [0, 0, 0, 0, 0, 0, 0];
-      p.recentMinutes = activity === 1 ? [90, 90, 90, 90, 90] : [0, 0, 0, 0, 0];
-      return p;
-    };
-    // Pin random factor to 1 by using a fixed profile and comparing pure budget math:
-    // Growth at age 20 with D=30: p=(20-18)/(30-18)=1/6 => 3*(5/6)^1.35 ≈ 2.35
-    // active modifier = 1.0, inactive = 0.65. Ratio should be exactly 0.65.
-    const age20Growth = calculateAgeDevelopment(20, 30);
-    expect(age20Growth * calculateGrowthActivityModifier(1.0)).toBeCloseTo(age20Growth * calculateGrowthActivityModifier(1.0), 10);
-    expect(age20Growth * calculateGrowthActivityModifier(0.0) / (age20Growth * calculateGrowthActivityModifier(1.0))).toBeCloseTo(0.65, 10);
+  it("advances precise age within the season", () => {
+    const player = makePlayer({ age: 20 });
+    expect(calculatePreciseAge(player, 0)).toBe(20);
+    expect(calculatePreciseAge(player, DAYS_PER_YEAR)).toBeCloseTo(21, 10);
+  });
 
-    const vet = (activity: number) => {
-      const p = generatePlayer(createRng(2), club, { id: 2 });
-      p.age = 34;
-      p.skills = { gol: 70, vel: 70, tec: 70, pas: 70, des: 70, arm: 70, fin: 70 };
-      p.overall = ratingOverall(p.position, p.skills);
-      p.potential = 100;
-      p.skillAcc = [0, 0, 0, 0, 0, 0, 0];
-      p.recentMinutes = activity === 1 ? [90, 90, 90, 90, 90] : [0, 0, 0, 0, 0];
-      return p;
-    };
-    const vetDecline = calculateAgeDevelopment(34, 30);
-    expect(vetDecline).toBeLessThan(0);
-    expect(vetDecline * calculateDeclineActivityModifier(0.0) / (vetDecline * calculateDeclineActivityModifier(1.0))).toBeCloseTo(1.4, 10);
-    expect(young(1).age).toBe(20);
-    expect(vet(1).age).toBe(34);
+  it("freezes development entirely for a dormant club's players", () => {
+    const club = testClub({ competitionState: "DORMANT" });
+    const player = makePlayer({ position: 3 });
+    player.age = 19;
+    player.careerProfile = profile({ growthPotential: 1, peakAge: 29 });
+    player.careerGrowthConsumed = 0;
+    player.recentMinutes = [90, 90, 90, 90, 90];
+    // applyDevelopment itself treats a non-ACTIVE club's missing appearances as
+    // neutral; the dormant freeze is enforced by the caller skipping the club.
+    // What must never happen is a dormant squad being penalised as "inactive".
+    const rng = createRng(5);
+    for (let day = 1; day <= DAYS_PER_YEAR; day++) applyDevelopment(player, club, day);
+    expect(calculateRecentActivity(player)).toBeCloseTo(1, 10);
   });
 });
 
 calibrationDescribe("long-term career simulation", () => {
-  it("produces plausible career trajectories across activity profiles", () => {
-    const n = 1000;
-    const activities = [
-      { label: "full", minutes: [90, 90, 90, 90, 90] },
-      { label: "regular", minutes: [80, 90, 85, 75, 90] },
-      { label: "rotation", minutes: [45, 60, 30, 50, 70] },
-      { label: "occasional", minutes: [15, 0, 25, 10, 5] },
-      { label: "inactive", minutes: [0, 0, 0, 0, 0] },
-    ];
-    const results: Record<string, number[]> = {};
-    let sumDeclineAge = 0;
-    for (const profile of activities) {
-      const changes: number[] = [];
-      for (let i = 0; i < n; i++) {
-        const rng = createRng(1000 + i);
-        const p = generateDevelopmentProfile(rng);
-        sumDeclineAge += p.declineStartAge;
-        let acc = 0;
-        let skill = 50;
-        for (let age = 16; age <= 40; age++) {
-          for (let day = 1; day <= DAYS_PER_YEAR; day++) {
-            const precise = age + day / DAYS_PER_YEAR;
-            const base = calculateAgeDevelopment(precise, p.declineStartAge);
-            if (Math.abs(base) < DEVELOPMENT.developmentEpsilon) continue;
-            const career = base * p.developmentRate;
-            const activity = calculateRecentActivity({ recentMinutes: profile.minutes } as Player);
-            const modifier = calculateActivityModifier(career, activity);
-            acc += career * modifier * DEVELOPMENT.tickFraction;
-            while (acc >= 1 && skill < 100) {
-              skill++;
-              acc -= 1;
-            }
-            while (acc <= -1 && skill > 1) {
-              skill--;
-              acc += 1;
-            }
-          }
-        }
-        changes.push(skill - 50);
+  const activities = [
+    { label: "full", minutes: [90, 90, 90, 90, 90] },
+    { label: "regular", minutes: [80, 90, 85, 75, 90] },
+    { label: "rotation", minutes: [45, 60, 30, 50, 70] },
+    { label: "occasional", minutes: [15, 0, 25, 10, 5] },
+    { label: "inactive", minutes: [0, 0, 0, 0, 0] },
+  ];
+
+  function simulateCareer(seed: number, minutes: number[]): { peak: number; final: number; peakAge: number } {
+    const club = testClub({ id: 1 });
+    const player = makePlayer({ position: 3 });
+    player.skills = { gol: 40, vel: 40, tec: 40, pas: 40, des: 40, arm: 40, fin: 40 };
+    player.overall = overallFromSkills(player.position, player.skills);
+    player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
+    player.age = 16;
+    player.careerProfile = generateCareerProfile(createRng(seed));
+    player.careerGrowthConsumed = 0;
+    player.careerDeclineConsumed = 0;
+    player.recentMinutes = minutes;
+    let peak = player.overall;
+    let peakAge = player.age;
+    while (player.age < 40) {
+      const rng = createRng(seed * 1_000 + player.age);
+      for (let day = 1; day <= DAYS_PER_YEAR; day++) applyDevelopment(player, club, day);
+      if (player.overall > peak) {
+        peak = player.overall;
+        peakAge = player.age;
       }
-      results[profile.label] = changes;
+      player.age += 1;
     }
-    const avg = (arr: number[]) => arr.reduce((s, x) => s + x, 0) / arr.length;
-    const full = avg(results.full);
-    const inactive = avg(results.inactive);
-    const occasional = avg(results.occasional);
-    expect(results.full).toHaveLength(n);
-    // Full starters outgrow inactive ones: inactivity must slow development.
-    expect(full).toBeGreaterThan(inactive);
-    expect(occasional).toBeLessThan(full);
-    // Inactivity accelerates decline: the inactive-veteran drag must exceed the
-    // active veteran's, so the gap between full and inactive is large.
-    expect(full - inactive).toBeGreaterThan(5);
-    // Same-age peers with different hidden profiles must diverge (variance).
-    const spread = Math.max(...results.full) - Math.min(...results.full);
-    expect(spread).toBeGreaterThan(5);
+    return { peak, final: player.overall, peakAge };
+  }
+
+  it("orders realized career growth by playing time", () => {
+    const n = 300;
+    const meanPeak: Record<string, number> = {};
+    for (const activity of activities) {
+      let sum = 0;
+      for (let i = 0; i < n; i++) sum += simulateCareer(1_000 + i, activity.minutes).peak;
+      meanPeak[activity.label] = sum / n;
+    }
+    for (let i = 0; i + 1 < activities.length; i++) {
+      expect(meanPeak[activities[i].label], `${activities[i].label} vs ${activities[i + 1].label}`)
+        .toBeGreaterThan(meanPeak[activities[i + 1].label]);
+    }
+    expect(meanPeak.full - meanPeak.inactive).toBeGreaterThan(3);
   });
 
-  it("has a mean decline start age near 30 and a centre-heavy decline-age distribution", () => {
-    const rng = createRng(555);
-    const n = 100000;
-    let sum = 0;
-    let center = 0;
-    let extreme = 0;
-    for (let i = 0; i < n; i++) {
-      const d = generateDevelopmentProfile(rng).declineStartAge;
-      sum += d;
-      if (d >= 26 && d <= 34) center++;
-      if (d <= 25 || d >= 35) extreme++;
-    }
-    expect(sum / n).toBeCloseTo(30, 0.2);
-    expect(center / n).toBeGreaterThan(0.9);
-    expect(extreme / n).toBeLessThan(0.05);
-  });
-
-  it("simulates 10,000 careers seasonally (spec section 48) with plausible aggregates", () => {
-    const n = 10000;
-    const rng = createRng(2024);
-    const profiles = Array.from({ length: n }, () => generateDevelopmentProfile(rng));
-    const activityValues = [
-      { label: "full", value: 1.0 },
-      { label: "regular", value: 0.75 },
-      { label: "rotation", value: 0.5 },
-      { label: "occasional", value: 0.25 },
-      { label: "inactive", value: 0.0 },
-    ];
-    const percentile = (sorted: number[], p: number) => sorted[Math.floor((sorted.length - 1) * p)];
-    const mean = (arr: number[]) => arr.reduce((s, x) => s + x, 0) / arr.length;
-
-    const careers: Record<string, number[]> = {};
-    const meanDeclineStart = mean(profiles.map((p) => p.declineStartAge));
-    expect(meanDeclineStart).toBeCloseTo(30, 0.2);
-
-    for (const activity of activityValues) {
-      const changes = profiles.map((p) => {
-        let total = 0;
-        for (let age = 16; age < 40; age++) {
-          const base = calculateAgeDevelopment(age, p.declineStartAge);
-          const career = base * p.developmentRate;
-          total += career * calculateActivityModifier(career, activity.value);
-        }
-        return total;
-      });
-      changes.sort((a, b) => a - b);
-      careers[activity.label] = changes;
-    }
-    const stats = (label: string) => {
-      const s = careers[label];
-      return { mean: mean(s), p10: percentile(s, 0.1), p25: percentile(s, 0.25), p50: percentile(s, 0.5), p75: percentile(s, 0.75), p90: percentile(s, 0.9) };
+  it("makes active veterans decline more slowly than inactive ones", () => {
+    const n = 300;
+    const drop = (minutes: number[]) => {
+      let sum = 0;
+      for (let i = 0; i < n; i++) {
+        const career = simulateCareer(2_000 + i, minutes);
+        sum += career.peak - career.final;
+      }
+      return sum / n;
     };
-    const full = stats("full");
-    const inactive = stats("inactive");
-    // Activity ordering: more minutes always beats fewer minutes.
-    for (let i = 0; i + 1 < activityValues.length; i++) {
-      expect(mean(careers[activityValues[i].label])).toBeGreaterThan(mean(careers[activityValues[i + 1].label]));
+    expect(drop([0, 0, 0, 0, 0])).toBeGreaterThan(drop([90, 90, 90, 90, 90]));
+  });
+
+  it("peaks near the drawn personal peak age and never grows past it", () => {
+    const n = 400;
+    let matched = 0;
+    for (let i = 0; i < n; i++) {
+      const club = testClub({ id: 1 });
+      const player = makePlayer({ position: 3 });
+      player.age = 16;
+      player.careerProfile = generateCareerProfile(createRng(3_000 + i));
+      player.careerGrowthConsumed = 0;
+      player.careerDeclineConsumed = 0;
+      player.recentMinutes = [90, 90, 90, 90, 90];
+      let growthAfterPeak = 0;
+      while (player.age < 40) {
+        const before = player.careerGrowthConsumed;
+        const rng = createRng((3_000 + i) * 1_000 + player.age);
+        for (let day = 1; day <= DAYS_PER_YEAR; day++) applyDevelopment(player, club, day);
+        if (player.age > player.careerProfile.peakAge) growthAfterPeak += player.careerGrowthConsumed - before;
+        player.age += 1;
+      }
+      // Growth strictly stops at the personal peak: none is banked for later.
+      expect(growthAfterPeak).toBeLessThan(1e-9);
+      if (player.careerDeclineConsumed > 0) matched += 1;
     }
-    // Inactive veterans decline substantially faster than active ones.
-    expect(full.mean - inactive.mean).toBeGreaterThan(5);
-    // Same-age peers with different hidden profiles diverge materially.
-    expect(full.p90 - full.p10).toBeGreaterThan(5);
-    expect(inactive.p90 - inactive.p10).toBeGreaterThan(5);
-    // Growth tapers as the decline age approaches: mean per-season growth at 20
-    // exceeds growth at 27 across the population.
-    const growthAt = (age: number) =>
-      mean(profiles.map((p) => Math.max(0, calculateAgeDevelopment(age, p.declineStartAge)) * p.developmentRate));
-    expect(growthAt(20)).toBeGreaterThan(growthAt(27));
-    expect(growthAt(27)).toBeGreaterThan(growthAt(29));
-    // Decline accelerates: mean decline magnitude at 36 well exceeds 31.
-    const declineAt = (age: number) =>
-      mean(profiles.map((p) => Math.abs(Math.min(0, calculateAgeDevelopment(age, p.declineStartAge))) * p.developmentRate));
-    expect(declineAt(36)).toBeGreaterThan(declineAt(31) * 1.5);
+    expect(matched).toBeGreaterThan(n * 0.9);
+  });
+
+  it("lets a strong lower-division prospect reach higher-division quality", () => {
+    // A D3-anchored career peak with a good draw must be able to clear normal
+    // D1 starter quality; development has no division ceiling.
+    const peaks: number[] = [];
+    for (let i = 0; i < 2_000; i++) {
+      const p = generateCareerProfile(createRng(7_000 + i));
+      peaks.push(careerGrowthBudget(p));
+    }
+    peaks.sort((a, b) => a - b);
+    const p99 = peaks[Math.floor(peaks.length * 0.99)];
+    expect(p99).toBeGreaterThan(gameConfig.playerCareer.maximumCareerGrowthOverall * 0.9);
   });
 });

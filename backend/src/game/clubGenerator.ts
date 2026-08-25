@@ -1,11 +1,19 @@
 import type { Club, Player, Position, World } from "./types";
-import { nextDouble, shuffle } from "./rng";
-import { generateSeniorPlayer, generateYouthPlayer, seniorRosterTemplate, playerRng, type GenerationType } from "./playerGeneration";
+import { shuffle } from "./rng";
+import {
+  ACADEMY_POSITION_WEIGHTS,
+  generateSeniorPlayer,
+  generateYouthPlayer,
+  seniorRosterTemplate,
+  playerRng,
+  type GenerationType,
+} from "./playerGeneration";
 import { gameConfig } from "../config";
 import { SENIOR_SQUAD_LIMIT } from "./constants";
-import { retirementProbability } from "./player";
 import { assignInitialSquadNumbers } from "./squadNumbers";
 import { bumpSkillsVersion } from "./skillsVersion";
+
+export { ACADEMY_POSITION_WEIGHTS };
 
 /**
  * Squad-level generation orchestration (plans/4. player-generation.md §70-§73).
@@ -55,10 +63,9 @@ function nextId(world: World): number {
  * position weights for academy squads keep every academy able to field a
  * balanced youth pool while preserving the subposition logic inside each group.
  */
-export const ACADEMY_POSITION_WEIGHTS = [0.1, 0.28, 0.26, 0.22, 0.14];
 const ACADEMY_POSITION_GROUPS: Position[] = [0, 1, 2, 3, 4];
 
-function largestRemainder(weights: number[], total: number): number[] {
+function largestRemainder(weights: readonly number[], total: number): number[] {
   const weightSum = weights.reduce((a, b) => a + b, 0);
   const exact = weights.map((w) => (w / weightSum) * total);
   const allocated = exact.map((x) => Math.floor(x));
@@ -161,18 +168,19 @@ export function generateInitialAcademy(ctx: GenerationContext): Player[] {
 }
 
 /**
- * Generate the seasonal academy intake (spec §43/§73): the resolved mean is
- * deterministically rounded to an integer quota, subject to academy roster
- * slots. Ages are drawn uniformly from academyMinAge..academyMaxAge. The event
- * marker is checked and written here so direct callers are idempotent as well.
+ * Generate this club's share of the seasonal academy intake. The exact global
+ * total and each club's allocation are resolved by the population module; this
+ * function only clamps to the academy roster limit and creates the players.
+ * Blocked slots are reported back so they carry into the signed correction
+ * rather than rerolling or disappearing.
  */
-export function generateSeasonalAcademyIntake(ctx: GenerationContext): Player[] {
+export function generateSeasonalAcademyIntake(ctx: GenerationContext & { allocated: number }): Player[] {
   const { world, club } = ctx;
   if (ctx.seasonId !== null && academyIntakeDone(world, club.id, ctx.seasonId)) return [];
   const { academyRosterLimit } = gameConfig.playerGenerationRules;
   const juniorCount = world.players.filter((p) => p.clubId === club.id && p.isYouth).length;
   const availableSlots = Math.max(0, academyRosterLimit - juniorCount);
-  const intakeCount = Math.min(seasonalAcademyIntakeQuota(world, club.id, ctx.seasonId), availableSlots);
+  const intakeCount = Math.max(0, Math.min(ctx.allocated, availableSlots));
   const positions = academyPositionTemplate(world, club.id, "seasonal-academy", intakeCount, ctx.seasonId);
   const created: Player[] = [];
   for (let slot = 0; slot < intakeCount; slot++) {
@@ -196,61 +204,6 @@ export function generateSeasonalAcademyIntake(ctx: GenerationContext): Player[] 
   bumpSkillsVersion();
   if (ctx.seasonId !== null) markAcademyIntakeDone(world, club.id, ctx.seasonId);
   return created;
-}
-
-/**
- * Expected number of senior seasons supplied by a player promoted at the given
- * age. Retirement is checked after each season's aging, exactly as it is during
- * season rollover.
- */
-export function expectedSeniorCareerSeasons(promotionAge: number, position: Position): number {
-  let age = promotionAge;
-  let activeProbability = 1;
-  let expectedSeasons = 0;
-  while (activeProbability > 1e-12) {
-    expectedSeasons += activeProbability;
-    age += 1;
-    activeProbability *= 1 - retirementProbability(age, position);
-  }
-  return expectedSeasons;
-}
-
-/**
- * Equilibrium intake for the configured initial persistent-player population.
- * Each recruit occupies one population slot from academy entry until retirement.
- */
-export function automaticSeasonalAcademyIntakeMean(
-  rules: typeof gameConfig.playerGenerationRules = gameConfig.playerGenerationRules,
-): number {
-  const meanIntakeAge = (rules.academyMinAge + rules.academyMaxAge) / 2;
-  const academyPipelineSeasons = rules.academyPromotionAge - meanIntakeAge;
-  const weightSum = ACADEMY_POSITION_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
-  const seniorCareerSeasons = ACADEMY_POSITION_WEIGHTS.reduce(
-    (sum, weight, position) => sum + weight * expectedSeniorCareerSeasons(rules.academyPromotionAge, position as Position),
-    0,
-  ) / weightSum;
-  const targetPopulation = rules.initialSeniorSquadSize + rules.initialAcademySize;
-  return targetPopulation / (academyPipelineSeasons + seniorCareerSeasons);
-}
-
-/** Resolve a manual mean or calculate the population-stable automatic mean. */
-export function seasonalAcademyIntakeMean(): number {
-  const configured = gameConfig.playerGenerationRules.seasonalAcademyIntake;
-  return configured === "auto" ? automaticSeasonalAcademyIntakeMean() : configured;
-}
-
-/**
- * Convert the resolved mean intake into a retry-stable integer quota. The
- * fractional draw is keyed only by world, club and season, so duplicate jobs
- * cannot reroll it and the long-run population follows the resolved mean.
- */
-export function seasonalAcademyIntakeQuota(world: World, clubId: number, seasonId: number | null): number {
-  const mean = seasonalAcademyIntakeMean();
-  const whole = Math.floor(mean);
-  const fraction = mean - whole;
-  if (fraction <= 0) return whole;
-  const rng = playerRng(world.seed, clubId, "seasonal-academy-quota", 0, seasonId);
-  return whole + (nextDouble(rng) < fraction ? 1 : 0);
 }
 
 /** Has this club already received its seasonal academy intake for `seasonId`? */

@@ -11,6 +11,13 @@ export const DAYS_PER_YEAR = gameConfig.seasonDays;
 export const SENIOR_SQUAD_LIMIT = 35;
 
 /**
+ * Minimum senior squad size a persistent club is left with at rollover. Falling
+ * below it triggers system replacement generation, which is non-academy
+ * persistent creation and therefore reduces the next intake correction.
+ */
+export const SENIOR_SQUAD_FLOOR = 20;
+
+/**
  * News kind reserved for admin "messages of the day". Multiple durable items
  * may exist, and the snapshot pins them ahead of the chronological feed.
  */
@@ -115,24 +122,21 @@ export const GOAL_SUBTYPES = {
   CORNER: 6,
 };
 
-// Player development & decay system (spec: player-evelopment.md §31/§55).
+// Player development & decay system. The career shape itself (growth/decline
+// budgets, peak age, slow/fast curves) lives in gameConfig.playerCareer and is
+// interpreted by careerCurves.ts; only the per-tick mechanics remain here.
 export const DEVELOPMENT = {
-  declineAge: { mean: 30.0, stdDev: 2.0, min: 24.0, max: 38.0 },
-  developmentRate: { alpha: 5.0, beta: 5.0, min: 0.6, max: 1.4 },
-  volatility: { alpha: 2.0, beta: 5.0, min: 0.03, max: 0.2 },
-  growthCurve: { referenceAge: 18.0, maxSeasonalGrowth: 3.0, exponent: 1.35 },
-  declineCurve: { initialDecline: 0.3, coefficient: 0.37, exponent: 1.5 },
+  // Free-agent contract-length sliding scale still references the historical
+  // decline-age distribution.
+  declineAge: { mean: 30.0, stdDev: 2.0 },
   activity: {
     weights: [1.0, 0.75, 0.55, 0.4, 0.3],
     regulationMinutes: 90,
     defaultActivity: 0.7,
-    transferActivity: 0.7,
     inactiveGrowthMultiplier: 0.65,
     inactiveDeclineMultiplier: 1.4,
   },
-  randomFactor: { mean: 1.0, min: 0.8, max: 1.2 },
   developmentEpsilon: 0.000001,
   tickFraction: 1 / DAYS_PER_YEAR,
   recentMatchWindow: 5,
-  backfillVersion: "development-profile-v1",
 } as const;

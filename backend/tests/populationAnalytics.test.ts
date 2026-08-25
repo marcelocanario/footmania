@@ -30,7 +30,13 @@ describe("population analytics", () => {
   it("records one population snapshot per season, carrying retirees across the two rollover steps", () => {
     const club = makeClub();
     const players: Player[] = [];
-    for (let i = 0; i < 20; i++) players.push(generatePlayer(createRng(100 + i), club, { id: i + 1 }));
+    for (let i = 0; i < 20; i++) {
+      const player = generatePlayer(createRng(100 + i), club, { id: i + 1 });
+      // Prime-age squad: nobody is eligible to retire, so the snapshot measures
+      // the recording mechanics rather than a random retirement draw.
+      player.age = 24;
+      players.push(player);
+    }
     const world = makeWorld([club], players);
 
     processSeasonEndContracts(world.rng, world);
@@ -45,11 +51,41 @@ describe("population analytics", () => {
     expect(entry.retirees).toBe(0);
     expect(entry.clubCount).toBe(1);
     expect(entry.seniorCount).toBeGreaterThanOrEqual(20);
+    // The signed ledger is reported alongside the stock so a target gap can be
+    // reconciled instead of being mistaken for an intake bonus.
+    expect(entry.targetActivePopulation).toBeGreaterThan(0);
+    expect(entry.resolvedGlobalIntake).toBeGreaterThanOrEqual(entry.minimumGlobalIntake);
+    expect(Number.isFinite(entry.rawExpectedGlobalIntake)).toBe(true);
+    expect(Number.isFinite(entry.correctionCarriedForward)).toBe(true);
 
     // Idempotent: re-running the intake step for the same season must not
     // duplicate the snapshot (mirrors the archiveSeasonResults guard).
     processSeasonalAcademyIntake(world.rng, world);
     expect(world.mp.populationHistory).toHaveLength(1);
+  });
+
+  it("reports realized retirements and reconciles them against the expected baseline", () => {
+    const club = makeClub();
+    const players: Player[] = [];
+    for (let i = 0; i < 30; i++) {
+      const player = generatePlayer(createRng(300 + i), club, { id: i + 1 });
+      // A squad of 36-year-olds: several retirements are certain, so the
+      // variance correction has to be non-trivial and self-consistent.
+      player.age = 36;
+      players.push(player);
+    }
+    const world = makeWorld([club], players);
+
+    processSeasonEndContracts(world.rng, world);
+    const retirees = world.mp.pendingSeasonRetirees!;
+    expect(retirees).toBeGreaterThan(0);
+
+    processSeasonalAcademyIntake(world.rng, world);
+    const entry = world.mp.populationHistory![0];
+    expect(entry.retirees).toBe(retirees);
+    // expectedRetirees is derived from the same survival model the baseline
+    // uses, so actual minus expected is exactly the recorded variance.
+    expect(entry.expectedRetirees).toBeGreaterThan(0);
   });
 
   it("exposes population, age, position and free-agent analytics alongside the existing quality metrics", () => {

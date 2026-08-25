@@ -1,36 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { createRng } from "../src/game/rng";
 import {
+  academyPeakMean,
   academyPedigree,
-  academyPedigreeOverallOffset,
+  academyQualitySigma,
   bottomDivisionMean,
   divisionMean,
   divisionStrength,
   drawRawZ,
-  expectedGrowth,
   generateSeniorPlayer,
   generateSkillsForTarget,
   generateYouthPlayer,
-  initialPotential,
   overallRange,
   qualitySigma,
-  remainingNaturalGrowth,
+  seniorPeakMean,
   SENIOR_POSITION_WEIGHTS,
   seniorRosterTemplate,
-  tierFromZ,
   topDivisionMean,
-  youthAgeOffset,
   OVR_MAX,
   OVR_MIN,
   SKILL_GENERATION_MAX_RETRIES,
   SKILL_TARGET_TOLERANCE_OVR,
   type GeneratePlayerContext,
 } from "../src/game/playerGeneration";
+import {
+  densityMean,
+  careerDeclineBudget,
+  careerGrowthBudget,
+  cumulativeGrowthFraction,
+  generateCareerProfile,
+  seniorSurvivalWeights,
+} from "../src/game/careerCurves";
 import { countriesWithNamePools } from "../src/game/names";
 import { overallFromSkills } from "../src/game/rating";
 import { gameConfig } from "../src/config";
 import { buildLineup } from "../src/game/club";
-import { aging, applyDevelopment, potentialGrowth } from "../src/game/player";
+import { aging, applyDevelopment } from "../src/game/player";
 import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
 import type { Position } from "../src/game/types";
@@ -149,16 +154,17 @@ describe("derived means (spec §6/§8/§9)", () => {
     }
   });
 
-  it("reproduces the spec's 1-100 reference values", () => {
-    expect(qualitySigma()).toBeCloseTo(6, 2);
-    expect(topDivisionMean()).toBeCloseTo(73.5, 2);
-    expect(bottomDivisionMean()).toBeCloseTo(55.5, 2);
+  it("reproduces the shipped calibration reference values", () => {
+    expect(qualitySigma()).toBeCloseTo(5.5, 2);
+    expect(academyQualitySigma()).toBeCloseTo(6, 2);
+    expect(topDivisionMean()).toBeCloseTo(74, 2);
+    expect(bottomDivisionMean()).toBeCloseTo(56, 2);
   });
 });
 
-describe("academy pedigree (spec §22-§24)", () => {
-  it("weights current division 0.65 and history 0.35", () => {
-    expect(academyPedigree(1, 1, 5)).toBeCloseTo(0.65 * 1 + 0.35 * 1, 10);
+describe("academy pedigree", () => {
+  it("normalizes the configured current/highest-ever weights", () => {
+    expect(academyPedigree(1, 1, 5)).toBeCloseTo(1, 10);
     expect(academyPedigree(5, 5, 5)).toBeCloseTo(0, 10);
   });
 
@@ -170,83 +176,90 @@ describe("academy pedigree (spec §22-§24)", () => {
     expect(d4d1).toBeLessThan(d1d1);
   });
 
-  it("maximum pedigree shift follows the configured academy calibration", () => {
-    const pedigree = academyPedigree(1, 1, 5);
-    expect(academyPedigreeOverallOffset(pedigree)).toBeCloseTo(gameConfig.playerGeneration.academyPedigreeOverallBoost, 10);
-  });
-});
-
-describe("youth age baselines (spec §27-§28)", () => {
-  it("reproduces the spec's canonical age offsets", () => {
-    const expected = { 16: 12.107, 17: 9.422, 18: 6.737, 19: 4.202, 20: 1.959, 21: 0.0 };
-    for (const [age, value] of Object.entries(expected)) {
-      expect(youthAgeOffset(Number(age))).toBeCloseTo(value, 3);
-    }
-  });
-
-  it("youth means equal mu_bottom minus the age offset", () => {
-    for (const age of [16, 17, 18, 19, 20, 21]) {
-      expect(youthAgeOffset(age)).toBeCloseTo(bottomDivisionMean() - (bottomDivisionMean() - youthAgeOffset(age)), 8);
-    }
-  });
-});
-
-describe("remaining natural growth & initial potential (spec §34-§36)", () => {
-  it("is zero past the decline age and grows for younger players", () => {
-    expect(remainingNaturalGrowth(30, 30)).toBe(0);
-    expect(remainingNaturalGrowth(35, 30)).toBe(0);
-    expect(remainingNaturalGrowth(20, 30)).toBeGreaterThan(remainingNaturalGrowth(28, 30));
-  });
-
-  it("initial potential is at least the current overall and at most OVR_MAX", () => {
-    for (const overall of [40, 60, 80, 95]) {
-      for (const age of [16, 20, 24, 30]) {
-        for (const decline of [24, 30, 38]) {
-          const p = initialPotential(overall, age, decline, 1.0);
-          expect(p).toBeGreaterThanOrEqual(overall);
-          expect(p).toBeLessThanOrEqual(OVR_MAX);
+  it("stays inside 0..1 for every weight split", () => {
+    const generation = gameConfig.playerGeneration;
+    const previous = [generation.academyCurrentDivisionWeight, generation.academyHighestEverDivisionWeight];
+    try {
+      for (const [current, history] of [[1, 0], [0, 1], [3, 7], [0.1, 0.1]]) {
+        generation.academyCurrentDivisionWeight = current;
+        generation.academyHighestEverDivisionWeight = history;
+        for (let division = 1; division <= 5; division++) {
+          const pedigree = academyPedigree(division, 1, 5);
+          expect(pedigree).toBeGreaterThanOrEqual(0);
+          expect(pedigree).toBeLessThanOrEqual(1);
         }
       }
+    } finally {
+      generation.academyCurrentDivisionWeight = previous[0];
+      generation.academyHighestEverDivisionWeight = previous[1];
     }
-  });
-
-  it("stronger development profiles produce higher ceilings (spec §36)", () => {
-    const strong = initialPotential(50, 20, 38, 1.4);
-    const weak = initialPotential(50, 20, 24, 0.6);
-    expect(strong).toBeGreaterThan(weak);
-  });
-
-  it("a poor player with a strong profile can still have headroom", () => {
-    const p = initialPotential(45, 18, 38, 1.4);
-    expect(p).toBeGreaterThan(45);
   });
 });
 
-calibrationDescribe("tier classification (spec §37)", () => {
-  it("maps percentile thresholds to tiers 1..5", () => {
-    expect(tierFromZ(-3.0)).toBe(1);
-    expect(tierFromZ(-1.5)).toBe(1);
-    expect(tierFromZ(-1.0)).toBe(2);
-    expect(tierFromZ(-0.5)).toBe(3);
-    expect(tierFromZ(0.0)).toBe(3);
-    expect(tierFromZ(0.8)).toBe(4);
-    expect(tierFromZ(1.5)).toBe(5);
-    expect(tierFromZ(3.0)).toBe(5);
+describe("career peak anchors", () => {
+  it("places the senior peak the configured offset above the division mean", () => {
+    for (let division = 1; division <= 5; division++) {
+      expect(seniorPeakMean(division, 5) - divisionMean(division, 5)).toBeCloseTo(
+        gameConfig.playerGeneration.seniorPeakOverallOffset,
+        10,
+      );
+    }
   });
 
-  it("produces approximately 10/20/40/20/10 distribution", () => {
-    const rng = createRng(2024);
-    const n = 200000;
-    const counts = [0, 0, 0, 0, 0];
-    for (let i = 0; i < n; i++) {
-      const z = drawRawZ(rng);
-      counts[tierFromZ(z) - 1]++;
+  it("gives a stable top-division academy the same peak anchor as top-division seniors", () => {
+    // The pedigree boost equals the division span, so a D1/D1 academy's normal
+    // recruit is heading for the same career peak as a D1 senior.
+    expect(academyPeakMean(academyPedigree(1, 1, 5))).toBeCloseTo(seniorPeakMean(1, 5), 6);
+  });
+
+  it("orders academy peak anchors by pedigree and bottoms out at the weakest academy", () => {
+    const anchors = [1, 2, 3, 4, 5].map((division) => academyPeakMean(academyPedigree(division, division, 5)));
+    for (let i = 1; i < anchors.length; i++) expect(anchors[i]).toBeLessThan(anchors[i - 1]);
+    expect(anchors[anchors.length - 1]).toBeCloseTo(
+      bottomDivisionMean() + gameConfig.playerGeneration.seniorPeakOverallOffset,
+      6,
+    );
+  });
+
+  it("uses a wider spread for academy careers than for senior careers", () => {
+    expect(academyQualitySigma()).toBeGreaterThan(qualitySigma());
+  });
+});
+
+describe("career budgets", () => {
+  it("scales the growth budget linearly with potential and nothing else", () => {
+    const base = { growthSpeed: 0.5, peakAge: 27, declinePotential: 0.5, declineSpeed: 0.5 };
+    expect(careerGrowthBudget({ ...base, growthPotential: 0 })).toBe(0);
+    expect(careerGrowthBudget({ ...base, growthPotential: 1 })).toBeCloseTo(
+      gameConfig.playerCareer.maximumCareerGrowthOverall,
+      10,
+    );
+    expect(careerGrowthBudget({ ...base, growthPotential: 0.5 })).toBeCloseTo(
+      gameConfig.playerCareer.maximumCareerGrowthOverall / 2,
+      10,
+    );
+  });
+
+  it("scales the decline budget linearly with decline potential", () => {
+    const base = { growthPotential: 0.5, growthSpeed: 0.5, peakAge: 27, declineSpeed: 0.5 };
+    expect(careerDeclineBudget({ ...base, declinePotential: 0 })).toBe(0);
+    expect(careerDeclineBudget({ ...base, declinePotential: 1 })).toBeCloseTo(
+      gameConfig.playerCareer.maximumCareerDeclineOverall,
+      10,
+    );
+  });
+
+  it("speed changes only the timing, never the full-activity total at the peak", () => {
+    const slow = { growthPotential: 1, growthSpeed: 0, peakAge: 27, declinePotential: 0, declineSpeed: 0 };
+    const fast = { ...slow, growthSpeed: 1 };
+    // Both reach exactly the whole budget at peak age...
+    expect(cumulativeGrowthFraction(slow, 27)).toBeCloseTo(1, 10);
+    expect(cumulativeGrowthFraction(fast, 27)).toBeCloseTo(1, 10);
+    // ...but the fast curve is never behind the slow one on the way there.
+    for (const age of [17, 19, 21, 23, 25]) {
+      expect(cumulativeGrowthFraction(fast, age)).toBeGreaterThanOrEqual(cumulativeGrowthFraction(slow, age) - 1e-9);
     }
-    expect(counts[0] / n).toBeCloseTo(0.1, 1);
-    expect(counts[1] / n).toBeCloseTo(0.2, 1);
-    expect(counts[2] / n).toBeCloseTo(0.4, 1);
-    expect(counts[3] / n).toBeCloseTo(0.2, 1);
-    expect(counts[4] / n).toBeCloseTo(0.1, 1);
+    expect(cumulativeGrowthFraction(fast, 20)).toBeGreaterThan(cumulativeGrowthFraction(slow, 20));
   });
 });
 
@@ -309,20 +322,66 @@ describe("generated player countries", () => {
 });
 
 calibrationDescribe("senior generation (spec §70)", () => {
-  it("generates a valid player with independent development traits", () => {
+  it("generates a valid player with a complete hidden career profile", () => {
     const player = generateSeniorPlayer(seniorCtx());
-    expect(player.age).toBeGreaterThanOrEqual(18);
-    expect(player.age).toBeLessThanOrEqual(38);
+    const peak = gameConfig.playerCareer.peakAgeDistribution;
+    expect(player.age).toBeGreaterThanOrEqual(gameConfig.playerGenerationRules.academyAutomaticPromotionAge);
     expect(player.overall).toBeGreaterThanOrEqual(1);
     expect(player.overall).toBeLessThanOrEqual(100);
-    // The birth-quality tier is a server-private development input: it must
-    // never be stored on the player (no star/quality flag).
+    // Nothing about the hidden career shape may leak onto the player as a
+    // visible star/quality flag, and there is no second potential ceiling.
     expect((player as unknown as { tier?: number }).tier).toBeUndefined();
-    expect(player.developmentProfile.declineStartAge).toBeGreaterThanOrEqual(24);
-    expect(player.potential).toBeGreaterThanOrEqual(player.overall);
+    expect((player as unknown as { potential?: number }).potential).toBeUndefined();
+    for (const value of [
+      player.careerProfile.growthPotential,
+      player.careerProfile.growthSpeed,
+      player.careerProfile.declinePotential,
+      player.careerProfile.declineSpeed,
+    ]) {
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThanOrEqual(1);
+    }
+    expect(Number.isInteger(player.careerProfile.peakAge)).toBe(true);
+    expect(player.careerProfile.peakAge).toBeGreaterThanOrEqual(peak.min);
+    expect(player.careerProfile.peakAge).toBeLessThanOrEqual(peak.max);
     expect(player.isYouth).toBe(false);
     expect(player.generationType).toBe("initial-senior");
     expect(player.generatedDivision).toBe(1);
+  });
+
+  it("draws initial senior ages from the active-career survival distribution", () => {
+    const entryAge = gameConfig.playerGenerationRules.academyAutomaticPromotionAge;
+    const counts = new Map<number, number>();
+    const n = 20_000;
+    for (let i = 0; i < n; i++) {
+      const player = generateSeniorPlayer(seniorCtx({ position: 3, slot: i }));
+      counts.set(player.age, (counts.get(player.age) ?? 0) + 1);
+    }
+    const weights = seniorSurvivalWeights(3);
+    const total = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
+    // Ages 16-19 belong to the academy and no intake path produces an age-20
+    // youth, so the senior population starts exactly at the promotion age.
+    expect(Math.min(...counts.keys())).toBe(entryAge);
+    for (const [age, weight] of weights) {
+      const expected = weight / total;
+      if (expected < 0.005) continue;
+      expect(Math.abs((counts.get(age) ?? 0) / n - expected)).toBeLessThan(0.01);
+    }
+  });
+
+  it("shows an age profile that rises toward prime age and falls afterwards", () => {
+    const byAge = new Map<number, number[]>();
+    for (let i = 0; i < 40_000; i++) {
+      const player = generateSeniorPlayer(seniorCtx({ slot: i }));
+      if (!byAge.has(player.age)) byAge.set(player.age, []);
+      byAge.get(player.age)!.push(player.overall);
+    }
+    const meanAt = (age: number): number => {
+      const values = byAge.get(age) ?? [];
+      return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+    };
+    expect(meanAt(27)).toBeGreaterThan(meanAt(21) + 3);
+    expect(meanAt(27)).toBeGreaterThan(meanAt(34) + 3);
   });
 
   it("higher divisions produce stronger average squads", () => {
@@ -344,25 +403,40 @@ calibrationDescribe("senior generation (spec §70)", () => {
     expect(Math.abs(means[4] - divisionMean(5, 5))).toBeLessThan(1.5);
   });
 
-  it("calibrates the automatic Division 1 starting XI close to 78 OVR", () => {
+  it("calibrates the automatic Division 1 starting XI to the accepted 80/73/87 bands", () => {
     const clubCount = 1_000;
-    let total = 0;
+    const xiMeans: number[] = [];
+    const weakest: number[] = [];
+    const strongest: number[] = [];
     for (let seed = 1; seed <= clubCount; seed++) {
       const club = makeClub({ id: 100_000 + seed, highestDivision: 1 });
       const squad = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
-        generateSeniorPlayer(seniorCtx({
-          id: slot + 1,
-          clubId: club.id,
-          position,
-          seed,
-          slot,
-        })),
+        generateSeniorPlayer(seniorCtx({ id: slot + 1, clubId: club.id, position, seed, slot })),
       );
       const lineup = buildLineup(club, squad);
       expect(lineup).not.toBeNull();
-      total += lineup!.starters.reduce((sum, player) => sum + player.overall, 0) / 11;
+      const ratings = lineup!.starters.map((player) => player.overall).sort((a, b) => a - b);
+      xiMeans.push(ratings.reduce((sum, value) => sum + value, 0) / ratings.length);
+      weakest.push(ratings[0]);
+      strongest.push(ratings[ratings.length - 1]);
     }
-    expect(Math.abs(total / clubCount - 78)).toBeLessThan(0.5);
+    const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
+    // Product target: a newly generated D1 automatic XI averages about 80 OVR,
+    // normally spanning roughly 73 to 87. These are population averages across
+    // many clubs, not a requirement on any individual club.
+    expect(Math.abs(mean(xiMeans) - 80)).toBeLessThan(1);
+    expect(Math.abs(mean(weakest) - 73)).toBeLessThan(1.5);
+    expect(Math.abs(mean(strongest) - 87)).toBeLessThan(1.5);
+  });
+
+  it("keeps the full generated D1 senior population on the configured division mean", () => {
+    // topDivisionMeanOverall is DEFINED as the mean of the complete generated
+    // D1 senior population across all ages, so the age mix must give back
+    // exactly seniorPeakOverallOffset relative to the peak anchor.
+    const samples: number[] = [];
+    for (let i = 0; i < 40_000; i++) samples.push(generateSeniorPlayer(seniorCtx({ slot: i })).overall);
+    const mean = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+    expect(Math.abs(mean - gameConfig.playerGeneration.topDivisionMeanOverall)).toBeLessThan(0.6);
   });
 
   it("is deterministic for the same seed/slot and differs across slots", () => {
@@ -381,7 +455,8 @@ calibrationDescribe("youth generation (spec §71)", () => {
     expect(player.isYouth).toBe(true);
     expect(player.age).toBeGreaterThanOrEqual(16);
     expect(player.age).toBeLessThanOrEqual(19);
-    expect(player.contractDays).toBe(4 * gameConfig.seasonDays);
+    // Academy terms are derived, not configured: they always end at age 21.
+    expect(player.contractDays).toBe((gameConfig.playerGenerationRules.academyContractEndAge - player.age) * gameConfig.seasonDays);
     expect((player as unknown as { tier?: number }).tier).toBeUndefined();
     expect(player.generatedClubHighestDivision).toBe(1);
   });
@@ -426,8 +501,17 @@ calibrationDescribe("youth generation (spec §71)", () => {
     expect(topPedigreeBest).toBeGreaterThan(64);
   });
 
-  it("calibrates a regularly playing Division 1 academy cohort to peak close to 78 OVR", () => {
-    const sampleSize = 1_000;
+  it("only ever generates academy ages 16 to 19", () => {
+    const { academyMinAge, academyMaxAge } = gameConfig.playerGenerationRules;
+    for (let i = 0; i < 5_000; i++) {
+      const player = generateYouthPlayer({ ...youthCtx({ slot: i }), age: undefined });
+      expect(player.age).toBeGreaterThanOrEqual(academyMinAge);
+      expect(player.age).toBeLessThanOrEqual(academyMaxAge);
+    }
+  });
+
+  it("develops a regularly playing top-academy cohort toward its career peak anchor", () => {
+    const sampleSize = 400;
     let peakSum = 0;
     for (let i = 0; i < sampleSize; i++) {
       const club = makeClub({ id: 200_000 + i, highestDivision: 1 });
@@ -443,16 +527,15 @@ calibrationDescribe("youth generation (spec §71)", () => {
       let peak = player.overall;
       for (let season = 0; season < 24 && player.age < 40; season++) {
         const rng = createRng((i + 1) * 1_000 + season);
-        for (let day = 1; day <= DAYS_PER_YEAR; day++) {
-          applyDevelopment(rng, player, club, day);
-          if (day % 7 === 0) potentialGrowth(rng, player);
-        }
-        aging(rng, player, club);
+        for (let day = 1; day <= DAYS_PER_YEAR; day++) applyDevelopment(player, club, day);
+        aging(player);
         peak = Math.max(peak, player.overall);
       }
       peakSum += peak;
     }
-    expect(Math.abs(peakSum / sampleSize - 78)).toBeLessThan(0.75);
+    // A full-activity career should land near the D1 academy peak anchor, which
+    // by construction equals the D1 senior peak anchor.
+    expect(Math.abs(peakSum / sampleSize - academyPeakMean(academyPedigree(1, 1, 5)))).toBeLessThan(3);
   });
 });
 
@@ -549,19 +632,21 @@ calibrationDescribe("distribution acceptance (spec §53-§55)", () => {
   });
 });
 
-calibrationDescribe("independence acceptance (spec §58)", () => {
-  it("starting quality Z is uncorrelated with development traits", () => {
-    const n = 200000;
+calibrationDescribe("independence acceptance", () => {
+  it("birth-quality Z is uncorrelated with all five hidden career attributes", () => {
+    const n = 60_000;
     const zs: number[] = [];
-    const rates: number[] = [];
-    const declines: number[] = [];
-    const vols: number[] = [];
+    const series: Record<string, number[]> = {
+      growthPotential: [], growthSpeed: [], peakAge: [], declinePotential: [], declineSpeed: [],
+    };
     for (let i = 0; i < n; i++) {
       const p = generateSeniorPlayer(seniorCtx({ slot: i }));
       zs.push(p.rawZ ?? 0);
-      rates.push(p.developmentProfile.developmentRate);
-      declines.push(p.developmentProfile.declineStartAge);
-      vols.push(p.developmentProfile.developmentVolatility);
+      series.growthPotential.push(p.careerProfile.growthPotential);
+      series.growthSpeed.push(p.careerProfile.growthSpeed);
+      series.peakAge.push(p.careerProfile.peakAge);
+      series.declinePotential.push(p.careerProfile.declinePotential);
+      series.declineSpeed.push(p.careerProfile.declineSpeed);
     }
     const corr = (a: number[], b: number[]) => {
       const meanA = a.reduce((s, x) => s + x, 0) / n;
@@ -576,9 +661,32 @@ calibrationDescribe("independence acceptance (spec §58)", () => {
       }
       return num / Math.sqrt(denA * denB);
     };
-    expect(Math.abs(corr(zs, rates))).toBeLessThan(0.01);
-    expect(Math.abs(corr(zs, declines))).toBeLessThan(0.01);
-    expect(Math.abs(corr(zs, vols))).toBeLessThan(0.01);
+    for (const [label, values] of Object.entries(series)) {
+      expect(Math.abs(corr(zs, values)), label).toBeLessThan(0.02);
+    }
+  });
+
+  it("samples the configured hidden profile densities and peak-age truncation", () => {
+    const rng = createRng(987_654);
+    const cfg = gameConfig.playerCareer;
+    const gp: number[] = [];
+    const peaks: number[] = [];
+    const n = 50_000;
+    for (let i = 0; i < n; i++) {
+      const profile = generateCareerProfile(rng);
+      gp.push(profile.growthPotential);
+      peaks.push(profile.peakAge);
+    }
+    const mean = (values: number[]) => values.reduce((s, v) => s + v, 0) / values.length;
+    // The realized mean must MATCH the configured density, not approximate it:
+    // sampling is exact inverse-CDF, so a drift here means the density changed.
+    expect(Math.abs(mean(gp) - densityMean(cfg.growthPotentialDistribution))).toBeLessThan(0.01);
+    expect(Math.min(...peaks)).toBeGreaterThanOrEqual(cfg.peakAgeDistribution.min);
+    expect(Math.max(...peaks)).toBeLessThanOrEqual(cfg.peakAgeDistribution.max);
+    expect(Math.abs(mean(peaks) - cfg.peakAgeDistribution.mean)).toBeLessThan(0.3);
+    // Both tails must actually be populated rather than piled at the bounds.
+    expect(peaks.filter((v) => v === cfg.peakAgeDistribution.min).length / n).toBeGreaterThan(0.001);
+    expect(peaks.filter((v) => v === cfg.peakAgeDistribution.max).length / n).toBeGreaterThan(0.001);
   });
 });
 

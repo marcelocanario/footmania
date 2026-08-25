@@ -114,7 +114,7 @@ export function clonePlayers(players: Player[]): Player[] {
     skills: { ...player.skills },
     skillAcc: [...player.skillAcc],
     recentMinutes: [...player.recentMinutes],
-    developmentProfile: { ...player.developmentProfile },
+    careerProfile: { ...player.careerProfile },
   }));
 }
 

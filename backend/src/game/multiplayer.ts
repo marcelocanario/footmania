@@ -14,6 +14,7 @@ import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "./
 import { generateFillerRoster, totalDivisionsForGeneration } from "./clubGenerator";
 import { deriveAiKits } from "./kits";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { recordActiveClubBoundaryChange } from "./population";
 
 export const CLUBS_PER_DIVISION = gameConfig.league.teams;
 export const ROUNDS_PER_SEASON = gameConfig.league.turns * (gameConfig.league.teams - 1);
@@ -638,6 +639,15 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
   const club = clubById(world, clubId)!;
   retireFillerClub(world, aiId, now);
   club.competitionState = "ACTIVE";
+  // The new club now enters the active persistent boundary: its target
+  // contribution minus the generated stock it arrived with goes into the ledger.
+  // Recorded here, NOT at creation, because a late joiner stays PROVISIONAL
+  // (outside the boundary) until this moment.
+  recordActiveClubBoundaryChange(
+    world,
+    world.players.filter((p) => p.clubId === club.id).length,
+    1,
+  );
   // The human club inherits only current-season competition state; it keeps
   // its own identity, roster, finances, facilities.
   publishNews(world, {
@@ -702,6 +712,11 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
   replaceClubInDivision(world, division, aiId, clubId);
   retireFillerClub(world, aiId, now);
   club.competitionState = "ACTIVE";
+  // The frozen roster re-enters the active boundary together with the club's
+  // target contribution. The signed gap between the two goes into the ledger —
+  // recorded only once the club actually becomes ACTIVE (a dormant return that
+  // falls back to PROVISIONAL above records nothing).
+  recordActiveClubBoundaryChange(world, world.players.filter((p) => p.clubId === club.id).length, 1);
   club.abandonmentEligibleAt = null;
   club.lastMeaningfulActivityAt = Date.now();
   publishNews(world, {
@@ -1545,7 +1560,7 @@ export function playPracticeMatch(world: World, clubId: number): { homeGoals: nu
     skills: { ...player.skills },
     skillAcc: [...player.skillAcc],
     recentMinutes: [...player.recentMinutes],
-    developmentProfile: { ...player.developmentProfile },
+    careerProfile: { ...player.careerProfile },
   });
   const practicePlayers = world.players.map(copyPlayer);
   const copyClub = (source: Club): Club => ({

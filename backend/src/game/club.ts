@@ -495,10 +495,31 @@ export function seniorRosterCount(world: import("./types").World, clubId: number
   return world.players.filter((p) => p.clubId === clubId && !p.isYouth).length;
 }
 
-/** Error string when the senior roster is at/over the shared cap, else null. */
+/**
+ * Error string when the senior roster has no room for one more player, else
+ * null. Every VOLUNTARY acquisition path calls this: transfer bids and their
+ * settlement, free-agent bids and signings, loans in, and voluntary youth
+ * promotion.
+ *
+ * Mandatory age promotion deliberately does NOT call this — it may exceed the
+ * cap rather than release, list, or overwrite anyone.
+ */
 export function seniorRosterFullError(world: import("./types").World, clubId: number): string | null {
   return seniorRosterCount(world, clubId) >= SENIOR_SQUAD_LIMIT
     ? `Senior squad is full (${SENIOR_SQUAD_LIMIT} players)`
+    : null;
+}
+
+/**
+ * Error string while the club is ABOVE the senior cap, else null. Mandatory age
+ * promotion can push a club into this temporary overflow; until the manager
+ * resolves it by selling, loaning out, or releasing, renewals are blocked too.
+ * Selling and releasing stay available so the overflow is always resolvable.
+ */
+export function seniorRosterOverflowError(world: import("./types").World, clubId: number): string | null {
+  const count = seniorRosterCount(world, clubId);
+  return count > SENIOR_SQUAD_LIMIT
+    ? `Senior squad is over the limit (${count}/${SENIOR_SQUAD_LIMIT}); sell, loan out or release a player first`
     : null;
 }
 

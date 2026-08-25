@@ -24,10 +24,15 @@ describe("configurable inter-season calendar", () => {
     expect(phaseForSeasonDayIndex(32, config)).toBe("INTERSEASON");
   });
 
-  it("rejects invalid offsets and mismatched totals", () => {
+  it("rejects invalid offsets", () => {
     expect(() => parseGameConfig({ ...gameConfig, interseasonAfterMatchDays: -1 })).toThrow();
     expect(() => parseGameConfig({ ...gameConfig, interseasonAfterMatchDays: 2.5 })).toThrow();
-    expect(() => parseGameConfig({ ...gameConfig, interseasonAfterMatchDays: 3, interseasonBeforeNextSeasonDays: 3 })).toThrow(/must equal interseasonDays/);
+  });
+
+  it("derives interseasonDays from the two halves", () => {
+    const config = { ...gameConfig, interseasonAfterMatchDays: 4, interseasonBeforeNextSeasonDays: 3 };
+    expect(parseGameConfig(config).interseasonDays).toBe(7);
+    expect(parseGameConfig({ ...gameConfig, interseasonAfterMatchDays: 4, interseasonBeforeNextSeasonDays: 3 }).interseasonDays).toBe(7);
   });
 
   it("normalizes legacy season timing to an immediate post-match transition", () => {

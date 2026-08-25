@@ -1007,6 +1007,9 @@ export interface MatchEvents {
 export interface Settings {
   matchDurationMinutes: number;
   maxContractSeasons?: number;
+  seniorSquadLimit?: number;
+  academyVoluntaryPromotionAge?: number;
+  academyAutomaticPromotionAge?: number;
   pregameWindowMinutes?: number;
 }
 
@@ -1316,8 +1319,10 @@ export const api = {
       `/api/transfers/auctions/preview?playerId=${playerId}`
     ),
 
-  renewContract: (playerId: number, length: number) =>
-    request<{ ok: boolean; demand: number }>(`/api/players/${playerId}/contract`, { method: "POST", body: JSON.stringify({ length }) }),
+  // `contractSeasons` = complete seasons beyond the remainder of the current
+  // one, the same meaning the transfer and free-agent bid endpoints use.
+  renewContract: (playerId: number, contractSeasons: number) =>
+    request<{ ok: boolean; demand: number }>(`/api/players/${playerId}/contract`, { method: "POST", body: JSON.stringify({ contractSeasons }) }),
   setTrainingFocus: (focus: "assistant" | "primary" | "secondary") =>
     request<{ ok: boolean; trainingFocus: "assistant" | "primary" | "secondary" }>("/api/club/training", { method: "POST", body: JSON.stringify({ focus }) }),
   setTactics: (tactics: { style: number; pressing: number; direction: number }) =>
@@ -1332,8 +1337,23 @@ export const api = {
     request<{ ok: boolean }>(`/api/transfers/loans/${loanId}/claim`, { method: "POST" }),
   cancelLoan: (loanId: number) =>
     request<{ ok: boolean }>(`/api/transfers/loans/${loanId}/cancel`, { method: "POST" }),
+  // Promotion takes NO contract term and NO salary offer: it is a status change
+  // that preserves the player's existing academy deal exactly.
   academyAction: (playerId: number, action: "promote" | "dismiss") =>
     request<{ ok: boolean }>(`/api/players/${playerId}/academy`, { method: "POST", body: JSON.stringify({ action }) }),
+  academyPromotionPreview: (playerId: number) =>
+    request<{
+      isYouth: boolean;
+      age: number;
+      voluntaryPromotionAge: number;
+      automaticPromotionAge: number;
+      contractEndAge: number;
+      eligibleForVoluntaryPromotion: boolean;
+      retainedSalary: number;
+      retainedContractDays: number;
+      retainedContractSeasons: number;
+      seniorRosterError: string | null;
+    }>(`/api/players/${playerId}/academy`),
   releasePlayer: (playerId: number) =>
     request<{ ok: boolean; cost: number }>(`/api/players/${playerId}/release`, { method: "POST" }),
   contractDemand: (playerId: number) =>

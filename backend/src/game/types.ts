@@ -13,10 +13,22 @@ export interface SkillSet {
   fin: number;
 }
 
-export interface PlayerDevelopmentProfile {
-  declineStartAge: number;
-  developmentRate: number;
-  developmentVolatility: number;
+/**
+ * The five hidden career-shape attributes. Potential controls total magnitude,
+ * speed controls only timing and steepness, and peakAge is the exact age growth
+ * ends and decline begins. There is no other growth capacity or rate authority.
+ */
+export interface PlayerCareerProfile {
+  /** 0..1 share of the configured maximum career growth budget. */
+  growthPotential: number;
+  /** 0..1 interpolation between the slow and fast cumulative growth curves. */
+  growthSpeed: number;
+  /** Exact age at which growth ends and decline begins. */
+  peakAge: number;
+  /** 0..1 share of the configured maximum career decline budget. */
+  declinePotential: number;
+  /** 0..1 interpolation between the slow and fast cumulative decline curves. */
+  declineSpeed: number;
 }
 
 export interface Player {
@@ -30,7 +42,6 @@ export interface Player {
   side: number;
   skills: SkillSet;
   overall: number;
-  potential: number;
   energy: number;
   /** Hidden exponentially-decaying recent match workload. */
   recentLoad?: number;
@@ -49,8 +60,14 @@ export interface Player {
   contractDays: number;
   isYouth: boolean;
   starter: boolean;
-  growthAcc: number;
-  potentialAcc: number;
+  /**
+   * OVR-equivalent growth already realized out of this player's career growth
+   * budget. Bookkeeping only: it records what has been spent, it never grants
+   * additional capacity.
+   */
+  careerGrowthConsumed: number;
+  /** OVR-equivalent decline already realized out of the career decline budget. */
+  careerDeclineConsumed: number;
   skillAcc: number[];
   careerGoals: number;
   careerAssists: number;
@@ -68,7 +85,7 @@ export interface Player {
   onSale: boolean;
   suspendedGames: number;
   loanId: number | null;
-  developmentProfile: PlayerDevelopmentProfile;
+  careerProfile: PlayerCareerProfile;
   recentMinutes: number[];
   // Immutable player-origin metadata (player-generation §50). Null for players
   // migrated from saves created before this generator landed.
@@ -893,6 +910,13 @@ export interface MpState {
    * flow. Cleared once consumed.
    */
   pendingSeasonRetirees?: number | null;
+  /**
+   * Durable signed population ledger. Every terminal or structural population
+   * event increments a pending counter here in the same transaction that
+   * performs the change; the single seasonal academy intake is the only step
+   * that converts pending compensation into new players.
+   */
+  population?: PopulationLedger;
   /** Population health snapshots, one per season, for admin analytics trends. */
   populationHistory?: PopulationHistoryEntry[];
   /**
@@ -911,6 +935,42 @@ export interface MpState {
 }
 
 /**
+ * Signed, durable population correction ledger. Counters accumulate between
+ * seasonal intakes; `carriedCorrection` is the only value that persists a
+ * signed balance across intake cycles and may legitimately be negative.
+ */
+export interface PopulationLedger {
+  /** Signed balance not yet worked off (negative during a surplus). */
+  carriedCorrection: number;
+  /** Eligible retirements actually observed since the last intake. */
+  actualEligibleRetirements: number;
+  /** Eligible retirements the baseline expected over the same window. */
+  expectedEligibleRetirements: number;
+  /** Free agents deleted after their retention period expired. */
+  eligibleTerminalDeletions: number;
+  /**
+   * Youth dismissals recorded but not yet converted by a seasonal intake, by
+   * the season id whose drain they belong to. The intake that opens the
+   * following season converts all of them into the global correction.
+   */
+  pendingYouthDismissals: { seasonId: number; count: number }[];
+  /** Youth dismissals already converted into global compensation. */
+  maturedYouthDismissals: number;
+  /** Persistent players created outside academy intake (senior floor, intervention). */
+  extraNonAcademyGeneration: number;
+  /** Target contribution of newly active clubs minus the stock that arrived with them. */
+  activeClubPopulationGap: number;
+  /** Cumulative flow analytics by structural cause; never reset. */
+  cumulative: Record<string, number>;
+  /** Seeded remainder recipients from the most recent intake, for reproducibility audits. */
+  lastAllocation?: {
+    seasonId: number;
+    resolvedGlobalIntake: number;
+    remainderRecipients: number[];
+  } | null;
+}
+
+/**
  * One season's population stock-and-flow snapshot (admin analytics). Recorded
  * once per season, at the end of processSeasonalAcademyIntake, after both
  * retirement and academy-intake/promotion/replacement processing have run.
@@ -919,16 +979,28 @@ export interface PopulationHistoryEntry {
   seasonId: number;
   seasonKey: string;
   recordedAt: number;
-  /** Non-ephemeral (real) clubs counted for this snapshot. */
+  /** Active persistent clubs counted for this snapshot (dormant excluded). */
   clubCount: number;
   seniorCount: number;
   youthCount: number;
+  /** Professional free agents still inside their retention period. */
+  freeAgentCount: number;
+  /** Target active population for the counted club count. */
+  targetActivePopulation: number;
   meanAge: number;
   meanOverall: number;
   retirees: number;
+  expectedRetirees: number;
+  terminalDeletions: number;
   promotions: number;
   seasonalIntakeGenerated: number;
   replacementsGenerated: number;
+  /** Raw, floor-clamped, and carried values of the signed correction ledger. */
+  rawExpectedGlobalIntake: number;
+  minimumGlobalIntake: number;
+  resolvedGlobalIntake: number;
+  correctionCarriedForward: number;
+  pendingYouthDismissals: number;
 }
 
 export interface MpQueueEntry {

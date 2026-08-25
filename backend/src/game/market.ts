@@ -10,7 +10,7 @@ import type {
   TransferAuction,
   World,
 } from "./types";
-import { calculateContractDemand, contractDaysForTerm, contractDemandOptions, clamp, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
+import { calculateProfessionalContractSalary, contractDaysForTerm, contractDemandOptions, clamp, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
 import { roundForDay } from "./clock";
 import { seniorRosterFullError, isEphemeralAI } from "./club";
 import { newClubSellLockError } from "./league";
@@ -474,6 +474,19 @@ export function createTransferAuction(
   const cooldown = transferCooldownError(world, player, now);
   if (cooldown) return { ok: false, error: cooldown };
 
+  // A player in his final contractual season cannot be listed for sale once the
+  // season is past the join threshold: he would become a free agent at rollover
+  // unless renewed, and a renewal is impossible while he is listed. The
+  // contract has to be resolved first (renew or let it run out). Reads the
+  // PERSISTED threshold so an admin override applies exactly as it does on the
+  // loan-listing guard.
+  if (player.contractDays <= gameConfig.seasonDays && world.mp.completedRounds >= world.mp.joinLockRound) {
+    return {
+      ok: false,
+      error: "This is the player's final contractual season and the season is too far advanced; renew his contract before listing him for sale",
+    };
+  }
+
   // §64.1: the seller chooses within [0.60, 1.00] × base; default to base.
   const resolved = resolveOpeningPrice(world, player, opts.openingPrice);
   if (!resolved.ok) return resolved;
@@ -728,6 +741,31 @@ export function cancelUnsettleableAuction(world: World, listing: TransferAuction
   });
 }
 
+/**
+ * Close every live market involvement of a club that is about to be frozen.
+ *
+ * A dormant club's snapshot must be authoritative the instant it is taken, so no
+ * listing, unresolved bid, or reservation of its may survive into the freeze —
+ * otherwise a deadline would fire against a club whose clocks have stopped.
+ * Returns the number of listings and bids withdrawn, for the audit trail.
+ */
+export function closeMarketInvolvementForFreeze(world: World, clubId: number, now: number): { listings: number; bids: number } {
+  const bids = world.marketBids.filter((bid) => bid.clubId === clubId).length;
+  // Withdraw the club's own commitments first: releases its reservations and
+  // recomputes the leader and price on every listing it was bidding on, so no
+  // surviving bidder is left trailing a bid that can never settle.
+  purgeClubBids(world, clubId);
+  // Its own listings are cancelled rather than force-settled: a dormant club
+  // keeps its squad frozen, so the player stays where he is.
+  let listings = 0;
+  for (const listing of world.transferAuctions) {
+    if (listing.status !== "ACTIVE" || listing.sellerClubId !== clubId) continue;
+    cancelUnsettleableAuction(world, listing, now, "the selling club became dormant");
+    listings += 1;
+  }
+  return { listings, bids };
+}
+
 /** Settle every due transfer auction (§77 worker path). Returns count settled. */
 export function settleDueTransferAuctions(world: World, now: number): number {
   let settled = 0;
@@ -871,16 +909,18 @@ export function applyMaxBid(
   if (existing?.contractSeasons !== undefined && requestedContractSeasons !== undefined && existing.contractSeasons !== requestedContractSeasons) {
     return { ok: false, error: "Contract term cannot be changed after the first bid" };
   }
-  const baseline = listing.salaryBaselineAtListing ?? player.salary;
-  const overall = listing.playerOverallAtListing ?? player.overall;
-  const age = listing.playerAgeAtListing ?? player.age;
-  const calculatedContractSalary = calculateContractDemand(
-    baseline,
-    overall,
-    age,
-    contractSeasons,
-    remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
-  );
+  // The no-pay-cut rule applies to a transfer too: a player under contract does
+  // not accept less to move clubs, so the buyer must match at least what he
+  // already earns. (A free agent is different — his expired deal does not
+  // follow him, so that path passes no current salary.) All three inputs are
+  // immutable listing snapshots, keeping settlement retry-safe.
+  const calculatedContractSalary = calculateProfessionalContractSalary({
+    currentOverall: listing.playerOverallAtListing ?? player.overall,
+    currentAge: listing.playerAgeAtListing ?? player.age,
+    futureCompleteSeasons: contractSeasons,
+    currentSeasonFraction: remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
+    currentSalary: listing.salaryBaselineAtListing ?? player.salary,
+  });
   const contractSalary = existing?.contractSalary ?? calculatedContractSalary;
   const capMultiplier = clubTransferCapMultiplier(opts.buyerDivision, listing.sellerDivisionAtListing, listing.totalDivisionsAtListing);
   if (existing) {
@@ -969,10 +1009,10 @@ export function transferAuctionView(
   const myBid = myClubId !== null ? marketBidFor(world, listing.id, myClubId) : undefined;
   const contractDemandsBySeason = p
     ? contractDemandOptions(
-        listing.salaryBaselineAtListing ?? p.salary,
         listing.playerOverallAtListing ?? p.overall,
         listing.playerAgeAtListing ?? p.age,
         world.mp.seasonDayIndex ?? world.dayIndex,
+        listing.salaryBaselineAtListing ?? p.salary,
       )
     : {};
   return {

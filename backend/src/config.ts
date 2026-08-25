@@ -37,6 +37,88 @@ const ageCurveSchema = z.record(z.string(), z.number()).refine(
 
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "time must be HH:MM in UTC");
 
+/**
+ * Piecewise-linear probability density over the continuous 0-to-1 interval,
+ * given as [value, density] points. Must stay inside 0-1, be ordered, and carry
+ * positive total mass so inverse-CDF sampling is well defined.
+ */
+const densitySchema = z
+  .array(z.tuple([z.number(), z.number()]))
+  .min(2)
+  .superRefine((points, ctx) => {
+    let mass = 0;
+    for (let i = 0; i < points.length; i++) {
+      const [x, d] = points[i];
+      if (x < 0 || x > 1) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `density point ${i} value ${x} must be inside 0-1` });
+      if (d < 0) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `density point ${i} has negative density ${d}` });
+      if (i > 0) {
+        const [prevX, prevD] = points[i - 1];
+        if (x <= prevX) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `density values must strictly increase (point ${i}: ${prevX} -> ${x})` });
+        mass += ((prevD + d) / 2) * (x - prevX);
+      }
+    }
+    if (points[0][0] !== 0 || points[points.length - 1][0] !== 1) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "density must span exactly 0 to 1" });
+    }
+    if (mass <= 0) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "density must have positive total mass" });
+  });
+
+/**
+ * Monotonic cumulative curve as [x, fraction] points. Must start at zero and
+ * terminate at exactly one so a speed setting can change timing without ever
+ * changing the total growth or decline magnitude.
+ */
+const cumulativeCurveSchema = z
+  .array(z.tuple([z.number(), z.number()]))
+  .min(2)
+  .superRefine((points, ctx) => {
+    if (points[0][0] !== 0 || points[0][1] !== 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cumulative curve must start at [0, 0]" });
+    }
+    if (points[points.length - 1][1] !== 1) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "cumulative curve must terminate at fraction 1" });
+    }
+    for (let i = 1; i < points.length; i++) {
+      const [prevX, prevY] = points[i - 1];
+      const [x, y] = points[i];
+      if (x <= prevX) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `cumulative curve x must strictly increase (point ${i}: ${prevX} -> ${x})` });
+      if (y < prevY) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `cumulative curve must be monotonic (point ${i}: ${prevY} -> ${y})` });
+      if (y < 0 || y > 1) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `cumulative curve fraction ${y} must be inside 0-1` });
+    }
+  });
+
+/** Interpolate a piecewise-linear curve, used by the fast >= slow validation. */
+function curveAt(points: readonly (readonly [number, number])[], x: number): number {
+  if (x <= points[0][0]) return points[0][1];
+  const last = points[points.length - 1];
+  if (x >= last[0]) return last[1];
+  for (let i = 0; i < points.length - 1; i++) {
+    const [x0, y0] = points[i];
+    const [x1, y1] = points[i + 1];
+    if (x >= x0 && x <= x1) return x1 === x0 ? y1 : y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+  }
+  return last[1];
+}
+
+/** A fast curve may never be behind its slow counterpart at any comparable point. */
+function assertFastNotBehindSlow(
+  slow: readonly (readonly [number, number])[],
+  fast: readonly (readonly [number, number])[],
+  label: string,
+  ctx: z.RefinementCtx,
+): void {
+  const xs = [...new Set([...slow, ...fast].map(([x]) => x))].sort((a, b) => a - b);
+  for (const x of xs) {
+    if (curveAt(fast, x) < curveAt(slow, x) - 1e-9) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `${label}: fast curve is behind the slow curve at x=${x}`,
+        path: ["playerCareer"],
+      });
+    }
+  }
+}
+
 const gameConfigSchema = z
   .object({
     league: z.object({
@@ -45,7 +127,7 @@ const gameConfigSchema = z
       startDay: z.number().int().min(0),
       restDaysBetweenMatches: z.number().int().min(0),
     }),
-    interseasonDays: z.number().int().min(1),
+    interseasonDays: z.number().int().min(1).optional(),
     interseasonAfterMatchDays: z.number().int().min(0).default(2),
     interseasonBeforeNextSeasonDays: z.number().int().min(0).default(5),
     scheduler: z.object({
@@ -58,6 +140,12 @@ const gameConfigSchema = z
     payrollIntervalDays: z.number().int().min(1),
     weeklyIntervalDays: z.number().int().min(1),
     freeAgentRetentionDays: z.number().int().min(1).default(30),
+    freeAgentPool: z.object({
+      expectedExpiriesPerActiveClubPerSeason: nonNegativeNumber,
+      signingProbability: z.number().min(0).max(1),
+      signedResidenceSeasons: nonNegativeNumber,
+    }),
+    joinThresholdPercent: z.number().min(0).max(1).default(0.5),
     contractWarningSeasons: z.number().int().min(1),
     playerValueBase: nonNegativeNumber,
     playerValueOverallReference: z.number().min(1),
@@ -80,23 +168,50 @@ const gameConfigSchema = z
   renewalSkillRaiseWeight: nonNegativeNumber,
   renewalSkillExponent: nonNegativeNumber,
   renewalMaxRaise: nonNegativeNumber,
-  renewalAgeCurve: ageCurveSchema,
+  renewalYouthPremiumWeight: nonNegativeNumber,
+  renewalYouthPremiumAgeCurve: ageCurveSchema,
     releaseClauseRemainingValuePct: nonNegativeNumber,
     playerGeneration: z.object({
-      topDivisionMeanOverall: z.number().min(1).max(100).default(76.24),
-      playerQualitySpreadOverall: z.number().min(0).max(99).default(6),
-      divisionOverallSpan: z.number().min(0).max(99).default(18),
-      academyPedigreeOverallBoost: z.number().min(0).max(99).default(25.5),
+      topDivisionMeanOverall: z.number().min(1).max(100),
+      playerQualitySpreadOverall: z.number().min(0).max(99),
+      academyQualitySpreadOverall: z.number().min(0).max(99),
+      divisionOverallSpan: z.number().min(0).max(99),
+      seniorPeakOverallOffset: z.number().min(0).max(50),
+      academyPedigreeOverallBoost: z.number().min(0).max(99),
+      academyCurrentDivisionWeight: nonNegativeNumber,
+      academyHighestEverDivisionWeight: nonNegativeNumber,
+    }),
+    playerCareer: z.object({
+      maximumCareerGrowthOverall: z.number().min(0).max(99),
+      maximumCareerDeclineOverall: z.number().min(0).max(99),
+      growthPotentialDistribution: densitySchema,
+      growthSpeedDistribution: densitySchema,
+      declinePotentialDistribution: densitySchema,
+      declineSpeedDistribution: densitySchema,
+      growthSlowCurve: cumulativeCurveSchema,
+      growthFastCurve: cumulativeCurveSchema,
+      peakAgeDistribution: z.object({
+        mean: z.number().min(1),
+        stdDev: z.number().positive(),
+        min: z.number().int().min(1),
+        max: z.number().int().min(1),
+      }),
+      declineSlowCurve: cumulativeCurveSchema,
+      declineFastCurve: cumulativeCurveSchema,
+      generationHistoricalActivity: z.number().min(0).max(1),
+      freeAgentTerminalLossAgeCurve: ageCurveSchema,
     }),
     playerGenerationRules: z.object({
       initialSeniorSquadSize: z.number().int().min(11),
       initialAcademySize: z.number().int().min(5),
       academyRosterLimit: z.number().int().min(1),
-      seasonalAcademyIntake: z.union([nonNegativeNumber, z.literal("auto")]),
       academyMinAge: z.number().int().min(1),
       academyMaxAge: z.number().int().min(1),
-      academyPromotionAge: z.number().int().min(1),
-      academyContractSeasons: z.number().int().min(1),
+      academyVoluntaryPromotionAge: z.number().int().min(1),
+      academyAutomaticPromotionAge: z.number().int().min(1),
+      academyContractEndAge: z.number().int().min(1),
+      targetOwnedPlayersPerActiveClub: z.number().min(1),
+      minimumAcademyIntakePerActiveClub: z.number().positive(),
       foreignPlayerChance: z.number().min(0).max(1).default(0.05),
     }),
     // Primary balance tunables of the match simulator (plans/6. §0/§6). The
@@ -182,13 +297,60 @@ const gameConfigSchema = z
         path: ["league", "teams"],
       });
     }
-    if (cfg.playerGenerationRules.academyPromotionAge <= cfg.playerGenerationRules.academyMaxAge) {
+    const rules = cfg.playerGenerationRules;
+    if (rules.academyAutomaticPromotionAge <= rules.academyMaxAge) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `academyPromotionAge (${cfg.playerGenerationRules.academyPromotionAge}) must be > academyMaxAge (${cfg.playerGenerationRules.academyMaxAge})`,
+        message: `academyAutomaticPromotionAge (${rules.academyAutomaticPromotionAge}) must be > academyMaxAge (${rules.academyMaxAge})`,
         path: ["playerGenerationRules"],
       });
     }
+    if (rules.academyContractEndAge <= rules.academyAutomaticPromotionAge) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `academyContractEndAge (${rules.academyContractEndAge}) must be > academyAutomaticPromotionAge (${rules.academyAutomaticPromotionAge})`,
+        path: ["playerGenerationRules"],
+      });
+    }
+    if (rules.academyVoluntaryPromotionAge < rules.academyMinAge || rules.academyVoluntaryPromotionAge > rules.academyMaxAge) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `academyVoluntaryPromotionAge (${rules.academyVoluntaryPromotionAge}) must sit inside the academy age range ${rules.academyMinAge}-${rules.academyMaxAge}`,
+        path: ["playerGenerationRules"],
+      });
+    }
+    if (cfg.academySalaryMultiplier <= 0 || cfg.academySalaryMultiplier >= 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `academySalaryMultiplier (${cfg.academySalaryMultiplier}) must be strictly between 0 and 1`,
+        path: ["academySalaryMultiplier"],
+      });
+    }
+    const pedigreeWeightSum = cfg.playerGeneration.academyCurrentDivisionWeight + cfg.playerGeneration.academyHighestEverDivisionWeight;
+    if (pedigreeWeightSum <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "academy pedigree weights must have a positive sum",
+        path: ["playerGeneration"],
+      });
+    }
+    const peak = cfg.playerCareer.peakAgeDistribution;
+    if (peak.min >= peak.max) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `peakAgeDistribution.min (${peak.min}) must be < max (${peak.max})`,
+        path: ["playerCareer", "peakAgeDistribution"],
+      });
+    }
+    if (peak.min <= rules.academyMinAge) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `peakAgeDistribution.min (${peak.min}) must be > academyMinAge (${rules.academyMinAge})`,
+        path: ["playerCareer", "peakAgeDistribution"],
+      });
+    }
+    assertFastNotBehindSlow(cfg.playerCareer.growthSlowCurve, cfg.playerCareer.growthFastCurve, "growth", ctx);
+    assertFastNotBehindSlow(cfg.playerCareer.declineSlowCurve, cfg.playerCareer.declineFastCurve, "decline", ctx);
     if (cfg.playerGeneration.divisionOverallSpan > cfg.playerGeneration.topDivisionMeanOverall - 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -199,7 +361,7 @@ const gameConfigSchema = z
     const roundsPerSeason = cfg.league.turns * (cfg.league.teams - 1);
     const matchSpacingDays = cfg.league.restDaysBetweenMatches + 1;
     const lastLeagueMatchDayIndex = cfg.league.startDay + (roundsPerSeason - 1) * matchSpacingDays;
-    const seasonDays = lastLeagueMatchDayIndex + 1 + cfg.interseasonDays;
+    const seasonDays = lastLeagueMatchDayIndex + 1 + cfg.interseasonAfterMatchDays + cfg.interseasonBeforeNextSeasonDays;
     if (roundsPerSeason <= 0) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: "roundsPerSeason must be positive", path: ["league"] });
     }
@@ -208,16 +370,6 @@ const gameConfigSchema = z
         code: z.ZodIssueCode.custom,
         message: `lastLeagueMatchDayIndex (${lastLeagueMatchDayIndex}) must be < seasonDays (${seasonDays})`,
         path: ["league"],
-      });
-    }
-    if (seasonDays - (lastLeagueMatchDayIndex + 1) !== cfg.interseasonDays) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "interseasonDays must equal the derived season remainder", path: ["interseasonDays"] });
-    }
-    if (cfg.interseasonAfterMatchDays + cfg.interseasonBeforeNextSeasonDays !== cfg.interseasonDays) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "interseasonAfterMatchDays + interseasonBeforeNextSeasonDays must equal interseasonDays",
-        path: ["interseasonAfterMatchDays"],
       });
     }
   });
@@ -410,7 +562,12 @@ const gameConfigSchema = z
   // available even during early module initialization (gameConfig not yet loaded).
 export const MP_CONFIG = {
   // Fraction of rounds after which no new humans may join the current season.
-  joinThresholdPercent: 0.5,
+  // Promoted into game.config.jsonc `joinThresholdPercent` so designers can
+  // tune without code changes. Read lazily via a getter so the value is
+  // available even during early module initialization (gameConfig not yet loaded).
+  get joinThresholdPercent(): number {
+    return gameConfig.joinThresholdPercent;
+  },
   // UTC hour at which every scheduled round kicks off (GLOBAL_FIXED mode).
   matchKickoffHourUtc: 20,
   // Preferred-time scheduling: the day is divided into half-hour slots and
@@ -622,12 +779,30 @@ export type GameConfig = z.infer<typeof gameConfigSchema> & {
   roundsPerSeason: number;
   matchSpacingDays: number;
   lastLeagueMatchDayIndex: number;
+  interseasonDays: number;
   seasonDays: number;
 };
 
+/**
+ * Derive the calendar fields from the base league/timing inputs. The total
+ * season length is never stored or hard-coded: it follows from teams, turns,
+ * rest days, the first match day, and the two inter-season windows.
+ */
+function deriveCalendarFields(base: {
+  league: { teams: number; turns: number; startDay: number; restDaysBetweenMatches: number };
+  interseasonAfterMatchDays: number;
+  interseasonBeforeNextSeasonDays: number;
+}): { roundsPerSeason: number; matchSpacingDays: number; lastLeagueMatchDayIndex: number; interseasonDays: number; seasonDays: number } {
+  const roundsPerSeason = base.league.turns * (base.league.teams - 1);
+  const matchSpacingDays = base.league.restDaysBetweenMatches + 1;
+  const lastLeagueMatchDayIndex = base.league.startDay + (roundsPerSeason - 1) * matchSpacingDays;
+  const interseasonDays = base.interseasonAfterMatchDays + base.interseasonBeforeNextSeasonDays;
+  const seasonDays = lastLeagueMatchDayIndex + 1 + interseasonDays;
+  return { roundsPerSeason, matchSpacingDays, lastLeagueMatchDayIndex, interseasonDays, seasonDays };
+}
+
 const DEFAULT_GAME_CONFIG: GameConfig = {
   league: { teams: 8, turns: 2, startDay: 1, restDaysBetweenMatches: 1 },
-  interseasonDays: 7,
   interseasonAfterMatchDays: 2,
   interseasonBeforeNextSeasonDays: 5,
   scheduler: { gameDayRolloverUtc: "00:00", leaseSeconds: 30 },
@@ -635,6 +810,8 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   payrollIntervalDays: 7,
   weeklyIntervalDays: 7,
   freeAgentRetentionDays: 30,
+  freeAgentPool: { expectedExpiriesPerActiveClubPerSeason: 4, signingProbability: 0.6, signedResidenceSeasons: 0.1 },
+  joinThresholdPercent: 0.5,
   contractWarningSeasons: 2,
   playerValueBase: 500000,
   playerValueOverallReference: 50,
@@ -665,30 +842,48 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   renewalSkillRaiseWeight: 0.08,
   renewalSkillExponent: 1.6,
   renewalMaxRaise: 0.15,
-  renewalAgeCurve: {
-    16: 1.15, 17: 1.2, 18: 1.3, 19: 1.35, 20: 1.3, 21: 1.2, 22: 1.1, 23: 1,
-    24: 1, 25: 1, 26: 1, 27: 1, 28: 1, 29: 0.95, 30: 0.9, 31: 0.85, 32: 0.8,
-    33: 0.75, 34: 0.7, 35: 0.65, 36: 0.6, 37: 0.55, 38: 0.5, 39: 0.45, 40: 0.4,
+  renewalYouthPremiumWeight: 0.05,
+  renewalYouthPremiumAgeCurve: {
+    16: 0.9, 17: 1, 18: 1, 19: 0.95, 20: 0.85, 21: 0.7, 22: 0.55, 23: 0.4,
+    24: 0.25, 25: 0.12, 26: 0.05, 27: 0,
   },
   releaseClauseRemainingValuePct: 0.5,
-  // Division-driven player quality (plans/4. player-generation.md §68).
-  // Absolute D1 quality is independent from within-division spread so designers
-  // can move the whole pyramid without also changing player variance.
   playerGeneration: {
-    topDivisionMeanOverall: 76.24,
-    playerQualitySpreadOverall: 6,
+    topDivisionMeanOverall: 74,
+    playerQualitySpreadOverall: 5.5,
+    academyQualitySpreadOverall: 6,
     divisionOverallSpan: 18,
-    academyPedigreeOverallBoost: 25.5,
+    seniorPeakOverallOffset: 6.7,
+    academyPedigreeOverallBoost: 18,
+    academyCurrentDivisionWeight: 0.65,
+    academyHighestEverDivisionWeight: 0.35,
+  },
+  playerCareer: {
+    maximumCareerGrowthOverall: 30,
+    maximumCareerDeclineOverall: 26,
+    growthPotentialDistribution: [[0, 0.35], [0.3, 0.85], [0.6, 1.6], [0.85, 1.25], [1, 0.5]],
+    growthSpeedDistribution: [[0, 0.5], [0.5, 1.5], [1, 0.5]],
+    declinePotentialDistribution: [[0, 0.45], [0.4, 1.4], [0.7, 1.2], [1, 0.6]],
+    declineSpeedDistribution: [[0, 0.6], [0.5, 1.4], [1, 0.6]],
+    growthSlowCurve: [[0, 0], [0.25, 0.14], [0.5, 0.36], [0.75, 0.66], [1, 1]],
+    growthFastCurve: [[0, 0], [0.25, 0.44], [0.5, 0.72], [0.75, 0.9], [1, 1]],
+    peakAgeDistribution: { mean: 27, stdDev: 2.4, min: 23, max: 33 },
+    declineSlowCurve: [[0, 0], [2, 0.08], [4, 0.2], [6, 0.36], [8, 0.55], [10, 0.75], [12, 0.9], [14, 1]],
+    declineFastCurve: [[0, 0], [2, 0.2], [4, 0.42], [6, 0.62], [8, 0.78], [10, 0.9], [12, 0.97], [14, 1]],
+    generationHistoricalActivity: 0.7,
+    freeAgentTerminalLossAgeCurve: { 20: 0.01, 24: 0.015, 28: 0.02, 31: 0.05, 34: 0.1, 37: 0.2, 40: 0.35 },
   },
   playerGenerationRules: {
-    initialSeniorSquadSize: 28,
-    initialAcademySize: 8,
-    academyRosterLimit: 12,
-    seasonalAcademyIntake: "auto",
+    initialSeniorSquadSize: 30,
+    initialAcademySize: 11,
+    academyRosterLimit: 15,
     academyMinAge: 16,
     academyMaxAge: 19,
-    academyPromotionAge: 21,
-    academyContractSeasons: 4,
+    academyVoluntaryPromotionAge: 18,
+    academyAutomaticPromotionAge: 20,
+    academyContractEndAge: 21,
+    targetOwnedPlayersPerActiveClub: 38,
+    minimumAcademyIntakePerActiveClub: 1,
     foreignPlayerChance: 0.05,
   },
   matchSimulator: {
@@ -704,10 +899,11 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1, autoSubstitute: true },
   motd: { maxLength: 280 },
   awards: { minAppearanceFraction: 0.4 },
-  roundsPerSeason: 14,
-  matchSpacingDays: 2,
-  lastLeagueMatchDayIndex: 27,
-  seasonDays: 35,
+  ...deriveCalendarFields({
+    league: { teams: 8, turns: 2, startDay: 1, restDaysBetweenMatches: 1 },
+    interseasonAfterMatchDays: 2,
+    interseasonBeforeNextSeasonDays: 5,
+  }),
 };
 
 /** Validates a raw config object against the game config schema (throws on failure). */
@@ -759,47 +955,19 @@ export function parseGameConfig(raw: unknown): GameConfig {
       }
     }
   }
-  // Migrate the former normalized quality knobs into direct OVR units. New
-  // fields win when both shapes are present, so custom configs can transition
-  // without an all-at-once migration.
-  if (normalized && typeof normalized === "object") {
-    const rawGeneration = normalized.playerGeneration;
-    if (rawGeneration && typeof rawGeneration === "object") {
-      const generation = { ...(rawGeneration as Record<string, unknown>) };
-      if (!("playerQualitySpreadOverall" in generation)) {
-        const legacyFraction = Number(generation.playerQualitySpreadFraction);
-        if (Number.isFinite(legacyFraction)) generation.playerQualitySpreadOverall = legacyFraction * 99;
-      }
-      if (!("divisionOverallSpan" in generation)) {
-        const legacySpanSigmas = Number(generation.divisionSpanSigmas);
-        const spreadOverall = Number(generation.playerQualitySpreadOverall);
-        if (Number.isFinite(legacySpanSigmas) && Number.isFinite(spreadOverall)) {
-          generation.divisionOverallSpan = legacySpanSigmas * spreadOverall;
-        }
-      }
-      if (!("academyPedigreeOverallBoost" in generation)) {
-        const legacyPedigreeSigmas = Number(generation.academyPedigreeSigmas);
-        const spreadOverall = Number(generation.playerQualitySpreadOverall);
-        if (Number.isFinite(legacyPedigreeSigmas) && Number.isFinite(spreadOverall)) {
-          generation.academyPedigreeOverallBoost = legacyPedigreeSigmas * spreadOverall;
-        }
-      }
-      normalized = { ...normalized, playerGeneration: generation };
-    }
-  }
   const parsed = gameConfigSchema.safeParse(normalized);
   if (!parsed.success) {
     throw new Error(`Invalid game.config.jsonc: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   }
   const data = parsed.data;
-  const roundsPerSeason = data.league.turns * (data.league.teams - 1);
-  const matchSpacingDays = data.league.restDaysBetweenMatches + 1;
-  const lastLeagueMatchDayIndex = data.league.startDay + (roundsPerSeason - 1) * matchSpacingDays;
+  const interseasonDays = data.interseasonDays ?? data.interseasonAfterMatchDays + data.interseasonBeforeNextSeasonDays;
   return Object.assign(data, {
-    roundsPerSeason,
-    matchSpacingDays,
-    lastLeagueMatchDayIndex,
-    seasonDays: lastLeagueMatchDayIndex + 1 + data.interseasonDays,
+    ...deriveCalendarFields({
+      league: data.league,
+      interseasonAfterMatchDays: data.interseasonAfterMatchDays,
+      interseasonBeforeNextSeasonDays: data.interseasonBeforeNextSeasonDays,
+    }),
+    interseasonDays,
   });
 }
 

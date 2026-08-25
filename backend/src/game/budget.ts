@@ -2,6 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { MP_CONFIG, gameConfig, scaleReferenceSeasonFlow, seasonFlowScale } from "../config";
 import { calculateBaseSalary, calculatePlayerValue } from "./economy";
 import { remainingSeasons } from "./economy";
+import { projectDivisionQuality } from "./generationProjection";
 
 /**
  * Seasonal budget economy (plans/1. multiplayer.md §17A).
@@ -60,13 +61,30 @@ export async function setBudgetSettings(prisma: PrismaClient, opts: { firstDivis
 }
 
 /**
- * Estimate of the senior-squad average overall for a healthy Division 1 club.
- * Derived from the club-generation curve: top-division clubs generate players
- * around overall ~72-80. We pick a representative middle value.
+ * Quality assumptions the budget economy is built on, all DERIVED from the live
+ * generation configuration rather than hard-coded. Retuning generation now moves
+ * the budget curve with it instead of silently invalidating it.
  */
-export function expectedFirstTeamOverall(): number {
-  return 72;
+export function expectedFirstDivisionQuality(): {
+  fullSquadOverall: number;
+  startingXiOverall: number;
+  meaningfulSigningOverall: number;
+  eliteOverall: number;
+} {
+  const projection = projectDivisionQuality(1, 1);
+  return {
+    fullSquadOverall: projection.fullSquadMean,
+    startingXiOverall: projection.startingXiMean,
+    // A "meaningful signing" is a player who would walk into the XI: the upper
+    // slice of the generated top-division population, not an arbitrary number.
+    meaningfulSigningOverall: projection.percentile(MEANINGFUL_SIGNING_PERCENTILE),
+    eliteOverall: projection.percentile(ELITE_PLAYER_PERCENTILE),
+  };
 }
+
+/** Representative percentiles of the generated top-division population. */
+const MEANINGFUL_SIGNING_PERCENTILE = 0.9;
+const ELITE_PLAYER_PERCENTILE = 0.99;
 
 /**
  * Initial value of FIRST_DIVISION_SEASON_BUDGET, derived from the existing
@@ -75,19 +93,18 @@ export function expectedFirstTeamOverall(): number {
  * multiple elite players every month (plan §17A).
  */
 export function calculateInitialFirstDivisionSeasonBudget(): number {
-  const overall = expectedFirstTeamOverall();
+  const quality = expectedFirstDivisionQuality();
   const squadSize = MP_CONFIG.expectedSeniorSquadSize;
 
   // Expected per-season wage bill at Division 1 quality.
   const scale = seasonFlowScale();
-  const expectedAveragePlayerSalary = calculateBaseSalary(overall, 26) / scale; // 30-day reference salary
+  const expectedAveragePlayerSalary = calculateBaseSalary(quality.fullSquadOverall, 26) / scale; // 30-day reference salary
   const expectedSeasonWages = expectedAveragePlayerSalary * squadSize;
 
-  // Expected first-team transfer spend: 2 meaningful acquisitions of a strong
-  // starter (~overall 78).
-  const strongStarterOverall = 78;
-  const strongStarterValue = calculatePlayerValue(strongStarterOverall, 27, 3);
-  const expectedTransferSpend = MP_CONFIG.expectedMeaningfulSigningsPerSeason * strongStarterValue;
+  // Expected first-team transfer spend: the configured number of meaningful
+  // acquisitions at the derived meaningful-signing quality.
+  const meaningfulSigningValue = calculatePlayerValue(quality.meaningfulSigningOverall, 27, 3);
+  const expectedTransferSpend = MP_CONFIG.expectedMeaningfulSigningsPerSeason * meaningfulSigningValue;
 
   // Recurring operating costs are intentionally NOT funded directly by the
   // seasonal allocation beyond this estimate; there is no gate-revenue income
@@ -95,18 +112,17 @@ export function calculateInitialFirstDivisionSeasonBudget(): number {
   // club's primary funding and must cover wages plus planned transfer spend.
   const rawTier1Budget = expectedSeasonWages + expectedTransferSpend;
 
-  // Sanity check against representative values:
-  //  - an average starter (~overall 68) must be comfortably affordable;
-  //  - a strong starter (~78) a meaningful-but-reasonable purchase;
-  //  - an elite (~86) a major expenditure, not a routine buy.
-  const avgStarter = calculatePlayerValue(68, 25, 3);
-  const elite = calculatePlayerValue(86, 26, 3);
-  const eliteCost = elite + calculateBaseSalary(86, 26) / scale;
-  // A club should be able to afford roughly 1 elite player per season as a
-  // major decision, not several. Cap the budget so 2+ elite purchases aren't
-  // routine.
+  // Sanity band against derived representative values:
+  //  - an average XI starter must be comfortably affordable;
+  //  - a meaningful signing a real but reasonable purchase;
+  //  - an elite player a major expenditure, not a routine buy.
+  const averageStarterValue = calculatePlayerValue(quality.startingXiOverall, 25, 3);
+  const eliteValue = calculatePlayerValue(quality.eliteOverall, 26, 3);
+  const eliteCost = eliteValue + calculateBaseSalary(quality.eliteOverall, 26) / scale;
+  // A club should be able to afford roughly one elite player per season as a
+  // major decision, not several.
   const maxSensible = Math.round(eliteCost * 1.9);
-  const minSensible = Math.round(avgStarter * 4);
+  const minSensible = Math.round(averageStarterValue * 4);
 
   return scaleReferenceSeasonFlow(Math.max(minSensible, Math.min(rawTier1Budget, maxSensible)));
 }

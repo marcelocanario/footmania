@@ -29,7 +29,8 @@ export interface EconomyConfig {
     renewalSkillRaiseWeight: number;
     renewalSkillExponent: number;
     renewalMaxRaise: number;
-    renewalAgeCurve: Record<number, number>;
+    renewalYouthPremiumWeight: number;
+    renewalYouthPremiumAgeCurve: Record<number, number>;
     releaseClauseRemainingValuePct: number;
   };
 }
@@ -61,7 +62,8 @@ export const economyConfig = (): EconomyConfig => ({
     renewalSkillRaiseWeight: gameConfig.renewalSkillRaiseWeight,
     renewalSkillExponent: gameConfig.renewalSkillExponent,
     renewalMaxRaise: gameConfig.renewalMaxRaise,
-    renewalAgeCurve: gameConfig.renewalAgeCurve,
+    renewalYouthPremiumWeight: gameConfig.renewalYouthPremiumWeight,
+    renewalYouthPremiumAgeCurve: gameConfig.renewalYouthPremiumAgeCurve,
     releaseClauseRemainingValuePct: gameConfig.releaseClauseRemainingValuePct,
   },
 });
@@ -128,89 +130,119 @@ export function calculateBaseSalary(overall: number, age: number): number {
   return Math.max(cfg.floor, Math.round(baseSalary * ageMult * cfg.multiplier));
 }
 
-/** Salary paid while a player remains in the academy. */
-export function calculateAcademySalary(overall: number, age: number): number {
-  const cfg = economyConfig().salary;
-  return Math.max(cfg.floor, Math.round(calculateBaseSalary(overall, age) * cfg.academyMultiplier));
-}
-
 /**
- * Fractional salary raise a player expects per season of a new contract.
- * Uses current salary, overall, age, and requested duration.
+ * Annual demand rate a player attaches to each season of a new professional
+ * contract: a floor, a visible-skill component, and a visible-age youth
+ * premium. The youth premium is what makes locking a promising young player
+ * into a long deal expensive.
+ *
+ * It reads visible age ONLY. Feeding hidden growth potential in here would leak
+ * scouting information through a public salary quote.
  */
-export function calculateRenewalRaise(currentSalary: number, overall: number, age: number, requestedSeasons: number): number {
+export function professionalAnnualDemandRate(currentOverall: number, currentAge: number): number {
   const cfg = economyConfig().contracts;
-  if (requestedSeasons <= 0 || currentSalary <= 0) return 0;
-  const skillNormalized = (clamp(overall, 1, 100) - 1) / 98;
-  const ageMult = curveMultiplier(cfg.renewalAgeCurve, age);
-  const raw = cfg.renewalMinRaise + cfg.renewalSkillRaiseWeight * Math.pow(skillNormalized, cfg.renewalSkillExponent) * ageMult;
-  return clamp(raw, cfg.renewalMinRaise, cfg.renewalMaxRaise);
+  const skillNormalized = (clamp(currentOverall, 1, 100) - 1) / 98;
+  const skillComponent = cfg.renewalSkillRaiseWeight * Math.pow(skillNormalized, cfg.renewalSkillExponent);
+  const youthComponent = cfg.renewalYouthPremiumWeight * curveMultiplier(cfg.renewalYouthPremiumAgeCurve, currentAge);
+  return clamp(cfg.renewalMinRaise + skillComponent + youthComponent, cfg.renewalMinRaise, cfg.renewalMaxRaise);
 }
 
 /**
- * Equivalent fixed per-season salary the player requests for a contract of
- * `requestedSeasons` seasons, converting the compounded raises he expects into
- * one constant figure. See spec §18.
+ * Levelize a compounding annual demand into one constant per-season salary over
+ * the exact contract horizon.
+ *
+ *   totalSeasonEquivalents = currentSeasonFraction + futureCompleteSeasons
+ *   total  = baseline × fraction + baseline × Σ_{i=1..n} (1+r)^i
+ *   salary = total / totalSeasonEquivalents
+ *
+ * `futureCompleteSeasons` is the number of complete seasons IN ADDITION TO the
+ * remainder of the current season. It is never a total contract length: passing
+ * a total here would price one extra season of service.
  */
-export function calculateRenewalDemand(currentSalary: number, raise: number, requestedSeasons: number): number {
-  return calculateRenewalDemandWithCurrentSeason(currentSalary, raise, requestedSeasons, 0);
-}
-
-/**
- * Equivalent fixed per-season salary including the remaining current season.
- * The current-season fraction is intentionally explicit because callers that
- * are calculating historical/full-season values may not have a live clock.
- *
- * Intended semantics (review B4, pinned by tests): a renewal always covers the
- * remainder of the current season plus `requestedSeasons` full seasons, and
- * the flat demand is the per-season equivalent of the player's expected raise
- * stream over that whole horizon — brought to "present value" by amortizing
- * the compounded raises into one constant figure.
- *
- *   total  = currentSalary × fraction + currentSalary × Σ_{i=1..n} (1+r)^i
- *   demand = total / (fraction + n)
- *
- * So renewing on day 0 of a season with a 5-season term costs approximately
- * the price of 6 raised seasons spread over 6 year-equivalents, while
- * renewing on the last day costs approximately the price of 5 raised seasons
- * over 5 years. Renewing early is therefore cheaper PER SEASON but covers
- * strictly more service time — the timing quirk is the pro-rating working as
- * designed, not an exploit.
- */
-export function calculateRenewalDemandWithCurrentSeason(
-  currentSalary: number,
-  raise: number,
-  requestedSeasons: number,
+export function levelizedContractSalary(
+  baseline: number,
+  annualDemandRate: number,
+  futureCompleteSeasons: number,
   currentSeasonFraction: number,
 ): number {
-  if (requestedSeasons <= 0) return Math.round(currentSalary);
+  const n = Math.max(0, futureCompleteSeasons);
   const fraction = clamp(currentSeasonFraction, 0, 1);
-  if (raise <= 0) {
-    return Math.round(currentSalary);
-  }
-  const r = clamp(raise, 0, 1);
-  const n = requestedSeasons;
-  const sum = Math.pow(1 + r, n + 1) - (1 + r);
-  const total = currentSalary * fraction + currentSalary * (sum / r);
-  const requested = total / Math.max(1e-9, fraction + n);
-  return Math.round(requested);
+  const horizon = fraction + n;
+  if (horizon <= 0) return Math.round(baseline);
+  const r = clamp(annualDemandRate, 0, 1);
+  if (r <= 0 || n <= 0) return Math.round(baseline);
+  const compounded = Math.pow(1 + r, n + 1) - (1 + r);
+  const total = baseline * fraction + baseline * (compounded / r);
+  return Math.round(total / horizon);
 }
 
-/** Canonical demand used by both human renewals and AI clubs. */
-export function calculateContractDemand(
-  currentSalary: number,
-  overall: number,
-  age: number,
-  requestedSeasons: number,
-  currentSeasonFraction = 0,
-): number {
-  const raise = calculateRenewalRaise(currentSalary, overall, age, requestedSeasons);
-  return calculateRenewalDemandWithCurrentSeason(currentSalary, raise, requestedSeasons, currentSeasonFraction);
+/**
+ * The single professional-contract salary authority. Every newly negotiated
+ * professional contract goes through here: ordinary renewals, renewals of a
+ * promoted player's retained academy contract, the contract attached to a
+ * winning transfer bid, free-agent signings, and generated first contracts.
+ *
+ * Passing `currentSalary` applies the NO-PAY-CUT floor: the contract can never
+ * be worth less per season than the player already earns. That holds for a club
+ * renewal and for a transfer, because a player under contract does not accept
+ * less to change clubs.
+ *
+ * Omitting it marks a contract with no incumbent wage to protect — a free-agent
+ * signing or a generated first contract. An expired salary does not follow a
+ * player into free agency, so someone who rejected a renewal may legitimately
+ * end up asking for less once his contract has run out.
+ */
+export function calculateProfessionalContractSalary(opts: {
+  currentOverall: number;
+  currentAge: number;
+  /** Complete seasons in addition to the remainder of the current season. */
+  futureCompleteSeasons: number;
+  currentSeasonFraction: number;
+  /** Present only for a club renewal; acts as a no-pay-cut floor. */
+  currentSalary?: number;
+}): number {
+  const marketBaseline = calculateBaseSalary(opts.currentOverall, opts.currentAge);
+  const baseline = opts.currentSalary === undefined ? marketBaseline : Math.max(opts.currentSalary, marketBaseline);
+  const rate = professionalAnnualDemandRate(opts.currentOverall, opts.currentAge);
+  return levelizedContractSalary(baseline, rate, opts.futureCompleteSeasons, opts.currentSeasonFraction);
 }
 
-/** Contract duration includes the current season plus the selected term. */
-export function contractDaysForTerm(requestedSeasons: number): number {
-  return (Math.max(1, Math.trunc(requestedSeasons)) + 1) * gameConfig.seasonDays;
+/** Complete seasons an academy-origin contract still has to run, including this one. */
+export function academyContractSeasonsForAge(currentAge: number): number {
+  return Math.max(1, gameConfig.playerGenerationRules.academyContractEndAge - currentAge);
+}
+
+/**
+ * Academy salary: the configured fraction of the salary the SAME player would
+ * receive from the complete professional calculation for his current OVR, age,
+ * exact term, and season fraction.
+ *
+ * Academy intake happens at the season boundary, so the current-season fraction
+ * is one and a five-season contract is the current season plus four future
+ * complete seasons. No professional floor is reapplied afterwards — that would
+ * silently break the configured fraction, and the resulting low release clause
+ * is a deliberate mobility mechanism for promoted academy players.
+ */
+export function calculateAcademySalary(currentOverall: number, currentAge: number): number {
+  const cfg = economyConfig().salary;
+  const seasons = academyContractSeasonsForAge(currentAge);
+  const professionalEquivalent = calculateProfessionalContractSalary({
+    currentOverall,
+    currentAge,
+    futureCompleteSeasons: seasons - 1,
+    currentSeasonFraction: 1,
+  });
+  return Math.max(1, Math.round(professionalEquivalent * cfg.academyMultiplier));
+}
+
+/** Contract duration in game-days: the remaining current season plus the selected term. */
+export function contractDaysForTerm(futureCompleteSeasons: number): number {
+  return (Math.max(1, Math.trunc(futureCompleteSeasons)) + 1) * gameConfig.seasonDays;
+}
+
+/** Contract duration in game-days for an academy-origin term ending at age 21. */
+export function academyContractDaysForAge(currentAge: number): number {
+  return academyContractSeasonsForAge(currentAge) * gameConfig.seasonDays;
 }
 
 /** Fraction of the current season remaining for a newly negotiated contract. */
@@ -219,18 +251,24 @@ export function remainingSeasonFractionForDay(seasonDayIndex: number): number {
   return Math.max(0, (gameConfig.seasonDays - day) / gameConfig.seasonDays);
 }
 
-/** All server-authoritative salary demands for the selectable contract terms. */
+/**
+ * All server-authoritative salary demands for the selectable contract terms.
+ * `currentSalary` is supplied only for club renewals (no-pay-cut baseline).
+ */
 export function contractDemandOptions(
-  salaryBaseline: number,
-  overall: number,
-  age: number,
+  currentOverall: number,
+  currentAge: number,
   seasonDayIndex: number,
+  currentSalary?: number,
 ): Record<number, number> {
-  const fraction = remainingSeasonFractionForDay(seasonDayIndex);
+  const currentSeasonFraction = remainingSeasonFractionForDay(seasonDayIndex);
   return Object.fromEntries(
     Array.from({ length: gameConfig.maxContractSeasons }, (_, index) => {
-      const seasons = index + 1;
-      return [seasons, calculateContractDemand(salaryBaseline, overall, age, seasons, fraction)];
+      const futureCompleteSeasons = index + 1;
+      return [
+        futureCompleteSeasons,
+        calculateProfessionalContractSalary({ currentOverall, currentAge, futureCompleteSeasons, currentSeasonFraction, currentSalary }),
+      ];
     }),
   );
 }

@@ -23,9 +23,11 @@ import type {
   TransferAuction,
   World,
 } from "../game/types";
+import type { PlayerCareerProfile } from "../game/types";
 import { generateWorld } from "../game/worldgen";
 import { createRng } from "../game/rng";
-import { backfillDevelopmentProfile, overallFromSkills } from "../game/player";
+import { overallFromSkills } from "../game/player";
+import { emptyPopulationLedger } from "../game/population";
 import { DEVELOPMENT } from "../game/constants";
 import { parseStoredPresets } from "../game/automation";
 import type { TacticFamiliarityMap } from "../game/familiarity";
@@ -193,7 +195,8 @@ function normalizePlayer(player: Player, club: Club | undefined): void {
     player.overall = overallFromSkills(player.position, player.skills);
   }
   player.overall = Math.max(1, Math.min(100, Math.round(player.overall)));
-  player.potential = Math.max(player.overall, Math.min(100, Number(player.potential) || player.overall));
+  player.careerGrowthConsumed = Math.max(0, Number(player.careerGrowthConsumed) || 0);
+  player.careerDeclineConsumed = Math.max(0, Number(player.careerDeclineConsumed) || 0);
   const acc = Array.isArray(player.skillAcc) ? player.skillAcc : [];
   const hasLegacyClickProgress = acc.some((value) => !Number.isFinite(value) || Math.abs(value) >= 1);
   player.skillAcc = hasLegacyClickProgress ? [0, 0, 0, 0, 0, 0, 0] : Array.from({ length: 7 }, (_, i) => Number(acc[i] ?? 0));
@@ -965,7 +968,6 @@ function playerRow(p: Player, saveId: number) {
     position: p.position,
     side: p.side,
     overall: p.overall,
-    potential: p.potential,
     energy: p.energy,
     recentLoad: p.recentLoad ?? 0,
     salary: p.salary,
@@ -982,8 +984,8 @@ function playerRow(p: Player, saveId: number) {
     contractDays: p.contractDays,
     isYouth: p.isYouth,
     starter: p.starter,
-    growthAcc: p.growthAcc,
-    potentialAcc: p.potentialAcc,
+    careerGrowthConsumed: p.careerGrowthConsumed,
+    careerDeclineConsumed: p.careerDeclineConsumed,
     careerGoals: p.careerGoals,
     careerAssists: p.careerAssists,
     seasonGoals: p.seasonGoals,
@@ -1004,9 +1006,11 @@ function playerRow(p: Player, saveId: number) {
     skillArm: p.skills.arm,
     skillFin: p.skills.fin,
     skillAccJson: JSON.stringify(p.skillAcc),
-    declineStartAge: p.developmentProfile?.declineStartAge ?? null,
-    developmentRate: p.developmentProfile?.developmentRate ?? null,
-    developmentVolatility: p.developmentProfile?.developmentVolatility ?? null,
+    growthPotential: p.careerProfile.growthPotential,
+    growthSpeed: p.careerProfile.growthSpeed,
+    peakAge: p.careerProfile.peakAge,
+    declinePotential: p.careerProfile.declinePotential,
+    declineSpeed: p.careerProfile.declineSpeed,
     recentMinutesJson: JSON.stringify(p.recentMinutes ?? []),
     generatedClubId: p.generatedClubId ?? null,
     generatedDivision: p.generatedDivision ?? null,
@@ -1484,21 +1488,14 @@ async function rebuildWorld(
 
     const migrationAbsoluteGameDay = jsonOr<Partial<World["mp"]>>(saveRow.mpStateJson ?? null, {}).absoluteGameDay ?? saveRow.dayIndex;
     const players: Player[] = playerRows.map((r) => {
-      const saved = r as unknown as { declineStartAge: number | null; developmentRate: number | null; developmentVolatility: number | null; recentMinutesJson: string | null };
-      // Backfill deterministically unless the whole profile is present and sane;
-      // never silently substitute arbitrary defaults for a partial profile.
-      const profileValid =
-        saved.declineStartAge !== null && saved.declineStartAge !== undefined &&
-        saved.developmentRate !== null && saved.developmentRate !== undefined &&
-        saved.developmentVolatility !== null && saved.developmentVolatility !== undefined &&
-        Number.isFinite(saved.declineStartAge) && Number.isFinite(saved.developmentRate) && Number.isFinite(saved.developmentVolatility);
-      const profile = profileValid
-        ? {
-            declineStartAge: saved.declineStartAge as number,
-            developmentRate: saved.developmentRate as number,
-            developmentVolatility: saved.developmentVolatility as number,
-          }
-        : backfillDevelopmentProfile(saveRow.seed, r.id);
+      const saved = r as unknown as { recentMinutesJson: string | null };
+      const profile: PlayerCareerProfile = {
+        growthPotential: r.growthPotential,
+        growthSpeed: r.growthSpeed,
+        peakAge: r.peakAge,
+        declinePotential: r.declinePotential,
+        declineSpeed: r.declineSpeed,
+      };
       const persistedUntil = (r as typeof r & { injuryUntilAbsoluteGameDay?: number | null }).injuryUntilAbsoluteGameDay;
       const legacyInjuryDays = r.injuryDays ?? 0;
       const injuryUntil = persistedUntil ?? (legacyInjuryDays > 0 ? migrationAbsoluteGameDay + Math.max(1, legacyInjuryDays) : null);
@@ -1512,7 +1509,6 @@ async function rebuildWorld(
         side: r.side,
         skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
         overall: r.overall,
-        potential: r.potential,
         energy: r.energy,
         salary: r.salary,
         payrollPaidThroughDay: (r as typeof r & { payrollPaidThroughDay?: number }).payrollPaidThroughDay ?? 0,
@@ -1529,8 +1525,8 @@ async function rebuildWorld(
         contractDays: r.contractDays,
         isYouth: r.isYouth,
         starter: r.starter,
-        growthAcc: r.growthAcc,
-        potentialAcc: r.potentialAcc,
+        careerGrowthConsumed: r.careerGrowthConsumed,
+        careerDeclineConsumed: r.careerDeclineConsumed,
         skillAcc: jsonOr<number[]>(r.skillAccJson, [0, 0, 0, 0, 0, 0, 0]),
         careerGoals: r.careerGoals,
         careerAssists: r.careerAssists,
@@ -1545,7 +1541,7 @@ async function rebuildWorld(
         onSale: r.onSale,
         suspendedGames: r.suspendedGames,
         loanId: r.loanId,
-         developmentProfile: profile,
+         careerProfile: profile,
          recentMinutes: sanitizeRecentMinutes(saved.recentMinutesJson),
         generatedClubId: (r as unknown as { generatedClubId?: number | null }).generatedClubId ?? null,
         generatedDivision: (r as unknown as { generatedDivision?: number | null }).generatedDivision ?? null,
@@ -1832,6 +1828,7 @@ async function rebuildWorld(
        manualRound: null,
        rolloverPhase: null,
        pendingSeasonRetirees: null,
+       population: emptyPopulationLedger(),
        populationHistory: [],
        ...jsonOr<Partial<World["mp"]>>((saveRow as unknown as { mpStateJson?: string | null }).mpStateJson, {}),
      },

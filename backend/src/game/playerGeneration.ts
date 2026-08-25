@@ -1,35 +1,48 @@
-import type { Player, Position, RngState, SkillSet } from "./types";
+import type { Player, PlayerCareerProfile, Position, RngState, SkillSet } from "./types";
 import { createRng, nextDouble, nextInt, truncatedNormal } from "./rng";
 import { countriesWithNamePools, generateName } from "./names";
-import { DAYS_PER_YEAR, DEVELOPMENT } from "./constants";
+import { DAYS_PER_YEAR } from "./constants";
 import { overallFromSkills, SKILL_KEYS, OVERALL_SCALE, type SkillKey } from "./rating";
-import { calculateAcademySalary, calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
-import { generateDevelopmentProfile } from "./player";
+import {
+  academyContractDaysForAge,
+  academyContractSeasonsForAge,
+  calculateAcademySalary,
+  calculatePlayerValue,
+  calculateProfessionalContractSalary,
+  calculateReleaseClause,
+  remainingSeasons,
+} from "./economy";
+import {
+  drawStandingSeniorAge,
+  generateCareerProfile,
+  generationActivityModifiers,
+  reconstructCurrentTarget,
+} from "./careerCurves";
 import { gameConfig } from "../config";
 
 /**
- * Division-driven player generation (plans/4. player-generation.md).
+ * Career-shaped, division-driven player generation.
  *
- * This module replaces the club-level-driven generator. All quality is derived
- * from the club's current division (seniors) and current/historical division
- * (academy pedigree). Human and AI clubs use exactly the same formulas, and the
- * same canonical generator is reused by every creation path (new human club,
- * AI filler, replacement, league expansion).
+ * Generation draws the hidden career profile FIRST, anchors the player's
+ * personal career PEAK on his division, then reconstructs the OVR he should
+ * already have at his generated age. An 18-year-old and a 28-year-old with the
+ * same career quality therefore look nothing alike: the teenager is early on
+ * his curve, the 28-year-old is at or past his peak.
  *
- * The tuning knobs live in gameConfig.playerGeneration; every other constant
- * below is a fixed statistical constant from the spec.
+ * Academy pedigree shifts the career peak anchor, never current OVR directly,
+ * so a strong academy produces better PROSPECTS rather than ready-made stars.
+ *
+ * Human and AI clubs share these formulas exactly, and every creation path
+ * (new human club, AI filler, replacement, league expansion) reuses them.
  */
 
 // ---------------------------------------------------------------------------
-// Fixed Version 1 statistical constants (spec §7) — not designer-facing knobs.
+// Fixed statistical constants — not designer-facing knobs.
 // ---------------------------------------------------------------------------
 
 export const PLAYER_Z_MIN = -3.0;
 export const PLAYER_Z_MAX = 3.0;
 export const DIVISION_CURVE_K = 0.5;
-export const ACADEMY_CURRENT_WEIGHT = 0.65;
-export const ACADEMY_HISTORY_WEIGHT = 0.35;
-export const TIER_Z_BOUNDS = [-1.2815515655, -0.5244005127, 0.5244005127, 1.2815515655];
 export const SKILL_TARGET_TOLERANCE_OVR = 1.0;
 export const SKILL_GENERATION_MAX_RETRIES = 8;
 
@@ -42,9 +55,14 @@ export function overallRange(): number {
   return OVR_MAX - OVR_MIN;
 }
 
-/** Individual quality standard deviation expressed directly in OVR points. */
+/** Senior within-division quality standard deviation, directly in OVR points. */
 export function qualitySigma(): number {
   return gameConfig.playerGeneration.playerQualitySpreadOverall;
+}
+
+/** Academy quality standard deviation: wider, to preserve rare wonderkids. */
+export function academyQualitySigma(): number {
+  return gameConfig.playerGeneration.academyQualitySpreadOverall;
 }
 
 /** Designer-controlled top-division senior mean (spec §8). */
@@ -81,98 +99,48 @@ export function divisionMean(division: number, totalDivisions: number): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Academy pedigree PA = 0.65·S(current) + 0.35·S(highestEver), clamped to [0,1].
+ * Academy pedigree from current and highest-ever division strength, using the
+ * configurable weights normalized here so designers can retune either side
+ * without also rescaling the pedigree.
+ *
+ * Highest-ever division is an intended permanent ratchet: once a club has
+ * reached D1, the historical component keeps using D1 strength forever.
  */
 export function academyPedigree(currentDivision: number, highestDivisionReached: number, totalDivisions: number): number {
+  const { academyCurrentDivisionWeight, academyHighestEverDivisionWeight } = gameConfig.playerGeneration;
+  const weightSum = academyCurrentDivisionWeight + academyHighestEverDivisionWeight;
+  if (weightSum <= 0) return 0;
   const sCurrent = divisionStrength(currentDivision, totalDivisions);
   const sHistory = divisionStrength(highestDivisionReached, totalDivisions);
-  return Math.max(0, Math.min(1, ACADEMY_CURRENT_WEIGHT * sCurrent + ACADEMY_HISTORY_WEIGHT * sHistory));
-}
-
-/** Direct OVR mean offset supplied by academy pedigree (spec §23). */
-export function academyPedigreeOverallOffset(pedigree: number): number {
-  return gameConfig.playerGeneration.academyPedigreeOverallBoost * pedigree;
+  const pedigree = (academyCurrentDivisionWeight * sCurrent + academyHighestEverDivisionWeight * sHistory) / weightSum;
+  return Math.max(0, Math.min(1, pedigree));
 }
 
 // ---------------------------------------------------------------------------
-// Youth age baselines (spec §26–§28)
+// Career peak anchors (§5.2 / §5.3)
 // ---------------------------------------------------------------------------
 
 /**
- * Closed-form expected natural growth from age `a` to age `b` under the
- * canonical development defaults (spec §27). Only the population-average
- * generation baselines use the default-activity multiplier; actual player
- * development is untouched.
+ * Mean personal career PEAK for a senior generated in division D. The peak sits
+ * a configured offset above the division's all-age population mean, because a
+ * standing population is a mix of pre-peak, peak and post-peak players whose
+ * average lands back on the division mean.
  */
-export function expectedGrowth(a: number, b: number): number {
-  const { referenceAge, maxSeasonalGrowth, exponent } = DEVELOPMENT.growthCurve;
-  const declineRef = DEVELOPMENT.declineAge.mean;
-  const Aref = DEVELOPMENT.activity.inactiveGrowthMultiplier + (1 - DEVELOPMENT.activity.inactiveGrowthMultiplier) * DEVELOPMENT.activity.defaultActivity;
-  const coeff = (maxSeasonalGrowth * (declineRef - referenceAge)) / (exponent + 1);
-  if (a >= referenceAge) {
-    const termA = Math.pow((declineRef - a) / (declineRef - referenceAge), exponent + 1);
-    const termB = Math.pow((declineRef - b) / (declineRef - referenceAge), exponent + 1);
-    return Aref * coeff * (termA - termB);
-  }
-  return Aref * (maxSeasonalGrowth * (referenceAge - a) + expectedGrowth(referenceAge, b) / Aref);
-}
-
-/** Youth mean offset: μ_youth(a) = μ21 − G(a, 21) (spec §28). */
-export function youthAgeOffset(age: number): number {
-  return expectedGrowth(age, gameConfig.playerGenerationRules.academyPromotionAge);
-}
-
-/** Youth mean for age `a`: μ_bottom − G(a, 21). */
-export function youthDivisionMeanForAge(age: number): number {
-  return bottomDivisionMean() - youthAgeOffset(age);
-}
-
-// ---------------------------------------------------------------------------
-// Initial potential (spec §34–§36)
-// ---------------------------------------------------------------------------
-
-/**
- * Remaining natural growth integral (spec §34). D is declineStartAge; Gmax, e
- * and the growth reference age come from the existing development config.
- */
-export function remainingNaturalGrowth(age: number, declineStartAge: number): number {
-  const { referenceAge, maxSeasonalGrowth, exponent } = DEVELOPMENT.growthCurve;
-  if (age >= declineStartAge) return 0;
-  if (age >= referenceAge) {
-    return (maxSeasonalGrowth * (declineStartAge - referenceAge)) / (exponent + 1) * Math.pow((declineStartAge - age) / (declineStartAge - referenceAge), exponent + 1);
-  }
-  return maxSeasonalGrowth * (referenceAge - age) + (maxSeasonalGrowth * (declineStartAge - referenceAge)) / (exponent + 1);
+export function seniorPeakMean(division: number, totalDivisions: number): number {
+  return divisionMean(division, totalDivisions) + gameConfig.playerGeneration.seniorPeakOverallOffset;
 }
 
 /**
- * Canonical initial potential (spec §35):
- *   ceil(OVR + RemainingGrowth(a, D) × developmentRate × Rmax), clamped to
- *   [OVR, OVR_MAX]. Rmax is the existing development random-factor maximum.
+ * Mean personal career PEAK for an academy recruit. Pedigree shifts the career
+ * anchor rather than handing out immediate current-OVR — a strong academy
+ * produces better prospects, not ready-made first-team stars.
+ *
+ * With the pedigree boost set equal to the division span, a stable D1 academy
+ * has the same normal peak anchor as D1 seniors.
  */
-export function initialPotential(overall: number, age: number, declineStartAge: number, developmentRate: number): number {
-  const growth = remainingNaturalGrowth(age, declineStartAge);
-  const raw = Math.ceil(overall + growth * developmentRate * DEVELOPMENT.randomFactor.max);
-  return Math.max(overall, Math.min(OVR_MAX, raw));
-}
-
-// ---------------------------------------------------------------------------
-// Tier classification from raw Z (spec §37)
-// ---------------------------------------------------------------------------
-
-/**
- * Map a raw (unshifted) birth-quality Z to a hidden growth tier 1..5 using
- * exact standard normal percentile thresholds. Raw Z — without the academy
- * pedigree OVR offset — keeps pedigree from indirectly modifying future
- * development. The tier is a server-
- * private development input only: it is never stored on the player and never
- * exposed through any API view.
- */
-export function tierFromZ(z: number): number {
-  if (z < TIER_Z_BOUNDS[0]) return 1;
-  if (z < TIER_Z_BOUNDS[1]) return 2;
-  if (z < TIER_Z_BOUNDS[2]) return 3;
-  if (z < TIER_Z_BOUNDS[3]) return 4;
-  return 5;
+export function academyPeakMean(pedigree: number): number {
+  const { seniorPeakOverallOffset, academyPedigreeOverallBoost } = gameConfig.playerGeneration;
+  return bottomDivisionMean() + seniorPeakOverallOffset + academyPedigreeOverallBoost * pedigree;
 }
 
 // ---------------------------------------------------------------------------
@@ -434,6 +402,12 @@ export function allocateSlots(weights: readonly number[], total: number): number
 
 /** Canonical senior weights: GK 10% / FB 14% / CB 18% / MF 32% / FW 26%. */
 export const SENIOR_POSITION_WEIGHTS = [0.1, 0.14, 0.18, 0.32, 0.26] as const;
+
+/**
+ * Academy cohort position weights. Lives here beside the senior weights so the
+ * population model can use them without importing squad orchestration.
+ */
+export const ACADEMY_POSITION_WEIGHTS = [0.1, 0.28, 0.26, 0.22, 0.14] as const;
 const POSITION_GROUPS: readonly Position[] = [0, 1, 2, 3, 4];
 
 /**
@@ -501,24 +475,33 @@ export interface GeneratePlayerContext extends GeneratedPlayerInput {
   slot: number;
 }
 
-/** Draw a raw birth-quality Z (spec §13). */
+/** Draw a raw birth-quality Z. Independent of the hidden career profile. */
 export function drawRawZ(rng: RngState): number {
   return truncatedNormal(rng, 0, 1, PLAYER_Z_MIN, PLAYER_Z_MAX);
 }
 
-/** Senior age distribution: TN(24, 4, 18, 38), rounded and clamped (spec §18). */
-export function drawSeniorAge(rng: RngState): number {
-  const age = Math.round(truncatedNormal(rng, 24, 4, 18, 38));
-  return Math.max(18, Math.min(38, age));
+/**
+ * Initial senior age from the standing active-career survivorship distribution:
+ * the probability a player who entered the senior population at the automatic
+ * promotion age is still inside the active boundary at each later age.
+ */
+export function drawSeniorAge(rng: RngState, position: Position): number {
+  return drawStandingSeniorAge(rng, position);
+}
+
+/** Academy age generation: UniformInteger(academyMinAge, academyMaxAge). */
+export function drawYouthAge(rng: RngState): number {
+  const { academyMinAge, academyMaxAge } = gameConfig.playerGenerationRules;
+  return academyMinAge + nextInt(rng, academyMaxAge - academyMinAge + 1);
 }
 
 function buildGeneratedPlayer(
   ctx: GeneratePlayerContext,
   age: number,
-  profile: { declineStartAge: number; developmentRate: number; developmentVolatility: number },
+  profile: PlayerCareerProfile,
   rawZ: number,
   actualOverall: number,
-  potential: number,
+  consumed: { growthConsumed: number; declineConsumed: number },
   skills: SkillSet,
 ): Player {
   const rng = playerRng(ctx.seed, ctx.clubId, ctx.generationType, ctx.slot, ctx.seasonId);
@@ -526,8 +509,23 @@ function buildGeneratedPlayer(
   const country = availableForeignCountries.length > 0 && nextDouble(rng) < gameConfig.playerGenerationRules.foreignPlayerChance
     ? availableForeignCountries[nextInt(rng, availableForeignCountries.length)]
     : ctx.country;
-  const contractDays = ctx.isYouth ? DAYS_PER_YEAR * gameConfig.playerGenerationRules.academyContractSeasons : DAYS_PER_YEAR * (1 + nextInt(rng, 3));
-  const salary = ctx.isYouth ? calculateAcademySalary(actualOverall, age) : calculateBaseSalary(actualOverall, age);
+  let contractDays: number;
+  let salary: number;
+  if (ctx.isYouth) {
+    // Academy terms are derived, never configured: the contract always ends at
+    // the age-21 rollover boundary and can never be renewed or extended.
+    contractDays = academyContractDaysForAge(age);
+    salary = calculateAcademySalary(actualOverall, age);
+  } else {
+    const futureCompleteSeasons = nextInt(rng, 3);
+    contractDays = DAYS_PER_YEAR * (futureCompleteSeasons + 1);
+    salary = calculateProfessionalContractSalary({
+      currentOverall: actualOverall,
+      currentAge: age,
+      futureCompleteSeasons,
+      currentSeasonFraction: 1,
+    });
+  }
   const value = calculatePlayerValue(actualOverall, age, remainingSeasons(contractDays));
   const player: Player = {
     id: ctx.id,
@@ -538,7 +536,6 @@ function buildGeneratedPlayer(
     side: nextInt(rng, 2),
     skills,
     overall: actualOverall,
-    potential,
     energy: 100,
     recentLoad: 0,
     salary,
@@ -555,8 +552,8 @@ function buildGeneratedPlayer(
     contractDays,
     isYouth: ctx.isYouth,
     starter: false,
-    growthAcc: 0,
-    potentialAcc: 0,
+    careerGrowthConsumed: consumed.growthConsumed,
+    careerDeclineConsumed: consumed.declineConsumed,
     skillAcc: [0, 0, 0, 0, 0, 0, 0],
     careerGoals: 0,
     careerAssists: 0,
@@ -569,7 +566,7 @@ function buildGeneratedPlayer(
     onSale: false,
     suspendedGames: 0,
     loanId: null,
-    developmentProfile: profile,
+    careerProfile: profile,
     recentMinutes: [],
     generatedClubId: ctx.clubId,
     generatedDivision: ctx.currentDivision,
@@ -583,44 +580,46 @@ function buildGeneratedPlayer(
 }
 
 /**
- * Generate one senior player (spec §70). Uses the club's current division only;
- * development traits are drawn independently from the starting-quality Z.
+ * Shared career-shaped construction: anchor the personal peak, reconstruct how
+ * much of the curve this age has already lived, then generate skills toward the
+ * resulting target. The persisted overall is always recomputed from the skills.
+ */
+function generateFromPeakAnchor(ctx: GeneratePlayerContext, peakMean: number, sigma: number, age: number, rng: RngState, rawZ: number): Player {
+  const profile = generateCareerProfile(rng);
+  const personalPeakTarget = peakMean + sigma * rawZ;
+  const activity = generationActivityModifiers();
+  const reconstructed = reconstructCurrentTarget(profile, personalPeakTarget, age, activity.growth, activity.decline);
+  const target = Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(reconstructed.current)));
+  const { skills } = generateSkillsForTarget(rng, ctx.position, target);
+  const actualOverall = overallFromSkills(ctx.position, skills);
+  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, reconstructed, skills);
+}
+
+/**
+ * Generate one senior player. His personal peak is anchored on the club's
+ * current division; his current OVR is where that peak, his own career curve,
+ * and his age put him today.
  */
 export function generateSeniorPlayer(ctx: GeneratePlayerContext): Player {
   const rng = playerRng(ctx.seed, ctx.clubId, ctx.generationType, ctx.slot, ctx.seasonId);
   const rawZ = drawRawZ(rng);
-  const mu = divisionMean(ctx.currentDivision, ctx.totalDivisions);
-  const target = mu + qualitySigma() * rawZ;
-  const age = ctx.age ?? drawSeniorAge(rng);
-  const { skills } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
-  const actualOverall = overallFromSkills(ctx.position, skills);
-  const profile = generateDevelopmentProfile(rng);
-  const potential = initialPotential(actualOverall, age, profile.declineStartAge, profile.developmentRate);
-  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills);
-}
-
-/** Youth age generation (spec §31): UniformInteger(academyMinAge, academyMaxAge). */
-export function drawYouthAge(rng: RngState): number {
-  const { academyMinAge, academyMaxAge } = gameConfig.playerGenerationRules;
-  return academyMinAge + nextInt(rng, academyMaxAge - academyMinAge + 1);
+  const age = ctx.age ?? drawSeniorAge(rng, ctx.position);
+  return generateFromPeakAnchor(ctx, seniorPeakMean(ctx.currentDivision, ctx.totalDivisions), qualitySigma(), age, rng, rawZ);
 }
 
 /**
- * Generate one youth player (spec §71). Youth quality depends on the current
- * division and the highest-ever division reached via the academy pedigree.
+ * Generate one academy player. His peak anchor comes from the club's academy
+ * pedigree, so a strong academy produces better prospects rather than
+ * teenagers who are already first-team stars.
  */
 export function generateYouthPlayer(ctx: GeneratePlayerContext): Player {
   const rng = playerRng(ctx.seed, ctx.clubId, ctx.generationType, ctx.slot, ctx.seasonId);
   const rawZ = drawRawZ(rng);
   const age = ctx.age ?? drawYouthAge(rng);
   const pedigree = academyPedigree(ctx.currentDivision, ctx.highestDivisionReached, ctx.totalDivisions);
-  const muAge = youthDivisionMeanForAge(age);
-  const target = muAge + qualitySigma() * rawZ + academyPedigreeOverallOffset(pedigree);
-  const { skills } = generateSkillsForTarget(rng, ctx.position, Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(target))));
-  const actualOverall = overallFromSkills(ctx.position, skills);
-  const profile = generateDevelopmentProfile(rng);
-  const potential = initialPotential(actualOverall, age, profile.declineStartAge, profile.developmentRate);
-  return buildGeneratedPlayer({ ...ctx, age }, age, profile, rawZ, actualOverall, potential, skills);
+  return generateFromPeakAnchor(ctx, academyPeakMean(pedigree), academyQualitySigma(), age, rng, rawZ);
 }
+
+export { academyContractSeasonsForAge };
 
 export { gameConfig };

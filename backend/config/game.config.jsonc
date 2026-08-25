@@ -14,9 +14,8 @@
   },
 
   // Guaranteed full game-days after the final league round and before the
-  // following season begins. Derived season length = 35 days.
-  "interseasonDays": 7,
-  // Split the canonical gap without changing the total season length.
+  // following season begins. The inter-season gap is the sum of these two
+  // windows; the derived season length is 35 days.
   "interseasonAfterMatchDays": 2,
   "interseasonBeforeNextSeasonDays": 5,
 
@@ -34,6 +33,12 @@
     "leaseSeconds": 30
   },
 
+  // --- Multiplayer ---
+  // Fraction of rounds after which no new humans may join the current season.
+  // (e.g. 0.5 = after half the season's rounds are complete, new clubs are
+  // queued as PROVISIONAL for the next season.)
+  "joinThresholdPercent": 0.5,
+
   "economy": {
     // Existing seasonal money flows were calibrated against 30 game-days.
     "referenceSeasonDays": 30
@@ -48,7 +53,22 @@
   // (e.g. 7 = a weekly sim update runs every 7 game-days.)
   "weeklyIntervalDays": 7,
   // Real-time days an unclaimed free agent remains available across relists.
+  // After this the listing is deleted for good — a genuine population sink that
+  // the seasonal academy intake must compensate for.
   "freeAgentRetentionDays": 30,
+  // Derivation inputs for the TARGET free-agent stock. The normal free-agent
+  // pool is part of the population target, not an untracked surplus on top of a
+  // club-only target, so it has to be derived from real flow: how many contracts
+  // expire, how often those players are signed, and how long the rest linger.
+  // All three are calibration outputs measured from full-world simulation.
+  "freeAgentPool": {
+    // Contracts expiring per active club per season.
+    "expectedExpiriesPerActiveClubPerSeason": 4,
+    // Probability an expired player is signed before his retention runs out.
+    "signingProbability": 0.6,
+    // Seasons a player who IS signed spends in the pool before leaving it.
+    "signedResidenceSeasons": 0.1
+  },
   // How many seasons before a contract's expiry (in game-days) a club starts
   // trying to renew the player.
   // (e.g. 2 = renewal talks begin 2 seasons before expiry.)
@@ -133,8 +153,13 @@
   // absurdly low wages for very low-rated or very old players.
   // (e.g. 500 = no annual salary can fall below 500.)
   "salaryFloor": 500,
-  // Academy players receive this fraction of their normal salary until promotion.
-  // (e.g. 0.1 = an academy player earns 10% of his normal salary.)
+  // Academy players receive this fraction of the salary the SAME player would
+  // receive from the complete professional-contract calculation for his current
+  // OVR, age, exact term, and season fraction. Must be strictly between 0 and 1;
+  // no professional floor is reapplied afterwards, so the configured fraction
+  // is exact. The resulting low release clause is a deliberate mobility
+  // mechanism for promoted academy players.
+  // (e.g. 0.1 = an academy player earns 10% of his professional-equivalent wage.)
   "academySalaryMultiplier": 0.1,
 
   // --- Contracts & renewals ---
@@ -158,13 +183,18 @@
   // demands even for the best players at their peak.
   // (e.g. 0.15 = no renewal demand exceeds a 15% raise per season.)
   "renewalMaxRaise": 0.15,
-  // Age multiplier applied to the renewal raise (ages between keyframes
-  // interpolate). Young rising stars demand bigger raises; aging veterans accept
-  // smaller ones.
-  "renewalAgeCurve": {
-    "16": 1.15, "17": 1.2, "18": 1.3, "19": 1.35, "20": 1.3, "21": 1.2, "22": 1.1, "23": 1,
-    "24": 1, "25": 1, "26": 1, "27": 1, "28": 1, "29": 0.95, "30": 0.9, "31": 0.85, "32": 0.8,
-    "33": 0.75, "34": 0.7, "35": 0.65, "36": 0.6, "37": 0.55, "38": 0.5, "39": 0.45, "40": 0.4
+  // Extra annual demand a young developing player adds on top of the minimum
+  // and skill components. This is what makes locking a promising youngster into
+  // a long deal expensive without erasing the advantage of promoting him.
+  // (e.g. 0.05 = a peak-curve young player adds up to 5 percentage points.)
+  "renewalYouthPremiumWeight": 0.05,
+  // Visible-age curve for that premium. It peaks for young developing players
+  // and fades to zero through the mid-20s. It MUST stay a function of visible
+  // age only: reading hidden growth potential here would leak scouting
+  // information into a public salary quote.
+  "renewalYouthPremiumAgeCurve": {
+    "16": 0.9, "17": 1, "18": 1, "19": 0.95, "20": 0.85, "21": 0.7, "22": 0.55, "23": 0.4,
+    "24": 0.25, "25": 0.12, "26": 0.05, "27": 0
   },
   // Release clause = salaryPerSeason x remainingSeasons x this percentage.
   // Fraction of the remaining contract value (salary x seasons left) the club
@@ -172,34 +202,94 @@
   // (e.g. 0.5 = releasing a player costs 50% of his remaining contract value.)
   "releaseClauseRemainingValuePct": 0.5,
 
-  // --- Player generation (plans/4. player-generation.md) ---
+  // --- Player generation ---
   //
-  // Division-driven player quality model. New senior squads draw from
-  //   OVR = mu(division) + sigma * Z,  Z ~ TruncatedNormal(0,1,-3,3)
-  // and youth from the same model with an academy-pedigree mean shift.
+  // Career-shaped quality model. Generation draws the player's hidden career
+  // profile FIRST, anchors his personal career peak on his division, then
+  // reconstructs the OVR he should already have at his generated age. A
+  // generated 18-year-old therefore looks like someone who has already lived
+  // part of the development curve, not like a 28-year-old drawn at 18.
   "playerGeneration": {
-    // Mean OVR of all generated senior players in Division 1. Because the best
-    // players are selected for the lineup, 70 produces an automatic starting
-    // XI close to 74 OVR with the spread configured below.
-    "topDivisionMeanOverall": 70,
-    // Standard deviation of individual player quality, directly in OVR points.
-    // (e.g. 4 = most players fall within roughly ±4 OVR of their environment.)
-    "playerQualitySpreadOverall": 4,
+    // Mean OVR of the COMPLETE generated Division 1 senior population across
+    // all ages — not the mean of the selected XI. Best-XI selection lifts the
+    // automatic lineup well above this figure.
+    "topDivisionMeanOverall": 74,
+    // Standard deviation of individual senior career quality, in OVR points.
+    "playerQualitySpreadOverall": 5.5,
+    // Wider spread for academy career quality. The extra tail is what keeps
+    // rare wonderkids possible without widening every senior squad.
+    "academyQualitySpreadOverall": 6,
     // Total mean OVR difference from Division 1 to the current bottom division.
-    // This remains 18 as divisions are added; the division curve automatically
-    // redistributes the intermediate means across the larger pyramid.
+    // This stays fixed as divisions are added; the division curve redistributes
+    // the intermediate means across the larger pyramid.
     "divisionOverallSpan": 18,
-    // Maximum generation-mean advantage, in OVR points, of a D1/D1 academy
-    // over the weakest academy at the same player age. Lower pedigrees receive
-    // a proportional share (currently about 16.1 in D2, 9.4 in D3, 4.2 in D4,
-    // and 0 in D5 for a five-division pyramid). This does not guarantee a
-    // player's future OVR: with regular starter minutes the calibrated average
-    // career peaks are roughly 78/69/62/57/53 from D1 to D5, while less-active
-    // players develop less. Only the D1 peak is directly calibration-tested.
-    "academyPedigreeOverallBoost": 25.5
+    // How far a player's personal career PEAK sits above his division's all-age
+    // population mean. Calibrated so the age mix of a standing population
+    // averages back down to topDivisionMeanOverall.
+    "seniorPeakOverallOffset": 6.7,
+    // Maximum shift a perfect academy pedigree applies to the academy career
+    // PEAK anchor (never to current OVR directly). Setting this equal to
+    // divisionOverallSpan means a stable D1 academy has the same normal peak
+    // anchor as D1 seniors.
+    "academyPedigreeOverallBoost": 18,
+    // Pedigree weights, normalized by the shared helper. Highest-ever division
+    // is a permanent ratchet: once a club has reached D1, its historical
+    // component keeps using D1 strength forever.
+    "academyCurrentDivisionWeight": 0.65,
+    "academyHighestEverDivisionWeight": 0.35
   },
 
-  // --- Structural academy/squad rules (plans/4. player-generation.md §42) ---
+  // --- Career growth and decline ---
+  //
+  // A career is described by five hidden values: growth potential and speed,
+  // an exact peak age, and decline potential and speed. POTENTIAL sets total
+  // magnitude; SPEED only changes timing and steepness. There is deliberately
+  // no second potential ceiling, growth tier, or development-rate multiplier —
+  // any of those would let growth be granted twice.
+  "playerCareer": {
+    // OVR-equivalent growth a player with growthPotential = 1 realizes across
+    // his whole pre-peak career at full activity.
+    "maximumCareerGrowthOverall": 30,
+    // OVR-equivalent decline a player with declinePotential = 1 suffers across
+    // his whole post-peak career at neutral activity.
+    "maximumCareerDeclineOverall": 26,
+    // Piecewise-linear probability densities over the continuous 0-to-1 range,
+    // as [value, density] points. Density need not integrate to one; it is
+    // normalized. Sampling is exact inverse-CDF, so the realized distribution
+    // matches these points rather than approximating them.
+    "growthPotentialDistribution": [[0, 0.35], [0.3, 0.85], [0.6, 1.6], [0.85, 1.25], [1, 0.5]],
+    "growthSpeedDistribution": [[0, 0.5], [0.5, 1.5], [1, 0.5]],
+    "declinePotentialDistribution": [[0, 0.45], [0.4, 1.4], [0.7, 1.2], [1, 0.6]],
+    "declineSpeedDistribution": [[0, 0.6], [0.5, 1.4], [1, 0.6]],
+    // Slow/fast cumulative GROWTH boundary curves as [progress, fraction]
+    // points, where progress runs from 0 at academy entry age to 1 at the
+    // player's own peak age. Both must start at 0 and terminate at 1 so speed
+    // never changes the full-activity growth total, and fast may never fall
+    // behind slow at any comparable point.
+    "growthSlowCurve": [[0, 0], [0.25, 0.14], [0.5, 0.36], [0.75, 0.66], [1, 1]],
+    "growthFastCurve": [[0, 0], [0.25, 0.44], [0.5, 0.72], [0.75, 0.9], [1, 1]],
+    // Truncated-normal personal peak age, drawn as an integer. Most peaks land
+    // near the mean with real tails on both sides.
+    "peakAgeDistribution": { "mean": 27, "stdDev": 2.4, "min": 23, "max": 33 },
+    // Slow/fast cumulative DECLINE boundary curves as [yearsSincePeak,
+    // fraction] points. Same monotonic 0-to-1 and fast >= slow rules apply.
+    "declineSlowCurve": [[0, 0], [2, 0.08], [4, 0.2], [6, 0.36], [8, 0.55], [10, 0.75], [12, 0.9], [14, 1]],
+    "declineFastCurve": [[0, 0], [2, 0.2], [4, 0.42], [6, 0.62], [8, 0.78], [10, 0.9], [12, 0.97], [14, 1]],
+    // Activity a generated player is assumed to have had historically. Lower
+    // values reduce his REALIZED growth; they never move him closer to his peak.
+    "generationHistoricalActivity": 0.7,
+    // Annual probability that a player of this age leaves the active population
+    // for the non-retirement structural reason: his contract expires, no club
+    // signs him, and he is deleted when the free-agent retention period ends.
+    // This depends on manager behavior, so it is a calibration input measured
+    // from full-world simulation, not a derived constant. Transfers, loans, and
+    // dormancy are NOT drains — they only change ownership or the boundary.
+    "freeAgentTerminalLossAgeCurve": {
+      "20": 0.01, "24": 0.015, "28": 0.02, "31": 0.05, "34": 0.1, "37": 0.2, "40": 0.35
+    }
+  },
+
+  // --- Structural academy/squad rules ---
   "playerGenerationRules": {
     // Fixed senior squad size for a newly created club.
     "initialSeniorSquadSize": 30,
@@ -207,19 +297,26 @@
     "initialAcademySize": 11,
     // Maximum youth roster size; unused seasonal intake slots are lost.
     "academyRosterLimit": 15,
-    // "auto" calculates the population-stable mean from the initial senior and
-    // academy sizes, intake ages, promotion age, position mix, and live
-    // retirement probabilities. A non-negative number can override it.
-    // The resolved fractional mean uses deterministic stochastic rounding per
-    // club/season, so retries cannot reroll the quota.
-    "seasonalAcademyIntake": "auto",
-    // Youth age range for generation.
+    // Academy age range for generation. No intake path ever generates an
+    // age-20 youth player: everyone is promoted no later than that boundary.
     "academyMinAge": 16,
     "academyMaxAge": 19,
-    // Age at which youth are automatically promoted to the senior squad.
-    "academyPromotionAge": 21,
-    // Contract length (seasons) for newly generated youth.
-    "academyContractSeasons": 4,
+    // Earliest age a manager may VOLUNTARILY promote a youth player.
+    "academyVoluntaryPromotionAge": 18,
+    // Age at which every remaining academy player is promoted automatically.
+    // Mandatory and atomic: it may create a temporary senior-roster overflow
+    // rather than releasing or replacing anyone.
+    "academyAutomaticPromotionAge": 20,
+    // Age at which an academy-origin contract expires. Academy contract terms
+    // are DERIVED as (academyContractEndAge - currentAge); there is no fixed
+    // configured academy contract length.
+    "academyContractEndAge": 21,
+    // Target owned players (senior + academy) per active persistent club. This
+    // is the population-control target, distinct from the enforced roster caps.
+    "targetOwnedPlayersPerActiveClub": 38,
+    // Guaranteed new prospects per active club every season, even during a
+    // population surplus. Must be greater than zero.
+    "minimumAcademyIntakePerActiveClub": 1,
     // Probability that a newly generated player is from a country other than
     // the club's country. The selected country also supplies the player's name.
     // (e.g. 0.05 = 5% foreign-born players.)

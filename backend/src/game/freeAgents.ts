@@ -16,7 +16,8 @@ import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 import { seniorRosterFullError, isEphemeralAI } from "./club";
 import { createRng, nextDouble } from "./rng";
 import { DEVELOPMENT } from "./constants";
-import { calculateBaseSalary, calculateContractDemand, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
+import { calculateBaseSalary, calculateProfessionalContractSalary, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
+import { recordTerminalDeletion } from "./population";
 import { ensureClubSquadNumbers } from "./squadNumbers";
 import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
 
@@ -223,13 +224,16 @@ export function applyFreeAgentBid(
   if (existing?.contractSeasons !== undefined && requestedContractSeasons !== undefined && existing.contractSeasons !== requestedContractSeasons) {
     return { ok: false, error: "Contract term cannot be changed after the first bid" };
   }
-  const calculatedContractSalary = calculateContractDemand(
-    listing.salaryBaselineAtListing ?? player.salary,
-    player.overall,
-    player.age,
-    contractSeasons,
-    remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
-  );
+  // A free-agent signing is a NEW market contract: the baseline is the market
+  // salary implied by his current OVR and age. An expired high salary does not
+  // follow the player into free agency, so a player who rejected a renewal may
+  // legitimately end up asking for less here.
+  const calculatedContractSalary = calculateProfessionalContractSalary({
+    currentOverall: player.overall,
+    currentAge: player.age,
+    futureCompleteSeasons: contractSeasons,
+    currentSeasonFraction: remainingSeasonFractionForDay(world.mp.seasonDayIndex ?? world.dayIndex),
+  });
   const contractSalary = existing?.contractSalary ?? calculatedContractSalary;
   if (existing) {
     existing.maxBid = maxBid;
@@ -453,6 +457,10 @@ export function deleteUnclaimedFreeAgent(world: World, playerId: number, now: nu
   world.marketReservations = world.marketReservations.filter((reservation) => !(reservation.marketType === "FREE_AGENT" && listingIdSet.has(reservation.listingId)));
   world.freeAgentListings = world.freeAgentListings.filter((listing) => listing.playerId !== playerId);
   world.players = world.players.filter((player) => player.id !== playerId);
+  // Terminal deletion is a real population sink. Increment the pending counter
+  // in the SAME transaction that performs the deletion, exactly once; the
+  // seasonal intake is what converts it into a replacement recruit.
+  recordTerminalDeletion(world);
   return listingIds;
 }
 
@@ -512,7 +520,7 @@ export function freeAgentListingView(world: World, listing: FreeAgentListing, my
     contractDays: contractDaysForTerm(1),
     salaryBaseline,
     contractDemandsBySeason: p
-      ? contractDemandOptions(salaryBaseline, p.overall, p.age, world.mp.seasonDayIndex ?? world.dayIndex)
+      ? contractDemandOptions(p.overall, p.age, world.mp.seasonDayIndex ?? world.dayIndex)
       : {},
     skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
     value: listing.playerValueAtListing,

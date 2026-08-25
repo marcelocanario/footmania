@@ -16,7 +16,7 @@ import { recordActivity } from "../game/multiplayer";
 import { hasPro } from "../services/pro";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
-import { lineupForMatch, peekLineup, applySavedLineup } from "../game/club";
+import { lineupForMatch, peekLineup, applySavedLineup, seniorRosterFullError, seniorRosterOverflowError } from "../game/club";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
 import { setPlayerSquadNumber } from "../game/squadNumbers";
 import { NEWS_SUBJECTS, publishNews } from "../game/news";
@@ -46,8 +46,10 @@ const loanCreateSchema = z.object({
   feeRatio: z.number().min(0).max(1).optional(),
 });
 
+// `contractSeasons` means COMPLETE seasons beyond the remainder of the current
+// one — the same meaning every market path uses.
 const contractSchema = z.object({
-  length: z.number().int().min(1).max(gameConfig.maxContractSeasons),
+  contractSeasons: z.number().int().min(1).max(gameConfig.maxContractSeasons),
 });
 
 const tacticsSchema = z.object({
@@ -490,10 +492,12 @@ export async function gameRoutes(app: FastifyInstance) {
       if (player.isYouth) return { error: { code: 400, body: { error: "Youth players cannot renew a contract" } } };
       if (player.loanId !== null) return { error: { code: 400, body: { error: "A player on loan cannot renew his contract" } } };
       if (playerHasActiveListing(world, player)) return { error: { code: 400, body: { error: "A player with an active market listing cannot renew his contract" } } };
-      const seasons = parsed.data.length;
-      if (seasons < 1 || seasons > gameConfig.maxContractSeasons) {
-        return { error: { code: 400, body: { error: `Contract length must be between 1 and ${gameConfig.maxContractSeasons} seasons` } } };
-      }
+      // Mandatory age promotion can push a club over the senior cap. While it
+      // is over, renewals are blocked alongside every other voluntary addition
+      // so the overflow has to be resolved rather than settled into.
+      const overflow = seniorRosterOverflowError(world, club.id);
+      if (overflow) return { error: { code: 400, body: { error: overflow } } };
+      const seasons = parsed.data.contractSeasons;
       const demand = contractDemand(player, seasons, remainingSeasonFraction(world));
       settlePlayerPayroll(world, player);
       resetPayrollPeriod(player, world.dayIndex);
@@ -530,6 +534,31 @@ export async function gameRoutes(app: FastifyInstance) {
     };
   });
 
+  // Server-authoritative preview of what a promotion does and does NOT change.
+  // Promotion accepts no contract term and no salary offer, so the UI can only
+  // show the retained terms; the server re-verifies them inside the mutation.
+  app.get("/players/:id/academy", async (req, reply) => {
+    const loaded = await loadGlobalWorldReadOnly(app.prisma);
+    const player = loaded?.world.players.find((p) => p.id === Number((req.params as { id: string }).id));
+    if (!loaded) return reply.code(404).send({ error: "World not found" });
+    if (!player) return reply.code(404).send({ error: "Player not found" });
+    const rules = gameConfig.playerGenerationRules;
+    const eligible = player.isYouth && player.age >= rules.academyVoluntaryPromotionAge;
+    return {
+      isYouth: player.isYouth,
+      age: player.age,
+      voluntaryPromotionAge: rules.academyVoluntaryPromotionAge,
+      automaticPromotionAge: rules.academyAutomaticPromotionAge,
+      contractEndAge: rules.academyContractEndAge,
+      eligibleForVoluntaryPromotion: eligible,
+      // Retained exactly on promotion — no renegotiation happens.
+      retainedSalary: player.salary,
+      retainedContractDays: player.contractDays,
+      retainedContractSeasons: Math.round((player.contractDays / gameConfig.seasonDays) * 100) / 100,
+      seniorRosterError: player.isYouth ? seniorRosterFullError(loaded.world, player.clubId ?? -1) : null,
+    };
+  });
+
   // Squad number reassignment. Taking a squadmate's number swaps the two.
   app.post("/players/:id/number", async (req, reply) => {
     const playerId = Number((req.params as { id: string }).id);
@@ -555,6 +584,7 @@ export async function gameRoutes(app: FastifyInstance) {
       const club = world.clubs.find((c) => c.id === clubId)!;
       const player = world.players.find((p) => p.id === playerId);
       if (!player || player.clubId !== club.id) return { error: { code: 400, body: { error: "Player not in your youth academy" } } };
+      if (parsed.data.action === "promote" && isPaused(world)) return { error: worldPausedError };
       const result = parsed.data.action === "promote" ? promoteYouthPlayer(world, player) : dismissYouthPlayer(world, player);
       if (!result.ok) return { error: { code: 400, body: { error: result.error } } };
       return { value: { ok: true } };

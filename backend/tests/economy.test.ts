@@ -2,12 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   calculateBaseSalary,
   calculateAcademySalary,
-  calculateContractDemand,
   calculatePlayerValue,
+  calculateProfessionalContractSalary,
   calculateReleaseClause,
-  calculateRenewalDemand,
-  calculateRenewalRaise,
   contractDaysForTerm,
+  contractDemandOptions,
+  levelizedContractSalary,
+  professionalAnnualDemandRate,
   remainingSeasonFractionForDay,
   curveMultiplier,
   remainingSeasons,
@@ -92,8 +93,8 @@ describe("player value", () => {
     b.age = 24;
     a.contractDays = gameConfig.seasonDays * 3;
     b.contractDays = gameConfig.seasonDays * 3;
-    a.developmentProfile = { declineStartAge: 38, developmentRate: 1.4, developmentVolatility: 0.2 };
-    b.developmentProfile = { declineStartAge: 24, developmentRate: 0.6, developmentVolatility: 0.03 };
+    a.careerProfile = { growthPotential: 1, growthSpeed: 1, peakAge: 32, declinePotential: 0, declineSpeed: 0 };
+    b.careerProfile = { growthPotential: 0, growthSpeed: 0, peakAge: 23, declinePotential: 1, declineSpeed: 1 };
     expect(calculatePlayerValue(a.overall, a.age, remainingSeasons(a.contractDays))).toBe(
       calculatePlayerValue(b.overall, b.age, remainingSeasons(b.contractDays))
     );
@@ -151,16 +152,97 @@ describe("contract limits", () => {
   });
 });
 
-describe("contract renewal demand", () => {
-  it("includes the remaining current-season fraction in the fixed-salary demand", () => {
+describe("professional contract salary authority", () => {
+  const renewal = (opts: { overall: number; age: number; seasons: number; fraction: number; salary: number }) =>
+    calculateProfessionalContractSalary({
+      currentOverall: opts.overall,
+      currentAge: opts.age,
+      futureCompleteSeasons: opts.seasons,
+      currentSeasonFraction: opts.fraction,
+      currentSalary: opts.salary,
+    });
+
+  it("levelizes the compounded annual demand over the exact horizon", () => {
     const baseline = 100_000;
     const seasons = 2;
     const fraction = 0.25;
-    const raise = calculateRenewalRaise(baseline, 80, 25, seasons);
-    const future = baseline * (1 + raise) + baseline * Math.pow(1 + raise, 2);
+    const rate = 0.1;
+    const future = baseline * (1 + rate) + baseline * Math.pow(1 + rate, 2);
     const expected = Math.round((baseline * fraction + future) / (fraction + seasons));
-    expect(calculateContractDemand(baseline, 80, 25, seasons, fraction)).toBe(expected);
-    expect(calculateContractDemand(baseline, 80, 25, seasons, 0)).toBeGreaterThan(calculateContractDemand(baseline, 80, 25, seasons, fraction));
+    expect(levelizedContractSalary(baseline, rate, seasons, fraction)).toBe(expected);
+  });
+
+  it("treats the term as FUTURE complete seasons, never a total contract length", () => {
+    // Passing a total where future seasons are expected would price one extra
+    // season of service, which is exactly the bug this distinction prevents.
+    const four = levelizedContractSalary(100_000, 0.1, 4, 1);
+    const five = levelizedContractSalary(100_000, 0.1, 5, 1);
+    expect(five).toBeGreaterThan(four);
+  });
+
+  it("converts a 10% raise over five future seasons to the equivalent fixed salary", () => {
+    expect(levelizedContractSalary(100_000, 0.1, 5, 0)).toBe(Math.round(134_312.2));
+  });
+
+  it("returns the baseline when the demand rate or horizon is nil", () => {
+    expect(levelizedContractSalary(100_000, 0, 5, 1)).toBe(100_000);
+    expect(levelizedContractSalary(100_000, 0.1, 0, 1)).toBe(100_000);
+  });
+
+  it("clamps the annual demand rate between the configured minimum and maximum", () => {
+    expect(professionalAnnualDemandRate(1, 40)).toBeGreaterThanOrEqual(gameConfig.renewalMinRaise);
+    expect(professionalAnnualDemandRate(100, 18)).toBeLessThanOrEqual(gameConfig.renewalMaxRaise);
+  });
+
+  it("adds a visible-age youth premium that fades through the mid-twenties", () => {
+    const young = professionalAnnualDemandRate(70, 18);
+    const midTwenties = professionalAnnualDemandRate(70, 25);
+    const prime = professionalAnnualDemandRate(70, 28);
+    expect(young).toBeGreaterThan(midTwenties);
+    expect(midTwenties).toBeGreaterThan(prime);
+    // The premium reads visible age only; two players of the same age and OVR
+    // must demand identically regardless of their hidden career profiles.
+    expect(professionalAnnualDemandRate(70, 18)).toBe(young);
+  });
+
+  it("makes a long renewal relatively more expensive for a young player", () => {
+    // Compared against each player's own one-season deal, so the age-driven
+    // salary baseline cancels out and only the youth premium is measured.
+    const ratio = (age: number) =>
+      renewal({ overall: 70, age, seasons: 5, fraction: 1, salary: 100_000 })
+      / renewal({ overall: 70, age, seasons: 1, fraction: 1, salary: 100_000 });
+    expect(ratio(18)).toBeGreaterThan(ratio(28));
+  });
+
+  it("never reduces a player's salary on a club renewal", () => {
+    // A player already paid far above his market worth keeps that salary.
+    const overpaid = renewal({ overall: 55, age: 33, seasons: 1, fraction: 1, salary: 5_000_000 });
+    expect(overpaid).toBeGreaterThanOrEqual(5_000_000);
+  });
+
+  it("uses the greater of current salary and current-OVR market salary as the baseline", () => {
+    // A player who improved a lot since signing can no longer be kept cheap.
+    const improved = renewal({ overall: 90, age: 24, seasons: 2, fraction: 1, salary: 1_000 });
+    const market = calculateBaseSalary(90, 24);
+    expect(improved).toBeGreaterThan(market);
+  });
+
+  it("lets the same player ask for less as a free agent than he rejected as a renewal", () => {
+    const renewalDemand = renewal({ overall: 60, age: 34, seasons: 1, fraction: 1, salary: 2_000_000 });
+    const freeAgentDemand = calculateProfessionalContractSalary({
+      currentOverall: 60,
+      currentAge: 34,
+      futureCompleteSeasons: 1,
+      currentSeasonFraction: 1,
+    });
+    expect(freeAgentDemand).toBeLessThan(renewalDemand);
+  });
+
+  it("grows the demand with the requested contract length", () => {
+    const options = contractDemandOptions(75, 26, 0, 100_000);
+    for (let seasons = 2; seasons <= gameConfig.maxContractSeasons; seasons++) {
+      expect(options[seasons]).toBeGreaterThan(options[seasons - 1]);
+    }
   });
 
   it("uses the multiplayer season clock for the remaining fraction", () => {
@@ -180,64 +262,21 @@ describe("contract renewal demand", () => {
     expect(player.contractDays).toBe(gameConfig.seasonDays * 4);
   });
 
-  it("renewing early costs less per season but covers strictly more raised service (review B4)", () => {
-    const baseline = 100_000;
-    const seasons = 5;
-    const early = calculateContractDemand(baseline, 80, 25, seasons, 1); // renew on day 0
-    const late = calculateContractDemand(baseline, 80, 25, seasons, 0.05); // renew near season end
+  it("renewing early costs less per season but covers strictly more raised service", () => {
+    const early = renewal({ overall: 80, age: 25, seasons: 5, fraction: 1, salary: 100_000 });
+    const late = renewal({ overall: 80, age: 25, seasons: 5, fraction: 0.05, salary: 100_000 });
     expect(early).toBeLessThan(late);
-    // Total spend: the early renewal covers fraction(=1) + n year-equivalents
-    // of raise-adjusted service; the late one only ~n. Early is cheaper per
-    // season precisely because it buys more service — intended pro-rating.
-    expect(early * (1 + seasons)).toBeGreaterThan(late * (0.05 + seasons));
-  });
-
-  it("converts a 10% raise over 5 seasons to the equivalent fixed salary", () => {
-    const demand = calculateRenewalDemand(100_000, 0.1, 5);
-    expect(demand).toBe(Math.round(134_312.2));
-    expect(Math.abs(demand - 134_312)).toBeLessThanOrEqual(1);
-  });
-
-  it("returns current salary for a one-season contract with the raise applied", () => {
-    // One-season renewal: requested = W x (1+r).
-    const demand = calculateRenewalDemand(100_000, 0.1, 1);
-    expect(demand).toBe(110_000);
-  });
-
-  it("returns current salary when the raise is zero", () => {
-    expect(calculateRenewalDemand(100_000, 0, 5)).toBe(100_000);
-    expect(calculateRenewalDemand(100_000, 0, 1)).toBe(100_000);
-  });
-
-  it("demand grows with the requested contract length", () => {
-    const club = makeClub();
-    const rng = createRng(3);
-    const p = generatePlayer(rng, club, { id: 1 });
-    p.salary = 100_000;
-    const d1 = calculateContractDemand(p.salary, p.overall, p.age, 1);
-    const d5 = calculateContractDemand(p.salary, p.overall, p.age, 5);
-    expect(d5).toBeGreaterThan(d1);
-  });
-
-  it("renewal raise is clamped between min and max", () => {
-    const club = makeClub();
-    const rng = createRng(3);
-    const p = generatePlayer(rng, club, { id: 1 });
-    const low = calculateRenewalRaise(p.salary, 1, 40, 5);
-    expect(low).toBeGreaterThanOrEqual(gameConfig.renewalMinRaise);
-    const high = calculateRenewalRaise(p.salary, 100, 20, 5);
-    expect(high).toBeLessThanOrEqual(gameConfig.renewalMaxRaise);
+    // Early is cheaper PER SEASON precisely because it buys more service.
+    expect(early * (1 + 5)).toBeGreaterThan(late * (0.05 + 5));
   });
 
   it("replaces an existing contract rather than extending it", () => {
     const club = makeClub();
-    const rng = createRng(5);
-    const p = generatePlayer(rng, club, { id: 1 });
-    p.contractDays = gameConfig.seasonDays * 2; // 2 seasons remaining
+    const p = generatePlayer(createRng(5), club, { id: 1 });
+    p.contractDays = gameConfig.seasonDays * 2;
     p.salary = 100_000;
-    // Renewal: new contract replaces the old one entirely.
     p.contractDays = 5 * gameConfig.seasonDays;
-    p.salary = calculateContractDemand(100_000, p.overall, p.age, 5);
+    p.salary = renewal({ overall: p.overall, age: p.age, seasons: 5, fraction: 0, salary: 100_000 });
     expect(remainingSeasons(p.contractDays)).toBe(5);
   });
 });

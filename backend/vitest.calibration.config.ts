@@ -8,6 +8,8 @@ export default defineConfig({
       "tests/matchSimulator.test.ts",
       "tests/playerCareer.test.ts",
       "tests/playerGeneration.test.ts",
+      "tests/population.test.ts",
+      "tests/contractEconomy.test.ts",
       "tests/rng.test.ts",
       "tests/calibration.energyInjury.test.ts",
     ],

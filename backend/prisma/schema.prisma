@@ -331,7 +331,6 @@ model Player {
   position        Int
   side            Int
   overall         Int
-  potential       Int
   energy          Int
   recentLoad      Float    @default(0)
   salary          Int
@@ -348,8 +347,10 @@ model Player {
   contractDays    Int
   isYouth         Boolean
   starter         Boolean
-  growthAcc       Float
-  potentialAcc    Float
+  // OVR-equivalent growth/decline already realized out of the player's career
+  // budgets. Bookkeeping only: it records what was spent, never extra capacity.
+  careerGrowthConsumed  Float
+  careerDeclineConsumed Float
   careerGoals     Int
   careerAssists   Int
   seasonGoals     Int
@@ -373,9 +374,13 @@ model Player {
   skillFin        Int
   nickname        String?
   skillAccJson    String
-  declineStartAge Float?
-  developmentRate Float?
-  developmentVolatility Float?
+  // The five hidden career-shape attributes. Potential sets total magnitude,
+  // speed only changes timing, peakAge is where growth ends and decline begins.
+  growthPotential  Float
+  growthSpeed      Float
+  peakAge          Int
+  declinePotential Float
+  declineSpeed     Float
   recentMinutesJson String?
   // Immutable player-origin metadata (player-generation §50). Null for players
   // migrated from saves created before this generator landed.

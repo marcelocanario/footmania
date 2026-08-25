@@ -122,41 +122,42 @@ divisionMean(D) =
 population, not the mean of the selected XI. Best-XI selection raises the
 automatic lineup above the full-squad population mean.
 
-Initial calibration candidate:
+ACCEPTED CALIBRATION (measured with the production generator, not a prototype):
 
 ```jsonc
 "playerGeneration": {
-  "topDivisionMeanOverall": 75,
-  "playerQualitySpreadOverall": 5,
+  "topDivisionMeanOverall": 74,
+  "playerQualitySpreadOverall": 5.5,
   "academyQualitySpreadOverall": 6,
   "divisionOverallSpan": 18,
-  "seniorPeakOverallOffset": 4,
+  "seniorPeakOverallOffset": 6.7,
   "academyPedigreeOverallBoost": 18
 }
 ```
 
-Prototype results for this candidate over 500 generated D1 clubs:
+`seniorPeakOverallOffset` is not a free knob. `topDivisionMeanOverall` is defined
+as the mean of the complete generated D1 senior population, so the offset must be
+exactly the amount the standing age mix gives back relative to the peak anchor.
+It was solved for, not chosen: `scripts/generation-sweep.ts` iterates it to the
+fixed point where the generated population mean equals the configured mean.
 
-| D1 automatic XI metric | Prototype result |
-| --- | ---: |
-| Average OVR | 80.3 |
-| Average weakest starter | 73.6 |
-| Average strongest starter | 86.8 |
-| Academy starters per XI | 0.3 |
+Measured over 300 generated clubs per division with `scripts/generation-calibration.ts`:
 
-Illustrative five-division projection:
+| Division | Senior population mean | Configured mean | XI average | XI weakest | XI strongest |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| D1 | 74.0 | 74.0 | 80.0 | 73.5 | 87.2 |
+| D2 | 67.5 | 67.4 | 73.5 | 67.0 | 80.5 |
+| D3 | 62.9 | 62.6 | 69.0 | 62.4 | 76.1 |
+| D4 | 59.2 | 59.0 | 65.3 | 58.3 | 72.5 |
+| D5 | 56.1 | 56.0 | 62.2 | 55.6 | 69.4 |
 
-| Division | Senior population mean | Approximate XI average | Approximate XI range |
-| --- | ---: | ---: | ---: |
-| D1 | 75.0 | 80 | 73-87 |
-| D2 | 68.4 | 74 | 67-80 |
-| D3 | 63.6 | 69 | 62-75 |
-| D4 | 60.0 | 65 | 59-72 |
-| D5 | 57.0 | 62 | 56-69 |
+Adjacent divisions overlap substantially (40-60% of a lower division's players
+clear the division above's 25th percentile), so an exceptional lower-division
+player is genuinely useful higher up.
 
-These values are acceptance-test starting points. Final tunables must come from
-the production generator and full calibration suite, not from comments or one
-fixed seed.
+Sample sizes and tolerances are now pinned test inputs. Later changes may not
+reduce sample sizes, widen tolerances, or drop reported tail metrics merely to
+make a regression pass.
 
 ## 5. Career-shaped generation
 
@@ -625,7 +626,32 @@ The lifecycle invariants are therefore:
 - mandatory promotion may exceed the senior cap, but every acquisition and
   renewal path remains blocked until the overflow is resolved.
 
+### 8.3.1 Additional market guards agreed during implementation
+
+Three rules were added on top of the original plan:
+
+1. **A loan listing may never outlive the contract behind it.** Both the loan
+   period and the listing's own public exposure window must finish inside the
+   player's remaining contract; a listing that could only be claimed after he had
+   already left is refused outright.
+
+2. **A player in his final contractual season may not be loaned out or put up
+   for sale once the season is past the join threshold.** At that point he is
+   on course to leave as a free agent at rollover unless renewed, and he cannot
+   be renewed while listed, so the contract has to be resolved first.
+
+3. **The no-pay-cut floor applies to transfers as well as renewals.** A player
+   under contract does not accept less per season to change clubs, so a buying
+   club must at least match what he already earns. It still does NOT apply to a
+   free-agent signing: an expired salary does not follow a player into free
+   agency, which is what allows a player to reject a renewal and later ask for
+   less once his contract has actually run out.
+
 ### 8.4 API and UI implications
+
+The renewal endpoint's wire field is `contractSeasons`, matching every market
+path; the former `length` field is gone. In every case `contractSeasons` means
+complete seasons beyond the remainder of the current one.
 
 The academy promotion mutation must not accept `contractSeasons` or a salary
 offer. Before confirmation, the UI displays the retained salary and remaining
@@ -755,18 +781,19 @@ Definitions:
 | Expected retirement | Included in baseline |
 | Actual minus expected eligible retirement | Signed variance |
 | Free agent deleted after retention | +1 |
-| Youth dismissed | Delayed +1 to the global pool after one full intake cycle |
+| Youth dismissed | +1 to the global pool at the first intake after the drain |
 | Academy promotion, voluntary or automatic | 0 |
 | Dormant freeze or reactivation with the same roster | Boundary change, not destruction |
 | Provisional or filler creation/deletion | 0 |
 | Senior floor or financial-intervention replacement | -1 |
 | Other non-academy persistent generation | -1 |
 
-A youth dismissal never changes the current cycle's total or creates a credit
-for the dismissing club. It enters `maturedYouthDismissals` only after one full
-intake cycle and is then distributed globally. Until maturity, population
-reconciliation treats the pending dismissal as deliberately unavailable stock
-so it is not mistaken for unexplained drift.
+A youth dismissal never creates a credit for the dismissing club or a targeted
+replacement. Because intakes run under the new season id, it enters
+`maturedYouthDismissals` at the first intake of the following season — the intake
+that accounts for the completed season's drain — and is then distributed globally.
+Until that intake, population reconciliation treats the pending dismissal as
+deliberately unavailable stock so it is not mistaken for unexplained drift.
 
 The correction may be negative, but generated intake never is. Preserve a
 configurable minimum academy intake for every active club:
@@ -829,7 +856,7 @@ Record durable pending counters and cumulative analytics by structural cause:
 
 - expected and actual eligible retirees;
 - free agents deleted after retention;
-- youth dismissals pending delay and matured dismissals;
+- youth dismissals pending conversion and matured dismissals;
 - academy players generated from baseline and correction;
 - initial active-club players generated;
 - senior floor and financial-intervention replacements;
@@ -848,7 +875,7 @@ locked commit. A retry therefore observes either none of those effects or all of
 it cannot reuse a deletion counter that was already converted into intake.
 
 Admin analytics must show both stock and flows. The observed target gap must
-reconcile to the signed ledger plus deliberately delayed dismissals; any other
+reconcile to the signed ledger plus not-yet-converted youth dismissals; any other
 difference is an invariant failure rather than another intake bonus.
 
 ## 10. Economy recalibration
@@ -886,42 +913,55 @@ and insolvency simulation even when the OVR distribution is unchanged.
 Add or retune these designer-facing settings in `game.config.jsonc` and its Zod
 schema/defaults:
 
-| Setting | Initial candidate | Purpose |
-| --- | ---: | --- |
-| `topDivisionMeanOverall` | 75 | Full D1 senior population mean |
-| `playerQualitySpreadOverall` | 5 | Senior within-division spread |
-| `academyQualitySpreadOverall` | 6 | Wider academy talent tail |
-| `divisionOverallSpan` | 18 | D1-to-bottom population gap |
-| `seniorPeakOverallOffset` | 4 | Peak anchor above all-age division mean |
-| `academyPedigreeOverallBoost` | 18 | Maximum pedigree peak-anchor shift |
-| `academyCurrentDivisionWeight` | 0.65 | Current-division pedigree contribution |
-| `academyHighestEverDivisionWeight` | 0.35 | Permanent highest-ever pedigree contribution |
-| `academyMinAge` | 16 | Youngest generated academy player |
-| `academyMaxAge` | 19 | Oldest generated academy player |
-| `academyAutomaticPromotionAge` | 20 | Mandatory promotion boundary |
-| `academyContractEndAge` | 21 | Derived academy-origin contract expiry age |
-| `maximumCareerGrowthOverall` | calibration required | OVR-equivalent growth budget at potential 1 |
-| `growthPotentialDistribution` | calibration required | Distribution of hidden 0-to-1 growth magnitude |
-| `growthSpeedDistribution` | calibration required | Distribution of hidden 0-to-1 growth speed |
-| `growthSlowCurve` | calibration required | Slow cumulative growth boundary before peak |
-| `growthFastCurve` | calibration required | Fast cumulative growth boundary before peak |
-| `peakAgeDistribution` | calibration required | Truncated-normal mean, standard deviation, minimum, and maximum |
-| `maximumCareerDeclineOverall` | calibration required | OVR-equivalent decline budget at potential 1 |
-| `declinePotentialDistribution` | calibration required | Distribution of hidden 0-to-1 decline magnitude |
-| `declineSpeedDistribution` | calibration required | Distribution of hidden 0-to-1 decline speed |
-| `declineSlowCurve` | calibration required | Slow cumulative decline boundary after peak |
-| `declineFastCurve` | calibration required | Fast cumulative decline boundary after peak |
-| `academySalaryMultiplier` | existing value, constrained to `0 < value < 1` | Youth fraction of the same full-term professional salary calculation |
-| `renewalMinRaise` | calibration required | Minimum annual demand component |
-| `renewalYouthPremiumWeight` | calibration required | Extra renewal eagerness for young players |
-| `renewalYouthPremiumAgeCurve` | calibration required | Visible-age curve that fades through the mid-20s |
-| `minimumAcademyIntakePerActiveClub` | calibration required, greater than zero | Guarantees new prospects during a population surplus |
+Shipped values (measured, not guessed — see §4):
 
-Remove the fixed `academyContractSeasons` setting; the term is derived from
-`academyContractEndAge - currentAge`. Validate that the academy age boundaries
-are ordered, automatic promotion occurs after the maximum generated age, and
-contract end occurs after automatic promotion. Pedigree weights must be
-non-negative with a positive sum and are normalized by the shared helper.
+| Setting | Block | Shipped value | Purpose |
+| --- | --- | ---: | --- |
+| `topDivisionMeanOverall` | `playerGeneration` | 74 | Full D1 senior population mean |
+| `playerQualitySpreadOverall` | `playerGeneration` | 5.5 | Senior within-division spread |
+| `academyQualitySpreadOverall` | `playerGeneration` | 6 | Wider academy talent tail |
+| `divisionOverallSpan` | `playerGeneration` | 18 | D1-to-bottom population gap |
+| `seniorPeakOverallOffset` | `playerGeneration` | 6.7 | Peak anchor above all-age division mean (solved, not chosen) |
+| `academyPedigreeOverallBoost` | `playerGeneration` | 18 | Maximum pedigree peak-anchor shift |
+| `academyCurrentDivisionWeight` | `playerGeneration` | 0.65 | Current-division pedigree contribution |
+| `academyHighestEverDivisionWeight` | `playerGeneration` | 0.35 | Permanent highest-ever pedigree contribution |
+| `maximumCareerGrowthOverall` | `playerCareer` | 30 | OVR-equivalent growth budget at potential 1 |
+| `maximumCareerDeclineOverall` | `playerCareer` | 26 | OVR-equivalent decline budget at potential 1 |
+| `growthPotentialDistribution` | `playerCareer` | piecewise, mean 0.56 | Hidden 0-to-1 growth magnitude density |
+| `growthSpeedDistribution` | `playerCareer` | piecewise, mean 0.50 | Hidden 0-to-1 growth speed density |
+| `declinePotentialDistribution` | `playerCareer` | piecewise, mean 0.51 | Hidden 0-to-1 decline magnitude density |
+| `declineSpeedDistribution` | `playerCareer` | piecewise, mean 0.50 | Hidden 0-to-1 decline speed density |
+| `growthSlowCurve` / `growthFastCurve` | `playerCareer` | 5-point curves | Slow/fast cumulative growth boundaries before the peak |
+| `declineSlowCurve` / `declineFastCurve` | `playerCareer` | 8-point curves | Slow/fast cumulative decline boundaries after the peak |
+| `peakAgeDistribution` | `playerCareer` | mean 27, sd 2.4, 23-33 | Truncated-normal personal peak age |
+| `generationHistoricalActivity` | `playerCareer` | 0.7 | Activity a generated player is assumed to have had |
+| `freeAgentTerminalLossAgeCurve` | `playerCareer` | age curve | Annual non-retirement drop-out hazard feeding the survival model |
+| `academyMinAge` | `playerGenerationRules` | 16 | Youngest generated academy player |
+| `academyMaxAge` | `playerGenerationRules` | 19 | Oldest generated academy player |
+| `academyVoluntaryPromotionAge` | `playerGenerationRules` | 18 | Earliest manager-chosen promotion |
+| `academyAutomaticPromotionAge` | `playerGenerationRules` | 20 | Mandatory promotion boundary |
+| `academyContractEndAge` | `playerGenerationRules` | 21 | Derived academy-origin contract expiry age |
+| `targetOwnedPlayersPerActiveClub` | `playerGenerationRules` | 38 | Population target per active club (senior + academy) |
+| `minimumAcademyIntakePerActiveClub` | `playerGenerationRules` | 1 | Guarantees new prospects during a population surplus |
+| `expectedExpiriesPerActiveClubPerSeason` | `freeAgentPool` | 4 | Contract-expiry flow feeding the free-agent target |
+| `signingProbability` | `freeAgentPool` | 0.6 | Chance an expired player is signed before retention ends |
+| `signedResidenceSeasons` | `freeAgentPool` | 0.1 | Seasons a signed player spends in the pool |
+| `academySalaryMultiplier` | top level | 0.1, constrained to `0 < value < 1` | Youth fraction of the same full-term professional salary calculation |
+| `renewalMinRaise` | top level | 0.02 | Minimum annual demand component |
+| `renewalYouthPremiumWeight` | top level | 0.05 | Extra renewal eagerness for young players |
+| `renewalYouthPremiumAgeCurve` | top level | peaks at 17-18, zero by 27 | Visible-age curve that fades through the mid-20s |
+
+Removed settings: `academyContractSeasons` (the term is derived from
+`academyContractEndAge - currentAge`), `seasonalAcademyIntake` (intake is now the
+resolved global total from the population ledger), `academyPromotionAge` (split
+into the voluntary and automatic boundaries), and `renewalAgeCurve` (replaced by
+the additive visible-age youth premium).
+
+Validation enforces: academy age boundaries ordered; voluntary promotion inside
+the academy age range; automatic promotion after the maximum generated age;
+contract end after automatic promotion; `0 < academySalaryMultiplier < 1`; and
+non-negative pedigree weights with a positive sum, normalized by the shared
+helper.
 
 Potential and speed probability densities must remain inside 0-1 and have
 positive total mass. `peakAgeDistribution` must have positive deviation and
@@ -968,9 +1008,10 @@ business rules, and calibration assertions.
 9. Implement the complete dormant freeze and exclude dormant, provisional, and
    filler stock and flows from active population control.
 
-10. Add the active-stock/free-agent target, retirement variance, delayed youth-
-    dismissal correction, atomic flow consumption, signed carry, minimum intake,
-    and exact seeded-random remainder allocation at seasonal intake.
+10. Add the active-stock/free-agent target, retirement variance, the youth-
+    dismissal correction at the following season's intake, atomic flow
+    consumption, signed carry, minimum intake, and exact seeded-random
+    remainder allocation at seasonal intake.
 
 11. Derive budget quality assumptions from generation projections and
     recalibrate the economy and young-player renewal curve.
@@ -1093,9 +1134,8 @@ business rules, and calibration assertions.
 - Free-agent terminal deletion adds one correction exactly once.
 - Free agents inside retention count in actual active population and the target
   includes a derived normal free-agent pool.
-- Youth dismissal changes neither the current cycle nor the dismissing club's
-  share, then matures into one globally distributed correction after a full
-  intake cycle.
+- A youth dismissal becomes one globally distributed correction at the first
+  intake of the following season and never a club-specific entitlement.
 - Voluntary and automatic academy promotion add no correction.
 - Dormant, provisional, and filler boundary flows add no correction.
 - Senior floor and intervention replacements subtract from correction.
@@ -1184,7 +1224,7 @@ Initial minimum calibration coverage:
 6. **Population stability**
    - Simulate at least 50 seeded worlds for at least 100 active seasons, including
      changing active-club counts, retirement variance, free-agent retention and
-     deletion, delayed youth-dismissal compensation, senior replacements,
+     deletion, youth-dismissal compensation at the following intake, senior replacements,
      blocked academies, dormant/reactivated clubs, and provisional teams.
    - Track owned stock, free-agent stock, total active stock, target stock,
      signed carry, minimum intake, and every structural flow.
