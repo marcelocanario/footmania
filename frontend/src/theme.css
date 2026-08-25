@@ -2755,6 +2755,86 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   letter-spacing: 0.04em;
 }
 
+.landing-footer .landing-privacy {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--text-3);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.landing-footer .landing-privacy:hover {
+  color: var(--grass-2);
+}
+
+/* ---------- privacy policy ---------- */
+
+.privacy-page {
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 44px 20px 64px;
+  background: var(--bg);
+  background-image: var(--bg-pattern);
+}
+
+.privacy-inner {
+  width: 100%;
+  max-width: 780px;
+}
+
+.privacy-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: var(--text-2);
+  font-size: 0.85rem;
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.privacy-back:hover {
+  color: var(--grass-2);
+}
+
+.privacy-card h1 {
+  font-family: var(--font-display);
+  font-size: 1.8rem;
+  margin: 0 0 6px;
+}
+
+.privacy-card p {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  line-height: 1.65;
+  font-size: 0.92rem;
+}
+
+.privacy-card h2 {
+  font-size: 1.15rem;
+  margin: 28px 0 12px;
+  color: var(--text);
+}
+
+.privacy-card h3 {
+  font-size: 0.98rem;
+  margin: 20px 0 8px;
+  color: var(--text);
+}
+
+.privacy-card ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  color: var(--text-2);
+  line-height: 1.65;
+  font-size: 0.92rem;
+}
+
+.privacy-card li {
+  margin-bottom: 3px;
+}
+
 @media (max-width: 880px) {
   .landing-inner { padding: 40px 20px 34px; }
   .landing-masthead { margin-bottom: clamp(24px, 5vh, 40px); }

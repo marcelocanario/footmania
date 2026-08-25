@@ -29,6 +29,7 @@ const FriendsScreen = lazyNamed(() => import("./screens/Friends"), "FriendsScree
 const MyClub = lazyNamed(() => import("./screens/MyClub"), "MyClub");
 const TeamScreen = lazyNamed(() => import("./screens/TeamScreen"), "TeamScreen");
 const Admin = lazyNamed(() => import("./screens/Admin"), "Admin");
+const Privacy = lazyNamed(() => import("./screens/Privacy"), "Privacy");
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, setUser, status, snapshot, loadStatus, loadClub } = useGame();
@@ -182,6 +183,7 @@ export default function App() {
       <Suspense fallback={<PageLoading message="Loading..." />}>
         <Routes>
           <Route path="/login" element={<Login />} />
+      <Route path="/privacy" element={<Privacy />} />
           <Route
             path="/*"
             element={

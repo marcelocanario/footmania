@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, Link } from "react-router-dom";
 import { Toast } from "primereact/toast";
 import { authClient } from "../lib/auth-client";
 import { strings } from "../strings";
@@ -147,7 +147,8 @@ export function Login() {
         </main>
 
         <footer className="landing-footer">
-          © {new Date().getFullYear()} {strings.app.name}. All rights reserved.
+          <div>© {new Date().getFullYear()} {strings.app.name}. All rights reserved.</div>
+          <Link to="/privacy" className="landing-privacy">Privacy Policy</Link>
         </footer>
       </div>
     </div>
