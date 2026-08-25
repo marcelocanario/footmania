@@ -53,6 +53,7 @@ export interface MatchPitchProps {
    * revealing them the instant they arrive, or the sidebar and the pitch
    * animation fall out of sync (see hasPitchCue in matchPitchUtils). */
   onEventRevealed?: (event: LiveEvent) => void;
+  onPlayerClick?: (id: number, name: string) => void;
 }
 
 const EVENT_COPY: Record<string, string> = {
@@ -143,7 +144,7 @@ function glideDurationFor(distancePct: number): number {
   return Math.max(500, Math.min(2200, 700 + distancePct * 11));
 }
 
-const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighted }: { player: LivePlayer; point: PitchPoint; side: PitchSide; kit: PitchTeam["kit"]; highlighted: boolean }) {
+const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighted, onPlayerClick }: { player: LivePlayer; point: PitchPoint; side: PitchSide; kit: PitchTeam["kit"]; highlighted: boolean; onPlayerClick?: (id: number, name: string) => void }) {
   const style = {
     left: `${point.x}%`,
     top: `${point.y}%`,
@@ -151,18 +152,19 @@ const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighte
     "--kit-2": kit.secondary,
   } as CSSProperties;
   return (
-    <span
+    <button
+      type="button"
       className={`pitch-player${highlighted ? " pitch-player-highlight" : ""}${player.injuryDays > 0 ? " pitch-player-injured" : ""}`}
       style={style}
-      role="img"
-      aria-label={`${player.name}, ${player.tacPos}`}
-      title={`${player.name} · ${player.tacPos}`}
+      aria-label={player.number != null ? `${player.number} ${player.name}` : player.name}
+      title={player.number != null ? `${player.number} · ${player.name}` : player.name}
+      onClick={() => onPlayerClick?.(player.id, player.name)}
     >
       <span className="pitch-player-kit" aria-hidden="true">
         <FootballKit {...kit} number={player.number ?? ""} size="100%" flat />
       </span>
-      <span className="pitch-player-name">{player.number != null ? `${player.number} · ${player.name}` : player.name}</span>
-    </span>
+      <span className="pitch-player-name">{player.name}</span>
+    </button>
   );
 });
 
@@ -174,7 +176,7 @@ const MISSING_COPY: Record<LiveMissingPlayer["kind"], string> = {
 /** Ghost marker for a vacated tactical slot: dimmed jersey with a persistent
  *  cause badge (🟥 red card / ✚ injury), so short-handed teams read at a
  *  glance. */
-const MissingMarker = memo(function MissingMarker({ missing, point, kit }: { missing: LiveMissingPlayer; point: PitchPoint; kit: PitchTeam["kit"] }) {
+const MissingMarker = memo(function MissingMarker({ missing, point, kit, onPlayerClick }: { missing: LiveMissingPlayer; point: PitchPoint; kit: PitchTeam["kit"]; onPlayerClick?: (id: number, name: string) => void }) {
   const style = {
     left: `${point.x}%`,
     top: `${point.y}%`,
@@ -182,12 +184,13 @@ const MissingMarker = memo(function MissingMarker({ missing, point, kit }: { mis
     "--kit-2": kit.secondary,
   } as CSSProperties;
   return (
-    <span
+    <button
+      type="button"
       className="pitch-player pitch-missing"
       style={style}
-      role="img"
-      aria-label={`${missing.name}, ${MISSING_COPY[missing.kind]}`}
-      title={`${missing.name} · ${MISSING_COPY[missing.kind]}`}
+      aria-label={`${missing.number != null ? `${missing.number} ${missing.name}, ` : `${missing.name}, `}${MISSING_COPY[missing.kind]}`}
+      title={`${missing.number != null ? `${missing.number} · ` : ""}${missing.name} · ${MISSING_COPY[missing.kind]}`}
+      onClick={() => onPlayerClick?.(missing.playerId, missing.name)}
     >
       <span className="pitch-player-kit" aria-hidden="true">
         <FootballKit {...kit} number={missing.number ?? ""} size="100%" flat />
@@ -195,8 +198,8 @@ const MissingMarker = memo(function MissingMarker({ missing, point, kit }: { mis
       <span className={`pitch-missing-badge pitch-missing-${missing.kind === "RED" ? "red" : "injury"}`} aria-hidden="true">
         {missing.kind === "RED" ? "🟥" : "✚"}
       </span>
-      <span className="pitch-player-name">{missing.number != null ? `${missing.number} · ${missing.name}` : missing.name}</span>
-    </span>
+      <span className="pitch-player-name">{missing.name}</span>
+    </button>
   );
 });
 
@@ -254,7 +257,7 @@ const CueOverlay = memo(function CueOverlay({ cue, active, reducedMotion }: { cu
   );
 });
 
-function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reducedMotion = false, ball = null, onEventRevealed }: MatchPitchProps) {
+function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reducedMotion = false, ball = null, onEventRevealed, onPlayerClick }: MatchPitchProps) {
   const [activeEvent, setActiveEvent] = useState<LiveEvent | null>(null);
   const [queue, setQueue] = useState<LiveEvent[]>([]);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
@@ -767,10 +770,10 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
         )}
         {cueActive && cue && <CueOverlay cue={cue} active={cueActive} reducedMotion={motionReduced} />}
         <div className="pitch-players">
-          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} />)}
-          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} />)}
-          {homeMissing.map((entry) => <MissingMarker key={`home-missing-${entry.playerId}`} missing={entry} point={homeMissingPoints.get(entry.tacPos) ?? { x: 50, y: 50 }} kit={entry.tacPos === 1 ? home.gkKit : home.kit} />)}
-          {awayMissing.map((entry) => <MissingMarker key={`away-missing-${entry.playerId}`} missing={entry} point={awayMissingPoints.get(entry.tacPos) ?? { x: 50, y: 50 }} kit={entry.tacPos === 1 ? away.gkKit : away.kit} />)}
+          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
+          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
+          {homeMissing.map((entry) => <MissingMarker key={`home-missing-${entry.playerId}`} missing={entry} point={homeMissingPoints.get(entry.tacPos) ?? { x: 50, y: 50 }} kit={entry.tacPos === 1 ? home.gkKit : home.kit} onPlayerClick={onPlayerClick} />)}
+          {awayMissing.map((entry) => <MissingMarker key={`away-missing-${entry.playerId}`} missing={entry} point={awayMissingPoints.get(entry.tacPos) ?? { x: 50, y: 50 }} kit={entry.tacPos === 1 ? away.gkKit : away.kit} onPlayerClick={onPlayerClick} />)}
         </div>
         {cue && activeEvent && BANNER_KINDS.has(cue.kind) && <div className="pitch-event-banner"><b>{EVENT_COPY[cue.kind]}</b><span>{cue.event.player || cue.event.player2}</span></div>}
       </div>

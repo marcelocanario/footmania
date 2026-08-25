@@ -525,6 +525,7 @@ export function LiveMatch() {
             addedTime={state.currentAddedTime ?? null}
             ball={state.ball ?? null}
             onEventRevealed={markRevealed}
+            onPlayerClick={(id, name) => setPlayerTarget({ id, name })}
           />
         </div>
         <aside className="card live-side">
