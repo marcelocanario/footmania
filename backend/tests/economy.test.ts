@@ -221,14 +221,17 @@ describe("professional contract salary authority", () => {
   });
 
   it("adds a visible-age youth premium that fades through the mid-twenties", () => {
-    const young = professionalAnnualDemandRate(70, 18);
-    const midTwenties = professionalAnnualDemandRate(70, 25);
-    const prime = professionalAnnualDemandRate(70, 28);
+    // Use one non-elite visible OVR so the test measures the age curve instead
+    // of having every cohort flattened against the configured maximum raise.
+    const visibleOverall = 50;
+    const young = professionalAnnualDemandRate(visibleOverall, 18);
+    const midTwenties = professionalAnnualDemandRate(visibleOverall, 25);
+    const prime = professionalAnnualDemandRate(visibleOverall, 28);
     expect(young).toBeGreaterThan(midTwenties);
     expect(midTwenties).toBeGreaterThan(prime);
     // The premium reads visible age only; two players of the same age and OVR
     // must demand identically regardless of their hidden career profiles.
-    expect(professionalAnnualDemandRate(70, 18)).toBe(young);
+    expect(professionalAnnualDemandRate(visibleOverall, 18)).toBe(young);
   });
 
   it("makes a long renewal relatively more expensive for a young player", () => {
@@ -467,7 +470,8 @@ describe("player value model", () => {
     // top-division mean, at the neutral peak age, on a neutral contract, costs
     // his share of an untouched Division 1 season budget.
     const expected = Math.round(
-      (gameConfig.firstDivisionSeasonBudget * MP_CONFIG.expectedMeaningfulSigningsPerSeason) / MP_CONFIG.expectedSeniorSquadSize,
+      gameConfig.playerValueBase *
+        (gameConfig.firstDivisionSeasonBudget * MP_CONFIG.expectedMeaningfulSigningsPerSeason) / MP_CONFIG.expectedSeniorSquadSize,
     );
     const peakAge = neutralCareerProfile().peakAge;
     const neutralSeasons = (1 + gameConfig.maxContractSeasons) / 2;

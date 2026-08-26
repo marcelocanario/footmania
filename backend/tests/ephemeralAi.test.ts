@@ -212,7 +212,10 @@ describe("ephemeral filler-AI clubs (invariant #28)", () => {
       listing,
       club: human,
       player: aiPlayer,
-      proposedMaximum: 1_000_000,
+      // Bid the maximum the rule allows for this player (150% of value at the
+      // same-division base cap). A fixed amount would silently break whenever
+      // generation changes the player's value.
+      proposedMaximum: Math.floor(aiPlayer.value * 1.5),
       buyerDivision: 1,
       immediateAvailableCash: human.cash,
     });

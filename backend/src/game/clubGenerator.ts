@@ -2,10 +2,12 @@ import type { Club, Player, Position, World } from "./types";
 import { shuffle } from "./rng";
 import {
   ACADEMY_POSITION_WEIGHTS,
-  generateSeniorPlayer,
+  generateInitialAcademyPlayers,
+  generateInitialSeniorPlayers,
   generateYouthPlayer,
   seniorRosterTemplate,
   playerRng,
+  type GeneratePlayerContext,
   type GenerationType,
 } from "./playerGeneration";
 import { gameConfig } from "../config";
@@ -102,25 +104,27 @@ export function academyPositionTemplate(world: World, clubId: number, generation
 export function generateInitialSeniorSquad(ctx: GenerationContext, size: number = gameConfig.playerGenerationRules.initialSeniorSquadSize): Player[] {
   const { world, club } = ctx;
   const template = seniorRosterTemplate(size);
-  const created: Player[] = [];
-  for (let slot = 0; slot < template.length; slot++) {
-    const player = generateSeniorPlayer({
-      id: nextId(world),
-      clubId: club.id,
-      country: club.country,
-      position: template[slot],
-      isYouth: false,
-      currentDivision: ctx.currentDivision,
-      highestDivisionReached: ctx.highestDivisionReached,
-      totalDivisions: ctx.totalDivisions,
-      seasonId: ctx.seasonId,
-      generationType: "initial-senior",
-      seed: world.seed,
-      slot,
-    });
-    created.push(player);
-    world.players.push(player);
-  }
+  // Allocate player IDs in template/slot order BEFORE generation so the batch
+  // path keeps the same idempotent ID sequence as the per-player path.
+  const ids = template.map(() => nextId(world));
+  const contexts: GeneratePlayerContext[] = template.map((position, slot) => ({
+    id: ids[slot],
+    clubId: club.id,
+    country: club.country,
+    position,
+    isYouth: false,
+    currentDivision: ctx.currentDivision,
+    highestDivisionReached: ctx.highestDivisionReached,
+    totalDivisions: ctx.totalDivisions,
+    seasonId: ctx.seasonId,
+    generationType: "initial-senior",
+    seed: world.seed,
+    slot,
+  }));
+  // Squad-level conditioning preserves age/profile draws and career coherence,
+  // then fits current OVR to the division-relative initial-club band.
+  const created = generateInitialSeniorPlayers(contexts);
+  for (const player of created) world.players.push(player);
   bumpSkillsVersion();
   const gks = created.filter((p) => p.position === 0).sort((a, b) => b.overall - a.overall);
   if (gks.length > 0) club.captainId = gks[0].id;
@@ -130,8 +134,9 @@ export function generateInitialSeniorSquad(ctx: GenerationContext, size: number 
 
 /**
  * Generate the initial 8-youth academy cohort (spec §72). Ages are assigned as
- * evenly as possible across 16..19 (2 per age) and shuffled deterministically
- * before generation.
+ * evenly as possible across 16..19 (2 per age) and shuffled deterministically.
+ * The batch conditions future personal peaks; current OVR still comes from each
+ * prospect's age and full career path.
  */
 export function generateInitialAcademy(ctx: GenerationContext): Player[] {
   const { world, club } = ctx;
@@ -143,26 +148,27 @@ export function generateInitialAcademy(ctx: GenerationContext): Player[] {
   const shuffleRng = playerRng(world.seed, club.id, "initial-academy", 0);
   const shuffledAges = shuffle(shuffleRng, ages);
   const positions = academyPositionTemplate(world, club.id, "initial-academy", initialAcademySize);
-  const created: Player[] = [];
-  for (let slot = 0; slot < shuffledAges.length; slot++) {
-    const player = generateYouthPlayer({
-      id: nextId(world),
-      clubId: club.id,
-      country: club.country,
-      position: positions[slot],
-      age: shuffledAges[slot],
-      isYouth: true,
-      currentDivision: ctx.currentDivision,
-      highestDivisionReached: ctx.highestDivisionReached,
-      totalDivisions: ctx.totalDivisions,
-      seasonId: ctx.seasonId,
-      generationType: "initial-academy",
-      seed: world.seed,
-      slot,
-    });
-    created.push(player);
-    world.players.push(player);
-  }
+  // Allocate IDs before the batch so slot/ID/persistence order remains stable.
+  const ids = shuffledAges.map(() => nextId(world));
+  const contexts: GeneratePlayerContext[] = shuffledAges.map((age, slot) => ({
+    id: ids[slot],
+    clubId: club.id,
+    country: club.country,
+    position: positions[slot],
+    age,
+    isYouth: true,
+    currentDivision: ctx.currentDivision,
+    highestDivisionReached: ctx.highestDivisionReached,
+    totalDivisions: ctx.totalDivisions,
+    seasonId: ctx.seasonId,
+    generationType: "initial-academy",
+    seed: world.seed,
+    slot,
+  }));
+  // Only the club-creation cohort is conditioned. Seasonal intake below keeps
+  // calling the independent youth generator directly.
+  const created = generateInitialAcademyPlayers(contexts);
+  for (const player of created) world.players.push(player);
   bumpSkillsVersion();
   return created;
 }

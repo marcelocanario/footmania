@@ -108,6 +108,11 @@ describe("game config validation", () => {
       academyPedigreeOverallBoost: 18,
       academyCurrentDivisionWeight: 0.65,
       academyHighestEverDivisionWeight: 0.35,
+      initialSeniorHistoricalActivity: 0.85,
+      initialSeniorQualityPairingAgeBandWidth: 5,
+      initialClubTargetMeanOffsetOverall: 1.0,
+      initialClubTargetBandHalfWidthOverall: 8.0,
+      initialClubPlayerValueTargetTopDivision: 40_000_000,
     },
     playerCareer: {
       maximumCareerGrowthOverall: 30,
@@ -209,6 +214,36 @@ describe("game config validation", () => {
     // Market value divides by the senior quality spread to place an OVR on the
     // budget tier curve, so zero would produce infinite tiers and prices.
     expect(withOverrides({ playerGeneration: { ...economyFields.playerGeneration, playerQualitySpreadOverall: 0 } })).toThrow(/playerQualitySpreadOverall/);
+    expect(withOverrides({ playerGeneration: { ...economyFields.playerGeneration, academyQualitySpreadOverall: 0 } })).toThrow(/academyQualitySpreadOverall/);
+  });
+
+  it("rejects out-of-range initial-senior pairing settings", () => {
+    const withOverrides = (overrides: Record<string, unknown>) => () =>
+      parseGameConfig({
+        seasonDays: 30,
+        league: { teams: 8, turns: 2, startDay: 1, matchIntervalDays: 2 },
+        payrollIntervalDays: 7,
+        weeklyIntervalDays: 7,
+        contractWarningSeasons: 2,
+        ...economyFields,
+        playerGeneration: { ...economyFields.playerGeneration, ...overrides },
+      });
+    // initialSeniorHistoricalActivity must be inside 0..1.
+    expect(withOverrides({ initialSeniorHistoricalActivity: -0.1 })).toThrow(/initialSeniorHistoricalActivity/);
+    expect(withOverrides({ initialSeniorHistoricalActivity: 1.1 })).toThrow(/initialSeniorHistoricalActivity/);
+    // Pairing age-band width must be an integer inside 1..20.
+    expect(withOverrides({ initialSeniorQualityPairingAgeBandWidth: 0 })).toThrow(/initialSeniorQualityPairingAgeBandWidth/);
+    expect(withOverrides({ initialSeniorQualityPairingAgeBandWidth: 21 })).toThrow(/initialSeniorQualityPairingAgeBandWidth/);
+    expect(withOverrides({ initialSeniorQualityPairingAgeBandWidth: 2.5 })).toThrow(/initialSeniorQualityPairingAgeBandWidth/);
+    // Mean offset inside -20..20.
+    expect(withOverrides({ initialClubTargetMeanOffsetOverall: -21 })).toThrow(/initialClubTargetMeanOffsetOverall/);
+    expect(withOverrides({ initialClubTargetMeanOffsetOverall: 21 })).toThrow(/initialClubTargetMeanOffsetOverall/);
+    // Band half width strictly positive, at most 30.
+    expect(withOverrides({ initialClubTargetBandHalfWidthOverall: 0 })).toThrow(/initialClubTargetBandHalfWidthOverall/);
+    expect(withOverrides({ initialClubTargetBandHalfWidthOverall: 31 })).toThrow(/initialClubTargetBandHalfWidthOverall/);
+    // D1 value target is a positive integer.
+    expect(withOverrides({ initialClubPlayerValueTargetTopDivision: 0 })).toThrow(/initialClubPlayerValueTargetTopDivision/);
+    expect(withOverrides({ initialClubPlayerValueTargetTopDivision: 1.5 })).toThrow(/initialClubPlayerValueTargetTopDivision/);
   });
 
   it("rejects a calendar where lastMatchDay >= seasonDays", () => {

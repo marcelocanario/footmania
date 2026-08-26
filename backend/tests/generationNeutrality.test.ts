@@ -10,8 +10,14 @@ import {
 } from "../src/game/playerGeneration";
 import { createRng } from "../src/game/rng";
 import { overallFromSkills, SKILL_KEYS } from "../src/game/rating";
+import {
+  calculateAcademySalary,
+  calculateProfessionalContractSalary,
+  calculateReleaseClause,
+  remainingSeasons,
+} from "../src/game/economy";
 import { buildSnapshot, playerView } from "../src/services/snapshot";
-import type { Position } from "../src/game/types";
+import type { Player, Position } from "../src/game/types";
 import { makeClub, makeWorld } from "./helpers";
 
 type OracleRow = [number, number, number, number, number, number, number, number, number, number, number];
@@ -23,6 +29,28 @@ type Baseline = {
 };
 
 const fixture = baseline as unknown as Baseline;
+
+function withoutDerivedContractEconomy(snapshot: PlayerSnapshot | Player): PlayerSnapshot {
+  const stable: PlayerSnapshot = { ...snapshot };
+  delete stable.salary;
+  delete stable.releaseClause;
+  delete stable.value;
+  return stable;
+}
+
+function expectAuthoritativeGeneratedContractEconomy(player: Player): void {
+  const seasons = remainingSeasons(player.contractDays);
+  const expectedSalary = player.isYouth
+    ? calculateAcademySalary(player.overall, player.age)
+    : calculateProfessionalContractSalary({
+      currentOverall: player.overall,
+      currentAge: player.age,
+      futureCompleteSeasons: Math.max(0, seasons - 1),
+      currentSeasonFraction: 1,
+    });
+  expect(player.salary).toBe(expectedSalary);
+  expect(player.releaseClause).toBe(calculateReleaseClause(expectedSalary, seasons));
+}
 
 function seniorContext(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlayerContext {
   return {
@@ -148,7 +176,7 @@ describe("generation neutrality", () => {
     }
   });
 
-  it("keeps complete senior and youth player output identical", () => {
+  it("keeps generated senior and youth output identical outside authoritative contract pricing", () => {
     const seniorPositions = seniorRosterTemplate(28);
     let seniorIndex = 0;
     for (const division of [1, 3]) {
@@ -162,7 +190,10 @@ describe("generation neutrality", () => {
           seed: 4200 + division,
           slot,
         }));
-        expect(player).toEqual(fixture.seniorPlayers[seniorIndex++]);
+        expect(withoutDerivedContractEconomy(player)).toEqual(
+          withoutDerivedContractEconomy(fixture.seniorPlayers[seniorIndex++]),
+        );
+        expectAuthoritativeGeneratedContractEconomy(player);
         expect(player.recentLoad).toBe(0);
       }
     }
@@ -181,7 +212,10 @@ describe("generation neutrality", () => {
           seed: 9000 + youthIndex,
           slot,
         }));
-        expect(player).toEqual(fixture.youthPlayers[youthIndex++]);
+        expect(withoutDerivedContractEconomy(player)).toEqual(
+          withoutDerivedContractEconomy(fixture.youthPlayers[youthIndex++]),
+        );
+        expectAuthoritativeGeneratedContractEconomy(player);
         expect(player.recentLoad).toBe(0);
       }
     }

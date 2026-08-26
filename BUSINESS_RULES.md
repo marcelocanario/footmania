@@ -281,6 +281,37 @@ player "belonging" to a division: the game never labels a player with a division
 recommends one, refuses a contract because of one, or lists a human club's player for
 it. Managers judge players on what they can see.
 
+**Initial club cohorts are assembled, not drawn one-by-one.** Single-player senior
+generation (replacements, rollover fill, the compatibility wrapper) and the periodic
+academy intake remain peak-anchored and fully independent, exactly as described
+above. The first senior squad a brand-new club receives is generated as a batch: the
+game preserves every drawn age and career profile, allocates peak-quality tickets
+across configured age bands, counter-pairs quality with career stage inside each
+band, then minimally shifts the effective personal peaks so the complete squad hits
+its division-relative target mean and every current OVR lies inside the configured
+hard band. Division 1's current settings produce mean 75 and inclusive bounds
+67–83; every lower division moves through the existing `divisionMean` curve rather
+than a separate table. Because the final current target is reconstructed from the
+adjusted personal peak, every player remains on his own growth/peak/decline path and
+persists the matching consumed career budgets.
+
+The initial eight-player academy is also assembled as a cohort, but its hard band
+applies to **future personal peaks**, not current OVR. The 16–19 age allocation and
+every career profile remain unchanged. Peak-quality tickets are counter-paired only
+among players of the same age, reducing avoidable same-age variation without making
+a 16-year-old look like a 19-year-old. A slow developer can therefore be weak today
+while still projecting into the bench/XI quality band of the club's generated
+division. This path is used only for `initial-academy`; the periodic
+`seasonal-academy` intake continues to use the ordinary pedigree distribution,
+including its intended good and bad outliers.
+
+Initial seniors plus the initial academy also have a configured **value acceptance
+target**, never a stored value override. Division 1 is anchored at $40M; lower-tier
+targets equal that anchor multiplied by `tierBudget(D) / tierBudget(1)`. Every actual
+player value still comes exclusively from visible OVR, age and remaining contract,
+so calibration may compare composition against the target but generation cannot
+invent value or make equal public players worth different amounts.
+
 ### 3.3 Growing older: development, growth, and decline
 
 A player's whole career is described by five hidden numbers, fixed once at generation

@@ -1,21 +1,13 @@
 import type { Position } from "./types";
-import { createRng } from "./rng";
 import {
-  drawRawZ,
+  drawSeniorGenerationBlueprint,
+  conditionInitialSeniorBlueprints,
   divisionMean,
-  seniorPeakMean,
-  qualitySigma,
   seniorRosterTemplate,
-  OVR_MAX,
-  OVR_MIN,
+  type GeneratePlayerContext,
 } from "./playerGeneration";
-import {
-  drawStandingSeniorAge,
-  generateCareerProfile,
-  generationActivityModifiers,
-  reconstructCurrentTarget,
-} from "./careerCurves";
 import { gameConfig } from "../config";
+import { tierBudget } from "./budget";
 
 /**
  * Canonical projection of the quality the generator actually produces.
@@ -24,11 +16,15 @@ import { gameConfig } from "../config";
  * terms. Reading that from a hard-coded constant meant every generation retune
  * silently invalidated the budget curve. Everything here is derived from the
  * live generation configuration instead, using the same peak anchors, career
- * profile draws, age survivorship, and best-XI shape the real world uses.
+ * profile draws, age survivorship, best-XI shape, and — crucially — the same
+ * squad-level quality pairing the real initial-roster path uses.
  *
- * Skill generation is deliberately skipped: it targets the OVR computed here and
+ * Each projection sample constructs a complete set of initial-senior contexts
+ * and runs them through the production batch/blueprint-pairing logic. Skill
+ * generation is deliberately skipped: it targets the OVR computed here and
  * lands within one point of it, so the projection converges on the same
- * distribution far more cheaply.
+ * distribution far more cheaply. Blueprint draws, pairing and bounded-mean
+ * conditioning are identical to production.
  */
 
 /** Best-XI shape: one GK, two full-backs, two centre-backs, four midfielders, two forwards. */
@@ -49,18 +45,40 @@ export interface DivisionQualityProjection {
   percentile: (p: number) => number;
 }
 
-function clampOverall(value: number): number {
-  return Math.max(OVR_MIN, Math.min(OVR_MAX, Math.round(value)));
-}
-
-/** One generated senior's current OVR target, without generating his skills. */
-function sampleSeniorOverall(rng: ReturnType<typeof createRng>, position: Position, division: number, totalDivisions: number): number {
-  const rawZ = drawRawZ(rng);
-  const age = drawStandingSeniorAge(rng, position);
-  const profile = generateCareerProfile(rng);
-  const activity = generationActivityModifiers();
-  const peakTarget = seniorPeakMean(division, totalDivisions) + qualitySigma() * rawZ;
-  return clampOverall(reconstructCurrentTarget(profile, peakTarget, age, activity.growth, activity.decline).current);
+/**
+ * One assembled initial senior squad's OVR targets, without generating skills.
+ * Uses the exact production pairing: draw every blueprint, counter-pair the
+ * quality tickets with the career bundles at the initial-senior activity, then
+ * reconstruct each player's current target from the assigned raw Z with the
+ * same peak anchor, rounding and global OVR clamp as `buildSeniorPlayerFromBlueprint`.
+ *
+ * Each sample uses the fixed projection world seed and a distinct club id, just
+ * like production: every slot in one squad shares the same world seed while
+ * `playerRng` separates players by club and slot.
+ */
+function sampleSquadOveralls(
+  division: number,
+  totalDivisions: number,
+  squadSize: number,
+  sample: number,
+): number[] {
+  const template = seniorRosterTemplate(squadSize);
+  const contexts: GeneratePlayerContext[] = template.map((position, slot) => ({
+    id: slot + 1,
+    clubId: sample + 1,
+    country: "BRA",
+    position,
+    isYouth: false,
+    currentDivision: division,
+    highestDivisionReached: division,
+    totalDivisions,
+    seasonId: 1,
+    generationType: "initial-senior",
+    seed: PROJECTION_SEED,
+    slot,
+  }));
+  const blueprints = contexts.map(drawSeniorGenerationBlueprint);
+  return conditionInitialSeniorBlueprints(blueprints).map(({ targetCurrentOverall }) => Math.round(targetCurrentOverall));
 }
 
 function selectStartingXi(squad: { position: Position; overall: number }[]): number[] {
@@ -79,8 +97,9 @@ const cache = new Map<string, DivisionQualityProjection>();
 
 /**
  * Project the generated quality of a division. Deterministic for a given
- * configuration: the sampling seed is fixed, so two callers in the same process
- * (and two runs of the same build) always agree.
+ * configuration: every sample uses the fixed projection world seed and a
+ * distinct club id, so two callers in the same process (and two runs of the
+ * same build) always agree while each sample draws a distinct assembled squad.
  */
 export function projectDivisionQuality(
   division: number,
@@ -91,7 +110,6 @@ export function projectDivisionQuality(
   const cached = cache.get(key);
   if (cached) return cached;
 
-  const rng = createRng(PROJECTION_SEED);
   const template = seniorRosterTemplate(squadSize);
   const allOverall: number[] = [];
   const xiMeans: number[] = [];
@@ -99,7 +117,8 @@ export function projectDivisionQuality(
   const strongest: number[] = [];
 
   for (let sample = 0; sample < PROJECTION_SAMPLES; sample++) {
-    const squad = template.map((position) => ({ position, overall: sampleSeniorOverall(rng, position, division, totalDivisions) }));
+    const squadOveralls = sampleSquadOveralls(division, totalDivisions, squadSize, sample);
+    const squad = template.map((position, slot) => ({ position, overall: squadOveralls[slot] }));
     for (const player of squad) allOverall.push(player.overall);
     const xi = selectStartingXi(squad);
     if (xi.length === 0) continue;
@@ -154,6 +173,16 @@ export function expectedFirstDivisionQuality(): {
 /** Configured all-age mean of the top division, straight from the curve. */
 export function configuredTopDivisionMean(): number {
   return divisionMean(1, 1);
+}
+
+/**
+ * Initial seniors + academy player-value acceptance target. Division 1 is the
+ * configured anchor; every lower division reuses the authoritative season-
+ * budget decay ratio instead of defining a second economy curve.
+ */
+export function initialClubPlayerValueTarget(division: number): number {
+  const topDivisionTarget = gameConfig.playerGeneration.initialClubPlayerValueTargetTopDivision;
+  return Math.round(topDivisionTarget * tierBudget(division) / tierBudget(1));
 }
 
 /** Drop cached projections. Only needed by tests that mutate the configuration. */

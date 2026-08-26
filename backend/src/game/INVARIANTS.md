@@ -134,7 +134,10 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     rating, a potential figure, a growth tier) is stored on the player or shown
     to a manager. There is exactly ONE growth capacity authority — the career
     growth budget — and one decline authority; no second ceiling, growth tier or
-    development-rate multiplier may exist alongside them.
+    development-rate multiplier may exist alongside them. Initial-roster pairing
+    may correlate existing peak-quality tickets with existing career-stage
+    bundles (it creates no new hidden rating, growth authority, or ceiling), and
+    every player's assigned raw Z stays a server-private input like any other.
 
 27. **Financial interventions pay the auction floor, never full value.**
     System liquidation credits the distressed club at the minimum acceptable
@@ -162,7 +165,10 @@ These invariants are the non-negotiable rules of the multiplayer league engine
 30. **Overall is always derived from the seven persisted skills.** Generation
     and development may target an OVR-equivalent amount, but no code path may
     add to or subtract from `player.overall` independently of the skills. Every
-    mutation recomputes it with `overallFromSkills(position, skills)`.
+    mutation recomputes it with `overallFromSkills(position, skills)`. Initial
+    senior cohort conditioning may bound the target and adjust the effective
+    personal peak, but the persisted OVR still comes only from generated skills;
+    the player's persisted consumed career budgets must match that same peak.
 
 31. **One professional-salary authority.** Every newly negotiated professional
     contract — ordinary renewal, renewal of a promoted academy player's retained
@@ -185,7 +191,10 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     `academyVoluntaryPromotionAge`, mandatory at `academyAutomaticPromotionAge`)
     preserves salary, contract start, contract end and remaining duration
     exactly, accepts no contract term and performs no salary calculation. No
-    player remains `isYouth` at or beyond the automatic promotion age.
+    player remains `isYouth` at or beyond the automatic promotion age. Only the
+    brand-new club's initial academy may condition personal peaks into a
+    division-relative cohort band. Seasonal academy intake must continue through
+    the independent pedigree generator and retain its intended outliers.
 
 33. **Player movement is manager-driven only.** The game exposes no division-fit
     field, no division recommendation, no automatic listing of a human club's

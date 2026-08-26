@@ -8,10 +8,14 @@ import {
   divisionMean,
   divisionStrength,
   drawRawZ,
+  drawSeniorGenerationBlueprint,
+  generateInitialSeniorPlayers,
   generateSeniorPlayer,
   generateSkillsForTarget,
   generateYouthPlayer,
+  initialClubQualityTargets,
   overallRange,
+  pairInitialSeniorBlueprints,
   qualitySigma,
   seniorPeakMean,
   SENIOR_POSITION_WEIGHTS,
@@ -30,6 +34,8 @@ import {
   cumulativeGrowthFraction,
   generateCareerProfile,
   seniorSurvivalWeights,
+  activityModifiersFor,
+  reconstructCurrentTarget,
 } from "../src/game/careerCurves";
 import { countriesWithNamePools } from "../src/game/names";
 import { overallFromSkills } from "../src/game/rating";
@@ -403,16 +409,28 @@ calibrationDescribe("senior generation (spec §70)", () => {
     expect(Math.abs(means[4] - divisionMean(5, 5))).toBeLessThan(1.5);
   });
 
-  it("calibrates the automatic Division 1 starting XI to the accepted 80/73/87 bands", () => {
+  it("assembles initial squads through the paired batch path to the division-relative band", () => {
+    // Product target: an initial D1 senior squad is assembled through
+    // generateInitialSeniorPlayers (quality pairing), not independent
+    // per-player draws. The squad mean lands on the initial-senior target mean
+    // (division mean + configured offset), and every visible OVR sits inside
+    // the hard division-relative band.
+    const targets = initialClubQualityTargets(1, 5);
+    expect(targets.mean).toBeCloseTo(75, 6);
+    expect(targets.lower).toBe(67);
+    expect(targets.upper).toBe(83);
     const clubCount = 1_000;
     const xiMeans: number[] = [];
     const weakest: number[] = [];
     const strongest: number[] = [];
+    const all: number[] = [];
     for (let seed = 1; seed <= clubCount; seed++) {
       const club = makeClub({ id: 100_000 + seed, highestDivision: 1 });
-      const squad = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
-        generateSeniorPlayer(seniorCtx({ id: slot + 1, clubId: club.id, position, seed, slot })),
+      const contexts = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+        seniorCtx({ id: slot + 1, clubId: club.id, position, seed, slot }),
       );
+      const squad = generateInitialSeniorPlayers(contexts);
+      for (const p of squad) all.push(p.overall);
       const lineup = buildLineup(club, squad);
       expect(lineup).not.toBeNull();
       const ratings = lineup!.starters.map((player) => player.overall).sort((a, b) => a - b);
@@ -421,12 +439,25 @@ calibrationDescribe("senior generation (spec §70)", () => {
       strongest.push(ratings[ratings.length - 1]);
     }
     const mean = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length;
-    // Product target: a newly generated D1 automatic XI averages about 80 OVR,
-    // normally spanning roughly 73 to 87. These are population averages across
-    // many clubs, not a requirement on any individual club.
-    expect(Math.abs(mean(xiMeans) - 80)).toBeLessThan(1);
-    expect(Math.abs(mean(weakest) - 73)).toBeLessThan(1.5);
-    expect(Math.abs(mean(strongest) - 87)).toBeLessThan(1.5);
+    expect(Math.abs(mean(all) - targets.mean)).toBeLessThan(0.35);
+    const inBand = all.filter((v) => v >= targets.lower && v <= targets.upper).length / all.length;
+    expect(inBand).toBe(1);
+    // Every complete squad respects the hard band.
+    let squadsWith29Plus = 0;
+    for (let seed = 1; seed <= clubCount; seed++) {
+      const club = makeClub({ id: 200_000 + seed, highestDivision: 1 });
+      const contexts = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+        seniorCtx({ id: slot + 1, clubId: club.id, position, seed, slot }),
+      );
+      const squad = generateInitialSeniorPlayers(contexts);
+      const inside = squad.filter((p) => p.overall >= targets.lower && p.overall <= targets.upper).length;
+      if (inside === squad.length) squadsWith29Plus++;
+    }
+    expect(squadsWith29Plus / clubCount).toBe(1);
+    // Reported, not asserted as a fixed product target: removing extreme
+    // current-OVR tails lowers the automatic XI mean below the old 80.
+    expect(mean(xiMeans)).toBeGreaterThan(targets.mean);
+    expect(mean(weakest)).toBeLessThan(mean(strongest));
   });
 
   it("keeps the full generated D1 senior population on the configured division mean", () => {
@@ -714,5 +745,149 @@ calibrationDescribe("global bounds (spec §40)", () => {
     }
     void rng;
     void club;
+  });
+});
+
+calibrationDescribe("initial senior roster calibration (spec §plans/initial-senior-roster-generation)", () => {
+  it("keeps the paired roster's marginal raw-Z distribution intact", () => {
+    const n = 3_000;
+    const rawZs: number[] = [];
+    for (let seed = 1; seed <= n; seed++) {
+      const contexts = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+        seniorCtx({ seed, slot, position, id: slot + 1 }),
+      );
+      const blueprints = contexts.map(drawSeniorGenerationBlueprint);
+      const paired = pairInitialSeniorBlueprints(blueprints);
+      for (const p of paired) rawZs.push(p.assignedRawZ);
+    }
+    const m = rawZs.reduce((s, v) => s + v, 0) / rawZs.length;
+    const variance = rawZs.reduce((s, v) => s + (v - m) ** 2, 0) / rawZs.length;
+    expect(Math.abs(m)).toBeLessThan(0.03);
+    expect(Math.abs(Math.sqrt(variance) - 0.989)).toBeLessThan(0.03);
+  });
+
+  it("holds all five career-profile marginals within the existing tolerances", () => {
+    const n = 3_000;
+    const series: Record<string, number[]> = { growthPotential: [], growthSpeed: [], peakAge: [], declinePotential: [], declineSpeed: [] };
+    for (let seed = 1; seed <= n; seed++) {
+      const contexts = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+        seniorCtx({ seed, slot, position, id: slot + 1 }),
+      );
+      for (const blueprint of contexts.map(drawSeniorGenerationBlueprint)) {
+        series.growthPotential.push(blueprint.profile.growthPotential);
+        series.growthSpeed.push(blueprint.profile.growthSpeed);
+        series.peakAge.push(blueprint.profile.peakAge);
+        series.declinePotential.push(blueprint.profile.declinePotential);
+        series.declineSpeed.push(blueprint.profile.declineSpeed);
+      }
+    }
+    const mean = (values: number[]) => values.reduce((s, v) => s + v, 0) / values.length;
+    const cfg = gameConfig.playerCareer;
+    expect(Math.abs(mean(series.growthPotential) - densityMean(cfg.growthPotentialDistribution))).toBeLessThan(0.01);
+    expect(Math.abs(mean(series.growthSpeed) - densityMean(cfg.growthSpeedDistribution))).toBeLessThan(0.01);
+    expect(Math.abs(mean(series.declinePotential) - densityMean(cfg.declinePotentialDistribution))).toBeLessThan(0.01);
+    expect(Math.abs(mean(series.declineSpeed) - densityMean(cfg.declineSpeedDistribution))).toBeLessThan(0.01);
+    expect(Math.abs(mean(series.peakAge) - cfg.peakAgeDistribution.mean)).toBeLessThan(0.3);
+    expect(Math.min(...series.peakAge)).toBeGreaterThanOrEqual(cfg.peakAgeDistribution.min);
+    expect(Math.max(...series.peakAge)).toBeLessThanOrEqual(cfg.peakAgeDistribution.max);
+  });
+
+  it("shows a rising-then-falling age-OVR profile and keeps peak-age bounds", () => {
+    const byAge = new Map<number, number[]>();
+    const peaks: number[] = [];
+    for (let seed = 1; seed <= 4_000; seed++) {
+      const squad = generateInitialSeniorPlayers(
+        seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+          seniorCtx({ seed, slot, position, id: slot + 1 }),
+        ),
+      );
+      for (const p of squad) {
+        if (!byAge.has(p.age)) byAge.set(p.age, []);
+        byAge.get(p.age)!.push(p.overall);
+        peaks.push(p.careerProfile.peakAge);
+      }
+    }
+    const meanBand = (ages: number[]): number => {
+      const values = ages.flatMap((age) => byAge.get(age) ?? []);
+      return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+    };
+    // Counter-pairing may narrow the cross-sectional spread, but it must not
+    // flatten the visible career shape: prime-age players remain materially
+    // stronger than both developing youngsters and declining veterans.
+    const youngBand = meanBand([18, 19, 20, 21]);
+    const peakBand = meanBand([25, 26, 27, 28, 29]);
+    const decliningBand = meanBand([34, 35, 36, 37, 38]);
+    expect(peakBand).toBeGreaterThanOrEqual(youngBand + 3);
+    expect(peakBand).toBeGreaterThanOrEqual(decliningBand + 3);
+    const cfg = gameConfig.playerCareer;
+    expect(Math.min(...peaks)).toBeGreaterThanOrEqual(cfg.peakAgeDistribution.min);
+    expect(Math.max(...peaks)).toBeLessThanOrEqual(cfg.peakAgeDistribution.max);
+  });
+
+  it("orders D1-D5 means and matches each division-relative target mean within 0.5", () => {
+    const n = 1_200;
+    const means: number[] = [];
+    for (const division of [1, 2, 3, 4, 5]) {
+      const all: number[] = [];
+      for (let seed = 1; seed <= n; seed++) {
+        const squad = generateInitialSeniorPlayers(
+          seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+            seniorCtx({ seed, slot, position, currentDivision: division, id: slot + 1 }),
+          ),
+        );
+        for (const p of squad) all.push(p.overall);
+      }
+      means.push(all.reduce((s, v) => s + v, 0) / all.length);
+    }
+    for (let d = 0; d < 4; d++) expect(means[d]).toBeGreaterThan(means[d + 1]);
+    for (let d = 0; d < 5; d++) {
+      const target = initialClubQualityTargets(d + 1, 5).mean;
+      expect(Math.abs(means[d] - target), `D${d + 1}`).toBeLessThan(0.5);
+    }
+  });
+
+  it("keeps the counter-pairing coupling negative between raw Z and career-stage offset", () => {
+    // The intentional joint-distribution change: within each age band, the
+    // weakest quality tickets go to the strongest career stages. Checking the
+    // coupling conditionally by band ensures the age curve itself is not used
+    // as the source of the negative correlation.
+    const activity = activityModifiersFor(gameConfig.playerGeneration.initialSeniorHistoricalActivity);
+    const ageBandWidth = gameConfig.playerGeneration.initialSeniorQualityPairingAgeBandWidth;
+    const bandPairs = new Map<number, Array<[number, number]>>();
+    for (let seed = 1; seed <= 1_500; seed++) {
+      const contexts = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize).map((position, slot) =>
+        seniorCtx({ seed, slot, position, id: slot + 1 }),
+      );
+      const blueprints = contexts.map(drawSeniorGenerationBlueprint);
+      const paired = pairInitialSeniorBlueprints(blueprints);
+      for (const { blueprint, assignedRawZ } of paired) {
+        const band = Math.floor(blueprint.age / ageBandWidth);
+        const pairs = bandPairs.get(band) ?? [];
+        pairs.push([
+          assignedRawZ,
+          reconstructCurrentTarget(blueprint.profile, 0, blueprint.age, activity.growth, activity.decline).current,
+        ]);
+        bandPairs.set(band, pairs);
+      }
+    }
+    const mean = (values: number[]) => values.reduce((s, v) => s + v, 0) / values.length;
+    const bandCorrelations: number[] = [];
+    for (const pairs of bandPairs.values()) {
+      if (pairs.length < 2) continue;
+      const rawZs = pairs.map(([rawZ]) => rawZ);
+      const offsets = pairs.map(([, offset]) => offset);
+      const mz = mean(rawZs);
+      const mo = mean(offsets);
+      let num = 0;
+      let denZ = 0;
+      let denO = 0;
+      for (let i = 0; i < pairs.length; i++) {
+        num += (rawZs[i] - mz) * (offsets[i] - mo);
+        denZ += (rawZs[i] - mz) ** 2;
+        denO += (offsets[i] - mo) ** 2;
+      }
+      if (denZ > 0 && denO > 0) bandCorrelations.push(num / Math.sqrt(denZ * denO));
+    }
+    expect(mean(bandCorrelations)).toBeLessThan(-0.4);
   });
 });

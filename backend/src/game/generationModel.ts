@@ -173,3 +173,30 @@ export function seniorRosterTemplate(total: number): Position[] {
   }
   return roster;
 }
+
+// ---------------------------------------------------------------------------
+// Initial-club cohort quality targets (§ plans/initial-senior-roster-generation.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Division-relative conditioning targets shared by initial senior current OVR
+ * and initial-academy personal peaks. Division 1 is only one instance of the
+ * existing pyramid quality curve; no division-specific table is introduced.
+ */
+export function initialClubQualityTargets(
+  division: number,
+  totalDivisions: number,
+): {
+  mean: number;
+  lower: number;
+  upper: number;
+} {
+  const mean =
+    divisionMean(division, totalDivisions) + gameConfig.playerGeneration.initialClubTargetMeanOffsetOverall;
+  const half = gameConfig.playerGeneration.initialClubTargetBandHalfWidthOverall;
+  return {
+    mean,
+    lower: Math.max(OVR_MIN, mean - half),
+    upper: Math.min(OVR_MAX, mean + half),
+  };
+}

@@ -150,7 +150,7 @@
   // for making the whole market cheaper or dearer without changing its shape.
   // (e.g. 1.1 = every player's market value rises by ~10%.)
   // Safe range: 0.1 .. 10.
-  "playerValueBase": 1,
+  "playerValueBase": 1.065,
   // Exponent applied to the expected-remaining-career ratio, which is how much
   // age matters. 0 disables age entirely (a 16- and a 40-year-old of equal
   // ability cost the same); 1 charges the full lifetime-output ratio, which lets
@@ -284,7 +284,29 @@
     // is a permanent ratchet: once a club has reached D1, its historical
     // component keeps using D1 strength forever.
     "academyCurrentDivisionWeight": 0.65,
-    "academyHighestEverDivisionWeight": 0.35
+    "academyHighestEverDivisionWeight": 0.35,
+    // --- Initial club cohorts only (see plans/initial-senior-roster-generation.md) ---
+    // Assumed historical activity for players arriving with a new club. A higher
+    // value means generated seniors are assumed to have realized more of their
+    // pre-generation growth and resisted more post-peak decline. It changes
+    // consumed career progress, never the player's peak-quality draw or total
+    // growth/decline budgets.
+    "initialSeniorHistoricalActivity": 0.85,
+    // Age-band width used when counter-pairing initial seniors. Tickets are
+    // allocated randomly across bands first, then counter-paired within each
+    // band so quality does not systematically invert the career-age curve.
+    "initialSeniorQualityPairingAgeBandWidth": 5,
+    // Initial-club cohort targets, relative to the generated division. Initial
+    // senior CURRENT OVR and initial-academy future PEAK use the same band. With
+    // the current D1 mean of 74 these produce mean 75 and the 67..83 band.
+    "initialClubTargetMeanOffsetOverall": 1.0,
+    "initialClubTargetBandHalfWidthOverall": 8.0,
+    // D1 acceptance anchor for the combined senior + initial-academy player
+    // value. Lower-division targets scale through the existing tier-budget
+    // decay curve; production player values still use calculatePlayerValue.
+    // The $40M anchor is calibrated to the natural center of the constrained
+    // cohort while leaving the global player-pricing model unchanged.
+    "initialClubPlayerValueTargetTopDivision": 40000000
   },
 
   // --- Career growth and decline ---

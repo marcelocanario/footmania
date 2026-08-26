@@ -176,10 +176,14 @@ export function calculateDeclineActivityModifier(activity: number): number {
   return 1 + (DEVELOPMENT.activity.inactiveDeclineMultiplier - 1) * (1 - clamp(activity, 0, 1));
 }
 
+/** Growth/decline activity modifiers for an explicit historical-activity value. */
+export function activityModifiersFor(activity: number): { growth: number; decline: number } {
+  return { growth: calculateGrowthActivityModifier(activity), decline: calculateDeclineActivityModifier(activity) };
+}
+
 /** Historical activity a generated player is assumed to have had. */
 export function generationActivityModifiers(): { growth: number; decline: number } {
-  const activity = gameConfig.playerCareer.generationHistoricalActivity;
-  return { growth: calculateGrowthActivityModifier(activity), decline: calculateDeclineActivityModifier(activity) };
+  return activityModifiersFor(gameConfig.playerCareer.generationHistoricalActivity);
 }
 
 /** Total OVR-equivalent growth this player can ever realize. */

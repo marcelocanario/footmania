@@ -188,12 +188,29 @@ const gameConfigSchema = z
       // budget curve as 1 + (topDivisionMeanOverall - overall) / this spread,
       // so a zero spread would produce infinite tiers and infinite prices.
       playerQualitySpreadOverall: z.number().min(0.1).max(99),
-      academyQualitySpreadOverall: z.number().min(0).max(99),
+      // Initial-academy cohort conditioning expresses assigned peak targets as
+      // quality coordinates, so this divisor must remain strictly positive.
+      academyQualitySpreadOverall: z.number().min(0.1).max(99),
       divisionOverallSpan: z.number().min(0).max(99),
       seniorPeakOverallOffset: z.number().min(0).max(50),
       academyPedigreeOverallBoost: z.number().min(0).max(99),
       academyCurrentDivisionWeight: nonNegativeNumber,
       academyHighestEverDivisionWeight: nonNegativeNumber,
+      // Initial senior rosters only (see plans/initial-senior-roster-generation.md).
+      // Assumed historical activity for players arriving with a new club: a
+      // higher value means they have realized more pre-generation growth and
+      // resisted more post-peak decline. Changes consumed career progress, never
+      // the peak-quality draw or total growth/decline budgets.
+      initialSeniorHistoricalActivity: z.number().min(0).max(1),
+      // Age-band width used when counter-pairing initial seniors.
+      initialSeniorQualityPairingAgeBandWidth: z.number().int().min(1).max(20),
+      // Initial-club cohort targets. The senior CURRENT OVR and academy future
+      // PEAK use the same division-relative band.
+      initialClubTargetMeanOffsetOverall: z.number().min(-20).max(20),
+      initialClubTargetBandHalfWidthOverall: z.number().gt(0).max(30),
+      // D1 acceptance anchor for seniors + initial academy. Lower divisions
+      // derive their target from the authoritative tier-budget decay curve.
+      initialClubPlayerValueTargetTopDivision: z.number().int().positive(),
     }),
     playerCareer: z.object({
       maximumCareerGrowthOverall: z.number().min(0).max(99),
@@ -842,7 +859,7 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   firstDivisionSeasonBudget: 10000000,
   minimumTierBudgetRatio: 0.3,
   tierBudgetDecayRate: 0.55,
-  playerValueBase: 1,
+  playerValueBase: 1.065,
   playerValueCareerWeight: 0.5,
   playerValueContractRange: 0.1,
   salaryBase: 70000,
@@ -876,6 +893,11 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     academyPedigreeOverallBoost: 18,
     academyCurrentDivisionWeight: 0.65,
     academyHighestEverDivisionWeight: 0.35,
+    initialSeniorHistoricalActivity: 0.85,
+    initialSeniorQualityPairingAgeBandWidth: 5,
+    initialClubTargetMeanOffsetOverall: 1.0,
+    initialClubTargetBandHalfWidthOverall: 8.0,
+    initialClubPlayerValueTargetTopDivision: 40_000_000,
   },
   playerCareer: {
     maximumCareerGrowthOverall: 30,
