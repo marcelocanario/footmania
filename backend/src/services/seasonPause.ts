@@ -165,6 +165,12 @@ export async function resumeSeason(prisma: PrismaClient, options: PauseResumeOpt
         if (!loaded) throw new Error("Global world unavailable");
         const pausedAt = pausedInstant(loaded.world);
         if (pausedAt === null) throw new Error("The season is not paused");
+        // While awaiting the first human, the pause IS the wait — an admin
+        // resume would start a season clock with no divisions. Only the first
+        // human join (or another human club appearing) lifts the hold.
+        if (loaded.world.mp.awaitingFirstHuman === true) {
+          throw new Error("The world is waiting for its first manager; resume happens automatically on join");
+        }
         const resumedAt = Date.now();
         const shift = Math.max(0, resumedAt - pausedAt);
 

@@ -939,6 +939,14 @@ export interface MpState {
    * timer silently expires during the freeze. Null/undefined = running.
    */
   pausedAt?: number | null;
+  /**
+   * Waiting-for-first-human mode: the season clock is held (pausedAt is set)
+   * and no division exists yet. The first human join clears the flag, applies
+   * the resume shift (anchoring the season start to the join moment) and
+   * lazily creates Division 1. Set at reset/season start when zero human clubs
+   * exist; the scheduler stays frozen the whole time.
+   */
+  awaitingFirstHuman?: boolean;
 }
 
 /**

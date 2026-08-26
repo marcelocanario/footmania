@@ -1275,6 +1275,87 @@ left behind in the market ever points to a club or player that no longer exists.
 Every season, whatever slots are still empty after every human club has been placed
 get filled with entirely fresh AI clubs — none ever carry over from one season to the next.
 
+### 10.4 Account deletion, and the AI team that takes the slot
+
+An administrator can delete a user account entirely (this is not a ban — the account,
+its sessions, OAuth links, friendships, invitations, warnings, notifications and push
+subscriptions are all removed permanently; admins, the system account and the acting
+admin's own account cannot be deleted). How the account's club is handled depends on
+where it sits:
+
+- **Club is ACTIVE in a division this season**: the human team is deleted and a
+  **brand-new AI team takes its place in the same slot**. The club keeps its id, so
+  every completed fixture, result and standings row stays exactly as it was
+  (immutable history, invariant #16) — the AI team inherits only the points and
+  results already on the board. Everything else is regenerated fresh: a deterministic
+  filler-style identity ("City FC" name, derived kits, colors, stadium, coach,
+  country), a brand-new static filler squad (the human squad is destroyed), zero cash,
+  cleared ledger/trophies/lineups/automation, and reset Elo. If the club is in a live
+  match at deletion time, the match is **force-finished first** (the same
+  "resolve now" path the admin scheduler uses), so its result is committed before the
+  squad is replaced. Any live market involvement is closed next (its listings
+  cancelled, its bids withdrawn with reservations released, loan boundaries ended).
+  From that moment the club is a regular ephemeral AI club: it plays its remaining
+  fixtures with auto lineups, and is removed at the next season rollover like any
+  other filler. Note: because the club is renamed, season-history snapshots archived
+  at the next rollover will show the new AI name for the whole season, not the human
+  manager's original name.
+- **Club is NEW / PROVISIONAL / DORMANT**: nothing competitive references it, so the
+  club, its squad, its pending queue entry and its reserved allocations are removed
+  entirely.
+
+The account-deletion audit entry (`DELETE_ACCOUNT`) records the user and the club
+outcome. The operation is retry-safe: the world mutation persists first and the
+account rows are deleted after, so a crash between the two leaves a state where a
+re-run simply finds no club and completes the account removal.
+
+### 10.5 World reset with preserved club identity
+
+The admin world reset wipes everything world-scoped (clubs, players, competitions,
+fixtures, matches, market, histories, scheduler rows, notifications) and bootstraps a
+fresh world and season. Accounts, sessions, friendships, invitations, moderation
+records, settings and name pools always survive. When the reset runs with
+**identity preservation** (`keepIdentity: true`), every human club that could
+reasonably come back — **ACTIVE and DORMANT** — has its *identity only* archived per
+owner before the world is destroyed (PROVISIONAL clubs are not archived: their owners
+are already mid-join for the coming season):
+
+- name, short name, country, stadium name, coach name;
+- kit designs plus the two identity colors;
+- crest (custom logo data and variant);
+- preferred match-time availability and friend-grouping consent.
+
+Nothing game-progress related (squad, finances, trophies, history, tactics, training,
+automation) is archived. The archive rows live outside the Save scope, so they
+survive the reset. On the owner's next `/mp/join` the archived identity overrides the
+wizard payload — the club comes back with its old name, colors, kit, crest, stadium,
+coach and availability — and the archive row is consumed (deleted) on successful
+placement. `/mp/status` advertises the preserved identity to the join screen while an
+archive row exists, so returning managers see "your club identity is preserved"
+before joining. Friendships need no archiving: they already live outside the Save
+scope.
+
+### 10.6 The world waits for its first manager
+
+After a reset — and after any season that ends with zero human clubs — the world does
+**not** play out an AI-only season. It enters **waiting-for-first-human** mode:
+
+- No Division 1 (or any division) exists yet; there are no clubs and no fixtures.
+- The season clock is **held** (`pausedAt` set, the same gate the admin pause uses):
+  the scheduler, day advancement, live matches and every timer stay frozen, so no
+  match is ever played and nothing expires while the world is empty.
+- The landing page, the join screen and the admin overview all surface the wait
+  ("the season starts when you join" / "waiting for the first manager").
+- An admin cannot manually resume the season while it is waiting — only the first
+  human join lifts the hold.
+
+On the first `/mp/join` (or a dormant club's return), the hold is lifted: every
+real-time anchor is shifted forward by the held interval (exactly like an admin
+resume), the waiting flag is cleared, and **Division 1 is created lazily** — the
+joining club plus seven fresh filler AI clubs, with fixtures generated from the join
+moment. Subsequent joiners replace the remaining filler slots as usual. If the season
+later ends with zero human clubs again, the world re-enters the same waiting state.
+
 ---
 
 ## 11. Tactics Automation
@@ -1417,6 +1498,22 @@ Administrators can post short announcements (currently capped at 280 characters)
 every connected player sees; posting one immediately prompts every connected player's
 screen to refresh so they see it right away. Every announcement ever posted is kept
 permanently — there's no way to edit one after posting, only to remove it.
+
+### 13.4 World reset and account deletion in the admin panel
+
+The admin panel's *Season maintenance* card offers the world reset with an optional
+**"Keep club identities"** checkbox: when checked, every human club's identity is
+archived before the wipe and restored automatically on the owner's next join (§10.5).
+The reset always requires the typed confirmation `RESET` and a reason, and writes a
+`WORLD_RESET` audit entry carrying the `keepIdentity` flag and the number of archived
+identities.
+
+The *Users* tab lists each account's current club (id, name, competition state) so
+admins can see the consequence before acting, and offers a **Delete account** action
+for non-admin users. It requires the typed confirmation `DELETE` and a reason; the
+account's ACTIVE club is replaced in place by a fresh AI team (or removed entirely if
+not in a division), then the account and all of its rows are deleted (§10.4). The
+`DELETE_ACCOUNT` audit entry records the user and the club outcome.
 
 ---
 

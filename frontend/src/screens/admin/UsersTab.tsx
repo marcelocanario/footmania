@@ -2,14 +2,25 @@ import { useState } from "react";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { InputText } from "primereact/inputtext";
-import { Ban, ShieldCheck, ShieldOff, Sparkles, Users, Wrench } from "lucide-react";
+import { Ban, ShieldCheck, ShieldOff, Sparkles, Trash2, Users, Wrench } from "lucide-react";
 import { api } from "../../api/client";
 import { AdminCard, useAdminFetch, type TabProps } from "./adminShared";
 import { StatusChip } from "./StatusChip";
 import { ConfirmDialog, type ConfirmRequest } from "./ConfirmDialog";
 import { ModerationDialog, WarningsDialog, type ModerationRequest } from "./moderationShared";
 
-type AdminUser = { id: number; name: string; email: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string };
+type AdminUser = {
+  id: number;
+  name: string;
+  email: string;
+  isAdmin: boolean;
+  isPro: boolean;
+  elo: number | null;
+  bannedAt: string | null;
+  banReason: string | null;
+  createdAt: string;
+  club: { id: number; name: string; competitionState: string } | null;
+};
 
 export function UsersTab({ version, notify }: TabProps) {
   const [searchInput, setSearchInput] = useState("");
@@ -58,6 +69,34 @@ export function UsersTab({ version, notify }: TabProps) {
       run: async (values) => {
         await api.adminWarnUser(u.id, values.reason);
         notify("success", `${u.name} warned`);
+      },
+    });
+
+  const deleteUser = (u: AdminUser) =>
+    setConfirm({
+      title: `Delete ${u.name}?`,
+      danger: true,
+      message: (
+        <>
+          Permanently deletes the account, sessions, OAuth links, friendships, warnings and notifications. {u.club ? (
+            u.club.competitionState === "ACTIVE" ? (
+              <>Their club <b>{u.club.name}</b> sits in a division this season and will be replaced by a fresh AI team in the same slot — only its points and results are kept.</>
+            ) : (
+              <>Their club <b>{u.club.name}</b> is not in a division this season and will be removed entirely.</>
+            )
+          ) : (
+            <>They have no club.</>
+          )} This cannot be undone.
+        </>
+      ),
+      confirmLabel: "Delete account",
+      confirmWord: "DELETE",
+      minReasonLength: 10,
+      reasonHint: "Why is the account being deleted? (min 10 characters)",
+      onConfirm: async (r) => {
+        await api.adminDeleteUser(u.id, "DELETE", r);
+        notify("success", `${u.name} deleted`);
+        users.reload();
       },
     });
 
@@ -163,6 +202,7 @@ export function UsersTab({ version, notify }: TabProps) {
       )}
       {!u.bannedAt && <button className="btn sm ghost" disabled={busyKey !== null} onClick={() => warnUser(u)}>Warn…</button>}
       <button className="btn sm ghost" disabled={busyKey !== null} onClick={() => setWarningsFor(u)}>Warnings</button>
+      {!u.isAdmin && <button className="btn sm ghost danger" disabled={busyKey !== null} onClick={() => deleteUser(u)}><Trash2 size={13} /> Delete…</button>}
     </div>
   );
 

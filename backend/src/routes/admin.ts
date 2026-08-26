@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError, invalidateWorldCache, ensureGlobalSave } from "../services/saveService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
-import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures } from "../game/multiplayer";
+import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures, enterWaitingForFirstHuman } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
 import { ROUNDS_PER_SEASON } from "../game/multiplayer";
 import { readNumberSetting } from "../services/settingsStore";
@@ -26,6 +26,9 @@ import { EVENT_CODES, MOTD_NEWS_KIND } from "../game/constants";
 import { multiplayerDayLabel } from "../game/calendar";
 import { displayElo } from "../game/elo";
 import type { World } from "../game/types";
+import { archiveRowsFromWorld } from "../game/identityArchive";
+import { replaceActiveClubWithAi, removeNonActiveClub } from "../game/aiTakeover";
+import { syncMemberships } from "../game/multiplayer";
 
 const advanceSchema = z.object({
   // Target round to simulate through (1..14). Rounds already played are
@@ -140,6 +143,8 @@ export async function adminRoutes(app: FastifyInstance) {
         clubCount: world.clubs.length,
         humanClubCount: world.clubs.filter((c) => c.ownerUserId !== null).length,
         liveMatchCount: world.liveMatches.length,
+        awaitingFirstHuman: world.mp.awaitingFirstHuman === true,
+        paused: isPaused(world),
       },
     };
   });
@@ -536,7 +541,9 @@ export async function adminRoutes(app: FastifyInstance) {
       if (loaded) publishToHumanUsers(loaded.world, { type: "invalidate", scope: "mp" });
       return res;
     } catch (error) {
-      if (error instanceof Error && error.message === "The season is not paused") return reply.code(400).send({ error: error.message });
+      if (error instanceof Error && (error.message === "The season is not paused" || error.message === "The world is waiting for its first manager; resume happens automatically on join")) {
+        return reply.code(400).send({ error: error.message });
+      }
       throw error;
     }
   });
@@ -627,19 +634,38 @@ export async function adminRoutes(app: FastifyInstance) {
    * matches, market, histories, scheduler rows and notifications are wiped.
    * The delete + recreate sequence is retry-safe: if recreation fails, the
    * next call (or any ensure-current-season path) rebuilds from scratch.
+   *
+   * With `keepIdentity: true` every human club's identity (name, colors, kits,
+   * crest, stadium, coach name, preferred match hours, friend-grouping
+   * opt-in) is archived first; the owner's next `/mp/join` re-applies it and
+   * consumes the archive row. Friendships already live outside the Save scope
+   * and always survive.
    */
   app.post("/admin/world/reset", async (req, reply) => {
-    const parsed = z.object({ confirmation: z.literal("RESET"), reason: z.string().min(10) }).safeParse(req.body);
+    const parsed = z.object({ confirmation: z.literal("RESET"), reason: z.string().min(10), keepIdentity: z.boolean().optional() }).safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Typed confirmation RESET and a reason of at least 10 characters are required" });
     const previous = await loadGlobalWorldReadOnly(app.prisma);
     if (!previous) return reply.code(404).send({ error: "World unavailable" });
     const oldSaveId = previous.save.id;
+    const keepIdentity = parsed.data.keepIdentity === true;
+    // Snapshot the identity of every human club BEFORE the world is destroyed.
+    const archivedRows = keepIdentity ? archiveRowsFromWorld(previous.world) : [];
     const result = await withGlobalLock(async () => {
       // Unscoped multiplayer tables are NOT covered by the Save cascade.
       // Notifications reference clubs/fixtures that are about to disappear, so
       // they are wiped too; device push subscriptions survive (they are not
       // world data).
       await app.prisma.$transaction(async (tx) => {
+        if (archivedRows.length > 0) {
+          // Upsert: a stale archive from an earlier reset must not survive.
+          for (const row of archivedRows) {
+            await tx.clubIdentityArchive.upsert({
+              where: { userId: row.userId },
+              update: row,
+              create: row,
+            });
+          }
+        }
         await tx.mpMembership.deleteMany({});
         await tx.mpClubSeason.deleteMany({});
         await tx.mpQueue.deleteMany({});
@@ -655,12 +681,16 @@ export async function adminRoutes(app: FastifyInstance) {
       await ensureCurrentSeason(app.prisma);
       const fresh = await loadGlobalWorldMutable(app.prisma);
       if (!fresh) throw new Error("World reset failed: fresh world unavailable");
+      // A reset wipes every human club, so the fresh world must WAIT for its
+      // first manager: no pre-seeded all-AI Division 1, season clock held.
+      enterWaitingForFirstHuman(fresh.world, Date.now());
+      await persistWorld(app.prisma, fresh.save.id, fresh.save.id, fresh.world, fresh.save.revision);
       await ensureGameClock(app.prisma, fresh.save.id, fresh.world);
       await materializeSeasonEvents(app.prisma, fresh.save.id, fresh.world);
-      await writeSchedulerAudit(app.prisma, fresh.save.id, req.user!.id, "WORLD_RESET", "WORLD", "GLOBAL", { saveId: oldSaveId }, { saveId: fresh.save.id, seasonId: fresh.world.mp.seasonId }, parsed.data.reason);
+      await writeSchedulerAudit(app.prisma, fresh.save.id, req.user!.id, "WORLD_RESET", "WORLD", "GLOBAL", { saveId: oldSaveId, keepIdentity, archivedClubs: archivedRows.length }, { saveId: fresh.save.id, seasonId: fresh.world.mp.seasonId }, parsed.data.reason);
       // Everyone keeps their account but loses their club; wake all clients.
       publishWorldReset();
-      return { value: { ok: true, oldSaveId, newSaveId: fresh.save.id, seasonId: fresh.world.mp.seasonId } };
+      return { value: { ok: true, oldSaveId, newSaveId: fresh.save.id, seasonId: fresh.world.mp.seasonId, archivedClubs: archivedRows.length } };
     });
     return result.value;
   });
@@ -816,14 +846,27 @@ export async function adminRoutes(app: FastifyInstance) {
         .filter((club) => club.ownerUserId !== null)
         .map((club) => [club.ownerUserId!, displayElo(club)]),
     );
+    // Club context per user so the admin panel can explain what an account
+    // deletion would do (convert an in-division club to AI / remove it).
+    const clubByOwnerId = new Map(
+      (loaded?.world.clubs ?? [])
+        .filter((club) => club.ownerUserId !== null)
+        .map((club) => [club.ownerUserId!, club]),
+    );
     const users = await app.prisma.user.findMany({ where, orderBy: { id: "asc" }, take: limit, select: { id: true, name: true, email: true, isAdmin: true, isPro: true, bannedAt: true, banReason: true, createdAt: true } });
     return {
-      users: users.map((u) => ({
-        ...u,
-        elo: eloByUserId.get(u.id) ?? null,
-        bannedAt: u.bannedAt?.toISOString() ?? null,
-        createdAt: u.createdAt.toISOString(),
-      })),
+      users: users.map((u) => {
+        const club = clubByOwnerId.get(u.id);
+        return {
+          ...u,
+          elo: eloByUserId.get(u.id) ?? null,
+          bannedAt: u.bannedAt?.toISOString() ?? null,
+          createdAt: u.createdAt.toISOString(),
+          club: club
+            ? { id: club.id, name: club.name, competitionState: club.competitionState }
+            : null,
+        };
+      }),
     };
   });
 
@@ -858,6 +901,68 @@ export async function adminRoutes(app: FastifyInstance) {
     if (!user) return reply.code(404).send({ error: "User not found" });
     await app.prisma.user.update({ where: { id }, data: { bannedAt: null, banReason: null } });
     return { ok: true };
+  });
+
+  /**
+   * Delete a user account entirely (not a ban). The world mutation runs first
+   * under the global lock; the account rows are removed in a separate
+   * transaction afterwards, so a crash between the two leaves a retry-safe
+   * state (a re-run finds no club but still deletes the account).
+   *
+   * Club handling:
+   *  - ACTIVE (assigned to a division this season): the human team is deleted
+   *    and a brand-new deterministic AI team takes its place IN THE SAME SLOT
+   *    (same club id, so fixtures/results/standings stay immutable per
+   *    invariant #16). The AI team inherits only the points and results
+   *    already on the board — new identity, fresh static squad, no finances,
+   *    no market involvement, no loans, no history.
+   *  - NEW/PROVISIONAL/DORMANT: nothing competitive references the club, so it
+   *    is removed entirely (squad, queue, allocations, memberships).
+   */
+  app.post("/admin/users/:id/delete", async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const parsed = z.object({ confirmation: z.literal("DELETE"), reason: z.string().min(10) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Typed confirmation DELETE and a reason of at least 10 characters are required" });
+    const user = await app.prisma.user.findUnique({ where: { id }, select: { id: true, name: true, email: true, isAdmin: true } });
+    if (!user) return reply.code(404).send({ error: "User not found" });
+    if (user.isAdmin) return reply.code(400).send({ error: "Cannot delete an admin account" });
+    if (user.email === "__system__@footmania.local") return reply.code(400).send({ error: "Cannot delete the system account" });
+    if (user.id === req.user!.id) return reply.code(400).send({ error: "Cannot delete your own account" });
+
+    let worldOutcome: { converted: boolean; removedPlayers: number; addedPlayers: number; listings: number; bids: number } | null = null;
+    const lockResult = await withGlobalLock(async () => {
+      const loaded = await loadGlobalWorldMutable(app.prisma);
+      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+      const world = loaded.world;
+      const club = world.clubs.find((c) => c.ownerUserId === id);
+      if (club) {
+        const now = Date.now();
+        if (club.competitionState === "ACTIVE") {
+          worldOutcome = replaceActiveClubWithAi(world, club, now);
+          syncMemberships(world, world.mp.seasonId);
+        } else {
+          worldOutcome = removeNonActiveClub(world, club, now);
+        }
+      }
+      // Purge the deleted user's activity trail (world-scoped, no FK).
+      world.mpActivities = world.mpActivities.filter((a) => a.userId !== id);
+      await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      const auditBefore = { email: user.email, name: user.name, clubId: club?.id ?? null, clubName: club?.name ?? null, competitionState: club?.competitionState ?? null };
+      const auditAfter = worldOutcome ?? { converted: null };
+      await writeSchedulerAudit(app.prisma, loaded.save.id, req.user!.id, "DELETE_ACCOUNT", "USER", String(id), auditBefore, auditAfter, parsed.data.reason);
+      publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
+      return { value: { ok: true, outcome: worldOutcome } };
+    });
+    if ("error" in lockResult && lockResult.error) return reply.code(lockResult.error.code).send(lockResult.error.body);
+
+    // Account rows: sessions/accounts/warnings/notifications/push/friendships
+    // cascade from User. Invitation.inviteeUserId is a bare column (no FK), so
+    // rows where the deleted user was the invitee are removed explicitly.
+    await app.prisma.$transaction(async (tx) => {
+      await tx.invitation.deleteMany({ where: { inviteeUserId: id } });
+      await tx.user.delete({ where: { id } });
+    });
+    return lockResult.value;
   });
 
   app.post("/admin/users/:id/warn", async (req, reply) => {

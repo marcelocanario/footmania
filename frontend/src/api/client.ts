@@ -161,6 +161,7 @@ export interface MpStatus {
     goalsAgainst: number | null;
   }[];
   userClubId: number | null;
+  awaitingFirstHuman: boolean;
   club: {
     id: number;
     name: string;
@@ -174,12 +175,21 @@ export interface MpStatus {
     reservedNextSeasonAllocation: { seasonId: number; amount: number; issuedAt: number } | null;
     inactivity: { eligible: boolean; removedAtRollover: boolean; note: string | null } | null;
   } | null;
+  preservedIdentity: {
+    name: string;
+    primaryColor: string;
+    secondaryColor: string;
+    stadiumName: string;
+    coachName: string;
+    hasCustomLogo: boolean;
+  } | null;
 }
 
 /** Public world-clock snapshot served unauthenticated to the landing page. */
 export interface PublicSeasonStatus {
   ready: boolean;
   paused: boolean;
+  awaitingFirstHuman: boolean;
   season: {
     seasonNumber: number;
     key: string;
@@ -1430,8 +1440,8 @@ export const api = {
   adminRecalculateFixtures: (reason: string) =>
     request<{ ok: boolean; divisions: number; fixturesBefore: number; fixturesAfter: number }>("/api/admin/scheduler/fixtures/recalculate", { method: "POST", body: JSON.stringify({ reason }) }),
   // Destructive: wipes the world, keeps user accounts. Requires typed confirmation.
-  adminWorldReset: (confirmation: "RESET", reason: string) =>
-    request<{ ok: boolean; oldSaveId: number; newSaveId: number; seasonId: number }>("/api/admin/world/reset", { method: "POST", body: JSON.stringify({ confirmation, reason }) }),
+  adminWorldReset: (confirmation: "RESET", reason: string, keepIdentity?: boolean) =>
+    request<{ ok: boolean; oldSaveId: number; newSaveId: number; seasonId: number; archivedClubs?: number }>("/api/admin/world/reset", { method: "POST", body: JSON.stringify({ confirmation, reason, keepIdentity }) }),
 
   // Pro features
   getAutomation: () => request<{ presets: unknown[] }>("/api/mp/automation"),
@@ -1456,12 +1466,13 @@ export const api = {
   ackWarning: (id: number) => request<{ ok: boolean }>(`/api/account/warnings/${id}/acknowledge`, { method: "POST" }),
 
   // Admin user management
-  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; name: string; email: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
+  adminListUsers: (search?: string, limit?: number) => request<{ users: { id: number; name: string; email: string; isAdmin: boolean; isPro: boolean; elo: number | null; bannedAt: string | null; banReason: string | null; createdAt: string; club: { id: number; name: string; competitionState: string } | null }[] }>(`/api/admin/users${search ? `?search=${encodeURIComponent(search)}` : ""}${limit ? `${search ? "&" : "?"}limit=${limit}` : ""}`),
   adminSetPro: (userId: number, isPro: boolean) => request<{ ok: boolean }>(`/api/admin/users/${userId}/pro`, { method: "POST", body: JSON.stringify({ isPro }) }),
   adminBanUser: (userId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/users/${userId}/ban`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminUnbanUser: (userId: number) => request<{ ok: boolean }>(`/api/admin/users/${userId}/unban`, { method: "POST" }),
   adminWarnUser: (userId: number, reason: string) => request<{ ok: boolean; warningId: number }>(`/api/admin/users/${userId}/warn`, { method: "POST", body: JSON.stringify({ reason }) }),
   adminListUserWarnings: (userId: number) => request<{ warnings: { id: number; reason: string; issuedByAdminUserId: number; createdAt: string; acknowledgedAt: string | null }[] }>(`/api/admin/users/${userId}/warnings`),
+  adminDeleteUser: (userId: number, confirmation: "DELETE", reason: string) => request<{ ok: boolean }>(`/api/admin/users/${userId}/delete`, { method: "POST", body: JSON.stringify({ confirmation, reason }) }),
   adminResetClubName: (clubId: number, name: string | undefined, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-club-name`, { method: "POST", body: JSON.stringify({ clubId, ...(name ? { name } : {}), reason }) }),
   adminResetStadiumName: (clubId: number, stadiumName: string, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/reset-stadium-name`, { method: "POST", body: JSON.stringify({ clubId, stadiumName, reason }) }),
   adminClearNickname: (playerId: number, reason: string) => request<{ ok: boolean }>(`/api/admin/moderation/clear-nickname`, { method: "POST", body: JSON.stringify({ playerId, reason }) }),

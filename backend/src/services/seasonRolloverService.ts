@@ -7,6 +7,7 @@ import {
   createDivision,
   divisionsInSeason,
   ensureDivisionFull,
+  enterWaitingForFirstHuman,
   generateDivisionFixtures,
   groupIndexOf,
   rebuildTierDivisions,
@@ -288,8 +289,11 @@ export async function executeRolloverStep(
     world.mp.seasonStartAt = now;
     for (const [tier, humans] of byTier) rebuildTierDivisions(world, context.targetSeasonId, tier, humans, ref, { generateFixtures: false, assignmentSeed: context.groupAssignmentSeed });
     if (byTier.size === 0) {
-      const division = createDivision(world, { tier: 1, groupIndex: 0, seasonId: context.targetSeasonId, ref });
-      ensureDivisionFull(world, division);
+      // No human clubs anywhere: do NOT pre-create an all-AI Division 1. The
+      // world waits for the first human (awaitingFirstHuman + pausedAt), and
+      // the division forms lazily on their join. Filler AI from the finished
+      // season was already removed above.
+      enterWaitingForFirstHuman(world, now);
     }
     for (const clubId of context.provisionalClubIds) {
       const club = world.clubs.find((candidate) => candidate.id === clubId);
@@ -339,6 +343,10 @@ export async function executeRolloverStep(
     }
   } else if (step === "NEXT_SEASON_STRUCTURE_VALIDATE") {
     const divisions = divisionsInSeason(world, context.targetSeasonId).filter((candidate) => candidate.status !== "ARCHIVED");
+    // Zero-human rollover: the world is in waiting-for-first-human mode with
+    // no divisions yet — nothing to validate, and the first join builds the
+    // pyramid lazily.
+    if (divisions.length === 0 && world.mp.awaitingFirstHuman === true) return;
     if (divisions.length === 0) throw new Error("Next season has no active divisions");
     for (const division of divisions) {
       const clubIds = Object.keys(division.standings).map(Number);
@@ -360,6 +368,14 @@ export async function executeRolloverStep(
     world.mp.pendingPreseasonFlow = undefined;
     world.mp.rolloverPhase = null;
     world.mp.rolloverContext = null;
+    // A season that rolled over with zero human clubs stays in waiting mode:
+    // the clock remains held until the first human join (entered in
+    // DIVISION_RESTRUCTURE above, re-asserted here after the commit resets
+    // seasonStartAt/lastAdvancedAt).
+    const hasHumans = world.clubs.some((c) => c.ownerUserId !== null);
+    if (!hasHumans) {
+      enterWaitingForFirstHuman(world, now);
+    }
   }
 
   if (world.mp.rolloverContext) markStepDone(world.mp.rolloverContext, step);

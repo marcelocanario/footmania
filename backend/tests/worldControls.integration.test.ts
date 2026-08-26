@@ -202,12 +202,18 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(await app.prisma.userNotification.count()).toBe(0);
     expect(await app.prisma.club.count({ where: { ownerUserId: { not: null } } })).toBe(0);
     expect(await app.prisma.mpSeason.count()).toBe(1);
+    // Without keepIdentity nothing is archived.
+    expect(await app.prisma.clubIdentityArchive.count()).toBe(0);
 
     const fresh = await loadGlobalWorld(app.prisma);
     if (!fresh) throw new Error("fresh world did not load");
-    expect(fresh.world.clubs.length).toBeGreaterThan(0);
-    expect(fresh.world.clubs.every((c) => c.ownerUserId === null)).toBe(true);
-    expect(fresh.world.fixtures.length).toBeGreaterThan(0);
+    // A reset leaves the world waiting for its first manager: no Division 1,
+    // no filler clubs, no fixtures, season clock held.
+    expect(fresh.world.clubs.length).toBe(0);
+    expect(fresh.world.competitions.length).toBe(0);
+    expect(fresh.world.fixtures.length).toBe(0);
+    expect(fresh.world.mp.awaitingFirstHuman).toBe(true);
+    expect(fresh.world.mp.pausedAt).toBeTypeOf("number");
     expect(await app.prisma.gameClock.count()).toBe(1);
     expect(await app.prisma.scheduledEvent.count({ where: { saveId: fresh.save.id } })).toBeGreaterThan(0);
     expect(await app.prisma.adminSchedulerAudit.count({ where: { saveId: fresh.save.id, action: "WORLD_RESET" } })).toBe(1);
@@ -215,8 +221,139 @@ describe("admin world controls (season pause / fixture recalculation / world res
     // The old save's scoped rows are gone even if the id was reused.
     const status = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: playerCookie } });
     expect(status.json().userClubId).toBeNull();
+    expect(status.json().awaitingFirstHuman).toBe(true);
 
     void oldSaveId;
+  });
+
+  it("archives club identities on keepIdentity reset and restores them at rejoin", async () => {
+    await app.ready();
+    const adminCookie = await registerAndLogin(app, "keepadmin");
+    await app.prisma.user.update({ where: { email: "keepadmin@test.dev" }, data: { isAdmin: true } });
+    const playerCookie = await registerAndLogin(app, "keepplayer");
+    await joinClub(app, playerCookie, "Archived United");
+
+    // Give the club a distinct identity: colors, kit, logo, availability,
+    // friend-grouping opt-out.
+    const player = await app.prisma.user.findUniqueOrThrow({ where: { email: "keepplayer@test.dev" }, select: { id: true } });
+    await app.prisma.user.update({ where: { id: player.id }, data: { isPro: true } });
+    await app.inject({
+      method: "POST",
+      url: "/api/mp/club/logo",
+      headers: { cookie: playerCookie },
+      payload: { mime: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+    });
+    await app.inject({
+      method: "PUT",
+      url: "/api/mp/club/friend-grouping",
+      headers: { cookie: playerCookie },
+      payload: { enabled: false },
+    });
+
+    await ensureCurrentSeason(app.prisma);
+    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "keep the team identities across the wipe", keepIdentity: true } });
+    expect(reset.statusCode).toBe(200);
+    expect(reset.json().archivedClubs).toBe(1);
+
+    // The archive row exists and carries the identity.
+    const archive = await app.prisma.clubIdentityArchive.findUniqueOrThrow({ where: { userId: player.id } });
+    expect(archive.name).toBe("Archived United");
+    expect(archive.customLogoData).toContain("iVBORw0KGgo");
+    expect(archive.friendGroupingOptIn).toBe(false);
+
+    // The world is fresh (no human clubs) but the status advertises the
+    // preserved identity to the join screen.
+    const status = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: playerCookie } });
+    expect(status.json().userClubId).toBeNull();
+    expect(status.json().preservedIdentity).toMatchObject({ name: "Archived United", hasCustomLogo: true });
+
+    // Rejoin: the archived identity is applied and the row consumed.
+    const join = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie: playerCookie },
+      payload: {
+        clubName: "Wizard Name",
+        country: "ARG",
+        stadiumName: "Wizard Stadium",
+        coachName: "Wizard Coach",
+        preferredHours: Array.from({ length: 16 }, (_, i) => i),
+      },
+    });
+    expect(join.statusCode).toBe(200);
+    expect(join.json().preserved).toBe(true);
+    expect(await app.prisma.clubIdentityArchive.count()).toBe(0);
+
+    const world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    const club = world.world.clubs.find((c) => c.ownerUserId === player.id);
+    expect(club).toBeDefined();
+    expect(club!.name).toBe("Archived United");
+    expect(club!.stadiumName).toBe("Archived United Arena");
+    expect(club!.country).toBe("BRA");
+    expect(club!.customLogo).toMatchObject({ mime: "image/png" });
+    expect(club!.friendGroupingOptIn).toBe(false);
+    // The wizard's name/country/stadium/coach were overridden by the archive.
+    expect(club!.coachName).not.toBe("Wizard Coach");
+    // The first join lifted the waiting-for-first-human hold and formed
+    // Division 1 lazily.
+    expect(world.world.mp.awaitingFirstHuman).not.toBe(true);
+    expect(world.world.mp.pausedAt ?? null).toBeNull();
+    expect(world.world.competitions.some((c) => c.kind === "division" && c.seasonId === world.world.mp.seasonId)).toBe(true);
+    expect(world.world.fixtures.length).toBeGreaterThan(0);
+  });
+
+  it("holds the season clock while waiting for the first human, then starts it on join", async () => {
+    await app.ready();
+    const adminCookie = await registerAndLogin(app, "waitadmin");
+    await app.prisma.user.update({ where: { email: "waitadmin@test.dev" }, data: { isAdmin: true } });
+    const firstCookie = await registerAndLogin(app, "waitfirst");
+    const secondCookie = await registerAndLogin(app, "waitsecond");
+
+    await ensureCurrentSeason(app.prisma);
+    // Reset the world (no humans survive): this is what enters waiting mode.
+    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter waiting-for-first-human mode" } });
+    expect(reset.statusCode).toBe(200);
+
+    // No humans yet: the world waits — no Division 1, no clubs, clock held.
+    let world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    expect(world.world.mp.awaitingFirstHuman).toBe(true);
+    expect(world.world.mp.pausedAt).toBeTypeOf("number");
+    expect(world.world.competitions.length).toBe(0);
+    expect(world.world.clubs.length).toBe(0);
+
+    // The public landing status reflects the wait.
+    const publicStatus = await app.inject({ method: "GET", url: "/api/public/season" });
+    expect(publicStatus.json().awaitingFirstHuman).toBe(true);
+    expect(publicStatus.json().paused).toBe(true);
+
+    // An admin manual resume is refused while waiting.
+    const refusedResume = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: { reason: "should not be allowed while waiting" } });
+    expect(refusedResume.statusCode).toBe(400);
+
+    // The first join lifts the hold and forms Division 1.
+    await joinClub(app, firstCookie, "Founding FC");
+    const afterFirst = await loadGlobalWorld(app.prisma);
+    if (!afterFirst) throw new Error("world did not load after first join");
+    expect(afterFirst.world.mp.awaitingFirstHuman).not.toBe(true);
+    expect(afterFirst.world.mp.pausedAt ?? null).toBeNull();
+    const division = afterFirst.world.competitions.find((c) => c.kind === "division" && c.seasonId === afterFirst.world.mp.seasonId);
+    expect(division).toBeDefined();
+    expect(Object.keys(division!.standings).length).toBe(8);
+    expect(afterFirst.world.clubs.filter((c) => c.ownerUserId !== null).length).toBe(1);
+    expect(afterFirst.world.clubs.filter((c) => c.ownerUserId === null).length).toBe(7);
+    expect(afterFirst.world.fixtures.length).toBeGreaterThan(0);
+    const status = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: firstCookie } });
+    expect(status.json().awaitingFirstHuman).toBe(false);
+    expect(status.json().paused).toBe(false);
+
+    // A second human joins the now-formed Division 1 (replacing another filler).
+    await joinClub(app, secondCookie, "Second SC");
+    const afterSecond = await loadGlobalWorld(app.prisma);
+    if (!afterSecond) throw new Error("world did not load after second join");
+    expect(afterSecond.world.clubs.filter((c) => c.ownerUserId !== null).length).toBe(2);
+    expect(afterSecond.world.clubs.filter((c) => c.ownerUserId === null).length).toBe(6);
   });
 });
 

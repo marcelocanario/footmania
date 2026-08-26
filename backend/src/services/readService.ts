@@ -21,6 +21,7 @@ type MpStateView = {
   seasonDayIndex?: number;
   phase?: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
   pausedAt?: number | null;
+  awaitingFirstHuman?: boolean;
 };
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -59,6 +60,7 @@ export async function readPublicSeasonStatus(prisma: PrismaClient) {
   return {
     ready: true as const,
     paused: typeof mp.pausedAt === "number" && Number.isFinite(mp.pausedAt),
+    awaitingFirstHuman: mp.awaitingFirstHuman === true,
     season: {
       seasonNumber,
       key: seasonKey({ year: mp.seasonYear ?? save.year, month: mp.seasonMonth ?? 1 }),
@@ -89,7 +91,7 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
 
   // `club` and `divisionRows` depend only on `save`/`mp`, not on each other,
   // so they can be fetched concurrently.
-  const [club, divisionRows] = await Promise.all([
+  const [club, divisionRows, preservedIdentityRow] = await Promise.all([
     prisma.club.findFirst({
       where: { saveId: save.id, ownerUserId: userId },
       select: {
@@ -115,6 +117,13 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
     mp.seasonId
       ? prisma.competition.findMany({ where: { saveId: save.id, kind: "division", seasonId: mp.seasonId }, select: { id: true } })
       : Promise.resolve([] as { id: number }[]),
+    // A preserved identity from a world reset: presented to the user on the
+    // join screen so their club comes back with its old name, colors, kit,
+    // crest, stadium and match-time availability. Consumed on next join.
+    prisma.clubIdentityArchive.findUnique({
+      where: { userId },
+      select: { name: true, primaryColor: true, secondaryColor: true, customLogoData: true, stadiumName: true, coachName: true },
+    }),
   ]);
 
   // `reservedAllocation`, `playedAgg` and `myFixtureRows` each depend only on
@@ -184,8 +193,10 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
     ready: true as const,
     saveId: save.id,
     // Season pause flag (admin freeze): clients use it to hold countdowns and
-    // disable schedule-dependent actions.
+    // disable schedule-dependent actions. awaitingFirstHuman is the special
+    // case where the pause is the world waiting for its first manager.
     paused: typeof mp.pausedAt === "number" && Number.isFinite(mp.pausedAt),
+    awaitingFirstHuman: mp.awaitingFirstHuman === true,
     season: {
       seasonNumber: mp.seasonNumber ?? 1,
       key: seasonKey({ year, month }),
@@ -232,6 +243,16 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
               ? "Your club may lose its league position at the end of the season if inactivity continues."
               : null,
           },
+        }
+      : null,
+    preservedIdentity: preservedIdentityRow
+      ? {
+          name: preservedIdentityRow.name,
+          primaryColor: preservedIdentityRow.primaryColor,
+          secondaryColor: preservedIdentityRow.secondaryColor,
+          stadiumName: preservedIdentityRow.stadiumName,
+          coachName: preservedIdentityRow.coachName,
+          hasCustomLogo: preservedIdentityRow.customLogoData != null && preservedIdentityRow.customLogoData.length > 0,
         }
       : null,
   };

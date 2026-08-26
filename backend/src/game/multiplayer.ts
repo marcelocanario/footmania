@@ -327,6 +327,34 @@ export function initSeason(world: World, ref: { year: number; month: number }, s
   return { seasonId, year: ref.year, month: ref.month };
 }
 
+/**
+ * Enter "waiting for the first human" mode: remove every pre-seeded all-AI
+ * division, its filler clubs, fixtures and memberships, and hold the season
+ * clock (pausedAt) until the first human joins. Called by the world reset and
+ * by a rollover that ends with zero human clubs — the world never plays an
+ * AI-only season. Division 1 forms lazily on the first join (placeNewClub).
+ */
+export function enterWaitingForFirstHuman(world: World, now: number): void {
+  // Remove filler AI clubs and any division that contains no human.
+  const fillerIds = new Set(
+    world.clubs.filter((c) => c.ownerUserId === null && c.isHuman === false).map((c) => c.id),
+  );
+  world.clubs = world.clubs.filter((c) => !fillerIds.has(c.id));
+  world.players = world.players.filter((p) => p.clubId === null || !fillerIds.has(p.clubId));
+  world.competitions = world.competitions.filter(
+    (c) => c.kind !== "division" || Object.keys(c.standings).some((clubId) => !fillerIds.has(Number(clubId))),
+  );
+  world.fixtures = world.fixtures.filter((f) => !fillerIds.has(f.homeClubId) && !fillerIds.has(f.awayClubId));
+  world.mpMemberships = world.mpMemberships.filter((m) => !fillerIds.has(m.clubId));
+  world.mpClubSeasons = world.mpClubSeasons.filter((cs) => !fillerIds.has(cs.clubId));
+  world.liveMatches = [];
+  for (const club of world.clubs) club.liveMatchAt = null;
+  // Hold the clock: the scheduler and every schedule-dependent mutation gate
+  // on pausedAt (isWorldPausedGlobally / isPaused).
+  world.mp.awaitingFirstHuman = true;
+  world.mp.pausedAt = now;
+}
+
 /** Create a division (competition) with empty standings + no fixtures yet. */
 export function createDivision(
   world: World,

@@ -319,6 +319,22 @@ export function Join() {
   }
 
   const season = status?.season;
+  const preserved = status?.preservedIdentity ?? null;
+
+  // A preserved identity (world reset with identity preservation) is restored
+  // by the server on join regardless of the wizard payload, so prefill the
+  // fields it covers for an accurate preview.
+  useEffect(() => {
+    if (!preserved) return;
+    if (!clubName.trim()) setClubName(preserved.name);
+    setTeamPrimary(preserved.primaryColor);
+    setTeamSecondary(preserved.secondaryColor);
+    setKits((current) => applyTeamColorPreset(current, preserved.primaryColor, preserved.secondaryColor));
+    if (!stadiumName.trim()) setStadiumName(preserved.stadiumName);
+    if (!coachName.trim()) setCoachName(preserved.coachName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preserved]);
+
   const joinOpen = season?.joinState === "OPEN";
   const identityValid = !!selectedCountry && nameValid && stadiumValid && coachNameValid;
   const scheduleValid = preferredHours.length >= MIN_SLOTS;
@@ -379,6 +395,19 @@ export function Join() {
       </div>
 
       {/* Season status */}
+      {preserved && (
+        <div className="jm-season-banner open">
+          <BadgeCheck size={17} className="jm-season-icon" />
+          <div className="jm-season-copy">
+            <b>Welcome back — your club identity is preserved</b>
+            <span>
+              {preserved.name} will be recreated with its name, colors, kit, crest, stadium and match-time availability when you join.
+            </span>
+          </div>
+          <span className="jm-season-pill open">Restored</span>
+        </div>
+      )}
+
       {season && (
         <div className={`jm-season-banner ${joinOpen ? "open" : "locked"}`}>
           <Info size={17} className="jm-season-icon" />

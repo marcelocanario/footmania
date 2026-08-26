@@ -230,3 +230,41 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     recruit, so a club can never dismiss and reroll for itself. Between the
     dismissal and that intake, reconciliation treats the pending count as
     deliberately unavailable stock rather than unexplained drift.
+
+38. **Admin account deletion never breaks immutable history.** An ACTIVE club
+    whose owner's account is deleted is replaced IN PLACE by a freshly generated
+    AI team: the club keeps its id so completed fixtures, results and standings
+    stay untouched (invariant 19); identity, squad, finances, ledger, trophies,
+    lineups, automation, Elo and market involvement are all reset to fresh
+    filler semantics (deterministic identity seeded from the club id, a new
+    static squad, zero cash, current tier kept as the highest-division marker).
+    If the club is in a live match at deletion time, the match is force-finished
+    through the authoritative resolve-now path BEFORE the squad is destroyed, so
+    no LiveMatchState can survive referencing deleted player ids. From then on
+    the club is a normal ephemeral AI club and is removed at the next rollover
+    (invariant 28). A NEW/PROVISIONAL/DORMANT club is removed entirely with its
+    queue, allocations and memberships. The world mutation persists before the
+    account rows are deleted, so a crash leaves a retry-safe state.
+
+39. **A reset with identity preservation archives only identity of ACTIVE and
+    DORMANT clubs, and the claim is consume-once.** `keepIdentity` snapshots per
+    owner of an ACTIVE or DORMANT club: name, short name, country, stadium
+    name, coach name, kit designs, the two identity colors, the custom crest
+    (data + variant), preferred match-time availability and friend-grouping
+    consent — nothing game-progress related. PROVISIONAL clubs are not
+    archived. Archive rows live outside the Save scope (they survive the wipe)
+    and are deleted the moment the owner's next join successfully re-applies
+    them. Friendships already live outside the Save scope and always survive a
+    reset untouched.
+
+40. **The world never plays an AI-only season.** After a reset, or after any
+    rollover that ends with zero human clubs, the world enters
+    waiting-for-first-human mode: no division, club or fixture exists, and the
+    season clock is held via the same `pausedAt` gate as an admin pause
+    (scheduler, day advancement, live matches and all timers frozen; manual
+    admin resume refused). Only the first human join (or a dormant return)
+    lifts the hold: it applies the resume shift so the season starts anchored
+    to the join moment, clears the flag, and creates Division 1 lazily
+    (`placeNewClub`), which the joining club plus seven fresh filler AI fill.
+    A season that ends with zero humans re-enters the same waiting state.
+

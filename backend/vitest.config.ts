@@ -17,6 +17,7 @@ export default defineConfig({
       "tests/seasonArchive.test.ts",
       "tests/worldControls.integration.test.ts",
       "tests/authGoogle.integration.test.ts",
+      "tests/accountDeletion.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 60000,

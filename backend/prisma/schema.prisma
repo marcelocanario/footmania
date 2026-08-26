@@ -36,6 +36,7 @@ model User {
   warnings     Warning[]
   notifications UserNotification[]
   pushSubscriptions PushSubscription[]
+  clubIdentityArchive ClubIdentityArchive?
 }
 
 // better-auth session (token is a unique column, not the PK).
@@ -1037,4 +1038,30 @@ model PlayerSeasonHistory {
   @@unique([saveId, playerId, seasonId])
   @@index([saveId, playerId])
   @@index([saveId, seasonId])
+}
+
+// Club identity preserved across a world reset (not save-scoped, so it
+// survives the Save delete+recreate). When an admin resets the world with
+// identity preservation, every human club is snapshotted here; the user's next
+// join re-applies the snapshot instead of the wizard payload and the row is
+// consumed (deleted) on successful placement. Nothing game-progress related
+// (squad, finances, trophies) is stored — identity only.
+model ClubIdentityArchive {
+  userId             Int      @id
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name               String
+  shortName          String
+  country            String
+  stadiumName        String
+  coachName          String
+  kitJson            String?
+  primaryColor       String
+  secondaryColor     String
+  logoVariant        Int      @default(0)
+  customLogoMime     String?
+  customLogoData     String?
+  customLogoStatus   String?
+  preferredHoursJson String?
+  friendGroupingOptIn Boolean @default(true)
+  createdAt          DateTime @default(now())
 }

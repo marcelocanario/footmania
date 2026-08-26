@@ -11,12 +11,13 @@ import { clubKitsSchema } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
+import { applyArchivedIdentity, resolveArchiveRow } from "../game/identityArchive";
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
 import { hasPro } from "../services/pro";
 import { readMpStatus, readPublicSeasonStatus, readSeasonHistory, readUserLiveMatch, footmaniaRankingView, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
-import { isPaused, worldPausedError } from "../services/seasonPause";
+import { isPaused, worldPausedError, applyResumeShift } from "../services/seasonPause";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -86,36 +87,84 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     const user = req.user!;
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-       const loaded = await loadGlobalWorldMutable(app.prisma);
+      // An archived identity (preserved by a world reset with keepIdentity)
+      // overrides the wizard payload: the club comes back with its old name,
+      // colors, kit, crest, stadium, coach and match-time availability. The
+      // row is consumed on successful placement.
+      const archiveRow = await app.prisma.clubIdentityArchive.findUnique({ where: { userId: user.id } });
+      const archive = archiveRow ? resolveArchiveRow(archiveRow) : null;
+      const loaded = await loadGlobalWorldMutable(app.prisma);
       if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
       const world = loaded.world;
       // Schedule-dependent: joining places the club into the live season.
-      if (isPaused(world)) return { error: worldPausedError };
+      // The FIRST human join is the exception: while awaitingFirstHuman the
+      // season clock is held and no division exists — this join lifts the
+      // hold (clears pausedAt, applies the resume shift so the season starts
+      // anchored to now) and Division 1 forms lazily below. Any later join
+      // while paused is still rejected.
+      const awaitingFirst = world.mp.awaitingFirstHuman === true;
+      if (isPaused(world) && !awaitingFirst) return { error: worldPausedError };
       const existing = world.clubs.find((c) => c.ownerUserId === user.id);
       if (existing) return { error: { code: 409, body: { error: "You already have a club" } } };
 
-      const club = createHumanClub(world, {
-        userId: user.id,
-        clubName: parsed.data.clubName,
-        country: parsed.data.country,
-        primaryColor: parsed.data.primaryColor,
-        secondaryColor: parsed.data.secondaryColor,
-        kits: parsed.data.kits ?? null,
-        stadiumName: parsed.data.stadiumName,
-        // The Google display name is the default manager name (the frontend
-        // prefills it and it is editable); a legacy client may omit it.
-        coachName: parsed.data.coachName ?? user.name,
-        preferredHours,
-      });
+      // Preferred windows come from the archive when one exists (they were
+      // validated when first stored); otherwise the wizard windows validated
+      // above are used.
+      const club = createHumanClub(
+        world,
+        archive
+          ? applyArchivedIdentity(archive, {
+              userId: user.id,
+              clubName: parsed.data.clubName,
+              country: parsed.data.country,
+              primaryColor: parsed.data.primaryColor,
+              secondaryColor: parsed.data.secondaryColor,
+              kits: parsed.data.kits ?? null,
+              stadiumName: parsed.data.stadiumName,
+              // The Google display name is the default manager name (the frontend
+              // prefills it and it is editable); a legacy client may omit it.
+              coachName: parsed.data.coachName ?? user.name,
+              preferredHours,
+            })
+          : {
+              userId: user.id,
+              clubName: parsed.data.clubName,
+              country: parsed.data.country,
+              primaryColor: parsed.data.primaryColor,
+              secondaryColor: parsed.data.secondaryColor,
+              kits: parsed.data.kits ?? null,
+              stadiumName: parsed.data.stadiumName,
+              coachName: parsed.data.coachName ?? user.name,
+              preferredHours,
+            },
+      );
+      // The archived crest is applied after creation (customLogo is not part
+      // of the wizard payload).
+      if (archive?.customLogo) {
+        club.customLogo = archive.customLogo;
+        club.logoVariant = archive.logoVariant;
+      }
 
-       const now = Date.now();
-       const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
-       const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
-       const seasonId = world.mp.seasonId;
-       const nextSeasonRef = { year: nextStart.getUTCFullYear(), month: nextStart.getUTCMonth() + 1 };
+      const now = Date.now();
+      // Lift the waiting-for-first-human hold: shift every real-time anchor
+      // forward by the held interval (same semantics as an admin resume) so
+      // the season clock starts fresh at this join moment, then clear the
+      // hold. Division 1 is created lazily by placeNewClub below.
+      if (awaitingFirst) {
+        const pausedAt = world.mp.pausedAt ?? now;
+        const shift = Math.max(0, now - pausedAt);
+        applyResumeShift(world, shift);
+        world.mp.pausedAt = null;
+        world.mp.awaitingFirstHuman = false;
+      }
+
+      const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
+      const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
+      const seasonId = world.mp.seasonId;
+      const nextSeasonRef = { year: nextStart.getUTCFullYear(), month: nextStart.getUTCMonth() + 1 };
       const result = placeNewClub(world, club.id, now, seasonId, nextSeasonRef);
 
-    if (result.kind === "provisional") {
+      if (result.kind === "provisional") {
         const nextSeason = await ensureSeasonRow(app.prisma, nextSeasonRef);
         await issueAllocation(app.prisma, world, club.id, nextSeason.seasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
         world.mpQueue.push({ clubId: club.id, source: "NEW_CLUB", queuedAt: Date.now(), preferredSeasonId: nextSeason.seasonId });
@@ -131,9 +180,13 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       syncMemberships(loaded.world, seasonId);
       syncClubSeasons(loaded.world, seasonId);
       await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      // Consume the preserved identity: it has been re-applied to the club.
+      if (archiveRow) {
+        await app.prisma.clubIdentityArchive.delete({ where: { userId: user.id } });
+      }
       publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
       publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
-      return { value: { ok: true, clubId: club.id, result } };
+      return { value: { ok: true, clubId: club.id, result, preserved: archive !== null } };
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;

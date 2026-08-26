@@ -19,6 +19,8 @@ interface WorldStatus {
   clubCount: number;
   humanClubCount: number;
   liveMatchCount: number;
+  awaitingFirstHuman: boolean;
+  paused: boolean;
 }
 
 const HEALTH_META: Record<string, { label: string; tone: ChipTone; hint: string }> = {
@@ -33,6 +35,7 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
   const [advanceDays, setAdvanceDays] = useState(1);
   const [reason, setReason] = useState("");
   const [targetRound, setTargetRound] = useState(14);
+  const [keepIdentity, setKeepIdentity] = useState(false);
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null);
 
   const runAction = async (action: () => Promise<unknown>, done: string) => {
@@ -101,7 +104,7 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
           <div className="stat">
             <div className="label">World</div>
             <div className="value">{w.humanClubCount} human{w.humanClubCount === 1 ? "" : "s"}</div>
-            <div className="hint">{w.clubCount} clubs · {w.divisionCount} divisions · {w.liveMatchCount} live</div>
+            <div className="hint">{w.awaitingFirstHuman ? "waiting for the first manager — season clock held" : `${w.clubCount} clubs · ${w.divisionCount} divisions · ${w.liveMatchCount} live`}</div>
           </div>
         </div>
       )}
@@ -236,14 +239,22 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
               setConfirm({
                 title: "Reset the world",
                 danger: true,
-                message: "Destroys EVERYTHING: clubs, squads, matches, history, markets, notifications. User accounts, friendships, bans and settings are kept. Every player must recreate a club via Join. This cannot be undone.",
+                message: keepIdentity ? (
+                  <>
+                    Destroys EVERYTHING except the preserved identity of every current club: names, colors, kits, crests, stadiums, coach names, match-time availability and friend-grouping opt-in are archived and restored automatically when each manager joins again. Squads, finances, matches, history, markets and notifications are wiped. Friendships, bans and settings are always kept. This cannot be undone.
+                  </>
+                ) : (
+                  <>
+                    Destroys EVERYTHING: clubs, squads, matches, history, markets, notifications. User accounts, friendships, bans and settings are kept. Every player must recreate a club via Join. This cannot be undone.
+                  </>
+                ),
                 confirmLabel: "Reset world",
                 confirmWord: "RESET",
                 minReasonLength: 10,
                 reasonHint: "Why is the world being reset? (min 10 characters)",
                 onConfirm: async (r) => {
-                  await api.adminWorldReset("RESET", r);
-                  notify("success", "World reset — a fresh season has started");
+                  const res = await api.adminWorldReset("RESET", r, keepIdentity);
+                  notify("success", keepIdentity ? `World reset — ${res.archivedClubs ?? 0} club identity(ies) preserved for rejoin` : "World reset — a fresh season has started");
                   world.reload();
                   clock.reload();
                 },
@@ -252,6 +263,16 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
           >
             <Trash2 size={15} /> Reset world…
           </button>
+          <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: "0.85rem", color: "var(--text-2)", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={keepIdentity}
+              onChange={(e) => setKeepIdentity(e.target.checked)}
+              aria-label="Preserve club identities across the reset"
+              style={{ width: 15, height: 15, accentColor: "var(--gold-2)" }}
+            />
+            Keep club identities (names, kits, crests, stadiums, availability) — restored on next join
+          </label>
         </div>
       </AdminCard>
 
