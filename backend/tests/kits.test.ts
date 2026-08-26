@@ -12,8 +12,10 @@ import {
   kitDesignSchema,
   parseClubKits,
   resolveClubKits,
+  selectMatchKits,
   serializeClubKits,
   type ClubKits,
+  type KitDesign,
 } from "../src/game/kits";
 
 const validKit = {
@@ -182,8 +184,63 @@ describe("human club creation with kits", () => {
   });
 });
 
+describe("match-day kit selection (selectMatchKits)", () => {
+  const design = (primary: string): KitDesign => ({ primary, secondary: "#ffffff", accent: "#111111", numberColor: "#111111", pattern: "solid" });
+  const sets = (home: string, away: string, gk = "#00ff00"): ClubKits => ({ home: design(home), away: design(away), gk: design(gk) });
+  const lumaOf = (hex: string) => {
+    const b = hex.replace("#", "");
+    return Math.round(0.2126 * parseInt(b.slice(0, 2), 16) + 0.7152 * parseInt(b.slice(2, 4), 16) + 0.0722 * parseInt(b.slice(4, 6), 16));
+  };
+
+  it("rule 1: away wears the away uniform with the highest shell contrast", () => {
+    // Home shell is dark navy (luma ~38). Away's home design is light yellow
+    // (clear contrast), its away design dark red (too close to navy) — so the
+    // away side must switch to its own home design.
+    const home = sets("#112233", "#889999");
+    const away = sets("#ffdd00", "#800000");
+    const result = selectMatchKits(home, away);
+    expect(result.homeKit.primary).toBe("#112233");
+    expect(result.awayKit.primary).toBe("#ffdd00");
+    expect(lumaOf(result.awayKit.primary) - lumaOf(result.homeKit.primary)).toBeGreaterThanOrEqual(90);
+  });
+
+  it("rule 1: classic home-home / away-away is kept when it already contrasts", () => {
+    const home = sets("#112233", "#889999");
+    const away = sets("#ffdd00", "#eeeeee");
+    const result = selectMatchKits(home, away);
+    expect(result.homeKit.primary).toBe("#112233");
+    expect(result.awayKit.primary).toBe("#eeeeee");
+  });
+
+  it("rule 2: home switches to its away design when no away uniform contrasts with the home shell", () => {
+    // Home shell is white; away has two near-white designs — no contrast. Home
+    // then wears its own dark navy away design, and away picks the lightest
+    // (highest-contrast) of its two options.
+    const home = sets("#ffffff", "#112233");
+    const away = sets("#f8f8f8", "#eeeeee");
+    const result = selectMatchKits(home, away);
+    expect(result.homeKit.primary).toBe("#112233");
+    expect(result.awayKit.primary).toBe("#f8f8f8");
+    expect(lumaOf(result.awayKit.primary) - lumaOf(result.homeKit.primary)).toBeGreaterThanOrEqual(90);
+  });
+
+  it("rule 3: falls back to home-home / away-away when nothing contrasts", () => {
+    const home = sets("#ffffff", "#fafafa");
+    const away = sets("#fdfdfd", "#eeeeee");
+    const result = selectMatchKits(home, away);
+    expect(result.homeKit.primary).toBe("#ffffff");
+    expect(result.awayKit.primary).toBe("#eeeeee");
+  });
+
+  it("is a pure deterministic function of the two kit sets", () => {
+    const home = sets("#ffffff", "#112233");
+    const away = sets("#f8f8f8", "#eeeeee");
+    expect(selectMatchKits(home, away)).toEqual(selectMatchKits(home, away));
+  });
+});
+
 describe("match-day kit usage (live view)", () => {
-  it("sends home design for home, away design for away, and each side's GK design", () => {
+  it("sends the contrast-selected designs and each side's GK design", () => {
     const world = generateWorld(2026);
     const storedKits: ClubKits = {
       home: { ...validKit, primary: "#112233", secondary: "#ffffff" },
@@ -195,12 +252,12 @@ describe("match-day kit usage (live view)", () => {
     const st = createLiveMatchState(createRng(7), home, away, world.players, { matchId: 1, fixtureId: 1, competitionId: 1 });
 
     const view = liveStateView(world, st);
-    expect(view.homeKit).toEqual(storedKits.home);
-    expect(view.homeGkKit).toEqual(storedKits.gk);
-    // The away side wears its own away design, never the home design.
-    const derivedAway = resolveClubKits(away).away;
-    expect(view.awayKit).toEqual(derivedAway);
+    const selected = selectMatchKits(storedKits, resolveClubKits(away));
+    expect(view.homeKit).toEqual(selected.homeKit);
+    expect(view.awayKit).toEqual(selected.awayKit);
+    // The away side never wears the home side's design.
     expect(view.awayKit.primary).not.toBe(view.homeKit.primary);
+    expect(view.homeGkKit).toEqual(storedKits.gk);
     expect(view.awayGkKit).toEqual(resolveClubKits(away).gk);
   });
 });

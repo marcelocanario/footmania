@@ -7,7 +7,7 @@ import {
   decayedStoredFamiliarity,
   projectSetups,
 } from "../game/familiarity";
-import { resolveClubKits } from "../game/kits";
+import { resolveClubKits, selectMatchKits } from "../game/kits";
 import { displayName } from "../game/displayName";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { MP_CONFIG } from "../config";
@@ -272,6 +272,10 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
   const { humanSide, isParticipant } = viewerFieldsFor(world, st, viewerUserId);
   const homeKits = home ? resolveClubKits(home) : null;
   const awayKits = away ? resolveClubKits(away) : null;
+  // Automatic uniform selection: contrast-aware pick of each side's designs,
+  // so the pitch never shows two clashing shells when designs allow a better
+  // pairing. GK kits are fixed per side regardless of the outfield choice.
+  const { homeKit, awayKit } = homeKits && awayKits ? selectMatchKits(homeKits, awayKits) : { homeKit: null, awayKit: null };
   return {
     matchId: st.matchId,
     fixtureId: st.fixtureId,
@@ -289,9 +293,10 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     home: home?.name ?? "",
     away: away?.name ?? "",
     // Kit Lab: full home/away/GK designs so pitch markers can mirror the
-    // pattern; each side's goalkeeper wears the side's GK design.
-    homeKit: kitView(homeKits?.home ?? null, "#23a55a", "#14693c"),
-    awayKit: kitView(awayKits?.away ?? null, "#f0b429", "#8c6510"),
+    // pattern; each side's goalkeeper wears the side's GK design. The
+    // outfield pair is chosen by selectMatchKits (contrast-aware).
+    homeKit: kitView(homeKit ?? null, "#23a55a", "#14693c"),
+    awayKit: kitView(awayKit ?? null, "#f0b429", "#8c6510"),
     homeGkKit: kitView(homeKits?.gk ?? null, "#d4770f", "#8a4d09"),
     awayGkKit: kitView(awayKits?.gk ?? null, "#0e6ba8", "#084a75"),
     homeScore: st.scores[0],

@@ -157,6 +157,22 @@ striped in the club's own colors, away kit a lightened or darkened variant depen
 on how bright the home color already is, goalkeeper kit following the same
 brightness-inversion rule as AI clubs.
 
+**Match-day kit selection** is automatic and contrast-aware, applied identically to
+the live match view and the fixture-list badges:
+1. The home team wears its home kit; the away team wears whichever of its two designs
+   contrasts best against the home shell (shells compared by perceptual luminance
+   distance, minimum 90 of 255 to count as decent contrast, light-vs-dark pairings
+   preferred on ties).
+2. If no away design reaches that minimum against the home kit, the home team
+   switches to its away kit and both away designs are retried the same way.
+3. If nothing qualifies even then, the classic pairing is used: home team home kit,
+   away team away kit.
+
+Each side's goalkeeper always wears that side's goalkeeper design, regardless of the
+outfield pairing. Selection is a pure deterministic function of the two clubs'
+designs — it never rerolls and is recomputed from current designs whenever the view
+is built.
+
 **Crests**: there's no automatic crest generation — only the ability to upload a
 custom image (PNG, JPEG, or WEBP, under 256KB). A size limit on the uploaded image's
 dimensions is currently enforced only by the app the club owner is using to upload it,

@@ -246,3 +246,45 @@ export function deriveFallbackKits(primaryColor: string, secondaryColor: string)
 export function resolveClubKits(club: { kits?: ClubKits | null; primaryColor: string; secondaryColor: string }): ClubKits {
   return club.kits ?? deriveFallbackKits(club.primaryColor, club.secondaryColor);
 }
+
+/**
+ * Automatic match-day uniform selection. Priority:
+ *  1. Home team wears its home design; the away side wears whichever of its
+ *     two designs contrasts best against the home shell.
+ *  2. When no away-side design reaches the minimum luma distance, the home
+ *     side switches to its away design and both away designs are retried.
+ *  3. Still nothing? Fall back to the classic home-home / away-away pairing.
+ *
+ * Contrast is measured on shell (primary) luma distance; qualifying pairings
+ * are compared by distance first, then light-vs-dark polarity (shells
+ * straddling the split) as a tie-break, then stable candidate order — so the
+ * result is a pure deterministic function of the two clubs' designs.
+ */
+export function selectMatchKits(home: ClubKits, away: ClubKits): { homeKit: KitDesign; awayKit: KitDesign } {
+  const split = KIT_CONFIG.matchKitLightLumaSplit;
+  const distance = (a: KitDesign, b: KitDesign) => Math.abs(getLuma(a.primary) - getLuma(b.primary));
+  const scores = (homeShell: KitDesign, candidates: KitDesign[]) =>
+    candidates.map((awayShell) => {
+      const d = distance(homeShell, awayShell);
+      const lumaHome = getLuma(homeShell.primary);
+      const lumaAway = getLuma(awayShell.primary);
+      return {
+        awayKit: awayShell,
+        distance: d,
+        // Light-vs-dark: exactly one shell on each side of the split.
+        oppositePolarity: (lumaHome >= split) !== (lumaAway >= split),
+      };
+    });
+  const best = (homeShell: KitDesign, candidates: KitDesign[]) =>
+    scores(homeShell, candidates)
+      .filter((s) => s.distance >= KIT_CONFIG.matchKitMinLumaDistance)
+      .sort((a, b) => b.distance - a.distance || Number(b.oppositePolarity) - Number(a.oppositePolarity))[0];
+
+  const homeFirst = best(home.home, [away.away, away.home]);
+  if (homeFirst) return { homeKit: home.home, awayKit: homeFirst.awayKit };
+
+  const homeSwapped = best(home.away, [away.away, away.home]);
+  if (homeSwapped) return { homeKit: home.away, awayKit: homeSwapped.awayKit };
+
+  return { homeKit: home.home, awayKit: away.away };
+}

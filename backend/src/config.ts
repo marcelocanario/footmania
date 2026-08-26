@@ -738,6 +738,12 @@ export const KIT_CONFIG = {
   gkSaturation: 0.75,
   gkLightnessMin: 0.22,
   gkLightnessMax: 0.82,
+  // Match-day automatic uniform selection (see selectMatchKits). A candidate
+  // home/away pairing qualifies when its shell luma distance reaches
+  // matchKitMinLumaDistance; ties prefer pairings that straddle the
+  // matchKitLightLumaSplit (light vs dark).
+  matchKitMinLumaDistance: 90,
+  matchKitLightLumaSplit: 128,
 } as const;
 
 /**

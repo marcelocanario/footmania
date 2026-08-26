@@ -3,7 +3,7 @@ import type { Competition, SeasonHistoryEntry, World } from "../game/types";
 import { seasonKey } from "../game/clock";
 import { calendarValues, phaseForSeasonDayIndex, seasonSchedulePreview } from "./seasonCalendar";
 import { preferredHoursFromClubRow } from "./saveService";
-import { resolveClubKits } from "../game/kits";
+import { resolveClubKits, selectMatchKits } from "../game/kits";
 import { standingsTiebreak } from "../game/league";
 import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf } from "../game/multiplayer";
 import { POSITION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
@@ -366,6 +366,11 @@ export function divisionFixturesView(world: World, comp: Competition, viewerClub
       const m = matchByFixtureId.get(f.id);
       // Live right now? Spectators can jump into any in-progress match.
       const liveMatch = world.liveMatches.find((s) => s.fixtureId === f.id);
+      // Fixture jerseys: the contrast-aware match-day selection, so the
+      // badges show exactly what each side will wear.
+      const homeDesigns = home ? resolveClubKits(home) : null;
+      const awayDesigns = away ? resolveClubKits(away) : null;
+      const matchKits = homeDesigns && awayDesigns ? selectMatchKits(homeDesigns, awayDesigns) : null;
       return {
         id: f.id,
         round: f.round,
@@ -373,10 +378,8 @@ export function divisionFixturesView(world: World, comp: Competition, viewerClub
         away: away?.name ?? "",
         homeClubId: f.homeClubId,
         awayClubId: f.awayClubId,
-        // Fixture jerseys: the home side wears its home design, the away
-        // side wears its away design.
-        homeKit: home ? resolveClubKits(home).home : null,
-        awayKit: away ? resolveClubKits(away).away : null,
+        homeKit: matchKits?.homeKit ?? homeDesigns?.home ?? null,
+        awayKit: matchKits?.awayKit ?? awayDesigns?.away ?? null,
         homeHasCustomLogo: Boolean(home?.customLogo && home.customLogo.status === "ACTIVE"),
         awayHasCustomLogo: Boolean(away?.customLogo && away.customLogo.status === "ACTIVE"),
         // Venue: the home club's ground.
