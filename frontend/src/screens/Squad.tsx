@@ -79,6 +79,7 @@ function conditionBody(p: PlayerView) {
     ? `${condition} · returns in ${injuryDays} day${injuryDays === 1 ? "" : "s"}`
     : `${condition}${(p.injuryDaysRemaining ?? 0) > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}`;
   const suspensionText = `Suspended for ${p.suspendedGames} match${p.suspendedGames === 1 ? "" : "es"}`;
+  const yellowWarningText = strings.squad.yellowCardWarning;
   const Icon = conditionIcon(condition);
   return (
     <span className="squad-condition-icons">
@@ -92,6 +93,17 @@ function conditionBody(p: PlayerView) {
       >
         <Icon size={16} aria-hidden="true" />
       </button>
+      {p.yellowWarning && (
+        <button
+          type="button"
+          className="squad-yellowcard squad-tooltip-trigger"
+          data-pr-tooltip={yellowWarningText}
+          title={yellowWarningText}
+          aria-label={yellowWarningText}
+        >
+          🟨
+        </button>
+      )}
       {p.suspended && (
         <button
           type="button"

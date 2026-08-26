@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,9 +6,11 @@ import { applySavedLineup } from "../src/game/club";
 import { EVENT_CODES } from "../src/game/constants";
 import { setupKey } from "../src/game/familiarity";
 import { createLiveMatchState, performLiveSub, simulateMatch, tickLiveMatch } from "../src/game/match";
+import { generateSeniorPlayer, generateYouthPlayer, seniorRosterTemplate } from "../src/game/playerGeneration";
 import { overallFromSkills } from "../src/game/rating";
 import { createRng } from "../src/game/rng";
 import type { Club, Match, MatchSimulationDiagnostics, Player, Position, Tactics } from "../src/game/types";
+import { gameConfig } from "../src/config";
 import { MATCH_SIMULATOR_CONFIG } from "../src/matchSimulatorConfig";
 
 /**
@@ -95,6 +98,20 @@ const POSITIONS: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3
 const STYLES: Record<string, number> = { CONTROL: 0, PRESS: 1, COUNTER: 2 };
 const FAMILIARITY_LEVELS = [25, 50, 75, 90, 100];
 const LOSS_MINUTES = [15, 30, 45, 60, 75];
+const INPUT_MODE = process.env.MATCH_SIM_INPUT_MODE === "generated" ? "generated" : "synthetic";
+const GENERATED_CLUBS_PER_DIVISION = Number(process.env.MATCH_SIM_GENERATED_CLUBS_PER_DIVISION ?? 12);
+const GENERATED_TOTAL_DIVISIONS = 5;
+const GENERATED_REFERENCE_DIVISION = Number(process.env.MATCH_SIM_GENERATED_DIVISION ?? 1);
+const HARNESS_VERSION = "match-calibration-next-v3-controlled-familiarity";
+
+type GeneratedPopulation = {
+  players: Player[];
+  clubsByDivision: Map<number, Club[]>;
+  xiMeans: Map<number, number>;
+  summary: Record<string, unknown>;
+};
+
+let generatedPopulation: GeneratedPopulation | null = null;
 
 function club(id: number, selectedTactics: Tactics): Club {
   return {
@@ -123,6 +140,142 @@ function club(id: number, selectedTactics: Tactics): Club {
     ledger: { income: [], expense: [] },
     trophies: {},
   };
+}
+
+function cloneClubState(source: Club, id = source.id): Club {
+  return {
+    ...source,
+    id,
+    tactics: { ...source.tactics },
+    tacticFamiliarity: source.tacticFamiliarity
+      ? Object.fromEntries(Object.entries(source.tacticFamiliarity).map(([key, value]) => [key, { ...value }]))
+      : undefined,
+    savedLineup: source.savedLineup
+      ? {
+          ...source.savedLineup,
+          starters: [...source.savedLineup.starters],
+          subs: [...source.savedLineup.subs],
+        }
+      : null,
+    ledger: {
+      income: [...source.ledger.income],
+      expense: [...source.ledger.expense],
+    },
+    trophies: { ...source.trophies },
+  };
+}
+
+function startingXi(squad: Player[]): Player[] {
+  const shape = [1, 2, 2, 4, 2];
+  const xi: Player[] = [];
+  for (let position = 0; position < shape.length; position++) {
+    xi.push(
+      ...squad
+        .filter((player) => player.position === position)
+        .sort((a, b) => b.overall - a.overall || a.id - b.id)
+        .slice(0, shape[position]),
+    );
+  }
+  return xi;
+}
+
+function buildGeneratedPopulation(seed: number): GeneratedPopulation {
+  if (!Number.isInteger(GENERATED_CLUBS_PER_DIVISION) || GENERATED_CLUBS_PER_DIVISION < 2) {
+    throw new Error(`MATCH_SIM_GENERATED_CLUBS_PER_DIVISION must be an integer >= 2: ${GENERATED_CLUBS_PER_DIVISION}`);
+  }
+  if (!Number.isInteger(GENERATED_REFERENCE_DIVISION) || GENERATED_REFERENCE_DIVISION < 1 || GENERATED_REFERENCE_DIVISION > GENERATED_TOTAL_DIVISIONS) {
+    throw new Error(`MATCH_SIM_GENERATED_DIVISION must be an integer from 1 to ${GENERATED_TOTAL_DIVISIONS}: ${GENERATED_REFERENCE_DIVISION}`);
+  }
+  const players: Player[] = [];
+  const clubsByDivision = new Map<number, Club[]>();
+  const xiMeans = new Map<number, number>();
+  const seniorTemplate = seniorRosterTemplate(gameConfig.playerGenerationRules.initialSeniorSquadSize);
+  const academyRules = gameConfig.playerGenerationRules;
+  const academyAgeSpan = academyRules.academyMaxAge - academyRules.academyMinAge + 1;
+
+  for (let division = 1; division <= GENERATED_TOTAL_DIVISIONS; division++) {
+    const clubs: Club[] = [];
+    for (let clubIndex = 0; clubIndex < GENERATED_CLUBS_PER_DIVISION; clubIndex++) {
+      const clubId = 100_000 + division * 1_000 + clubIndex;
+      const generatedClub = club(clubId, tactics(0));
+      generatedClub.name = `Generated D${division} Club ${clubIndex + 1}`;
+      generatedClub.shortName = `G${division}-${clubIndex + 1}`;
+      generatedClub.highestDivision = division;
+      const seniors = seniorTemplate.map((position, slot) =>
+        generateSeniorPlayer({
+          id: clubId * 1_000 + slot + 1,
+          clubId,
+          country: generatedClub.country,
+          position,
+          isYouth: false,
+          currentDivision: division,
+          highestDivisionReached: division,
+          totalDivisions: GENERATED_TOTAL_DIVISIONS,
+          seasonId: 1,
+          generationType: "initial-senior",
+          seed,
+          slot,
+        }),
+      );
+      const academy = Array.from({ length: academyRules.initialAcademySize }, (_, slot) =>
+        generateYouthPlayer({
+          id: clubId * 1_000 + 100 + slot + 1,
+          clubId,
+          country: generatedClub.country,
+          position: (slot % 5) as Position,
+          age: academyRules.academyMinAge + (slot % academyAgeSpan),
+          isYouth: true,
+          currentDivision: division,
+          highestDivisionReached: division,
+          totalDivisions: GENERATED_TOTAL_DIVISIONS,
+          seasonId: 1,
+          generationType: "initial-academy",
+          seed,
+          slot,
+        }),
+      );
+      generatedClub.captainId = seniors.find((player) => player.position === 0)?.id ?? null;
+      generatedClub.penaltyTakerId = seniors.find((player) => player.position === 4)?.id ?? null;
+      players.push(...seniors, ...academy);
+      clubs.push(generatedClub);
+      xiMeans.set(clubId, mean(startingXi(seniors).map((player) => player.overall)));
+    }
+    clubsByDivision.set(division, clubs);
+  }
+
+  const seniorPlayers = players.filter((player) => !player.isYouth);
+  const academyPlayers = players.filter((player) => player.isYouth);
+  const seniorOveralls = seniorPlayers.map((player) => player.overall).sort((a, b) => a - b);
+  const allOveralls = players.map((player) => player.overall).sort((a, b) => a - b);
+  const divisionMeans = Object.fromEntries(
+    [...clubsByDivision.entries()].map(([division, clubs]) => [
+      `D${division}`,
+      mean(seniorPlayers.filter((player) => clubs.some((candidate) => candidate.id === player.clubId)).map((player) => player.overall)),
+    ]),
+  );
+  const d1Xi = (clubsByDivision.get(1) ?? []).map((candidate) => xiMeans.get(candidate.id) ?? 0);
+  const summary: Record<string, unknown> = {
+    source: "production generateSeniorPlayer/generateYouthPlayer",
+    seed,
+    totalDivisions: GENERATED_TOTAL_DIVISIONS,
+    clubsPerDivision: GENERATED_CLUBS_PER_DIVISION,
+    referenceDivision: GENERATED_REFERENCE_DIVISION,
+    totalClubs: GENERATED_TOTAL_DIVISIONS * GENERATED_CLUBS_PER_DIVISION,
+    totalPlayers: players.length,
+    seniorPlayers: seniorPlayers.length,
+    academyPlayers: academyPlayers.length,
+    seniorOverallMean: mean(seniorOveralls),
+    seniorOverallP10: percentile(seniorOveralls, 0.1),
+    seniorOverallP50: percentile(seniorOveralls, 0.5),
+    seniorOverallP90: percentile(seniorOveralls, 0.9),
+    allPlayerMean: mean(allOveralls),
+    divisionMeans,
+    d1XiMean: mean(d1Xi),
+    d1XiP10: percentile([...d1Xi].sort((a, b) => a - b), 0.1),
+    d1XiP50: percentile([...d1Xi].sort((a, b) => a - b), 0.5),
+    d1XiP90: percentile([...d1Xi].sort((a, b) => a - b), 0.9),
+  };
+  return { players, clubsByDivision, xiMeans, summary };
 }
 
 function makePlayer(id: number, clubId: number, position: Position, strength: number, energy: number): Player {
@@ -195,6 +348,23 @@ function clone(players: Player[]): Player[] {
   }));
 }
 
+function generatedStrengthPercentile(strength: number): number {
+  const anchors: Array<[number, number]> = [[42, 0.1], [49, 0.25], [55, 0.5], [61, 0.75], [68, 0.9]];
+  return anchors.reduce((best, candidate) =>
+    Math.abs(candidate[0] - strength) < Math.abs(best[0] - strength) ? candidate : best,
+  )[1];
+}
+
+function generatedClubForStrength(strength: number, offset = 0): Club {
+  if (!generatedPopulation) throw new Error("Generated match population has not been initialized");
+  const referenceClubs = generatedPopulation.clubsByDivision.get(GENERATED_REFERENCE_DIVISION) ?? [];
+  const ordered = [...referenceClubs].sort((a, b) =>
+    (generatedPopulation!.xiMeans.get(a.id) ?? 0) - (generatedPopulation!.xiMeans.get(b.id) ?? 0) || a.id - b.id,
+  );
+  const target = Math.round((ordered.length - 1) * generatedStrengthPercentile(strength));
+  return ordered[(target + offset + ordered.length) % ordered.length];
+}
+
 function seedFamiliarity(target: Club, value: number): void {
   target.tacticFamiliarity = {
     [setupKey(target.tactics)]: { familiarity: value, lastUsedAbsoluteGameDay: null },
@@ -211,9 +381,56 @@ function pair(
   outOfPosition = false,
   homeFamiliarity = 50,
   awayFamiliarity = 50,
+  identicalTeams = false,
+  aiTactics = true,
 ) {
+  if (INPUT_MODE === "generated") {
+    if (!generatedPopulation) throw new Error("Generated match population has not been initialized");
+    const homeTemplate = generatedClubForStrength(homeStrength);
+    const awayTemplate = identicalTeams
+      ? homeTemplate
+      : generatedClubForStrength(awayStrength, homeStrength === awayStrength ? 1 : 0);
+    const home = cloneClubState(homeTemplate);
+    const away = identicalTeams ? cloneClubState(homeTemplate, homeTemplate.id + 90_000_000) : cloneClubState(awayTemplate);
+    if (!aiTactics) {
+      home.isHuman = true;
+      away.isHuman = true;
+    }
+    home.tactics = { ...homeTactics };
+    away.tactics = { ...awayTactics };
+    seedFamiliarity(home, homeFamiliarity);
+    seedFamiliarity(away, awayFamiliarity);
+    const players = clone(generatedPopulation.players);
+    for (const player of players) {
+      if (player.clubId === home.id || player.clubId === away.id) player.energy = energy;
+    }
+    if (identicalTeams) {
+      const clonedHomePlayers = players
+        .filter((player) => player.clubId === home.id)
+        .map((player) => ({ ...player, id: player.id + 90_000_000, clubId: away.id }));
+      players.push(...clonedHomePlayers);
+    }
+    if (outOfPosition) {
+      const homePlayers = players.filter((player) => player.clubId === home.id);
+      const ids = homePlayers.slice(0, 11).map((player) => player.id);
+      [ids[1], ids[2]] = [ids[2], ids[1]];
+      [ids[3], ids[9]] = [ids[9], ids[3]];
+      applySavedLineup(home, homePlayers, {
+        formation: 4,
+        starters: ids,
+        subs: homePlayers.slice(11, 23).map((player) => player.id),
+        penaltyTakerId: null,
+        freeKickTakerId: null,
+      });
+    }
+    return { home, away, players, seed: SEED + index * 7919 };
+  }
   const home = club(1, homeTactics);
   const away = club(2, awayTactics);
+  if (!aiTactics) {
+    home.isHuman = true;
+    away.isHuman = true;
+  }
   seedFamiliarity(home, homeFamiliarity);
   seedFamiliarity(away, awayFamiliarity);
   const homePlayers = squad(1, homeStrength, energy, 1000);
@@ -261,8 +478,10 @@ function full(
   outOfPosition = false,
   homeFamiliarity = 50,
   awayFamiliarity = 50,
+  identicalTeams = false,
+  aiTactics = true,
 ): CalibrationRun {
-  const setup = pair(index, homeStrength, awayStrength, homeTactics, awayTactics, energy, outOfPosition, homeFamiliarity, awayFamiliarity);
+  const setup = pair(index, homeStrength, awayStrength, homeTactics, awayTactics, energy, outOfPosition, homeFamiliarity, awayFamiliarity, identicalTeams, aiTactics);
   const players = clone(setup.players);
   const result = simulateMatch(createRng(setup.seed), setup.home, setup.away, players, {
     competitionId: 1,
@@ -434,7 +653,7 @@ function summarize(name: string, values: Sample[]): Summary {
 
 function run(name: string, index: number): CalibrationRun {
   if (name === "neutral-baseline") return full(index, 55, 55);
-  if (name === "identical-home-away") return full(index, 55, 55, tactics(0), tactics(0), 100, false);
+  if (name === "identical-home-away") return full(index, 55, 55, tactics(0), tactics(0), 100, false, false, 50, 50, true);
   if (name === "P10-vs-P50-neutral") return full(index, 42, 55);
   if (name === "P25-vs-P50-neutral") return full(index, 49, 55);
   if (name === "P50-vs-P50-neutral") return full(index, 55, 55);
@@ -455,14 +674,14 @@ function run(name: string, index: number): CalibrationRun {
     const style = STYLES[equalFamiliarity[1]];
     const familiarity = Number(equalFamiliarity[2]);
     const selected = tactics(style, style === 1 ? 2 : 0);
-    return full(index, 55, 55, selected, selected, 100, true, false, familiarity, familiarity);
+    return full(index, 55, 55, selected, selected, 100, true, false, familiarity, familiarity, false, false);
   }
 
   const gapFamiliarity = /^familiarity-(CONTROL|PRESS|COUNTER)-home-(\d+)-away-(\d+)$/.exec(name);
   if (gapFamiliarity) {
     const style = STYLES[gapFamiliarity[1]];
     const selected = tactics(style, style === 1 ? 2 : 0);
-    return full(index, 55, 55, selected, selected, 100, true, false, Number(gapFamiliarity[2]), Number(gapFamiliarity[3]));
+    return full(index, 55, 55, selected, selected, 100, true, false, Number(gapFamiliarity[2]), Number(gapFamiliarity[3]), false, false);
   }
 
   if (name.startsWith("energy-")) return full(index, 55, 55, tactics(0), tactics(0), Number(name.slice(7)));
@@ -507,6 +726,39 @@ const PLAYER_LOSS_SCENARIOS = [
 ];
 const ALL = [...CORE_SCENARIOS, ...FAMILIARITY_SCENARIOS, ...PLAYER_LOSS_SCENARIOS];
 
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([key, nested]) => [key, stableJsonValue(nested)]),
+    );
+  }
+  return value;
+}
+
+function digest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(stableJsonValue(value))).digest("hex");
+}
+
+function inputSnapshot(names: string[]): Record<string, unknown> {
+  return {
+    harnessVersion: HARNESS_VERSION,
+    inputMode: INPUT_MODE,
+    seed: SEED,
+    scenarios: names,
+    generatedPopulation: generatedPopulation?.summary ?? null,
+    targetContract: TARGETS,
+    gameConfig: {
+      playerGeneration: gameConfig.playerGeneration,
+      playerCareer: gameConfig.playerCareer,
+      playerGenerationRules: gameConfig.playerGenerationRules,
+    },
+    matchSimulatorConfig: MATCH_SIMULATOR_CONFIG,
+  };
+}
+
 function snapshot(): Record<string, unknown> {
   const config = MATCH_SIMULATOR_CONFIG;
   return {
@@ -531,9 +783,21 @@ function snapshot(): Record<string, unknown> {
 function main(): void {
   applyOverrides();
   const requested = process.env.MATCH_SIM_ONLY ?? "neutral-baseline";
-  const names = requested === "all" ? ALL : [requested];
+  const names = requested === "all"
+    ? ALL
+    : requested.split(",").map((name) => name.trim()).filter(Boolean);
+  if (names.length === 0) throw new Error("MATCH_SIM_ONLY must contain at least one scenario name");
+  if (INPUT_MODE === "generated") generatedPopulation = buildGeneratedPopulation(SEED);
   if (process.env.MATCH_SIM_DRY_RUN === "1") {
-    process.stdout.write(JSON.stringify({ status: "dry-run-no-simulations", targets: TARGET_PATH, scenarios: names }, null, 2));
+    const frozen = inputSnapshot(names);
+    process.stdout.write(JSON.stringify({
+      status: "dry-run-no-simulations",
+      targets: TARGET_PATH,
+      scenarios: names,
+      inputDigest: digest(frozen),
+      inputMode: INPUT_MODE,
+      generatedPopulation: generatedPopulation?.summary ?? null,
+    }, null, 2));
     return;
   }
   const baselineCount = Number(process.env.MATCH_SIM_BASELINE_COUNT ?? 20000);
@@ -550,11 +814,17 @@ function main(): void {
     results.push(summarize(name, raw[name]));
   }
   const output = process.env.MATCH_SIM_OUTPUT ?? CANDIDATE_JSON;
+  const frozen = inputSnapshot(names);
   const artifact = {
     artifactStatus: "CANDIDATE_NOT_AUTHORITATIVE",
+    harnessVersion: HARNESS_VERSION,
+    inputMode: INPUT_MODE,
     targetSchemaVersion: TARGETS.schemaVersion,
     seed: SEED,
     sampleCounts: { baseline: baselineCount, scenario: scenarioCount },
+    inputDigest: digest(frozen),
+    inputSnapshot: frozen,
+    generatedPopulation: generatedPopulation?.summary ?? null,
     config: snapshot(),
     results,
     raw,

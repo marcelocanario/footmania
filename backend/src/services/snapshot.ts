@@ -8,7 +8,7 @@ import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 import { resolveClubKits } from "../game/kits";
 import { newsVisibleTo } from "../game/news";
-import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
+import { calendarValues, leagueTurnKey, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { seasonKey } from "../game/clock";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import {
@@ -68,13 +68,27 @@ export function playerView(
   p: World["players"][number],
   loan?: { onLoan: boolean; onLoanOut: boolean; loanClubName: string | null; loanFromName: string | null },
   absoluteGameDay = 0,
-  liveDelta?: LivePlayerStatDelta | null
+  liveDelta?: LivePlayerStatDelta | null,
+  /** Turn key of the viewing club's next unplayed division fixture. Enables
+   *  the per-turn yellow-card warning; callers whose context is not "this
+   *  player represents the viewing club" (loans, other-club views) omit it. */
+  nextFixtureTurnKey?: number | null
 ) {
   const nick = (p.nickname ?? "").trim();
   const goals = p.seasonGoals + (liveDelta?.goals ?? 0);
   const assists = p.seasonAssists + (liveDelta?.assists ?? 0);
   const careerGoals = p.careerGoals + (liveDelta?.goals ?? 0);
   const careerAssists = p.careerAssists + (liveDelta?.assists ?? 0);
+  // One booking away from the per-turn limit, next match still inside the same
+  // turn: another yellow in that match triggers the automatic ban.
+  const { turnYellowLimit } = gameConfig.discipline;
+  const yellowWarning =
+    p.suspendedGames === 0 &&
+    nextFixtureTurnKey !== undefined &&
+    nextFixtureTurnKey !== null &&
+    (p.yellowsTurnKey ?? null) === nextFixtureTurnKey &&
+    turnYellowLimit >= 1 &&
+    (p.turnYellows ?? 0) >= turnYellowLimit - 1;
   return {
     id: p.id,
     name: p.name,
@@ -105,6 +119,8 @@ export function playerView(
     careerAssists,
     yellows: p.yellows,
     reds: p.reds,
+    turnYellows: p.turnYellows ?? 0,
+    yellowWarning,
     onSale: p.onSale,
     suspended: p.suspendedGames > 0,
     suspendedGames: p.suspendedGames,
@@ -225,14 +241,17 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
     });
 
   const liveStatDeltas = liveMatchStatDeltas(world);
+  // Turn key of the club's next unplayed division fixture: players booked in
+  // that same turn are one card away from the automatic ban (squad warning).
+  const nextFixtureTurnKey = nextFixture ? leagueTurnKey(world.mp.seasonNumber ?? 0, nextFixture.round) : null;
   const squad = world.players
     .filter((p) => p.clubId === clubId && !p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null, nextFixtureTurnKey));
   const juniors = world.players
     .filter((p) => p.clubId === clubId && p.isYouth)
     .sort((a, b) => b.overall - a.overall)
-    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null));
+    .map((p) => playerView(p, loanInfo(world, p, clubId, loanById, clubById), world.mp.absoluteGameDay ?? world.dayIndex, liveStatDeltas.get(p.id) ?? null, nextFixtureTurnKey));
   // Players the club owns but that are away on loan, so the ceding club can
   // still see them in its roster.
   const loanedOutIds = new Set(

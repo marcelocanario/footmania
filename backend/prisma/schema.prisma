@@ -364,6 +364,12 @@ model Player {
   squadNumber     Int?
   onSale          Boolean
   suspendedGames  Int
+  // Yellow cards accumulated within the current league turn, plus the stable
+  // key of that turn (seasonNumber * league.turns + floor(round/(teams-1))).
+  // Null = no bookings recorded in any turn. Reaching
+  // gameConfig.discipline.turnYellowLimit within one turn triggers a ban.
+  turnYellows     Int
+  yellowsTurnKey  Int?
   loanId          Int?
   skillGol        Int
   skillVel        Int

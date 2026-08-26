@@ -56,6 +56,22 @@ export function leagueMatchDayIndices(config = gameConfig): number[] {
   return Array.from({ length: config.roundsPerSeason }, (_, roundIndex) => roundDayIndex(roundIndex, config));
 }
 
+/**
+ * Stable integer key for the league turn containing 0-based `round` in the
+ * season identified by `seasonNumber`. Turn N spans rounds
+ * [N * (teams - 1), (N + 1) * (teams - 1)) — every pair of teams meets exactly
+ * once per turn. Encoding the season keeps keys unique across seasons, so
+ * per-turn disciplinary counters (discipline.turnYellowLimit) expire naturally
+ * at every turn boundary without an explicit reset sweep.
+ */
+export function leagueTurnKey(seasonNumber: number, round: number, config: Pick<GameConfig, "league"> = gameConfig): number {
+  const roundsPerTurn = config.league.teams - 1;
+  if (!Number.isInteger(roundsPerTurn) || roundsPerTurn <= 0) {
+    throw new Error(`League turn size must be a positive integer: ${config.league.teams - 1}`);
+  }
+  return seasonNumber * config.league.turns + Math.floor(round / roundsPerTurn);
+}
+
 export function roundForSeasonDayIndex(seasonDayIndex: number, config = gameConfig): number | null {
   const offset = seasonDayIndex - config.league.startDay;
   if (offset < 0 || offset % config.matchSpacingDays !== 0) return null;

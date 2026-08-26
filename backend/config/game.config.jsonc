@@ -13,6 +13,23 @@
     "restDaysBetweenMatches": 1
   },
 
+  // --- Discipline ---
+  // Post-match consequences of card events. Purely downstream of the match
+  // engine: nothing here feeds back into match simulation probabilities.
+  "discipline": {
+    // Yellow cards accumulated within one league turn that trigger an
+    // automatic ban. The counter resets at every league-turn boundary.
+    // (e.g. 2 = a second booking inside the same half-season bans the player.)
+    "turnYellowLimit": 2,
+    // Length in club fixtures of the automatic yellow-accumulation ban.
+    "turnYellowBanGames": 1,
+    // Red-card tribunal: games = round(base + lnCoefficient * ln(X)) where X
+    // is a uniform integer 1..100 drawn from the world RNG.
+    // Defaults yield 59% x1, 27% x2, 9% x3, 4% x4, 1% x5 matches.
+    "tribunalBase": 5.1748,
+    "tribunalLnCoefficient": -0.9884
+  },
+
   // Guaranteed full game-days after the final league round and before the
   // following season begins. The inter-season gap is the sum of these two
   // windows; the derived season length is 35 days.

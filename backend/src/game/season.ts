@@ -583,6 +583,10 @@ export function commitSeasonRollover(world: World): void {
     player.seasonAppearances = 0;
     player.yellows = 0;
     player.reds = 0;
+    // Per-turn accumulation is season-scoped by construction, but clear it
+    // explicitly so the new season starts from a clean slate.
+    player.turnYellows = 0;
+    player.yellowsTurnKey = null;
     player.onSale = world.transferAuctions.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id)
       || world.freeAgentListings.some((listing) => listing.status === "ACTIVE" && listing.playerId === player.id);
   }

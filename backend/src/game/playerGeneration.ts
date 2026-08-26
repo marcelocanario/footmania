@@ -565,6 +565,8 @@ function buildGeneratedPlayer(
     tacPos: -1,
     onSale: false,
     suspendedGames: 0,
+    turnYellows: 0,
+    yellowsTurnKey: null,
     loanId: null,
     careerProfile: profile,
     recentMinutes: [],

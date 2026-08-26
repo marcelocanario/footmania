@@ -59,6 +59,8 @@ export const strings = {
     condition: "Cond",
     injuryCause: "Cause",
     injuredReturn: "Expected return: season day {{day}}",
+    yellowCardWarning: "Booked this league turn — another yellow in the next match means a ban",
+
     age: "Age",
     position: "Pos",
     player: "Player",

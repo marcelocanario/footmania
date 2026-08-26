@@ -593,6 +593,17 @@ exact same setup cold for the first time.
   naturally and unevenly, the way a real 90 minutes does. Stoppage time at the end of
   each half responds to what actually happened in that half — goals, substitutions,
   injuries, and cards all add a little.
+- **Quality-normalized event volume**: the action model is anchored to the accepted
+  neutral reference XI. When generated squads are materially stronger than that
+  reference, only the neutral pass-intent weight and action pacing are interpolated
+  toward the calibrated high-quality setting. This prevents the new generation scale
+  from inflating pass counts and total actions; it does not directly modify goals,
+  xG, or win probability, which remain emergent from the possession engine.
+- **Short-handed execution**: a missing support player lowers local formation
+  density. Pass execution uses its own calibrated density sensitivity because
+  passing relies on nearby support more directly than shot quality; shot density
+  is calibrated separately. Both effects are local and emergent, and neither is
+  a direct win, score, or xG modifier.
 - **Shots**: who takes a shot, from where, and how likely it is to result in a goal
   are all driven by the specific players on the pitch — the shooter's finishing
   ability versus the opposing goalkeeper's shot-stopping ability is the one place a
@@ -739,6 +750,31 @@ player short.
 A player who's currently injured or suspended simply cannot be selected into a
 lineup — by a human manager or by the game's own automatic squad-picking — until their
 injury has fully healed or their suspension has been served.
+
+### 5.8 Discipline: bookings and suspensions
+
+Discipline is purely a downstream consequence of match events — the card model in the
+match engine is never influenced by any of these rules, so no rebalancing of match
+simulation is required when they change.
+
+- **Yellow cards are counted per league turn** (a turn is one complete pass through all
+  opponents, i.e. half of a double round-robin; with 8 teams and 2 turns, rounds 1–7 form
+  one turn and rounds 8–14 the other). A player booked twice inside the same turn is
+  automatically suspended (currently for one fixture), after which their per-turn counter
+  starts fresh. Bookings never carry across a turn boundary, and the season-total yellow
+  count used for season history keeps accumulating independently.
+- **Red cards go to a tribunal.** The ban length is drawn from a log model over a uniform
+  1–100 roll (`games = round(5.1748 − 0.9884 · ln(X))`, configured in
+  `game.config.jsonc` under `discipline`), yielding roughly 59% ×1, 27% ×2, 9% ×3,
+  4% ×4, and 1% ×5 fixtures. Exactly one RNG draw is consumed per red card at
+  finalization, keeping replays deterministic.
+- **Serving**: suspensions tick down once per club fixture that is finalized, whether or
+  not the suspended player would have taken part.
+- **Squad warning**: the squad screen's condition column shows a yellow-card icon for a
+  player booked in the same league turn as the club's next fixture while they sit one
+  booking below the per-turn limit — i.e. another yellow in the following match means an
+  automatic ban. The icon deliberately does not appear when the next match falls into a
+  new turn.
 
 ---
 

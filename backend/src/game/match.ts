@@ -2,6 +2,8 @@ import type { Club, LiveMatchState, LiveTactics, Match, MatchEvent, MatchStats, 
 import { nextInt } from "./rng";
 import { chooseAiTactics, lineupForMatch } from "./club";
 import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, GOAL_SUBTYPES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
+import { leagueTurnKey } from "./calendar";
+
 import {
   advancePossessionMatch,
   computeAttributeCenters,
@@ -12,7 +14,7 @@ import {
   type AttributeCenters,
 } from "./matchSim";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
-import { MP_CONFIG } from "../config";
+import { MP_CONFIG, gameConfig } from "../config";
 import {
   canonicalFromLive,
   decayedStoredFamiliarity,
@@ -736,13 +738,23 @@ export function rebuildLiveHumanLineup(
 // Post-match player effects
 // ---------------------------------------------------------------------------
 
+/**
+ * Pure red-card tribunal mapping: games = round(base + lnCoefficient * ln(X))
+ * for a uniform draw X in 1..100 (discipline config). Clamped to at least one
+ * fixture. Exported for tests.
+ */
+export function tribunalGamesForDraw(x: number): number {
+  const { tribunalBase, tribunalLnCoefficient } = gameConfig.discipline;
+  return Math.max(1, Math.round(tribunalBase + tribunalLnCoefficient * Math.log(x)));
+}
+
+/**
+ * Red-card tribunal. Draws one uniform integer 1..100 from the world RNG and
+ * maps it through the configured log model. Post-match only: exactly one RNG
+ * draw per red card, never consulted by the match engine itself.
+ */
 export function tribunalSuspension(rng: RngState): number {
-  const roll = nextInt(rng, 100);
-  if (roll < 60) return 1;
-  if (roll < 85) return 2;
-  if (roll < 95) return 3;
-  if (roll < 99) return 5;
-  return 10;
+  return tribunalGamesForDraw(nextInt(rng, 100) + 1);
 }
 
 /** Credit a finalized match's goals and assists to player counters, from the
@@ -772,6 +784,31 @@ export function applyMatchGoalsToPlayers(match: Match, players: Player[]): void 
   }
 }
 
+/**
+ * Per-league-turn yellow-card accumulation (discipline config). Bookings count
+ * only within one league turn: the stable yellowsTurnKey makes stale counters
+ * expire at every turn boundary without an explicit reset sweep. Reaching the
+ * limit inside a turn bans the player and zeroes the counter, so a fresh
+ * accumulation window opens once the ban is served. Post-match only — reads
+ * the finalized fixture's round and never touches engine state.
+ */
+function applyTurnYellow(world: World, p: Player, match: Match): void {
+  const fixture = world.fixtures.find((f) => f.id === match.fixtureId);
+  if (!fixture) return; // practice/history sims have no committed fixture row
+  const { turnYellowLimit, turnYellowBanGames } = gameConfig.discipline;
+  const key = leagueTurnKey(world.mp.seasonNumber ?? 0, fixture.round);
+  if ((p.yellowsTurnKey ?? null) !== key) {
+    p.yellowsTurnKey = key;
+    p.turnYellows = 0;
+  }
+  p.turnYellows = (p.turnYellows ?? 0) + 1;
+  if (p.turnYellows >= turnYellowLimit) {
+    p.turnYellows = 0;
+    p.yellowsTurnKey = null;
+    p.suspendedGames = Math.max(p.suspendedGames, turnYellowBanGames);
+  }
+}
+
 export function applyMatchToPlayers(match: Match, world: World) {
   const byId = new Map(world.players.map((p) => [p.id, p]));
   applyMatchGoalsToPlayers(match, world.players);
@@ -791,11 +828,10 @@ export function applyMatchToPlayers(match: Match, world: World) {
     const p = ev.playerId ? byId.get(ev.playerId) : null;
     if (!p) continue;
     if (ev.type === EVENT_CODES.YELLOW) {
+      // Season total (season history, awards, profile). Never resets mid-season;
+      // per-turn accumulation is tracked separately by applyTurnYellow.
       p.yellows++;
-      if (p.yellows >= 3) {
-        p.yellows = 0;
-        p.suspendedGames = Math.max(p.suspendedGames, 1);
-      }
+      applyTurnYellow(world, p, match);
     } else if (ev.type === EVENT_CODES.RED || ev.type === EVENT_CODES.YELLOW_RED) {
       p.reds++;
       const games = tribunalSuspension(world.rng);

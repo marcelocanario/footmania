@@ -4037,7 +4037,9 @@
           }
         },
         "finisherVsGoalkeeperLogitCoefficient": 0.35,
-        "localDensityCoefficient": 20,
+        // Calibrated with the pass-specific density effect so a one-player
+        // loss shifts xG without double-counting the same formation deficit.
+        "localDensityCoefficient": 14,
         "shooterRoleWeights": {
           "ST": 1,
           "LW": 0.8,
@@ -4144,10 +4146,22 @@
         "minRobustSigma": 1,
         "rawZClamp": 3,
         "contestZClamp": 2.5,
-        "minTacticalSigma": 0.25
+        "minTacticalSigma": 0.25,
+        // Higher generated OVR otherwise creates extra actions and passes
+        // without representing a stronger side. Interpolate from the legacy
+        // neutral reference to the accepted generated-population benchmark.
+        "qualityCompensation": {
+          "referenceOverall": 71,
+          "highOverall": 80,
+          "highQualityPassIntentScale": 0.85,
+          "highQualityTempoScale": 0.78
+        }
       },
       "actionQuality": {
         "localDensityCoefficient": 0.6,
+        // Passing is more sensitive to a missing support player than the
+        // general action outcome; keep this separate from shot quality.
+        "passLocalDensityCoefficient": 5.5,
         "attributeWeights": {
           "PASS": {
             "technical": 1
@@ -4274,6 +4288,9 @@
         }
       },
       "tacticalActionMix": {
+        // Baseline neutral pass intent. Quality compensation applies the
+        // generated-population correction without changing the legacy fixture.
+        "passIntentScale": 1,
         "nonNeutralCorrectionScale": 0.75,
         "asymmetricActionUtility": {
           "PASS": -0.35,

@@ -315,6 +315,8 @@ interface Engine {
   phaseResidenceSeconds: Record<MatchPhase, number>;
   restartCounts: Record<string, number>;
   possessionStarts: number;
+  passIntentScale: number;
+  tempoScale: number;
 }
 
 function sideOf(eng: Engine, side: 0 | 1): Side {
@@ -712,13 +714,30 @@ function gammaParams(action: string, phase: MatchPhase, zone: MatchZone): { shap
   return null;
 }
 
-function controlledDuration(rng: RngState, action: string, phase: MatchPhase, zone: MatchZone): number {
+function qualityCompensation(players: Player[], clubIds: Set<number>, initialXIIds: number[]): { passIntentScale: number; tempoScale: number } {
+  const cfg = MS.normalization.qualityCompensation;
+  const roster = players.filter((player) => player.clubId !== null && clubIds.has(player.clubId));
+  const byId = new Map(players.map((player) => [player.id, player]));
+  const initialXI = initialXIIds.map((id) => byId.get(id)).filter((player): player is Player => Boolean(player));
+  const referenceOverall = initialXI.length > 0
+    ? initialXI.reduce((sum, player) => sum + (player.overall ?? 0), 0) / initialXI.length
+    : roster.length > 0
+      ? roster.reduce((sum, player) => sum + (player.overall ?? 0), 0) / roster.length
+      : cfg.referenceOverall;
+  const fraction = clamp((referenceOverall - cfg.referenceOverall) / Math.max(1, cfg.highOverall - cfg.referenceOverall), 0, 1);
+  return {
+    passIntentScale: MS.tacticalActionMix.passIntentScale + fraction * (cfg.highQualityPassIntentScale - MS.tacticalActionMix.passIntentScale),
+    tempoScale: MS.timing.tempoScale + fraction * (cfg.highQualityTempoScale - MS.timing.tempoScale),
+  };
+}
+
+function controlledDuration(eng: Engine, action: string, phase: MatchPhase, zone: MatchZone): number {
   const params = gammaParams(action, phase, zone);
   if (params) {
-    const sample = gamma(rng, params.shape) * params.scale;
-    return sample / MS.timing.tempoScale;
+    const sample = gamma(eng.rng, params.shape) * params.scale;
+    return sample / eng.tempoScale;
   }
-  return MS.timing.instantActionSeconds / MS.timing.tempoScale;
+  return MS.timing.instantActionSeconds / eng.tempoScale;
 }
 
 // ---------------------------------------------------------------------------
@@ -732,7 +751,9 @@ function stateKey(phase: MatchPhase, zone: MatchZone): string {
 function intentBaseline(eng: Engine): Record<string, number> {
   const row = MS.probabilityModel.state[stateKey(eng.phase, eng.zone)];
   if (!row) return {};
-  return row.intentProbabilities;
+  const baseline = { ...row.intentProbabilities };
+  if (baseline.PASS !== undefined) baseline.PASS *= eng.passIntentScale;
+  return baseline;
 }
 
 function failureBaseline(eng: Engine): { controlFailureProbability: number; miscontrol: number; dispossessed: number } {
@@ -907,9 +928,12 @@ function resolveOutcome(eng: Engine, action: string): Outcome {
   const base = outcomeBaseline(eng, action);
   const att = eng.possessionSide;
   const def = opp(eng, att);
+  const densityCoefficient = action === "PASS"
+    ? MS.actionQuality.passLocalDensityCoefficient
+    : MS.actionQuality.localDensityCoefficient;
   const zExec = clamp(
     (actionQualityFor(sideOf(eng, att), eng.zone, action) - defensiveResistanceFor(def, eng.zone, action)) / Math.SQRT2 +
-      MS.actionQuality.localDensityCoefficient * (localDensity(sideOf(eng, att), eng.zone) - localDensity(def, eng.zone)),
+      densityCoefficient * (localDensity(sideOf(eng, att), eng.zone) - localDensity(def, eng.zone)),
     -MS.normalization.contestZClamp,
     MS.normalization.contestZClamp
   );
@@ -1902,7 +1926,7 @@ function stepPossession(eng: Engine): void {
   else if (action === "DRIBBLE") stats.dribbles++;
 
   const actionPhase = eng.phase;
-  const dt = controlledDuration(eng.rng, action, actionPhase, eng.zone);
+  const dt = controlledDuration(eng, action, actionPhase, eng.zone);
   eng.clockSeconds += dt;
   eng.possessionAgeSeconds += dt;
   eng.controlledSeconds[attSide] += dt;
@@ -2352,6 +2376,7 @@ function buildEngine(
   st.playerEnergy ??= {};
   const homeXI = resolve(st.homeOn);
   const awayXI = resolve(st.awayOn);
+  const quality = qualityCompensation(players, new Set([home.id, away.id]), [...st.homeXI, ...st.awayXI]);
 
   const homeSide: Side = {
     idx: 0,
@@ -2478,6 +2503,8 @@ function buildEngine(
     },
     restartCounts: {},
     possessionStarts: 0,
+    passIntentScale: quality.passIntentScale,
+    tempoScale: quality.tempoScale,
   };
 
   // Initial possession

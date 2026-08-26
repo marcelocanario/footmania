@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api } from "../api/client";
 
 const KEY = "footmania:matchDurationMinutes";
+const SOUND_MUTED_KEY = "footmania:soundMuted";
 
 function read(): number {
   try {
@@ -21,6 +22,23 @@ function write(n: number) {
   }
 }
 
+// Client-only preference (never sent to the server): match-viewer sounds.
+function readSoundMuted(): boolean {
+  try {
+    return window.localStorage.getItem(SOUND_MUTED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function writeSoundMuted(muted: boolean) {
+  try {
+    window.localStorage.setItem(SOUND_MUTED_KEY, String(muted));
+  } catch {
+    /* ignore */
+  }
+}
+
 interface SettingsState {
   matchDurationMinutes: number;
   maxContractSeasons: number;
@@ -29,8 +47,11 @@ interface SettingsState {
   seniorSquadLimit: number;
   academyVoluntaryPromotionAge: number;
   academyAutomaticPromotionAge: number;
+  /** Match-viewer sounds muted; persisted locally, survives sessions/matches. */
+  soundMuted: boolean;
   loading: boolean;
   load: () => Promise<void>;
+  toggleSoundMuted: () => void;
 }
 
 export const useSettings = create<SettingsState>((set) => ({
@@ -40,7 +61,15 @@ export const useSettings = create<SettingsState>((set) => ({
   seniorSquadLimit: 35,
   academyVoluntaryPromotionAge: 18,
   academyAutomaticPromotionAge: 20,
+  soundMuted: typeof window !== "undefined" ? readSoundMuted() : false,
   loading: false,
+
+  toggleSoundMuted: () =>
+    set((s) => {
+      const soundMuted = !s.soundMuted;
+      writeSoundMuted(soundMuted);
+      return { soundMuted };
+    }),
 
   load: async () => {
     set({ loading: true });

@@ -127,6 +127,17 @@ const gameConfigSchema = z
       startDay: z.number().int().min(0),
       restDaysBetweenMatches: z.number().int().min(0),
     }),
+    discipline: z.object({
+      turnYellowLimit: z.number().int().min(1).default(2),
+      turnYellowBanGames: z.number().int().min(0).default(1),
+      tribunalBase: z.number().default(5.1748),
+      tribunalLnCoefficient: z.number().default(-0.9884),
+    }).default({
+      turnYellowLimit: 2,
+      turnYellowBanGames: 1,
+      tribunalBase: 5.1748,
+      tribunalLnCoefficient: -0.9884,
+    }),
     interseasonDays: z.number().int().min(1).optional(),
     interseasonAfterMatchDays: z.number().int().min(0).default(2),
     interseasonBeforeNextSeasonDays: z.number().int().min(0).default(5),
@@ -803,6 +814,12 @@ function deriveCalendarFields(base: {
 
 const DEFAULT_GAME_CONFIG: GameConfig = {
   league: { teams: 8, turns: 2, startDay: 1, restDaysBetweenMatches: 1 },
+  discipline: {
+    turnYellowLimit: 2,
+    turnYellowBanGames: 1,
+    tribunalBase: 5.1748,
+    tribunalLnCoefficient: -0.9884,
+  },
   interseasonAfterMatchDays: 2,
   interseasonBeforeNextSeasonDays: 5,
   scheduler: { gameDayRolloverUtc: "00:00", leaseSeconds: 30 },

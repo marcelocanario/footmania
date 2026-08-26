@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Flag, RefreshCw, Subscript, Users } from "lucide-react";
+import { Flag, RefreshCw, Subscript, Users, Volume2, VolumeX } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
 import { eventKey, hasPitchCue } from "../components/matchPitchUtils";
+import { enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
@@ -65,6 +66,8 @@ export function LiveMatch() {
   const setLiveMatch = useGame((s) => s.setLiveMatch);
   const snapshot = useGame((s) => s.snapshot);
   const pregameWindowMinutes = useSettings((s) => s.pregameWindowMinutes);
+  const soundMuted = useSettings((s) => s.soundMuted);
+  const toggleSoundMuted = useSettings((s) => s.toggleSoundMuted);
   const navigate = useNavigate();
   // Spectator entry: /live-match/:matchId watches any match, not just our own.
   const routeMatchId = Number(useParams().matchId ?? "");
@@ -95,6 +98,11 @@ export function LiveMatch() {
   // ever drops a stale cue, without) the pitch showing anything for it.
   // MatchPitch calls this exactly when it starts (or gives up on) each cue.
   const revealedKeysRef = useRef<Set<string>>(new Set());
+  // Sounds follow the same "only live moments" rule as pitch cues: the first
+  // snapshot for a match adopts its history silently (reconnects and spectator
+  // switches must not replay old goals), and arrivals older than the freshness
+  // window are skipped inside the sound module.
+  const lastSoundedSeqRef = useRef<number>(-1);
   const [revealTick, setRevealTick] = useState(0);
   const markRevealed = useCallback((event: LiveEvent) => {
     const key = eventKey(event);
@@ -153,8 +161,21 @@ export function LiveMatch() {
   // component remounting — the reveal set must not carry over.
   useEffect(() => {
     revealedKeysRef.current = new Set();
+    lastSoundedSeqRef.current = -1;
     setRevealTick(0);
   }, [matchId]);
+
+  // Preload clips once; keep the module's mute flag in sync with the stored
+  // preference (muting mid-playback also drops the pending queue).
+  useEffect(() => {
+    preloadMatchSounds();
+  }, []);
+
+  useEffect(() => {
+    setSoundsMuted(soundMuted);
+  }, [soundMuted]);
+
+  useEffect(() => () => stopMatchSounds(), []);
 
   useEffect(() => {
     if (noLive) {
@@ -193,6 +214,21 @@ export function LiveMatch() {
   const applyState = useCallback((s: LiveState) => {
     stateRef.current = s;
     setState(s);
+    // Single sound entry point: every path that replaces the whole state (WS
+    // snapshot, delta merge, polling fallback, sub/tactics responses) funnels
+    // through here, so newly arrived events are detected uniformly. The very
+    // first snapshot for this match only initializes the watermark — history
+    // must not replay.
+    const seqs = s.events.map((e) => e.sequence).filter((n): n is number => typeof n === "number");
+    if (seqs.length === 0) return;
+    const maxSeq = Math.max(...seqs);
+    if (lastSoundedSeqRef.current < 0 || maxSeq <= lastSoundedSeqRef.current) {
+      lastSoundedSeqRef.current = Math.max(lastSoundedSeqRef.current, maxSeq);
+      return;
+    }
+    const fresh = s.events.filter((e) => e.sequence !== undefined && e.sequence > lastSoundedSeqRef.current);
+    lastSoundedSeqRef.current = maxSeq;
+    enqueueMatchEventSounds({ events: fresh, homeClubId: s.homeClubId, displayMinute: s.minute, phase: s.phase });
   }, []);
 
   const applyDelta = useCallback((delta: LiveStateDelta) => {
@@ -484,6 +520,15 @@ export function LiveMatch() {
 
       <div className="scoreboard" style={{ marginBottom: 16 }}>
         <div className="floodlights" />
+        <button
+          type="button"
+          className="sound-toggle"
+          onClick={toggleSoundMuted}
+          title={soundMuted ? "Unmute match sounds" : "Mute match sounds"}
+          aria-label={soundMuted ? "Unmute match sounds" : "Mute match sounds"}
+        >
+          {soundMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+        </button>
         {isDone ? (
           <span className="live-minute">{state.shootout ? "Penalties decided it" : PHASE_LABEL.fulltime}</span>
         ) : (

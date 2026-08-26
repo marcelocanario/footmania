@@ -155,10 +155,18 @@ const normalizationSchema = z.object({
   rawZClamp: positiveNumber,
   contestZClamp: positiveNumber,
   minTacticalSigma: positiveNumber,
+  qualityCompensation: z.object({
+    referenceOverall: z.number(),
+    highOverall: z.number().positive(),
+    highQualityPassIntentScale: z.number().min(0.1).max(2),
+    highQualityTempoScale: z.number().positive(),
+  }),
 });
 
 const actionQualitySchema = z.object({
   localDensityCoefficient: nonNegativeNumber,
+  /** Pass execution density effect; normally matches the general local effect. */
+  passLocalDensityCoefficient: nonNegativeNumber,
   attributeWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
   defensiveResistanceWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
 });
@@ -190,6 +198,8 @@ const tacticalFamiliaritySchema = z.object({
 });
 
 const tacticalActionMixSchema = z.object({
+  /** Uniformly scales the neutral PASS intent before the action-choice softmax. */
+  passIntentScale: z.number().min(0.1).max(2),
   /** Scales explicit action-mix corrections outside the neutral CONTROL/CONTROL matchup. */
   nonNeutralCorrectionScale: z.number().min(0).max(1),
   /** Direct logit shifts; the configured default scale is zero to preserve the baseline. */

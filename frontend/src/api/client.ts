@@ -74,6 +74,11 @@ export interface PlayerView {
   careerAssists: number;
   yellows: number;
   reds: number;
+  /** Yellow cards in the current league turn (per-turn disciplinary limit). */
+  turnYellows?: number;
+  /** True when booked in the same league turn as the club's next match and one
+   *  card away from the automatic per-turn ban. */
+  yellowWarning?: boolean;
   onSale: boolean;
   suspended: boolean;
   suspendedGames: number;

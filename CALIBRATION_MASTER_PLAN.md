@@ -1,6 +1,10 @@
 # Footmania Calibration Master Plan
 
-**Status:** Plan only. No recalibration run has started.
+**Status:** Initial recalibration completed on 2026-08-25, then superseded as
+authoritative when concurrent source changes landed in generation, player,
+match-boundary, persistence, and related files. Freeze the combined source
+snapshot before accepting a rerun. The configured database-backed multiplayer
+test also remains unverified because its database was unreachable.
 
 **Purpose:** Recalibrate the current player-generation, career, population,
 economy, and match systems in dependency order after the player-generation and
@@ -140,8 +144,9 @@ Additional match contracts remain:
      as familiarity, player loss, and exact paired-seed behavior;
    - **production-population mode** built from the real generation functions.
 4. Modernize `backend/scripts/match-calibration-next.ts` before official match
-   sampling. It currently constructs fixed-strength, age-25 synthetic players,
-   so its output cannot validate the new generated population by itself.
+   sampling. It now supports both controlled synthetic mechanics and a
+   production-generated D1–D5 population, with deterministic input snapshots
+   and digests.
 5. Make every artifact report sample count, seeds, generated population
    summary, division mix, age mix, energy state, and configuration digest.
 
@@ -321,3 +326,40 @@ After all phases pass:
 The recalibration is complete only when the accepted parameters, generated
 population, economy, and match engine have all passed their own gates and the
 cross-system match run has passed using the production-generated population.
+
+## 10. Historical run record — rerun required after source freeze
+
+- Generation and career calibration: fixed-seed production samples passed the
+  documented D1–D5 means, D1 XI/weakest/strongest starter targets, academy age
+  cohorts, career-profile distributions, growth/decline budgets, peak-age
+  bounds, and activity orderings. No generation or career parameter changed.
+- Accepted match tuning changes: generated-population quality compensation is
+  enabled through neutral pass-intent/action pacing scales; short-handed
+  passing uses a separate local-density coefficient of **5.5**, and shot local
+  density is **14**. The general action-density coefficient remains **0.6**;
+  no direct score, xG, or win-probability modifier was introduced.
+- Controlled neutral match, final candidate, N=5,000: goals **2.620**, shots
+  **27.065**, shots on target **9.688**, xG **2.617**, corners **9.857**, fouls
+  **26.589**, yellows **4.654**, reds **0.092**, passes **995.9**, injuries
+  **0.621**. The 0.065 shot-band overshoot is within sampling uncertainty.
+- Production-generated D1 neutral match, final candidate, N=5,000: goals
+  **2.608**, shots **26.818**, shots on target **9.365**, xG **2.566**,
+  corners **10.114**, fouls **24.943**, yellows **4.218**, reds **0.072**,
+  passes **1,037.2**, injuries **0.618**.
+- Permanent-loss controls: zero-loss rows at minutes 15/30/45/60/75 were
+  bit-identical. One-loss rows at N=1,000 per timing were monotonic and the
+  minute-60 guardrails measured possession **−8.6%**, passes **−8.1%**, shots
+  **−6.5%**, and xG-difference shift **−0.52** versus the no-loss control.
+  Two- and three-loss rows at minutes 30/60 passed the monotonic severity
+  heuristic; no direct score or win modifier was added.
+- Familiarity: the corrected controlled harness preserves specified tactics
+  for equal-level and mirrored-gap rows; equal familiarity is exactly neutral
+  across 25/50/75/90/100, and mirrored gaps reverse the effect. Representative
+  equal-style rows were confirmed at N=5,000; the full three-style matrix was
+  recorded at N=500 per row.
+- Candidate artifacts are under `backend/plans/`, including
+  `match-calibration-synthetic-neutral-confirmation-5000.json`,
+  `match-calibration-generated-neutral-confirmation-5000.json`,
+  `match-calibration-player-loss-one-final-1000.json`,
+  `match-calibration-player-loss-multiple-final-1000.json`, and
+  `match-calibration-familiarity-final-500-v2.json`.

@@ -204,6 +204,9 @@ export function aging(player: Player) {
   player.seasonAppearances = 0;
   player.yellows = 0;
   player.reds = 0;
+  // Per-turn yellow accumulation is season-scoped; a new season starts clean.
+  player.turnYellows = 0;
+  player.yellowsTurnKey = null;
 }
 
 export type { PlayerCareerProfile };

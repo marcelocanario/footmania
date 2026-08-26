@@ -84,6 +84,13 @@ export interface Player {
   squadNumber?: number | null;
   onSale: boolean;
   suspendedGames: number;
+  /** Yellow cards accumulated within the current league turn (discipline).
+   *  Optional so worlds persisted before the field existed load unchanged. */
+  turnYellows?: number;
+  /** Stable key of the turn `turnYellows` belongs to
+   *  (seasonNumber * league.turns + floor(round / (teams - 1)));
+   *  null = no bookings recorded in any turn. */
+  yellowsTurnKey?: number | null;
   loanId: number | null;
   careerProfile: PlayerCareerProfile;
   recentMinutes: number[];

@@ -15,6 +15,7 @@ import { applyDevelopment } from "../src/game/player";
 import { initSeason, createDivision, ensureDivisionFull, generateDivisionFixtures, rebuildTierDivisions, highestRankedReplaceableAI, placeNewClub } from "../src/game/multiplayer";
 import { applyMaxBid, createTransferAuction } from "../src/game/market";
 import { gameConfig } from "../src/config";
+import { leagueTurnKey } from "../src/services/seasonCalendar";
 
 const prisma = new PrismaClient();
 
@@ -76,6 +77,28 @@ describe("global multiplayer world persistence", () => {
     expect(reloaded!.world.clubEloEvents).toHaveLength(1);
     expect(reloaded!.world.clubEloEvents![0].matchId).toBe(880000);
     expect(reloaded!.world.nextId).toBeGreaterThan(880001);
+  });
+
+  it("round-trips per-turn yellow-card discipline state on players", async () => {
+    const { saveId } = await freshGlobalWorld(4243);
+    const { world } = await withSeason(saveId);
+    const player = world.players[0];
+    player.turnYellows = 1;
+    player.yellowsTurnKey = leagueTurnKey(world.mp.seasonNumber ?? 0, 3);
+    await persistWorld(prisma, saveId, saveId, world);
+
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const restored = reloaded!.world.players.find((p) => p.id === player.id)!;
+    expect(restored.turnYellows).toBe(1);
+    expect(restored.yellowsTurnKey).toBe(player.yellowsTurnKey);
+
+    // A stale turn key must survive verbatim: expiry is computed from the
+    // current turn at booking time, never rewritten during persistence.
+    player.yellowsTurnKey = leagueTurnKey((world.mp.seasonNumber ?? 0) + 4, 1);
+    await persistWorld(prisma, saveId, saveId, world);
+    const again = await loadGlobalWorld(prisma);
+    expect(again!.world.players.find((p) => p.id === player.id)!.yellowsTurnKey).toBe(player.yellowsTurnKey);
   });
 
   it("round-trips friend-grouping consent and converts legacy local preferred hours once", async () => {
