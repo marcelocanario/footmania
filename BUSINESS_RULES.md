@@ -689,14 +689,22 @@ pressing, and direction it actually uses — not with "tactics" in general. A co
 new combination starts at a neutral, middling familiarity — never as a penalty, just
 an unpolished starting point. The more matches a club plays under one setup, the
 better its players execute it, approaching (but never quite reaching) full mastery
-over the course of a season. Familiarity fades slowly if a setup goes unused for a while.
+quickly — by default the first 15% of a season's matches cover about 95% of the
+distance from neutral to mastery. Familiarity fades if a setup goes unused: the
+learned surplus above the neutral level decays, and after missing roughly 30% of a
+season's matches it is almost entirely gone, returning the setup to the neutral
+level rather than any worse. Decay is measured in missed rounds, so a setup played
+every match never loses familiarity between consecutive fixtures.
 
 Switching tactics — even mid-match — costs some of that familiarity, though a portion
-carries over if the new setup is similar to the old one (same formation shares, same
-style, similar pressing level). What actually matters on the pitch is never one side's
-familiarity in isolation — only the *relative* gap between the two sides' familiarity
-with their own respective setups. Two evenly-matched, equally well-drilled teams get
-no advantage from familiarity either way.
+carries over if the new setup is similar to the old one. Formation carries most of
+the drilled skill: by default 70% of a switch's similarity weight is structural
+formation overlap, with style, pressing level, and direction sharing the remaining
+30%, so changing only the latter three is cheap while changing shape is the real
+commitment. What actually matters on the pitch is never one side's familiarity in
+isolation — only the *relative* gap between the two sides' familiarity with their own
+respective setups. Two evenly-matched, equally well-drilled teams get no advantage
+from familiarity either way.
 
 ### 4.7 Home advantage
 
@@ -1386,7 +1394,8 @@ Each individual rule is built from three parts:
 - **A condition**: any situation, currently winning, currently losing, currently
   drawing, winning by two or more, or losing by two or more.
 - **An action**: either a substitution (swap a specific player out for a specific
-  player in) or a tactical change (formation, style, pressing, and/or direction).
+  player in) or a tactical change (style, pressing, and/or direction; formation only
+  when the trigger is half-time).
 
 Every rule fires **at most once** per match — it won't repeat itself over and over
 even if its trigger condition keeps being true. If a rule's planned substitution
@@ -1397,7 +1406,8 @@ tactical change made by an automation rule only affects that one live match; it 
 overwrites the club's own saved default tactics. Every automated tactical change is
 priced exactly the same familiarity cost as if the manager had made the change by hand
 (§4.6), and an automated formation change is only allowed at the same moments a manual
-one would be — before kickoff or at half-time.
+one would be — before kickoff or at half-time, which is why a preset may only attach a
+formation change to a half-time trigger.
 
 ---
 

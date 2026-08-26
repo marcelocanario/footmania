@@ -31,6 +31,7 @@ function validPreset(overrides: Partial<AutomationPreset> = {}): AutomationPrese
 
 describe("automation schemas", () => {
   it("accepts boundary tactic values", () => {
+    // Formation changes are only legal at half-time.
     const parsed = actionSchema.safeParse({ kind: "TACTICS", formation: MIN_FORMATION, style: 0, pressing: 0, direction: 0 });
     expect(parsed.success).toBe(true);
     const upper = actionSchema.safeParse({ kind: "TACTICS", formation: MAX_FORMATION, style: MAX_STYLE, pressing: MAX_PRESSING, direction: MAX_DIRECTION });
@@ -43,6 +44,17 @@ describe("automation schemas", () => {
     expect(actionSchema.safeParse({ kind: "TACTICS", pressing: MAX_PRESSING + 1 }).success).toBe(false);
     expect(actionSchema.safeParse({ kind: "TACTICS", direction: MAX_DIRECTION + 1 }).success).toBe(false);
     expect(actionSchema.safeParse({ kind: "TACTICS", formation: -1 }).success).toBe(false);
+  });
+
+  it("rejects formation changes on non-halftime triggers", () => {
+    const minuteFormation = ruleSchema.safeParse(validRule({ kind: "TACTICS", formation: 4 }, { kind: "MINUTE", minute: 60 }));
+    expect(minuteFormation.success).toBe(false);
+    // The same action is fine on a half-time trigger.
+    const halftimeFormation = ruleSchema.safeParse(validRule({ kind: "TACTICS", formation: 4 }, { kind: "HALF_TIME" }));
+    expect(halftimeFormation.success).toBe(true);
+    // Style/pressing/direction remain allowed on any trigger.
+    const minuteStyle = ruleSchema.safeParse(validRule({ kind: "TACTICS", style: 1, pressing: 2 }, { kind: "MINUTE", minute: 60 }));
+    expect(minuteStyle.success).toBe(true);
   });
 
   it("requires minute only for MINUTE triggers", () => {
@@ -116,6 +128,31 @@ describe("parseStoredPresets legacy migration", () => {
     expect(migrated![0].rules).toHaveLength(1);
     expect(migrated![0].rules[0].id).toBe("r1");
     expect(migrated![0].rules[0].action).toEqual({ kind: "TACTICS", style: 2 });
+  });
+
+  it("keeps formation only on half-time rules and strips it from other triggers", () => {
+    const stored = [
+      {
+        id: "p1",
+        name: "Legacy",
+        formationId: 4,
+        enabled: true,
+        rules: [
+          // Half-time formation change survives migration.
+          { id: "r1", trigger: { kind: "HALF_TIME" }, condition: "ANY", action: { kind: "TACTICS", formation: 7 } },
+          // A minute-triggered formation change can never fire; the formation
+          // field is dropped while style survives.
+          { id: "r2", trigger: { kind: "MINUTE", minute: 60 }, condition: "ANY", action: { kind: "TACTICS", formation: 7, style: 1 } },
+          // A goal-triggered formation-only rule becomes empty and is removed.
+          { id: "r3", trigger: { kind: "GOAL_SCORED" }, condition: "ANY", action: { kind: "TACTICS", formation: 7 } },
+        ],
+      },
+    ];
+    const migrated = parseStoredPresets(stored, 4);
+    expect(migrated).not.toBeNull();
+    expect(migrated![0].rules.map((r) => r.id)).toEqual(["r1", "r2"]);
+    expect(migrated![0].rules[0].action).toEqual({ kind: "TACTICS", formation: 7 });
+    expect(migrated![0].rules[1].action).toEqual({ kind: "TACTICS", style: 1 });
   });
 
   it("is stable across repeated parses (no duplication or drift)", () => {

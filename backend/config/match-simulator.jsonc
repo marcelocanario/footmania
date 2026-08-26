@@ -4274,17 +4274,35 @@
         }
       },
       "tacticalFamiliarity": {
-        "seasonTargetExponent": 3,
-        "dailyUnusedDecay": 0.005,
-        "switchTransferCoefficient": 0.35,
+        // Lifecycle horizons, expressed as fractions of a season's scheduled
+        // games so retuning the league length never silently re-tunes drilling.
+        //   growthSeasonFraction         games until (horizonTargetFraction) of
+        //                                the journey from neutral to mastery
+        //   unusedDecaySeasonFraction    missed games until that same fraction
+        //                                of LEARNED surplus above neutral is lost
+        //   horizonTargetFraction        how much of the journey each horizon
+        //                                stands for (1 - exp(-k) with k = 3)
+        "growthSeasonFraction": 0.15,
+        "unusedDecaySeasonFraction": 0.3,
+        "horizonTargetFraction": 0.95,
+        // How much of the surplus between the source setup and the
+        // destination's starting base carries over on a switch. 1.0 lets
+        // similarity itself decide how much execution is retained.
+        "switchTransferCoefficient": 1,
         "executionFloor": 0.6,
         "executionCeiling": 1,
-        "switchStartFloor": 25,
+        // Starting familiarity for an undrilled destination. Kept at the
+        // neutral midpoint: an untried setup is merely unpolished, never
+        // worse than one the club has never used.
+        "switchStartFloor": 50,
+        // Relative contribution of each tactic dimension to switch similarity.
+        // 70/30 means formation carries most of the drilled skill; changing
+        // style/pressing/direction alone costs little familiarity.
         "switchSimilarityWeights": {
-          "formation": 0.25,
-          "style": 0.25,
-          "pressing": 0.25,
-          "direction": 0.25
+          "formation": 0.7,
+          "style": 0.1,
+          "pressing": 0.1,
+          "direction": 0.1
         }
       },
       "tacticalActionMix": {

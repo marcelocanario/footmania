@@ -38,12 +38,18 @@ export const actionSchema = z
     if (v.kind === "TACTICS" && v.formation === undefined && v.style === undefined && v.pressing === undefined && v.direction === undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: "TACTICS requires at least one field" });
   });
 
-export const ruleSchema = z.object({
-  id: z.string().min(1).max(64),
-  trigger: triggerSchema,
-  condition: z.enum(AUTOMATION_CONFIG.allowedConditions as unknown as [string, ...string[]]),
-  action: actionSchema,
-});
+export const ruleSchema = z
+  .object({
+    id: z.string().min(1).max(64),
+    trigger: triggerSchema,
+    condition: z.enum(AUTOMATION_CONFIG.allowedConditions as unknown as [string, ...string[]]),
+    action: actionSchema,
+  })
+  .superRefine((v, ctx) => {
+    if (v.action.kind === "TACTICS" && v.action.formation !== undefined && v.trigger.kind !== "HALF_TIME") {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "A formation change may only trigger at half-time" });
+    }
+  });
 
 // Presets are strictly bound to one formation ("per-tactic" model).
 export const presetSchema = z.object({
@@ -93,9 +99,16 @@ const storedPresetsSchema = z.array(
   })
 );
 
-function sanitizeTacticsAction(action: AutomationAction): AutomationAction | null {
+/**
+ * Sanitize a stored TACTICS action, mirroring the strict schema: formation is
+ * only legal when the rule fires at half-time (formation changes are locked
+ * out during live play, so a stored minute/goal-triggered shape change could
+ * never fire anyway). Out-of-range values are dropped; a rule left with no
+ * surviving field is removed entirely.
+ */
+function sanitizeTacticsAction(action: AutomationAction, trigger: AutomationTriggerKind): AutomationAction | null {
   const clean: AutomationAction = { kind: "TACTICS" };
-  if (action.formation !== undefined && action.formation >= 0 && action.formation <= MAX_FORMATION) clean.formation = action.formation;
+  if (action.formation !== undefined && action.formation >= 0 && action.formation <= MAX_FORMATION && trigger === "HALF_TIME") clean.formation = action.formation;
   if (action.style !== undefined && action.style >= 0 && action.style <= MAX_STYLE) clean.style = action.style;
   if (action.pressing !== undefined && action.pressing >= 0 && action.pressing <= MAX_PRESSING) clean.pressing = action.pressing;
   if (action.direction !== undefined && action.direction >= 0 && action.direction <= MAX_DIRECTION) clean.direction = action.direction;
@@ -116,7 +129,7 @@ export function parseStoredPresets(raw: unknown, fallbackFormationId: number): A
         rules.push(r);
         continue;
       }
-      const clean = sanitizeTacticsAction(r.action);
+      const clean = sanitizeTacticsAction(r.action, r.trigger.kind as AutomationTriggerKind);
       if (clean) rules.push({ ...r, action: clean });
     }
     migrated.push({

@@ -180,8 +180,11 @@ const numericalDisadvantageSchema = z.object({
 const formationSupportSchema = z.record(z.string(), z.record(z.string(), nonNegativeNumber));
 
 const tacticalFamiliaritySchema = z.object({
-  seasonTargetExponent: positiveNumber,
-  dailyUnusedDecay: nonNegativeNumber,
+  // Lifecycle horizons as fractions of the season's scheduled games; see
+  // backend/config/match-simulator.jsonc for the exact semantics.
+  growthSeasonFraction: z.number().min(0.001).max(1),
+  unusedDecaySeasonFraction: z.number().min(0.001).max(1),
+  horizonTargetFraction: z.number().min(0.001).max(0.999),
   switchTransferCoefficient: nonNegativeNumber,
   executionFloor: z.number().min(0).max(1),
   executionCeiling: z.number().min(0).max(1),

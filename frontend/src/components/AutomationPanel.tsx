@@ -86,6 +86,7 @@ function ruleIssue(rule: Rule): string | null {
     rule.action.pressing !== undefined ||
     rule.action.direction !== undefined;
   if (!changed) return "Choose at least one tactic change.";
+  if (rule.action.formation !== undefined && rule.trigger.kind !== "HALF_TIME") return "Formation changes may only trigger at half-time.";
   return null;
 }
 
@@ -118,7 +119,13 @@ function RuleRow({
         <StepLabel>When</StepLabel>
         <Dropdown
           value={rule.trigger.kind}
-          onChange={(e) => onChange({ ...rule, trigger: e.value === "MINUTE" ? { kind: e.value, minute: rule.trigger.minute ?? 60 } : { kind: e.value } })}
+          onChange={(e) => {
+            const kind = e.value === "MINUTE" ? { kind: e.value, minute: rule.trigger.minute ?? 60 } : { kind: e.value };
+            // Formation changes are only legal at half-time; drop a stale
+            // formation field when the trigger moves away from it.
+            const action = kind.kind !== "HALF_TIME" && rule.action.kind === "TACTICS" ? { ...rule.action, formation: undefined } : rule.action;
+            onChange({ ...rule, trigger: kind, action });
+          }}
           options={TRIGGER_OPTS}
           style={{ minWidth: 190 }}
           aria-label="Trigger event"
@@ -181,14 +188,16 @@ function RuleRow({
         </div>
       ) : (
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", paddingLeft: 4, borderLeft: "2px solid var(--line)", marginLeft: 4 }}>
-          <Dropdown
-            value={rule.action.formation ?? null}
-            onChange={(e) => patchAction(e.value === null ? { formation: undefined } : { formation: e.value })}
-            options={[...UNCHANGED_FORMATION]}
-            placeholder="Formation"
-            style={{ minWidth: 160, flex: 1 }}
-            aria-label="New formation"
-          />
+          {rule.trigger.kind === "HALF_TIME" && (
+            <Dropdown
+              value={rule.action.formation ?? null}
+              onChange={(e) => patchAction(e.value === null ? { formation: undefined } : { formation: e.value })}
+              options={[...UNCHANGED_FORMATION]}
+              placeholder="Formation"
+              style={{ minWidth: 160, flex: 1 }}
+              aria-label="New formation"
+            />
+          )}
           <Dropdown
             value={rule.action.style ?? null}
             onChange={(e) => patchAction(e.value === null ? { style: undefined } : { style: e.value })}

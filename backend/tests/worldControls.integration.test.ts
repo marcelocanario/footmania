@@ -303,6 +303,70 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(world.world.fixtures.length).toBeGreaterThan(0);
   });
 
+  it("rejects automation presets that change formation outside the half-time trigger", async () => {
+    await app.ready();
+    await ensureGlobalSave(app.prisma);
+    await ensureCurrentSeason(app.prisma);
+    const cookie = await registerAndLogin(app, "autopresetuser");
+    await joinClub(app, cookie, "Preset FC");
+
+    // A half-time formation change is a valid preset rule.
+    const valid = await app.inject({
+      method: "PUT",
+      url: "/api/mp/automation",
+      headers: { cookie },
+      payload: {
+        presets: [
+          {
+            id: "p1",
+            name: "Halftime shape",
+            formationId: 4,
+            enabled: true,
+            rules: [
+              { id: "r1", trigger: { kind: "HALF_TIME" }, condition: "ANY", action: { kind: "TACTICS", formation: 7 } },
+            ],
+          },
+        ],
+      },
+    });
+    expect(valid.statusCode).toBe(200);
+
+    // The valid half-time rule was actually persisted on this user's club.
+    const user = await app.prisma.user.findUniqueOrThrow({ where: { email: "autopresetuser@test.dev" } });
+    let world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    let club = world.world.clubs.find((c) => c.ownerUserId === user.id);
+    expect(club?.automationPresets?.some((p) => p.rules.some((r) => r.action.kind === "TACTICS" && r.action.formation !== undefined))).toBe(true);
+
+    // A formation change attached to a non-half-time trigger must be rejected
+    // instead of silently stored and silently dropped at fire time.
+    const invalid = await app.inject({
+      method: "PUT",
+      url: "/api/mp/automation",
+      headers: { cookie },
+      payload: {
+        presets: [
+          {
+            id: "p2",
+            name: "Minute shape",
+            formationId: 4,
+            enabled: true,
+            rules: [
+              { id: "r2", trigger: { kind: "MINUTE", minute: 60 }, condition: "ANY", action: { kind: "TACTICS", formation: 7, style: 1 } },
+            ],
+          },
+        ],
+      },
+    });
+    expect(invalid.statusCode).toBe(400);
+    world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    club = world.world.clubs.find((c) => c.ownerUserId === user.id);
+    // The rejected preset was not stored; the valid half-time one remains.
+    expect(club?.automationPresets?.map((p) => p.id)).toEqual(["p1"]);
+    expect(club?.automationPresets?.some((p) => p.rules.some((r) => r.action.kind === "TACTICS" && r.action.formation !== undefined))).toBe(true);
+  });
+
   it("holds the season clock while waiting for the first human, then starts it on join", async () => {
     await app.ready();
     const adminCookie = await registerAndLogin(app, "waitadmin");

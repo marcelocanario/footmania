@@ -18,6 +18,7 @@ import { finalizeLiveMatch } from "../src/game/world";
 import { makeWorld } from "./helpers";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
+import { MATCH_SIMULATOR_CONFIG as MS } from "../src/matchSimulatorConfig";
 import { FORMATION_POSITIONS, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../src/game/constants";
 import type { Club, Player } from "../src/game/types";
 
@@ -96,34 +97,41 @@ describe("tactical familiarity: growth", () => {
     expect(effectiveFamiliarity(c, 500)).toBe(INITIAL_FAMILIARITY);
   });
 
-  it("grows per completed match toward ~95% after one season of games", () => {
+  it("grows per completed match toward ~95% within the configured growth season fraction", () => {
     const c = club();
     const gamesPerSeason = 14; // gameConfig.roundsPerSeason default
-    const rate = 1 - Math.exp(-3 / gamesPerSeason);
+    const cfg = MS.tacticalFamiliarity;
+    const rate = 1 - Math.exp(-Math.log(1 / (1 - cfg.horizonTargetFraction)) / (gamesPerSeason * cfg.growthSeasonFraction));
     applyMatchFamiliarity(c, 0);
     const expectedOne = INITIAL_FAMILIARITY + (100 - INITIAL_FAMILIARITY) * rate;
     expect(c.tacticFamiliarity?.[setupKey(c.tactics)]?.familiarity).toBeCloseTo(expectedOne, 1);
 
-    // A full season played with zero idle days isolates the pure §17 growth
-    // curve (idle decay between match days is covered by the decay tests).
+    // A full season played with zero idle days isolates the pure growth curve
+    // (idle decay between match days is covered by the decay tests).
     for (let game = 1; game < gamesPerSeason; game++) applyMatchFamiliarity(c, 0);
     const value = c.tacticFamiliarity?.[setupKey(c.tactics)]?.familiarity ?? 0;
-    // §17 target: after G games, f = 100 - (100 - start) * e^(-seasonTargetExponent)
-    expect(value).toBeCloseTo(100 - 50 * Math.exp(-3), 1);
+    // After a full season of games the curve is exactly
+    // 100 - (100 - start) * (1 - rate)^G.
+    const expectedSeasonEnd = 100 - 50 * Math.pow(1 - rate, gamesPerSeason);
+    expect(value).toBeCloseTo(expectedSeasonEnd, 1);
     expect(value).toBeLessThanOrEqual(100);
   });
 
-  it("is monotonic and clamped at 100", () => {
+  it("grows toward mastery when played every round without ever decreasing", () => {
     const c = club();
+    // Play on realistic match days (every `matchSpacingDays`), so no idle
+    // decay is applied and the loop isolates the growth curve.
     let previous = effectiveFamiliarity(c, 0);
-    for (let day = 0; day < 60; day++) {
+    for (let round = 1; round <= 60; round++) {
+      const day = round * 2; // matchSpacingDays default
       applyMatchFamiliarity(c, day);
       const current = c.tacticFamiliarity![setupKey(c.tactics)].familiarity;
       expect(current).toBeGreaterThanOrEqual(previous);
       expect(current).toBeLessThanOrEqual(100);
       previous = current;
     }
-    expect(previous).toBeLessThan(100);
+    // A full season of played rounds approaches mastery.
+    expect(previous).toBeGreaterThan(99);
   });
 
   it("only grows the setup that actually played", () => {
@@ -134,13 +142,20 @@ describe("tactical familiarity: growth", () => {
 });
 
 describe("tactical familiarity: decay", () => {
-  it("applies lazy idle decay since the last used day", () => {
+  it("applies idle decay per missed match, not per calendar day", () => {
     const key = "4-0-0-0";
     const c = club({ tacticFamiliarity: { [key]: { familiarity: 80, lastUsedAbsoluteGameDay: 10 } } });
-    // Same day: no decay.
-    expect(effectiveFamiliarity(c, 10)).toBe(80);
-    // 10 idle days: 80 * e^(-0.005 * 10).
-    expect(effectiveFamiliarity(c, 20)).toBeCloseTo(80 * Math.exp(-0.05), 5);
+    const cfg = MS.tacticalFamiliarity;
+    const retention = Math.exp(-Math.log(1 / (1 - cfg.horizonTargetFraction)) / (14 * cfg.unusedDecaySeasonFraction));
+    // Consecutive fixtures are 2 days apart: idle time up to a full spacing
+    // window (days 11-12) means no skipped round and no decay.
+    expect(effectiveFamiliarity(c, 12)).toBe(80);
+    // Each additional spacing block beyond the window is one skipped round:
+    // day 13 (3 idle days) and day 14 (4 idle days) are both one round,
+    // day 15 (5 idle days) is two rounds.
+    expect(effectiveFamiliarity(c, 13)).toBeCloseTo(50 + 30 * retention, 5);
+    expect(effectiveFamiliarity(c, 14)).toBeCloseTo(50 + 30 * retention, 5);
+    expect(effectiveFamiliarity(c, 15)).toBeCloseTo(50 + 30 * Math.pow(retention, 2), 5);
   });
 
   it("reads are pure: repeated reads never double-decay or mutate state", () => {
@@ -158,9 +173,24 @@ describe("tactical familiarity: decay", () => {
     expect(effectiveFamiliarity(c, 400)).toBe(70);
   });
 
+  it("learned familiarity decays toward the neutral midpoint, never below it", () => {
+    const key = "4-0-0-0";
+    const c = club({ tacticFamiliarity: { [key]: { familiarity: 80, lastUsedAbsoluteGameDay: 0 } } });
+    // 100 days idle: far more than a season of missed games.
+    expect(effectiveFamiliarity(c, 100)).toBeGreaterThanOrEqual(INITIAL_FAMILIARITY);
+    // A below-neutral stored value is never decayed further.
+    const low = club({ tacticFamiliarity: { [key]: { familiarity: 30, lastUsedAbsoluteGameDay: 0 } } });
+    expect(effectiveFamiliarity(low, 100)).toBeGreaterThanOrEqual(30);
+  });
+
   it("decays lazily when reading stored progress for projections", () => {
     const map = { "4-2-0-0": { familiarity: 90, lastUsedAbsoluteGameDay: 0 } };
-    expect(decayedStoredFamiliarity(map, "4-2-0-0", 100)).toBeCloseTo(90 * Math.exp(-0.5), 2);
+    const cfg = MS.tacticalFamiliarity;
+    const retention = Math.exp(-Math.log(1 / (1 - cfg.horizonTargetFraction)) / (14 * cfg.unusedDecaySeasonFraction));
+    // 100 days idle = 49 skipped rounds (ceil((100-2)/2)); surplus is gone.
+    expect(decayedStoredFamiliarity(map, "4-2-0-0", 100)).toBeCloseTo(50, 5);
+    // 5 idle days = ceil((5-2)/2) = 2 skipped rounds.
+    expect(decayedStoredFamiliarity(map, "4-2-0-0", 5)).toBeCloseTo(50 + 40 * Math.pow(retention, 2), 2);
     expect(decayedStoredFamiliarity(map, "7-0-0-0", 100)).toBeNull();
     expect(decayedStoredFamiliarity(undefined, "4-2-0-0", 100)).toBeNull();
   });
@@ -169,39 +199,39 @@ describe("tactical familiarity: decay", () => {
 describe("tactical familiarity: similarity and switch transfer", () => {
   it("scores identical setups 1", () => {
     const a = canonicalFromClub({ formation: 4, style: 1, pressing: 2, direction: 1 });
-    expect(setupSimilarity(a, a)).toBe(1);
+    expect(setupSimilarity(a, a)).toBeCloseTo(1, 12);
   });
 
   it("weights formation-only changes by structural slot overlap", () => {
-    // Only the formation differs: three of four components stay at 1.
+    // Only the formation differs: the three shared dimensions contribute 0.3.
     const a = canonicalFromClub({ formation: 4, style: 0, pressing: 0, direction: 0 });
     const b = canonicalFromClub({ formation: 7, style: 0, pressing: 0, direction: 0 });
-    const expected = 0.75 + 0.25 * jaccard(4, 7);
+    const expected = 0.3 + 0.7 * jaccard(4, 7);
     expect(setupSimilarity(a, b)).toBeCloseTo(expected, 6);
-    expect(setupSimilarity(a, b)).toBeGreaterThan(0.75);
+    expect(setupSimilarity(a, b)).toBeGreaterThan(0.3);
     expect(setupSimilarity(a, b)).toBeLessThan(1);
   });
 
   it("scores maximally distant setups within the same formation at the weight floor", () => {
     const a = canonicalFromClub({ formation: 4, style: 0, pressing: 0, direction: 0 });
     const b = canonicalFromClub({ formation: 4, style: 2, pressing: 2, direction: 1 });
-    expect(setupSimilarity(a, b)).toBeCloseTo(0.25, 6);
+    expect(setupSimilarity(a, b)).toBeCloseTo(0.7, 6);
   });
 
-  it("switch into an undrilled setup starts from the configured floor plus partial credit", () => {
-    // Identical setups (sim=1): base 25 + (90-25)*0.35.
+  it("switch into an undrilled setup starts from the neutral floor plus partial credit", () => {
+    // Identical setups (sim=1): base 50 + (90-50)*1.
     const setup = canonicalFromClub({ formation: 4, style: 0, pressing: 0, direction: 0 });
-    expect(switchFamiliarity(90, setup, setup, null)).toBeCloseTo(25 + 65 * 0.35, 5);
-    // Maximal distance within formation (sim=0.25): floor dominates.
+    expect(switchFamiliarity(90, setup, setup, null)).toBeCloseTo(90, 5);
+    // Maximal distance within formation (sim=0.7): most of the surplus carries.
     const other = canonicalFromClub({ formation: 4, style: 2, pressing: 2, direction: 1 });
-    expect(switchFamiliarity(90, setup, other, null)).toBeCloseTo(25 + 65 * 0.25 * 0.35, 2);
+    expect(switchFamiliarity(90, setup, other, null)).toBeCloseTo(50 + 40 * 0.7, 2);
   });
 
   it("a previously drilled destination keeps its (decayed) progress as the base", () => {
     const src = canonicalFromClub({ formation: 4, style: 0, pressing: 0, direction: 0 });
     const dst = canonicalFromClub({ formation: 4, style: 2, pressing: 0, direction: 0 });
     // Drilled at 80 > floor: base 80, only the surplus transfers.
-    expect(switchFamiliarity(90, src, dst, 80)).toBeCloseTo(80 + 10 * setupSimilarity(src, dst) * 0.35, 2);
+    expect(switchFamiliarity(90, src, dst, 80)).toBeCloseTo(80 + 10 * setupSimilarity(src, dst) * 1, 2);
     // Source below the base contributes nothing.
     expect(switchFamiliarity(50, src, dst, 80)).toBe(80);
   });
@@ -291,12 +321,13 @@ describe("tactical familiarity: engine integration", () => {
         awayTactics: { formation: 4, style: "CONTROL", pressing: 0, direction: "CENTRE", familiarity: 50 },
       }) as Parameters<typeof applyLiveTacticsUpdate>[0];
 
-    // Undrilled destination, no club context: starts from the configured floor
-    // plus partial credit. CONTROL vs COUNTER at the same shape scores sim 0.75,
-    // so 25 + (80 - 25) * 0.75 * 0.35.
+    // Undrilled destination, no club context: starts from the neutral floor
+    // plus full similarity credit. CONTROL vs COUNTER at the same shape scores
+    // sim 0.9 (style/pressing/direction share 0.3 of the weight), so
+    // 50 + (80 - 50) * 0.9.
     const st = state();
     expect(applyLiveTacticsUpdate(st, 0, { style: 2 })).toBeNull();
-    expect(st.homeTactics.familiarity).toBeCloseTo(39.44, 2);
+    expect(st.homeTactics.familiarity).toBeCloseTo(77, 2);
 
     // A drilled destination keeps its stored progress as the base.
     const drilled = state();
@@ -306,7 +337,7 @@ describe("tactical familiarity: engine integration", () => {
         absoluteGameDay: 40,
       })
     ).toBeNull();
-    expect(drilled.homeTactics.familiarity).toBeCloseTo(70 + 10 * 0.75 * 0.35, 2);
+    expect(drilled.homeTactics.familiarity).toBeCloseTo(70 + 10 * 0.9, 2);
   });
 
   it("does not re-apply a penalty when the applied setup is unchanged", () => {
@@ -338,7 +369,7 @@ describe("tactical familiarity: engine integration", () => {
     const context = { familiarityMap: home.tacticFamiliarity, absoluteGameDay: 5 };
     expect(applyLiveFormationChange(st, 0, 7, context)).toBeNull();
     const jaccard47 = jaccard(4, 7);
-    expect(st.homeTactics.familiarity).toBeCloseTo(25 + 55 * (0.75 + 0.25 * jaccard47) * 0.35, 2);
+    expect(st.homeTactics.familiarity).toBeCloseTo(50 + 30 * (0.3 + 0.7 * jaccard47), 2);
     const afterSwitch = st.homeTactics.familiarity;
     expect(applyLiveFormationChange(st, 0, 7, context)).toBeNull();
     expect(st.homeTactics.familiarity).toBe(afterSwitch);
@@ -356,7 +387,7 @@ describe("tactical familiarity: engine integration", () => {
     human.tactics = { ...human.tactics, formation: 7 };
     rebuildLiveHumanLineup(st, human, players, { absoluteGameDay: 5 });
     expect(st.homeTactics.formation).toBe(7);
-    expect(st.homeTactics.familiarity).toBeCloseTo(25 + 55 * (0.75 + 0.25 * jaccard(4, 7)) * 0.35, 2);
+    expect(st.homeTactics.familiarity).toBeCloseTo(50 + 30 * (0.3 + 0.7 * jaccard(4, 7)), 2);
 
     // Rebuilding again with unchanged tactics must not re-apply any penalty.
     const after = st.homeTactics.familiarity;
@@ -373,12 +404,12 @@ describe("tactical familiarity: engine integration", () => {
     tickLiveMatch(rng, human, opponent, players, st, 52);
 
     // Manager saved a persistent COUNTER flip during the interval; the rebuild
-    // must price it exactly like a live switch would (sim 0.75, undrilled dst).
+    // must price it exactly like a live switch would (sim 0.9, undrilled dst).
     human.tactics = { ...human.tactics, style: 2 };
     rebuildLiveHumanLineup(st, human, players, { absoluteGameDay: 5 });
     expect(st.homeTactics.style).toBe("COUNTER");
     expect(st.homeTactics.formation).toBe(4);
-    expect(st.homeTactics.familiarity).toBeCloseTo(25 + 55 * 0.75 * 0.35, 2);
+    expect(st.homeTactics.familiarity).toBeCloseTo(50 + 30 * 0.9, 2);
 
     // And an unchanged rebuild stays free.
     const after = st.homeTactics.familiarity;

@@ -54,7 +54,9 @@ describe("tactical familiarity persistence", () => {
     expect(Object.keys(restored.tacticFamiliarity!).length).toBe(2);
     // No decay at the exact anchor day; later reads decay lazily and stay pure.
     expect(effectiveFamiliarity(restored, 21)).toBe(87.5);
-    expect(effectiveFamiliarity(restored, 121)).toBeCloseTo(87.5 * Math.exp(-0.005 * 100), 3);
+    // 100 idle days is far beyond a season of missed games: the learned
+    // surplus fully returns to the neutral midpoint.
+    expect(effectiveFamiliarity(restored, 121)).toBeCloseTo(INITIAL_FAMILIARITY, 3);
 
     // Re-persisting the same world must not duplicate or drift entries.
     const entryCount = Object.keys(restored.tacticFamiliarity!).length;

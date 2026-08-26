@@ -165,18 +165,48 @@ function formationOverlap(a: number, b: number): number {
   return union > 0 ? intersection / union : 0;
 }
 
-/** Per-game growth rate so a club reaches ~95% after one full season of games. */
-function growthRate(): number {
-  const gamesPerSeason = Math.max(1, gameConfig.roundsPerSeason);
-  return 1 - Math.exp(-MS.tacticalFamiliarity.seasonTargetExponent / gamesPerSeason);
+/**
+ * Exponential constant shared by growth and decay so one configured target
+ * fraction of the journey is covered in one configured season-fraction of
+ * games: 1 - exp(-k) = horizonTargetFraction  =>  k = -ln(1 - target).
+ */
+function horizonExponent(): number {
+  return -Math.log(1 - Math.min(0.999, MS.tacticalFamiliarity.horizonTargetFraction));
 }
 
-/** Decay a stored entry by the days idle since its last competitive match. */
+/** Number of scheduled games that represent the configured fraction of a season. */
+function horizonGames(fraction: number): number {
+  return Math.max(1, gameConfig.roundsPerSeason * fraction);
+}
+
+/** Per-game growth rate: covers `growthSeasonFraction` of the season. */
+function growthRate(): number {
+  return 1 - Math.exp(-horizonExponent() / horizonGames(MS.tacticalFamiliarity.growthSeasonFraction));
+}
+
+/**
+ * Decay an entry by the missed competitive matches since it was last used,
+ * measured in match-spacing units so a setup played every round never decays
+ * between consecutive fixtures. Learned familiarity returns to the neutral
+ * midpoint (never below it — an abandoned setup is no worse than one never
+ * drilled), losing the same target fraction of its surplus over
+ * `unusedDecaySeasonFraction` of a season of missed games.
+ */
 function decayedFamiliarity(entry: TacticFamiliarityEntry, absoluteGameDay?: number | null): number {
   if (entry.lastUsedAbsoluteGameDay === null || typeof absoluteGameDay !== "number") return entry.familiarity;
   const daysIdle = Math.max(0, Math.trunc(absoluteGameDay) - entry.lastUsedAbsoluteGameDay);
   if (daysIdle === 0) return entry.familiarity;
-  return entry.familiarity * Math.exp(-MS.tacticalFamiliarity.dailyUnusedDecay * daysIdle);
+  const matchSpacing = Math.max(1, gameConfig.matchSpacingDays);
+  // Consecutive fixtures are `matchSpacing` days apart; idle time up to a full
+  // spacing window therefore represents no skipped round (a setup played every
+  // round never decays). Each additional full spacing block beyond that counts
+  // as one skipped round, with a partial block decaying fractionally.
+  const missed = Math.max(0, Math.ceil((daysIdle - matchSpacing) / matchSpacing));
+  if (missed === 0) return entry.familiarity;
+  const retention = Math.exp(-horizonExponent() / horizonGames(MS.tacticalFamiliarity.unusedDecaySeasonFraction));
+  // Decay the surplus above neutral only; the neutral baseline is the natural
+  // resting level of an untracked setup and must never be undercut.
+  return INITIAL_FAMILIARITY + Math.max(0, entry.familiarity - INITIAL_FAMILIARITY) * Math.pow(retention, missed);
 }
 
 /** Sanitize an untrusted persisted map: drop malformed rows and clamp values. */
