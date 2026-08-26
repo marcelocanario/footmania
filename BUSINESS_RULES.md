@@ -720,6 +720,20 @@ rules (§11). Changing style, pressing, or direction mid-match is locked out for
 cooldown (currently ten match-minutes) after the last change; formation changes are
 only allowed before kickoff or at half-time.
 
+The live event feed records every shot attempt exactly once, so the timeline
+reconciles with the stat counters: goals + goalkeeper saves + on-target woodwork hits
+= shots on target, and all shot-outcome events together = total shots. A save is
+credited to the defending goalkeeper with the shooter as secondary ("GK saved shot by
+shooter"); a blocked shot names the attacking shooter with the defending blocker as
+secondary; misses, woodwork hits, goals and corners credit the shooter (and scorer)
+alone. Off-target misses and blocked shots used to be left out of the feed to keep it
+readable; they are now recorded like every other shot outcome. Save-rebound shots
+count as saves, not as a separate outcome. The match history and the live pitch
+animation play the same shot choreography for every outcome — off-target shots sail
+wide of the frame, blocked shots deflect back into play off the defender, saves pause
+at the goalkeeper before distribution, and woodwork hits kiss the frame — with loud
+banners reserved for goals, cards, injuries, substitutions and missed penalties.
+
 ---
 
 ## 5. Energy & Injuries

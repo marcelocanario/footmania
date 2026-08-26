@@ -111,6 +111,8 @@ export const EVENT_CODES = {
   CORNER: 14,
   SAVE: 15,
   WOODWORK: 16,
+  SHOT_MISS: 17,
+  SHOT_BLOCKED: 18,
 };
 
 export const GOAL_SUBTYPES = {

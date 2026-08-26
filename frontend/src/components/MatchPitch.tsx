@@ -82,6 +82,8 @@ const SEQ_HOLD_MAX_MS = 2600;
 /** Curated event codes with ball-travel choreography (EVENT_CODES mirrors). */
 const EVENT_SAVE = 15;
 const EVENT_WOODWORK = 16;
+const EVENT_SHOT_MISS = 17;
+const EVENT_SHOT_BLOCKED = 18;
 // Loose enough to absorb a batched delta spanning a few simulated minutes
 // (fast-forwarded play, a reconnect catch-up) without treating an event as
 // stale before the pitch even had a chance to queue it — every event that
@@ -97,13 +99,14 @@ function cueIsFresh(event: LiveEvent, displayMinute: number): boolean {
 /**
  * A scripted ball sequence that owns the ⚽ while it plays out: saves glide
  * shooter/carrier → GK, pause at the gloves, then distribute to the first
- * post-save carrier; woodwork hits kiss the frame. Goals keep the dedicated
- * CueOverlay animation into the net.
+ * post-save carrier; woodwork hits kiss the frame; off-target shots fade out
+ * wide of the frame; blocked shots deflect back into play off the defender.
+ * Goals keep the dedicated CueOverlay animation into the net.
  */
 interface BallSeq {
   key: number;
-  kind: "save" | "woodwork";
-  stage: "start" | "leg" | "hold" | "pass" | "rebound";
+  kind: "save" | "woodwork" | "shot-off" | "shot-blocked";
+  stage: "start" | "leg" | "hold" | "pass" | "rebound" | "fade";
   /** Origin of the currently displayed leg. */
   from: PitchPoint;
   /** Current rendered point (target of the active glide). */
@@ -252,7 +255,7 @@ const CueOverlay = memo(function CueOverlay({ cue, active, reducedMotion }: { cu
         </svg>
       )}
       <span className={`pitch-cue-icon pitch-cue-${cue.kind}${activeClass}`} style={{ left: `${actorPoint.x}%`, top: `${actorPoint.y}%` }} aria-hidden="true">
-        {cue.kind === "yellow" ? "🟨" : cue.kind === "red" ? "🟥" : cue.kind === "injury" ? "✚" : cue.kind === "sub" ? "↔" : cue.kind === "miss" ? "×" : cue.kind === "goal" ? "⚽" : cue.kind === "corner" ? "🚩" : cue.kind === "save" ? "🧤" : "💥"}
+        {cue.kind === "yellow" ? "🟨" : cue.kind === "red" ? "🟥" : cue.kind === "injury" ? "✚" : cue.kind === "sub" ? "↔" : cue.kind === "miss" ? "×" : cue.kind === "goal" ? "⚽" : cue.kind === "corner" ? "🚩" : cue.kind === "save" ? "🧤" : cue.kind === "shot-off" ? "↗" : cue.kind === "shot-blocked" ? "🛡️" : "💥"}
       </span>
     </>
   );
@@ -324,7 +327,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   const cueActive = !!activeEvent && cueIsFresh(activeEvent, minute);
   const cue = cueActive && activeEvent ? cueForEvent(activeEvent, home.clubId, home.players, away.players, rememberedRef.current) : null;
   const overlayBallActive = cueActive && !!cue && (cue.kind === "goal" || cue.kind === "miss");
-  const shotCueActive = cueActive && !!cue && (cue.kind === "goal" || cue.kind === "miss" || cue.kind === "save" || cue.kind === "woodwork");
+  const shotCueActive = cueActive && !!cue && (cue.kind === "goal" || cue.kind === "miss" || cue.kind === "save" || cue.kind === "woodwork" || cue.kind === "shot-off" || cue.kind === "shot-blocked");
 
   // Live possession ball: anchored to the possessing side's nearest supporting
   // player during play; parked at the centre spot whenever play is stopped.
@@ -467,7 +470,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     const prevEv = activeEventRef.current;
     activeEventRef.current = ev;
     if (!ev || ev === prevEv || !cueIsFresh(ev, minute) || motionReduced || !liveBall || liveBall.idle) return;
-    const kind = ev.type === EVENT_SAVE ? ("save" as const) : ev.type === EVENT_WOODWORK ? ("woodwork" as const) : null;
+    const kind = ev.type === EVENT_SAVE ? ("save" as const) : ev.type === EVENT_WOODWORK ? ("woodwork" as const) : ev.type === EVENT_SHOT_MISS ? ("shot-off" as const) : ev.type === EVENT_SHOT_BLOCKED ? ("shot-blocked" as const) : null;
     if (!kind) return;
     const cueInfo = cueForEvent(ev, home.clubId, home.players, away.players, rememberedRef.current);
     if (!cueInfo) return;
@@ -477,6 +480,43 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     prevBallMetaRef.current = null;
     setTrail(null);
     const key = ++seqKeyRef.current;
+    if (kind === "shot-off") {
+      // The ball sails past the frame the attack was aiming at — wide of the
+      // goal mouth, bowing one way or the other (seeded from the event so a
+      // reconnect never flips which side). It fades out past the goal line
+      // instead of arriving anywhere.
+      const shotSign = bendSignFor(String(ev.sequence ?? ev.minute));
+      const frameX = cueInfo.side === "home" ? 97 : 3;
+      const wideY = shotSign > 0 ? 24 : 52;
+      const shooter = cueInfo.actorPoint;
+      beginShotLeg({ key, kind, stage: "start", from: shooter, point: shooter, gkSide: null }, { x: frameX, y: wideY }, () => {
+        setSeq((current) => (current && current.key === key ? { ...current, stage: "hold" } : current));
+        scheduleSeqTimer(() => {
+          setSeq((current) => (current && current.key === key ? { ...current, stage: "fade", from: current.point, point: current.point } : current));
+          // Seed the next trajectory from where the ball actually vanished
+          // (wide of the frame), not from the shooter.
+          scheduleSeqTimer(() => finishBallSeq({ x: frameX, y: wideY }), SEQ_HOLD_MS);
+        }, SEQ_HOLD_MS);
+      });
+      return;
+    }
+    if (kind === "shot-blocked") {
+      // The ball flies toward the blocker (secondary player), stops at his
+      // feet for a beat, then deflects back into play off him.
+      const shooter = cueInfo.actorPoint;
+      const blocker = cueInfo.secondaryPoint ?? previousPoint ?? shooter;
+      const deflectSign = bendSignFor(String(ev.sequence ?? ev.minute));
+      const deflectOutward = cueInfo.side === "home" ? 1 : -1;
+      const deflected = clampToPitch({ x: blocker.x + deflectOutward * 6, y: blocker.y + deflectSign * 8 });
+      beginShotLeg({ key, kind, stage: "start", from: shooter, point: shooter, gkSide: null }, blocker, () => {
+        setSeq((current) => (current && current.key === key ? { ...current, stage: "hold" } : current));
+        scheduleSeqTimer(() => {
+          setSeq((current) => (current && current.key === key ? { ...current, stage: "rebound", from: blocker, point: deflected } : current));
+          scheduleSeqTimer(() => finishBallSeq(deflected), WOODWORK_REBOUND_MS);
+        }, SEQ_HOLD_MS);
+      });
+      return;
+    }
     if (kind === "woodwork") {
       // Kiss the frame beside the goal mouth the attack was aiming at.
       const frame = cueInfo.side === "home" ? { x: 95, y: 38 } : { x: 5, y: 38 };
@@ -695,6 +735,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     seq ? "pitch-live-ball-seq" : "",
     seq?.stage === "start" ? "pitch-live-ball-seq-start" : "",
     seq?.stage === "rebound" ? "pitch-live-ball-seq-rebound" : "",
+    seq?.stage === "fade" ? "pitch-live-ball-seq-fade" : "",
   ].filter(Boolean).join(" ");
   const surfaceStyle = { "--ball-glide-ms": `${glideMs}ms` } as CSSProperties;
 
@@ -759,7 +800,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
             />
           </svg>
         )}
-        {seq && seq.stage !== "start" && !motionReduced && (
+        {seq && seq.stage !== "start" && seq.stage !== "fade" && !motionReduced && (
           <svg className={`pitch-trail pitch-live-trail pitch-shot-trail${seq.stage === "leg" || seq.stage === "hold" ? " pitch-shot-trail-danger" : ""}${seq.stage === "rebound" ? " pitch-shot-trail-rebound" : ""}`} viewBox="0 0 100 64" aria-hidden="true">
             <line
               // "hold" keeps the leg's exact geometry, so it must reuse the

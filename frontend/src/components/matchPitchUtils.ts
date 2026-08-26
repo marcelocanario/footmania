@@ -11,7 +11,7 @@ export type PitchSide = "home" | "away";
  * toss, half-time/second-half/full-time whistles, shootout announcement) map
  * to no cue at all — they have no pitch location to highlight.
  */
-export type PitchCueKind = "goal" | "miss" | "yellow" | "red" | "injury" | "sub" | "corner" | "save" | "woodwork";
+export type PitchCueKind = "goal" | "miss" | "yellow" | "red" | "injury" | "sub" | "corner" | "save" | "woodwork" | "shot-off" | "shot-blocked";
 
 /** Event types (EVENT_CODES) that produce a pitch cue; everything else is neutral. */
 const CUE_TYPES: Record<number, PitchCueKind> = {
@@ -25,6 +25,8 @@ const CUE_TYPES: Record<number, PitchCueKind> = {
   14: "corner",
   15: "save",
   16: "woodwork",
+  17: "shot-off",
+  18: "shot-blocked",
 };
 
 /** Whether this event type ever produces a pitch cue at all. A parent showing
@@ -540,14 +542,12 @@ export interface IntentLine {
 export type MoveStyle = "pass" | "cross" | "shot-blocked" | "shot-miss" | "corner" | "foul";
 
 /** Shot outcomes that ship with their own curated pitch cue: GOAL renders the
- *  goal/miss overlay tracer, SAVE/WOODWORK drive the scripted ball sequence.
- *  The possession snapshot can land in the same commit batch as — or one
- *  commit ahead of — the event being dequeued into the active cue, so also
- *  drawing a live trajectory for these shots races the curated one and shows
- *  the same shot twice. BLOCKED/REBOUND/MISS shots emit no event at all
- *  (open-play misses are deliberately unrecorded in the feed), so the live
- *  trail is their only visualization and stays enabled. */
-const SHOT_OUTCOMES_WITH_CUE = new Set(["GOAL", "SAVE", "WOODWORK"]);
+ *  goal/miss overlay tracer; SAVE/WOODWORK/SHOT_MISS/SHOT_BLOCKED drive the
+ *  scripted ball sequence. The possession snapshot can land in the same commit
+ *  batch as — or one commit ahead of — the event being dequeued into the
+ *  active cue, so also drawing a live trajectory for these shots races the
+ *  curated one and shows the same shot twice. */
+const SHOT_OUTCOMES_WITH_CUE = new Set(["GOAL", "SAVE", "WOODWORK", "BLOCKED", "MISS"]);
 
 /** Whether this ball snapshot's last action is a shot that carries its own
  *  curated cue animation (see SHOT_OUTCOMES_WITH_CUE). */

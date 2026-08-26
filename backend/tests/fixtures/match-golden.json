@@ -76,12 +76,62 @@
         "goalType": 0
       },
       {
+        "minute": 1,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2019,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 2,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1019,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 2,
         "half": 1,
         "type": 14,
         "subtype": 0,
         "clubId": 1,
         "playerId": 1005,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 4,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 5,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1028,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 9,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1019,
         "player2Id": null,
         "goalType": 0
       },
@@ -113,6 +163,16 @@
         "clubId": 1,
         "playerId": 1009,
         "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 20,
+        "half": 1,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1028,
+        "player2Id": 2018,
         "goalType": 0
       },
       {
@@ -162,6 +222,36 @@
         "subtype": 0,
         "clubId": 1,
         "playerId": 1028,
+        "player2Id": 1017,
+        "goalType": 0
+      },
+      {
+        "minute": 26,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 28,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 28,
+        "half": 1,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2019,
         "player2Id": 1017,
         "goalType": 0
       },
@@ -249,6 +339,28 @@
       {
         "minute": 45,
         "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0,
+        "addedTime": 3
+      },
+      {
+        "minute": 45,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0,
+        "addedTime": 4
+      },
+      {
+        "minute": 45,
+        "half": 1,
         "type": 10,
         "subtype": 0,
         "clubId": 1,
@@ -270,6 +382,16 @@
       {
         "minute": 50,
         "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2021,
+        "player2Id": 1017,
+        "goalType": 0
+      },
+      {
+        "minute": 50,
+        "half": 2,
         "type": 14,
         "subtype": 0,
         "clubId": 1,
@@ -284,6 +406,16 @@
         "subtype": 0,
         "clubId": 2,
         "playerId": 2009,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 59,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
         "player2Id": null,
         "goalType": 0
       },
@@ -308,6 +440,16 @@
         "goalType": 0
       },
       {
+        "minute": 67,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 69,
         "half": 2,
         "type": 2,
@@ -328,12 +470,92 @@
         "goalType": 0
       },
       {
+        "minute": 70,
+        "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": 1027,
+        "goalType": 0
+      },
+      {
         "minute": 78,
         "half": 2,
         "type": 2,
         "subtype": 0,
         "clubId": 2,
         "playerId": 2016,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 79,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2018,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 81,
+        "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": 2015,
+        "goalType": 0
+      },
+      {
+        "minute": 81,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 83,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 84,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2019,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 85,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 87,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1017,
         "player2Id": null,
         "goalType": 0
       },
@@ -376,6 +598,17 @@
         "playerId": 1005,
         "player2Id": null,
         "goalType": 0
+      },
+      {
+        "minute": 90,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1025,
+        "player2Id": null,
+        "goalType": 0,
+        "addedTime": 1
       },
       {
         "minute": 90,
@@ -625,6 +858,26 @@
         "goalType": 0
       },
       {
+        "minute": 2,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 4,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2019,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 6,
         "half": 1,
         "type": 15,
@@ -642,6 +895,46 @@
         "clubId": 1,
         "playerId": 1002,
         "player2Id": 2019,
+        "goalType": 0
+      },
+      {
+        "minute": 9,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1028,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 10,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 11,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1025,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 15,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
         "goalType": 0
       },
       {
@@ -675,12 +968,42 @@
         "goalType": 0
       },
       {
+        "minute": 17,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 18,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 21,
         "half": 1,
         "type": 2,
         "subtype": 0,
         "clubId": 1,
         "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 24,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
         "player2Id": null,
         "goalType": 0
       },
@@ -695,12 +1018,42 @@
         "goalType": 0
       },
       {
+        "minute": 26,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2028,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 30,
         "half": 1,
         "type": 2,
         "subtype": 0,
         "clubId": 2,
         "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 33,
+        "half": 1,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": 2015,
+        "goalType": 0
+      },
+      {
+        "minute": 38,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
         "player2Id": null,
         "goalType": 0
       },
@@ -767,12 +1120,62 @@
         "goalType": 0
       },
       {
+        "minute": 47,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1025,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 50,
         "half": 2,
         "type": 14,
         "subtype": 0,
         "clubId": 1,
         "playerId": 1005,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 52,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 54,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 55,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 60,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
         "player2Id": null,
         "goalType": 0
       },
@@ -807,6 +1210,16 @@
         "goalType": 0
       },
       {
+        "minute": 64,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 65,
         "half": 2,
         "type": 2,
@@ -827,6 +1240,16 @@
         "goalType": 0
       },
       {
+        "minute": 67,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 69,
         "half": 2,
         "type": 15,
@@ -843,6 +1266,26 @@
         "subtype": 1,
         "clubId": 1,
         "playerId": 1021,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 71,
+        "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1019,
+        "player2Id": 2028,
+        "goalType": 0
+      },
+      {
+        "minute": 73,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
         "player2Id": null,
         "goalType": 0
       },
@@ -917,6 +1360,16 @@
         "goalType": 0
       },
       {
+        "minute": 78,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1021,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 86,
         "half": 2,
         "type": 2,
@@ -939,6 +1392,16 @@
       {
         "minute": 90,
         "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1019,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 90,
+        "half": 2,
         "type": 14,
         "subtype": 0,
         "clubId": 1,
@@ -946,6 +1409,39 @@
         "player2Id": null,
         "goalType": 0,
         "addedTime": 1
+      },
+      {
+        "minute": 90,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0,
+        "addedTime": 2
+      },
+      {
+        "minute": 90,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0,
+        "addedTime": 3
+      },
+      {
+        "minute": 90,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0,
+        "addedTime": 4
       },
       {
         "minute": 90,
@@ -1242,6 +1738,16 @@
         "goalType": 0
       },
       {
+        "minute": 7,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 9,
         "half": 1,
         "type": 15,
@@ -1292,6 +1798,26 @@
         "goalType": 0
       },
       {
+        "minute": 13,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2018,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 14,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2028,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 15,
         "half": 1,
         "type": 15,
@@ -1332,12 +1858,72 @@
         "goalType": 0
       },
       {
+        "minute": 16,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 16,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 17,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 18,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 23,
         "half": 1,
         "type": 16,
         "subtype": 1,
         "clubId": 2,
         "playerId": 2023,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 24,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 27,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1019,
         "player2Id": null,
         "goalType": 0
       },
@@ -1349,6 +1935,16 @@
         "clubId": 2,
         "playerId": 2001,
         "player2Id": 1028,
+        "goalType": 0
+      },
+      {
+        "minute": 30,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
         "goalType": 0
       },
       {
@@ -1392,6 +1988,36 @@
         "goalType": 0
       },
       {
+        "minute": 37,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1018,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 38,
+        "half": 1,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1025,
+        "player2Id": 2018,
+        "goalType": 0
+      },
+      {
+        "minute": 39,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 39,
         "half": 1,
         "type": 14,
@@ -1404,10 +2030,30 @@
       {
         "minute": 40,
         "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 40,
+        "half": 1,
         "type": 14,
         "subtype": 0,
         "clubId": 2,
         "playerId": 2004,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 41,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2021,
         "player2Id": null,
         "goalType": 0
       },
@@ -1428,6 +2074,16 @@
         "subtype": 1,
         "clubId": 1,
         "playerId": 1030,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 45,
+        "half": 1,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1018,
         "player2Id": null,
         "goalType": 0
       },
@@ -1506,6 +2162,16 @@
         "goalType": 0
       },
       {
+        "minute": 50,
+        "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1025,
+        "player2Id": 2018,
+        "goalType": 0
+      },
+      {
         "minute": 51,
         "half": 2,
         "type": 14,
@@ -1524,6 +2190,16 @@
         "playerId": 1030,
         "player2Id": 1019,
         "goalType": 1
+      },
+      {
+        "minute": 62,
+        "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2018,
+        "player2Id": 1028,
+        "goalType": 0
       },
       {
         "minute": 66,
@@ -1576,6 +2252,16 @@
         "goalType": 0
       },
       {
+        "minute": 78,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2016,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
         "minute": 79,
         "half": 2,
         "type": 15,
@@ -1592,6 +2278,16 @@
         "subtype": 0,
         "clubId": 2,
         "playerId": 2009,
+        "player2Id": null,
+        "goalType": 0
+      },
+      {
+        "minute": 82,
+        "half": 2,
+        "type": 17,
+        "subtype": 0,
+        "clubId": 1,
+        "playerId": 1030,
         "player2Id": null,
         "goalType": 0
       },
@@ -1644,6 +2340,17 @@
         "playerId": 1011,
         "player2Id": 1003,
         "goalType": 0
+      },
+      {
+        "minute": 90,
+        "half": 2,
+        "type": 18,
+        "subtype": 0,
+        "clubId": 2,
+        "playerId": 2016,
+        "player2Id": 1028,
+        "goalType": 0,
+        "addedTime": 2
       },
       {
         "minute": 90,

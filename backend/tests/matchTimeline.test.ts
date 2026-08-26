@@ -139,6 +139,15 @@ describe("match timeline boundary events", () => {
           onTargetWoodwork +
           countByType(inPlay, EVENT_CODES.SAVE, oppClubId),
         ).toBe(stats.shotsOnTarget);
+        // Total shots = goals + saves (defending side) + all woodwork + misses
+        // + blocks (attacking side): every attempt records exactly one event.
+        const allShotOutcomes =
+          countByType(inPlay, EVENT_CODES.GOAL, clubId) +
+          countByType(inPlay, EVENT_CODES.SAVE, oppClubId) +
+          countByType(inPlay, EVENT_CODES.WOODWORK, clubId) +
+          countByType(inPlay, EVENT_CODES.SHOT_MISS, clubId) +
+          countByType(inPlay, EVENT_CODES.SHOT_BLOCKED, clubId);
+        expect(allShotOutcomes).toBe(stats.shots);
         // A save names the defending goalkeeper plus the shooter.
         for (const save of inPlay.filter((e) => e.type === EVENT_CODES.SAVE)) {
           if (save.clubId !== clubId) continue;
@@ -146,6 +155,14 @@ describe("match timeline boundary events", () => {
           expect(squadIds.has(save.playerId!)).toBe(true);
           expect(save.player2Id).not.toBeNull();
           expect(oppSquadIds.has(save.player2Id!)).toBe(true);
+        }
+        // A blocked shot names the attacking shooter plus a defending
+        // outfielder (never the goalkeeper).
+        for (const block of inPlay.filter((e) => e.type === EVENT_CODES.SHOT_BLOCKED && e.clubId === clubId)) {
+          expect(block.playerId).not.toBeNull();
+          expect(squadIds.has(block.playerId!)).toBe(true);
+          expect(block.player2Id).not.toBeNull();
+          expect(oppSquadIds.has(block.player2Id!)).toBe(true);
         }
         if (stats.corners > 0) sawCorners = true;
         if (stats.shotsOnTarget > countByType(inPlay, EVENT_CODES.GOAL, clubId)) sawSavesOrWoodwork = true;

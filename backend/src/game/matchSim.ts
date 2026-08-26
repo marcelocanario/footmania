@@ -1237,6 +1237,8 @@ interface ShotResult {
   rebound: boolean;
   finalXg: number;
   shooter: LivePlayerState | null;
+  /** Defending outfielder who blocked the attempt (SHOT_BLOCKED attribution). */
+  blockerId: number | null;
   situation: string;
   pressured: boolean;
   distance: number;
@@ -1288,6 +1290,7 @@ function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
   let woodwork = false;
   let saved = false;
   let rebound = false;
+  let blockerId: number | null = null;
   if (!goal) {
     onTarget = nextDouble(eng.rng) < pOnTarget;
     if (onTarget) {
@@ -1306,9 +1309,16 @@ function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
         woodwork = true;
       }
     }
+    // Blocked-shot attribution: the defending outfielder with the strongest
+    // zone involvement at the shot point (the one who gets the block). Reuses
+    // the deterministic presentation picker — no RNG draw, so the outcome
+    // stream is unchanged; goalkeepers never "block", saves are their own.
+    if (blocked) {
+      blockerId = presentationPlayerId(def, eng.zone);
+    }
   }
 
-  return { goal, onTarget, blocked, saved, woodwork, rebound, finalXg: finalXgC, shooter, situation, pressured, distance };
+  return { goal, onTarget, blocked, saved, woodwork, rebound, blockerId, finalXg: finalXgC, shooter, situation, pressured, distance };
 }
 
 // ---------------------------------------------------------------------------
@@ -2004,26 +2014,64 @@ function stepPossession(eng: Engine): void {
       beginPossession(eng, "KICK_OFF");
       return;
     }
-    // Curated timeline events for notable non-goal shots: goalkeeper saves and
-    // woodwork hits. Blocked/off-target misses stay unrecorded to keep feeds
-    // readable. A save credits the defending goalkeeper with the shooter as
-    // the secondary player ("GK saved shot by shooter" in the feed); WOODWORK
-    // stays attributed to the shooter who hit it. The WOODWORK subtype marks
-    // an on-target hit so goals + saves + on-target woodwork reconciles
-    // exactly with shotsOnTarget (saves counted for the defending side).
-    if (result.saved || result.woodwork) {
+    // Curated timeline events for non-goal shots: every attempt emits exactly
+    // one event so the feed reconciles with the stat counters — goals + saves
+    // + on-target woodwork = shotsOnTarget, and all five shot-outcome codes
+    // together = shots. A save credits the defending goalkeeper with the
+    // shooter as the secondary player ("GK saved shot by shooter" in the
+    // feed); WOODWORK stays attributed to the shooter who hit it (subtype 1
+    // marks an on-target hit); SHOT_MISS/SHOT_BLOCKED name the shooter, with
+    // the blocker credited as the secondary player of SHOT_BLOCKED. REBOUND
+    // never reaches here alone: a save-rebound also sets `saved`, so it is
+    // recorded as a SAVE.
+    if (!result.goal) {
       const shotClubId = sideOf(eng, attSide).club.id;
-      const gk = shotGk;
-      eng.events.push({
-        minute: displayMinute, half: eventHalf,
-        type: result.saved ? EVENT_CODES.SAVE : EVENT_CODES.WOODWORK,
-        subtype: !result.saved && result.onTarget ? 1 : 0,
-        clubId: result.saved ? def.club.id : shotClubId,
-        playerId: result.saved ? (gk?.id ?? null) : (result.shooter?.id ?? null),
-        player2Id: result.saved ? (result.shooter?.id ?? null) : null,
-        goalType: 0,
-        ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
-      });
+      if (result.saved) {
+        const gk = shotGk;
+        eng.events.push({
+          minute: displayMinute, half: eventHalf,
+          type: EVENT_CODES.SAVE,
+          subtype: 0,
+          clubId: def.club.id,
+          playerId: gk?.id ?? null,
+          player2Id: result.shooter?.id ?? null,
+          goalType: 0,
+          ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
+        });
+      } else if (result.blocked) {
+        eng.events.push({
+          minute: displayMinute, half: eventHalf,
+          type: EVENT_CODES.SHOT_BLOCKED,
+          subtype: 0,
+          clubId: shotClubId,
+          playerId: result.shooter?.id ?? null,
+          player2Id: result.blockerId,
+          goalType: 0,
+          ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
+        });
+      } else if (result.woodwork) {
+        eng.events.push({
+          minute: displayMinute, half: eventHalf,
+          type: EVENT_CODES.WOODWORK,
+          subtype: result.onTarget ? 1 : 0,
+          clubId: shotClubId,
+          playerId: result.shooter?.id ?? null,
+          player2Id: null,
+          goalType: 0,
+          ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
+        });
+      } else {
+        eng.events.push({
+          minute: displayMinute, half: eventHalf,
+          type: EVENT_CODES.SHOT_MISS,
+          subtype: 0,
+          clubId: shotClubId,
+          playerId: result.shooter?.id ?? null,
+          player2Id: null,
+          goalType: 0,
+          ...(displayAddedTime !== undefined ? { addedTime: displayAddedTime } : {}),
+        });
+      }
     }
     // Non-goal shot resolution
     if (result.saved) {
