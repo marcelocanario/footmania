@@ -204,12 +204,15 @@ function normalizePlayer(player: Player, club: Club | undefined): void {
   if (!Number.isFinite(player.payrollPaidThroughDay) || player.payrollPaidThroughDay < 0) player.payrollPaidThroughDay = 0;
   if (!Number.isFinite(player.payrollPaidAmount) || player.payrollPaidAmount < 0) player.payrollPaidAmount = 0;
   if (!Number.isFinite(player.payrollPeriodStartDay) || player.payrollPeriodStartDay < 0) player.payrollPeriodStartDay = 0;
-  // Preserve the persisted market value/salary when present and sane; only
-  // backfill them when missing. Salaries are contractual and are never
-  // recomputed on load.
-  if (!Number.isFinite(player.value) || player.value <= 0) {
-    player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
-  }
+  // Market value is a DERIVED price, not a stored fact: it is recomputed from
+  // overall/age/remaining contract on every load so a rollout of the valuation
+  // model or its configuration takes effect on the existing population instead
+  // of leaving stale prices behind. Absolute snapshots taken when a transaction
+  // opened (playerValueAtListing on transfer, free-agent and loan listings) are
+  // untouched by this, so an already-open auction never moves under its bidders.
+  //
+  // Salaries are the opposite: contractual, and never recomputed on load.
+  player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
   if (!Number.isFinite(player.salary) || player.salary <= 0) {
     player.salary = calculateBaseSalary(player.overall, player.age);
   }

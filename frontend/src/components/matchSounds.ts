@@ -18,6 +18,7 @@ const EVENT_FULL_TIME = 12;
 const GOAL_SUBTYPE_PENALTY = 3;
 
 const SOUND_FILES = {
+  kickoff: "/sounds/kickoff.wav",
   goalHome: "/sounds/goal-home.wav",
   goalAway: "/sounds/goal-away.wav",
   redCard: "/sounds/red-card.wav",
@@ -147,9 +148,29 @@ export interface MatchSoundBatch {
   phase: string;
 }
 
+function pushAndDrain(items: QueuedSound[]): void {
+  queue.push(...items);
+  if (queue.length > 0 && !draining) {
+    draining = true;
+    playNext();
+  }
+}
+
+/**
+ * Match-start whistle. The COIN_TOSS event ships inside the initial snapshot
+ * (it is created with the match state, before any viewer connects), so it can
+ * never be detected as a new arrival — the caller fires this on the live phase
+ * transition into the first half instead.
+ */
+export function enqueueKickoffWhistle(): void {
+  if (muted) return;
+  pushAndDrain([{ url: SOUND_FILES.kickoff, gapMsAfter: 0 }]);
+}
+
 export function enqueueMatchEventSounds(batch: MatchSoundBatch): void {
   if (muted) return;
   const gateFreshness = batch.phase !== "shootout";
+  const collected: QueuedSound[] = [];
   for (const event of batch.events) {
     if (
       gateFreshness &&
@@ -158,10 +179,7 @@ export function enqueueMatchEventSounds(batch: MatchSoundBatch): void {
       continue;
     }
     const items = itemsForEvent(event, batch.homeClubId);
-    if (items) queue.push(...items);
+    if (items) collected.push(...items);
   }
-  if (queue.length > 0 && !draining) {
-    draining = true;
-    playNext();
-  }
+  if (collected.length > 0) pushAndDrain(collected);
 }

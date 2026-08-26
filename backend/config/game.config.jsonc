@@ -91,53 +91,81 @@
   // (e.g. 2 = renewal talks begin 2 seasons before expiry.)
   "contractWarningSeasons": 2,
 
+  // --- Season budget economy ---
+  //
+  // The Division 1 seasonal budget is the ANCHOR of the whole money economy:
+  // seasonal allocations and every player market value are derived from it.
+  // These three values are the only source of truth for the tier-budget curve;
+  // there is deliberately no database row and no admin override, so the same
+  // configuration always produces the same economy.
+  //
+  //   tierBudget(T) = minimum + (first - minimum) x e^(-decay x (T - 1))
+  //   minimum       = first x minimumTierBudgetRatio
+  //
+  // Seasonal money a Division 1 club receives, added on top of the cash it
+  // already holds. This is a club's primary funding: it must cover a season of
+  // wages plus the planned transfer spend. Raising it raises every division's
+  // budget AND every player's market value proportionally.
+  // (e.g. 10000000 = a D1 club receives ~10.00M per season.)
+  // Safe range: 100000 .. 10000000000.
+  "firstDivisionSeasonBudget": 10000000,
+  // Floor the tier curve decays toward, as a fraction of the Division 1 budget.
+  // No division, however deep in the pyramid, receives less than this share.
+  // (e.g. 0.3 = the weakest division still gets 30% of the D1 budget.)
+  // Safe range: 0.05 .. 1.
+  "minimumTierBudgetRatio": 0.3,
+  // Exponential rate at which the budget falls per tier below Division 1.
+  // Higher values make the drop from one division to the next steeper.
+  // (e.g. 0.55 = division 2 sits ~42% of the way from D1 down to the floor.)
+  // Safe range: 0.01 .. 5.
+  "tierBudgetDecayRate": 0.55,
+
   // --- Player economy ---
   //
-  // Player market value = base x (overall/reference)^exponent x ageMultiplier
-  //                       x contractMultiplier x multiplier
-  // Value is fully deterministic for a given overall / age / contract and never
-  // depends on hidden development, form, position, or club.
+  // Player market value is anchored to the same tier-budget curve as the
+  // seasonal allocations, so prices always mean something relative to what a
+  // club can actually earn:
   //
-  // Base monetary unit used to scale the whole value curve. Doubling it roughly
-  // doubles every player's market value.
-  // (e.g. raising 500000 to 1,000,000 roughly doubles every player's value.)
-  "playerValueBase": 500000,
-  // The overall rating that produces a value multiplier of exactly 1.0 before
-  // age/contract are applied. Players rated above this get super-linear value;
-  // below it get sub-linear value.
-  // (e.g. 50 = a rating of 50 yields a value multiplier of 1.0.)
-  "playerValueOverallReference": 50,
-  // Exponent applied to (overall / reference). Higher exponents make high-rated
-  // players disproportionately more expensive (super-linear growth).
-  // (e.g. 3.5 = a rating of 75 is worth ~4.1x a rating of 50.)
-  "playerValueOverallExponent": 3.5,
-  // Global multiplier applied to the final value. A convenient single knob to
-  // scale all market values without touching the base or curves.
-  // (e.g. 1.5 = every player's market value rises by 50%.)
-  "playerValueMultiplier": 1,
-  // Age multiplier applied to base value (ages between keyframes interpolate).
-  // Below ~23 the multiplier grows with age (prospects appreciate), peaks in
-  // the mid-20s, then declines sharply past 30 as players depreciate.
-  "playerValueAgeCurve": {
-    "16": 0.65, "17": 0.72, "18": 0.8, "19": 0.88, "20": 0.95, "21": 1.03, "22": 1.1, "23": 1.14,
-    "24": 1.15, "25": 1.15, "26": 1.15, "27": 1.12, "28": 1.05, "29": 0.97, "30": 0.9, "31": 0.8,
-    "32": 0.7, "33": 0.6, "34": 0.5, "35": 0.4, "36": 0.3, "37": 0.22, "38": 0.15, "39": 0.1, "40": 0.08
-  },
-  // Contract length (in seasons) at which the contract multiplier is exactly
-  // 1.0. Shorter contracts are worth slightly less; longer ones slightly more.
-  // (e.g. 3 = a 3-season contract leaves value unchanged.)
-  "playerValueContractNeutralSeasons": 3,
-  // How much the value multiplier changes per season of difference from
-  // contractNeutralSeasons (e.g. 0.05 = 5% per season).
-  "playerValueContractWeight": 0.05,
-  // Lower bound for the contract multiplier (floor applied when contracts are
-  // very short). Prevents value from dropping too far on expiring contracts.
-  // (e.g. 0.9 = value never falls below 90% of its neutral-contract level.)
-  "playerValueContractMinMultiplier": 0.9,
-  // Upper bound for the contract multiplier (cap applied when contracts are
-  // very long). Prevents value from inflating too much on long contracts.
-  // (e.g. 1.1 = value never rises above 110% of its neutral-contract level.)
-  "playerValueContractMaxMultiplier": 1.1,
+  //   qualityTier    = 1 + (topDivisionMeanOverall - overall) / playerQualitySpreadOverall
+  //   qualityPrice   = tierBudget(qualityTier)
+  //                    x expectedMeaningfulSigningsPerSeason / expectedSeniorSquadSize
+  //   value          = playerValueBase x qualityPrice(overall)
+  //                    x careerMultiplier(overall, age) x contractMultiplier(seasons)
+  //
+  // A player exactly at the top-division mean prices at tier 1; each population
+  // standard deviation of ability above or below that moves one continuous step
+  // along the same decay curve, so ability is expensive in the same currency the
+  // pyramid pays out.
+  //
+  // The career multiplier prices AGE by projecting the player forward along the
+  // population-average career curve (growth, decline, and position-weighted
+  // retirement risk) and comparing his expected remaining career output with the
+  // same OVR at the mean peak age. It reads visible age ONLY: the player's own
+  // hidden growth potential, speed, peak age, potential, form, position, and club
+  // are never consulted, so value can never leak scouting information.
+  //
+  // Value is fully deterministic for a given overall / age / remaining contract.
+  //
+  // Global scalar applied at the very end, after everything else. The one knob
+  // for making the whole market cheaper or dearer without changing its shape.
+  // (e.g. 1.1 = every player's market value rises by ~10%.)
+  // Safe range: 0.1 .. 10.
+  "playerValueBase": 1,
+  // Exponent applied to the expected-remaining-career ratio, which is how much
+  // age matters. 0 disables age entirely (a 16- and a 40-year-old of equal
+  // ability cost the same); 1 charges the full lifetime-output ratio, which lets
+  // sheer longevity outweigh present ability. The default takes the square root:
+  // age moves price substantially more than contract length, without a teenager
+  // costing several times an established player of the same ability.
+  // (e.g. 0.5 = an 80 OVR 18-year-old is worth ~51% more than the same OVR at 23.)
+  // Safe range: 0 .. 1.
+  "playerValueCareerWeight": 0.5,
+  // Half-width of the contract-length adjustment. The neutral length is the
+  // midpoint of 1..maxContractSeasons and needs no separate setting, so the
+  // per-season step lands exactly on both bounds at the extremes of the range.
+  // (e.g. 0.1 = value swings between 90% and 110% across the contract range.)
+  // Safe range: 0 .. 0.5.
+  "playerValueContractRange": 0.1,
 
   // Base salary = salaryBase x (overall/reference)^exponent x ageMultiplier x multiplier.
   // Used only when a contract is first established; persisted salaries are fixed.
@@ -157,7 +185,7 @@
   // Global multiplier applied to the final suggested salary. A convenient knob
   // to scale all wages without touching the base or curves.
   // (e.g. 1.5 = every suggested salary rises by 50%.)
-  "salaryMultiplier": 1,
+  "salaryMultiplier": 0.8,
   // Age multiplier applied to the suggested salary (ages between keyframes
   // interpolate). Young prospects earn less, peak in their mid-to-late 20s,
   // then decline after ~30 as players age.
@@ -232,6 +260,9 @@
     // automatic lineup well above this figure.
     "topDivisionMeanOverall": 74,
     // Standard deviation of individual senior career quality, in OVR points.
+    // Player market value also divides by this spread to place an OVR on the
+    // budget tier curve, so it must stay well above zero.
+    // Safe range: 0.1 .. 99.
     "playerQualitySpreadOverall": 5.5,
     // Wider spread for academy career quality. The extra tail is what keeps
     // rare wonderkids possible without widening every senior squad.

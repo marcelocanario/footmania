@@ -5,20 +5,26 @@ import {
   calculatePlayerValue,
   calculateProfessionalContractSalary,
   calculateReleaseClause,
+  careerValueMultiplier,
   contractDaysForTerm,
   contractDemandOptions,
+  contractValueMultiplier,
   levelizedContractSalary,
   professionalAnnualDemandRate,
   remainingSeasonFractionForDay,
   curveMultiplier,
   remainingSeasons,
+  resetPlayerValueCache,
 } from "../src/game/economy";
+import { budgetSettings, calculateTierBudget, qualityTierBudget, tierBudget } from "../src/game/budget";
+import { densityMean, neutralCareerProfile } from "../src/game/careerCurves";
+import { divisionMean, topDivisionMean } from "../src/game/generationModel";
 import { generatePlayer, refreshPlayerDerived } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import { contractCycle, processContractExpiry, promoteYouthPlayer, processSeasonEndContracts, processSeasonalAcademyIntake, commitSeasonRollover } from "../src/game/season";
 import { settlePayroll } from "../src/game/season";
 import { applyMaxBid, createTransferAuction, settleTransferAuction } from "../src/game/market";
-import { MARKET_CONFIG, gameConfig } from "../src/config";
+import { MARKET_CONFIG, MP_CONFIG, gameConfig } from "../src/config";
 import { makeClub, makeWorld } from "./helpers";
 
 describe("removed concepts", () => {
@@ -100,14 +106,34 @@ describe("player value", () => {
     );
   });
 
-  it("value does not change when a player moves between clubs", () => {
-    const clubA = makeClub();
-    const clubB = makeClub();
+  it("value does not change when a player moves between clubs or divisions", () => {
+    const clubA = makeClub({ id: 1, highestDivision: 1 });
+    const clubB = makeClub({ id: 2, highestDivision: 4 });
     const rng = createRng(9);
     const p = generatePlayer(rng, clubA, { id: 1 });
     const before = p.value;
     p.clubId = clubB.id;
     expect(p.value).toBe(before);
+    // Recomputing from the public inputs after the move agrees: the formula has
+    // no club or division term to change.
+    expect(calculatePlayerValue(p.overall, p.age, remainingSeasons(p.contractDays))).toBe(before);
+  });
+
+  it("does not change when the pyramid gains or loses divisions", () => {
+    const cases = [[60, 19, 2], [80, 27, 3], [93, 33, 5]] as const;
+    const baseline = cases.map(([ovr, age, seasons]) => calculatePlayerValue(ovr, age, seasons));
+    // Pyramid depth genuinely moves the generation curve for the divisions BELOW
+    // the top one, so this is a real variable in the world...
+    expect(divisionMean(2, 3)).not.toBeCloseTo(divisionMean(2, 9), 6);
+    for (const totalDivisions of [1, 2, 5, 12]) {
+      // ...but valuation is anchored on the configured top-division mean, which
+      // is the same at every depth and takes no division count at all.
+      expect(divisionMean(1, totalDivisions)).toBe(topDivisionMean());
+      expect(topDivisionMean()).toBe(gameConfig.playerGeneration.topDivisionMeanOverall);
+      cases.forEach(([ovr, age, seasons], index) => {
+        expect(calculatePlayerValue(ovr, age, seasons)).toBe(baseline[index]);
+      });
+    }
   });
 });
 
@@ -421,12 +447,148 @@ describe("age curves", () => {
     expect(curveMultiplier(curve, 40)).toBe(2);
   });
 
-  it("value peaks in the mid-20s and falls sharply at 35+", () => {
+  it("prices the same ability lower at every older age, and sharply lower at 35+", () => {
+    // At equal ability the younger player has more expected career left, so
+    // value falls with age all the way down rather than peaking in the mid-20s.
     const young = calculatePlayerValue(80, 18, 3);
-    const peak = calculatePlayerValue(80, 25, 3);
+    const prime = calculatePlayerValue(80, 25, 3);
     const veteran = calculatePlayerValue(80, 35, 3);
-    expect(peak).toBeGreaterThan(young);
-    expect(peak).toBeGreaterThan(veteran);
-    expect(veteran).toBeLessThan(peak * 0.6);
+    expect(young).toBeGreaterThan(prime);
+    expect(prime).toBeGreaterThan(veteran);
+    expect(veteran).toBeLessThan(prime * 0.6);
+  });
+});
+
+describe("player value model", () => {
+  const CONTRACTS = [0, 1, 2, 3, 4, 5] as const;
+
+  it("prices exactly one meaningful signing out of the Division 1 tier budget at the top-division mean", () => {
+    // The whole curve is anchored here: a player exactly at the configured
+    // top-division mean, at the neutral peak age, on a neutral contract, costs
+    // his share of an untouched Division 1 season budget.
+    const expected = Math.round(
+      (gameConfig.firstDivisionSeasonBudget * MP_CONFIG.expectedMeaningfulSigningsPerSeason) / MP_CONFIG.expectedSeniorSquadSize,
+    );
+    const peakAge = neutralCareerProfile().peakAge;
+    const neutralSeasons = (1 + gameConfig.maxContractSeasons) / 2;
+    expect(calculatePlayerValue(topDivisionMean(), peakAge, neutralSeasons)).toBe(expected);
+  });
+
+  it("uses the same tier-decay implementation for real allocations and quality pricing", () => {
+    const settings = budgetSettings();
+    for (const tier of [1, 2, 3.5, 7]) {
+      expect(tierBudget(tier)).toBe(
+        calculateTierBudget(settings.firstDivisionBudget, settings.minimumTierBudgetRatio, settings.tierBudgetDecayRate, tier),
+      );
+      expect(qualityTierBudget(tier)).toBe(tierBudget(tier));
+    }
+    // Only the clamp differs: allocations never extrapolate above Division 1,
+    // quality pricing must, so an exceptional player can cost more than a D1
+    // club's whole season budget share.
+    for (const tier of [0, -1.4]) {
+      expect(tierBudget(tier)).toBe(tierBudget(1));
+      expect(qualityTierBudget(tier)).toBeGreaterThan(tierBudget(1));
+      expect(qualityTierBudget(tier)).toBe(
+        calculateTierBudget(settings.firstDivisionBudget, settings.minimumTierBudgetRatio, settings.tierBudgetDecayRate, tier),
+      );
+    }
+  });
+
+  it("is strictly increasing across every integer overall from 1 to 100", () => {
+    for (const age of [16, 20, 23, 27, 31, 35, 45]) {
+      for (const seasons of CONTRACTS) {
+        for (let ovr = 2; ovr <= 100; ovr++) {
+          const lower = calculatePlayerValue(ovr - 1, age, seasons);
+          const higher = calculatePlayerValue(ovr, age, seasons);
+          expect(higher, `ovr=${ovr} age=${age} seasons=${seasons}`).toBeGreaterThan(lower);
+        }
+      }
+    }
+  });
+
+  it("is strictly decreasing across every age from 16 to 45", () => {
+    for (const ovr of [1, 30, 50, 74, 85, 100]) {
+      for (const seasons of CONTRACTS) {
+        for (let age = 17; age <= 45; age++) {
+          const younger = calculatePlayerValue(ovr, age - 1, seasons);
+          const older = calculatePlayerValue(ovr, age, seasons);
+          expect(older, `ovr=${ovr} age=${age} seasons=${seasons}`).toBeLessThan(younger);
+        }
+      }
+    }
+  });
+
+  it("has a neutral career multiplier at exactly the configured mean peak age", () => {
+    const peakAge = neutralCareerProfile().peakAge;
+    expect(peakAge).toBe(Math.round(gameConfig.playerCareer.peakAgeDistribution.mean));
+    for (const ovr of [40, 74, 90]) {
+      expect(careerValueMultiplier(ovr, peakAge)).toBeCloseTo(1, 12);
+      expect(careerValueMultiplier(ovr, peakAge - 1)).toBeGreaterThan(1);
+      expect(careerValueMultiplier(ovr, peakAge + 1)).toBeLessThan(1);
+    }
+  });
+
+  it("applies the exact contract multipliers 0.90 / 0.90 / 0.95 / 1.00 / 1.05 / 1.10", () => {
+    expect(gameConfig.maxContractSeasons).toBe(5);
+    expect(gameConfig.playerValueContractRange).toBe(0.1);
+    expect(CONTRACTS.map(contractValueMultiplier)).toEqual([0.9, 0.9, 0.95, 1, 1.05, 1.1]);
+  });
+
+  it("makes age matter more than the full contract range", () => {
+    const ageEffect = calculatePlayerValue(80, 18, 3) / calculatePlayerValue(80, 23, 3) - 1;
+    const contractEffect = calculatePlayerValue(80, 25, 5) / calculatePlayerValue(80, 25, 1) - 1;
+    expect(contractEffect).toBeCloseTo(1.1 / 0.9 - 1, 6);
+    expect(ageEffect).toBeGreaterThan(contractEffect);
+  });
+
+  it("values an 85 OVR 18-year-old above an 86 OVR 23-year-old at every contract length", () => {
+    for (const seasons of CONTRACTS) {
+      expect(calculatePlayerValue(85, 18, seasons), `seasons=${seasons}`)
+        .toBeGreaterThan(calculatePlayerValue(86, 23, seasons));
+    }
+  });
+
+  it("derives the neutral profile from the configured distributions, not literals", () => {
+    const cfg = gameConfig.playerCareer;
+    expect(neutralCareerProfile()).toEqual({
+      growthPotential: densityMean(cfg.growthPotentialDistribution),
+      growthSpeed: densityMean(cfg.growthSpeedDistribution),
+      peakAge: Math.round(cfg.peakAgeDistribution.mean),
+      declinePotential: densityMean(cfg.declinePotentialDistribution),
+      declineSpeed: densityMean(cfg.declineSpeedDistribution),
+    });
+
+    // Retuning the career configuration moves the valuation curve with it.
+    const originalPeak = cfg.peakAgeDistribution.mean;
+    try {
+      cfg.peakAgeDistribution.mean = originalPeak + 3;
+      resetPlayerValueCache();
+      expect(neutralCareerProfile().peakAge).toBe(Math.round(originalPeak) + 3);
+      expect(careerValueMultiplier(80, Math.round(originalPeak) + 3)).toBeCloseTo(1, 12);
+      expect(careerValueMultiplier(80, Math.round(originalPeak))).toBeGreaterThan(1);
+    } finally {
+      cfg.peakAgeDistribution.mean = originalPeak;
+      resetPlayerValueCache();
+    }
+    expect(careerValueMultiplier(80, Math.round(originalPeak))).toBeCloseTo(1, 12);
+  });
+
+  it("treats playerValueBase as a pure global scalar", () => {
+    const cases = [[50, 17, 1], [74, 27, 3], [92, 31, 5]] as const;
+    const before = cases.map(([ovr, age, seasons]) => calculatePlayerValue(ovr, age, seasons));
+    const original = gameConfig.playerValueBase;
+    try {
+      gameConfig.playerValueBase = original * 1.1;
+      cases.forEach(([ovr, age, seasons], index) => {
+        const after = calculatePlayerValue(ovr, age, seasons);
+        // Only final integer rounding may differ from an exact +10%.
+        expect(Math.abs(after - before[index] * 1.1)).toBeLessThanOrEqual(1);
+      });
+    } finally {
+      gameConfig.playerValueBase = original;
+    }
+    cases.forEach(([ovr, age, seasons], index) => {
+      expect(calculatePlayerValue(ovr, age, seasons)).toBe(before[index]);
+    });
   });
 });

@@ -136,6 +136,31 @@ export function generateCareerProfile(rng: RngState): PlayerCareerProfile {
   return { growthPotential, growthSpeed, peakAge, declinePotential, declineSpeed };
 }
 
+/**
+ * The PUBLIC career profile: the population average of every configured career
+ * distribution, with no reference to any individual player.
+ *
+ * Market value has to price age without leaking scouting information, so it
+ * projects every player along this one neutral curve instead of his own hidden
+ * profile. Two players with the same visible OVR and age are therefore always
+ * worth the same, however differently their real careers will unfold.
+ *
+ * Every value is derived from the configured distribution — `densityMean` for
+ * the four 0-to-1 attributes and the configured mean for the peak age — so
+ * retuning generation moves the valuation curve with it rather than leaving a
+ * stale literal behind.
+ */
+export function neutralCareerProfile(): PlayerCareerProfile {
+  const cfg = gameConfig.playerCareer;
+  return {
+    growthPotential: densityMean(cfg.growthPotentialDistribution),
+    growthSpeed: densityMean(cfg.growthSpeedDistribution),
+    peakAge: Math.round(cfg.peakAgeDistribution.mean),
+    declinePotential: densityMean(cfg.declinePotentialDistribution),
+    declineSpeed: densityMean(cfg.declineSpeedDistribution),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Activity modifiers
 // ---------------------------------------------------------------------------

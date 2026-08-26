@@ -14,8 +14,13 @@ import { readMpStatus } from "../src/services/readService";
 import { applyDevelopment } from "../src/game/player";
 import { initSeason, createDivision, ensureDivisionFull, generateDivisionFixtures, rebuildTierDivisions, highestRankedReplaceableAI, placeNewClub } from "../src/game/multiplayer";
 import { applyMaxBid, createTransferAuction } from "../src/game/market";
-import { gameConfig } from "../src/config";
+import { MP_CONFIG, gameConfig } from "../src/config";
+import { budgetSettings, tierBudget } from "../src/game/budget";
+import { calculatePlayerValue, remainingSeasons } from "../src/game/economy";
 import { leagueTurnKey } from "../src/services/seasonCalendar";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const prisma = new PrismaClient();
 
@@ -188,7 +193,7 @@ describe("global multiplayer world persistence", () => {
     expect(afterDelta.preferredHours).toEqual([22, 23, 36]);
   });
 
-  it("round-trips retained player values without regeneration", async () => {
+  it("round-trips retained player attributes and re-derives the market value", async () => {
     const { saveId } = await freshGlobalWorld(6767);
     const { world } = await withSeason(saveId);
     const player = world.players[0];
@@ -197,6 +202,7 @@ describe("global multiplayer world persistence", () => {
     player.skills = skills;
     player.overall = 77;
     player.salary = 123456;
+    // A stale price persisted by an older valuation model.
     player.value = 654321;
     player.skillAcc = skillAcc;
 
@@ -206,9 +212,82 @@ describe("global multiplayer world persistence", () => {
     const saved = reloaded!.world.players.find((candidate) => candidate.id === player.id)!;
     expect(saved.skills).toEqual(skills);
     expect(saved.overall).toBe(77);
-    expect(saved.salary).toBe(123456);
-    expect(saved.value).toBe(654321);
     expect(saved.skillAcc).toEqual(skillAcc);
+    // The contractual salary is preserved exactly...
+    expect(saved.salary).toBe(123456);
+    // ...but market value is derived, so a rebuilt world re-prices the player
+    // from the current model instead of keeping the stale figure.
+    expect(saved.value).toBe(calculatePlayerValue(saved.overall, saved.age, remainingSeasons(saved.contractDays)));
+    expect(saved.value).not.toBe(654321);
+  });
+
+  it("re-prices players on reload but never an open listing's value snapshot", async () => {
+    const { saveId } = await freshGlobalWorld(6868);
+    const { seasonId, world } = await withSeason(saveId);
+    // A human seller with a User row (Club.ownerUserId FK) and enough played
+    // fixtures to clear the new-club outbound sell lock.
+    await prisma.user.deleteMany({ where: { id: 6800 } });
+    await prisma.user.create({ data: { id: 6800, name: "Snapshot Seller", email: "snapshot-seller@test.dev", emailVerified: true } });
+    const division = world.competitions.find((candidate) => candidate.kind === "division" && candidate.seasonId === seasonId)!;
+    const seller = createHumanClub(world, { userId: 6800, clubName: "Snapshot FC", country: "BRA" });
+    seller.competitionState = "ACTIVE";
+    for (let round = 0; round < MP_CONFIG.newClubSellLockMatches; round++) {
+      world.fixtures.push({ id: world.nextId++, competitionId: division.id, round, homeClubId: seller.id, awayClubId: -seller.id, dayIndex: round, played: true });
+    }
+    const player = world.players.find((p) => p.clubId === seller.id && !p.isYouth)!;
+    player.contractDays = gameConfig.seasonDays * 4;
+    player.value = calculatePlayerValue(player.overall, player.age, remainingSeasons(player.contractDays));
+    const listed = createTransferAuction(world, { player, sellerClub: seller, sellerDivision: 1, totalDivisions: 1 });
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) throw new Error(listed.error);
+    const auctionId = listed.listing.id;
+    const snapshotAtListing = listed.listing.playerValueAtListing;
+    expect(snapshotAtListing).toBe(player.value);
+
+    // Simulate a valuation rollout that moves every price while the auction is
+    // still open: the persisted player price is stale, the listing is not.
+    player.value = 1;
+    await persistWorld(prisma, saveId, saveId, world);
+    const reloaded = await loadGlobalWorld(prisma);
+    expect(reloaded).not.toBeNull();
+    const savedPlayer = reloaded!.world.players.find((candidate) => candidate.id === player.id)!;
+    expect(savedPlayer.value).toBe(
+      calculatePlayerValue(savedPlayer.overall, savedPlayer.age, remainingSeasons(savedPlayer.contractDays)),
+    );
+    const savedAuction = reloaded!.world.transferAuctions.find((auction) => auction.id === auctionId)!;
+    // The bid cap the current bidders agreed to is an absolute snapshot and must
+    // not move underneath them.
+    expect(savedAuction.playerValueAtListing).toBe(snapshotAtListing);
+  });
+
+  it("ignores retired budget Setting rows and the migration deletes them", async () => {
+    await freshGlobalWorld(6969);
+    const retired = ["FIRST_DIVISION_SEASON_BUDGET", "MINIMUM_TIER_BUDGET_RATIO", "TIER_BUDGET_DECAY_RATE"] as const;
+    for (const key of retired) {
+      await prisma.setting.upsert({ where: { key }, update: { value: "1" }, create: { key, value: "1" } });
+    }
+    // Present but inert: the budget curve and every player price come from
+    // game.config.jsonc alone.
+    expect(tierBudget(1)).toBe(gameConfig.firstDivisionSeasonBudget);
+    expect(budgetSettings()).toEqual({
+      firstDivisionBudget: gameConfig.firstDivisionSeasonBudget,
+      minimumTierBudgetRatio: gameConfig.minimumTierBudgetRatio,
+      tierBudgetDecayRate: gameConfig.tierBudgetDecayRate,
+    });
+    expect(calculatePlayerValue(80, 27, 3)).toBeGreaterThan(1);
+
+    // The shipped data migration is what actually removes them.
+    const migration = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "..", "prisma", "migrations", "20260825160000_retire_budget_settings", "migration.sql"),
+      "utf8",
+    );
+    for (const key of retired) expect(migration).toContain(key);
+    await prisma.$executeRawUnsafe(migration);
+    expect(await prisma.setting.findMany({ where: { key: { in: [...retired] } } })).toEqual([]);
+    // An unrelated operational setting is untouched.
+    await prisma.setting.upsert({ where: { key: "JOIN_THRESHOLD_PERCENT" }, update: { value: "0.5" }, create: { key: "JOIN_THRESHOLD_PERCENT", value: "0.5" } });
+    await prisma.$executeRawUnsafe(migration);
+    expect(await prisma.setting.findUnique({ where: { key: "JOIN_THRESHOLD_PERCENT" } })).not.toBeNull();
   });
 
   it("round-trips live match state (multiple) and records player minutes on finish", async () => {

@@ -73,15 +73,12 @@ describe("worldgen", () => {
 
 describe("game config validation", () => {
   const economyFields = {
-    playerValueBase: 9000,
-    playerValueOverallReference: 50,
-    playerValueOverallExponent: 3.5,
-    playerValueMultiplier: 1,
-    playerValueAgeCurve: { 16: 0.65, 22: 1.1, 30: 0.9 },
-    playerValueContractNeutralSeasons: 3,
-    playerValueContractWeight: 0.05,
-    playerValueContractMinMultiplier: 0.9,
-    playerValueContractMaxMultiplier: 1.1,
+    firstDivisionSeasonBudget: 10000000,
+    minimumTierBudgetRatio: 0.3,
+    tierBudgetDecayRate: 0.55,
+    playerValueBase: 1,
+    playerValueCareerWeight: 0.5,
+    playerValueContractRange: 0.1,
     salaryBase: 2500,
     salaryOverallReference: 50,
     salaryOverallExponent: 2.5,
@@ -209,6 +206,9 @@ describe("game config validation", () => {
     expect(withOverrides({
       playerGeneration: { ...economyFields.playerGeneration, academyCurrentDivisionWeight: 0, academyHighestEverDivisionWeight: 0 },
     })).toThrow(/pedigree/);
+    // Market value divides by the senior quality spread to place an OVR on the
+    // budget tier curve, so zero would produce infinite tiers and prices.
+    expect(withOverrides({ playerGeneration: { ...economyFields.playerGeneration, playerQualitySpreadOverall: 0 } })).toThrow(/playerQualitySpreadOverall/);
   });
 
   it("rejects a calendar where lastMatchDay >= seasonDays", () => {

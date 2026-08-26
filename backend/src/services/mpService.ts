@@ -178,11 +178,9 @@ export async function ensureCurrentSeason(prisma: PrismaClient): Promise<SeasonH
       if (listing.salaryBaselineAtListing !== undefined) listing.salaryBaselineAtListing = scaleReferenceSeasonFlow(listing.salaryBaselineAtListing);
     }
     for (const allocation of world.seasonAllocations) allocation.amount = scaleReferenceSeasonFlow(allocation.amount);
-    const budget = await prisma.setting.findUnique({ where: { key: "FIRST_DIVISION_SEASON_BUDGET" } });
-    if (budget) {
-      const amount = Number(budget.value);
-      if (Number.isFinite(amount)) await prisma.setting.update({ where: { key: budget.key }, data: { value: String(scaleReferenceSeasonFlow(amount)) } });
-    }
+    // The Division 1 budget is no longer persisted: it is a configured value
+    // (game.config.jsonc firstDivisionSeasonBudget) and needs no migration.
+    // Already-issued allocations above stay immutable; future ones use config.
     world.mp.calendarMigrationVersion = 1;
     await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
     loaded = await loadGlobalWorld(prisma);
@@ -230,7 +228,7 @@ export async function issueAllocation(
   const existing = world.seasonAllocations.find((a) => a.clubId === clubId && a.seasonId === seasonId && a.type === opts.type);
   if (existing) return existing.amount;
   const { tierBudget, proratedBudget } = await import("../game/budget");
-  const full = await tierBudget(prisma, tier);
+  const full = tierBudget(tier);
   const amount = opts.type === "ACTIVE_PRORATED"
     ? proratedBudget(full, opts.remainingRounds ?? gameConfig.roundsPerSeason, gameConfig.roundsPerSeason)
     : full;

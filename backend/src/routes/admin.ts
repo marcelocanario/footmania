@@ -5,8 +5,7 @@ import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
 import { ROUNDS_PER_SEASON } from "../game/multiplayer";
-import { budgetSettings, setBudgetSettings } from "../game/budget";
-import { readNumberSetting } from "../game/budget";
+import { readNumberSetting } from "../services/settingsStore";
 import { getCommitmentTotals } from "../game/finance";
 import { divisionAnalytics } from "../game/adminAnalytics";
 import { gameConfig } from "../config";
@@ -145,19 +144,10 @@ export async function adminRoutes(app: FastifyInstance) {
     };
   });
 
-  // Budget economy settings (plan §17A).
-  app.get("/admin/budget-settings", async () => ({ settings: await budgetSettings(app.prisma) }));
-
-  const budgetSchema = z.object({
-    firstDivisionBudget: z.number().int().min(1).optional(),
-    minimumTierBudgetRatio: z.number().min(0.05).max(1).optional(),
-    tierBudgetDecayRate: z.number().min(0.01).max(5).optional(),
-  });
-  app.put("/admin/budget-settings", async (req, reply) => {
-    const parsed = budgetSchema.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
-    return { settings: await setBudgetSettings(app.prisma, parsed.data) };
-  });
+  // The season budget economy is configuration only (game.config.jsonc):
+  // firstDivisionSeasonBudget, minimumTierBudgetRatio and tierBudgetDecayRate
+  // anchor both seasonal allocations and every player market value, so they
+  // deliberately have no runtime override.
 
   app.get("/admin/league-settings", async () => ({
     settings: {

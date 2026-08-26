@@ -920,9 +920,13 @@ model MpAudit {
   @@index([clubId, occurredAt])
 }
 
-// Simple key/value store for admin-tunable multiplayer settings
-// (e.g. FIRST_DIVISION_SEASON_BUDGET, MINIMUM_TIER_BUDGET_RATIO,
-// TIER_BUDGET_DECAY_RATE, JOIN_THRESHOLD_PERCENT).
+// Simple key/value store for global operational settings: the global lock,
+// scheduler bookkeeping, match timing, inactivity thresholds and the join
+// threshold (e.g. JOIN_THRESHOLD_PERCENT, MATCH_TIME_MODE, INACTIVITY_TIER_1).
+//
+// Economy BALANCE parameters are deliberately not stored here. The season
+// budget curve and the player-value model are owned by game.config.jsonc alone,
+// so a configuration rollout can never be silently overridden by a stale row.
 model Setting {
   key       String   @id
   value     String

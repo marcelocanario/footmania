@@ -158,15 +158,15 @@ const gameConfigSchema = z
     }),
     joinThresholdPercent: z.number().min(0).max(1).default(0.5),
     contractWarningSeasons: z.number().int().min(1),
-    playerValueBase: nonNegativeNumber,
-    playerValueOverallReference: z.number().min(1),
-    playerValueOverallExponent: nonNegativeNumber,
-    playerValueMultiplier: nonNegativeNumber,
-    playerValueAgeCurve: ageCurveSchema,
-    playerValueContractNeutralSeasons: nonNegativeNumber,
-    playerValueContractWeight: z.number(),
-    playerValueContractMinMultiplier: nonNegativeNumber,
-    playerValueContractMaxMultiplier: nonNegativeNumber,
+    // Season budget economy: the single source of truth for the tier-budget
+    // curve that anchors both seasonal allocations and player market values.
+    firstDivisionSeasonBudget: z.number().min(1),
+    minimumTierBudgetRatio: z.number().min(0.05).max(1),
+    tierBudgetDecayRate: z.number().min(0.01).max(5),
+    // The only three player-value tunables (see config/game.config.jsonc).
+    playerValueBase: z.number().positive(),
+    playerValueCareerWeight: z.number().min(0).max(1),
+    playerValueContractRange: z.number().min(0).max(0.5),
     salaryBase: nonNegativeNumber,
     salaryOverallReference: z.number().min(1),
     salaryOverallExponent: nonNegativeNumber,
@@ -184,7 +184,10 @@ const gameConfigSchema = z
     releaseClauseRemainingValuePct: nonNegativeNumber,
     playerGeneration: z.object({
       topDivisionMeanOverall: z.number().min(1).max(100),
-      playerQualitySpreadOverall: z.number().min(0).max(99),
+      // Must be strictly positive: player market value places an OVR on the
+      // budget curve as 1 + (topDivisionMeanOverall - overall) / this spread,
+      // so a zero spread would produce infinite tiers and infinite prices.
+      playerQualitySpreadOverall: z.number().min(0.1).max(99),
       academyQualitySpreadOverall: z.number().min(0).max(99),
       divisionOverallSpan: z.number().min(0).max(99),
       seniorPeakOverallOffset: z.number().min(0).max(50),
@@ -634,12 +637,12 @@ export const MP_CONFIG = {
   liveAdvanceMinutesPerTick: 1,
   // Idempotency guard: only one UTC day's daily tick runs per key.
   dailyTickHourUtc: 0,
-  // Season budget economy (plans/1. multiplayer.md §17A).
-  minimumTierBudgetRatio: 0.3,
-  tierBudgetDecayRate: 0.55,
   // Inactivity thresholds by tier (days), per plan §41.
   inactivityThresholds: { 1: 42, 2: 35, default: 28 },
-  // Multiplayer club/player generation baselines used to seed budgets.
+  // Squad-economy baselines shared by the tier budget and player valuation:
+  // how many senior players a club carries, and how many meaningful first-team
+  // signings one season of budget is expected to fund. Their ratio is what turns
+  // a seasonal tier budget into a single player's price.
   expectedSeniorSquadSize: 25,
   expectedMeaningfulSigningsPerSeason: 2,
   // Starting cash for a brand-new human club. The season budget is the only
@@ -830,19 +833,12 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   freeAgentPool: { expectedExpiriesPerActiveClubPerSeason: 4, signingProbability: 0.6, signedResidenceSeasons: 0.1 },
   joinThresholdPercent: 0.5,
   contractWarningSeasons: 2,
-  playerValueBase: 500000,
-  playerValueOverallReference: 50,
-  playerValueOverallExponent: 3.5,
-  playerValueMultiplier: 1,
-  playerValueAgeCurve: {
-    16: 0.65, 17: 0.72, 18: 0.8, 19: 0.88, 20: 0.95, 21: 1.03, 22: 1.1, 23: 1.14,
-    24: 1.15, 25: 1.15, 26: 1.15, 27: 1.12, 28: 1.05, 29: 0.97, 30: 0.9, 31: 0.8,
-    32: 0.7, 33: 0.6, 34: 0.5, 35: 0.4, 36: 0.3, 37: 0.22, 38: 0.15, 39: 0.1, 40: 0.08,
-  },
-  playerValueContractNeutralSeasons: 3,
-  playerValueContractWeight: 0.05,
-  playerValueContractMinMultiplier: 0.9,
-  playerValueContractMaxMultiplier: 1.1,
+  firstDivisionSeasonBudget: 10000000,
+  minimumTierBudgetRatio: 0.3,
+  tierBudgetDecayRate: 0.55,
+  playerValueBase: 1,
+  playerValueCareerWeight: 0.5,
+  playerValueContractRange: 0.1,
   salaryBase: 70000,
   salaryOverallReference: 50,
   salaryOverallExponent: 2.5,

@@ -7,7 +7,7 @@ import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
 import { eventKey, hasPitchCue, tacticalRoleLabel } from "../components/matchPitchUtils";
-import { enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
+import { enqueueKickoffWhistle, enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
@@ -101,6 +101,8 @@ export function LiveMatch() {
   // switches must not replay old goals), and arrivals older than the freshness
   // window are skipped inside the sound module.
   const lastSoundedSeqRef = useRef<number>(-1);
+  // Previous live phase, for edge-triggered transitions (kick-off whistle).
+  const prevPhaseRef = useRef<string | null>(null);
   const [revealTick, setRevealTick] = useState(0);
   const markRevealed = useCallback((event: LiveEvent) => {
     const key = eventKey(event);
@@ -160,6 +162,7 @@ export function LiveMatch() {
   useEffect(() => {
     revealedKeysRef.current = new Set();
     lastSoundedSeqRef.current = -1;
+    prevPhaseRef.current = null;
     setRevealTick(0);
   }, [matchId]);
 
@@ -212,6 +215,15 @@ export function LiveMatch() {
   const applyState = useCallback((s: LiveState) => {
     stateRef.current = s;
     setState(s);
+    // Kick-off whistle: fires on the live transition into the first half
+    // (after the coin toss, which ships inside the match state itself). The
+    // first snapshot only anchors prevPhaseRef — a viewer joining mid-match
+    // must not hear it — and reconnects never replay it because this
+    // component survives socket drops with the previous phase intact.
+    if (prevPhaseRef.current !== null && prevPhaseRef.current !== s.phase && s.phase === "first") {
+      enqueueKickoffWhistle();
+    }
+    prevPhaseRef.current = s.phase;
     // Single sound entry point: every path that replaces the whole state (WS
     // snapshot, delta merge, polling fallback, sub/tactics responses) funnels
     // through here, so newly arrived events are detected uniformly. The very

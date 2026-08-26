@@ -125,6 +125,32 @@ export function projectDivisionQuality(
   return projection;
 }
 
+/** Representative percentiles of the generated top-division population. */
+const MEANINGFUL_SIGNING_PERCENTILE = 0.9;
+const ELITE_PLAYER_PERCENTILE = 0.99;
+
+/**
+ * Quality assumptions the economy is built on, all DERIVED from the live
+ * generation configuration rather than hard-coded. Retuning generation now moves
+ * the quality reference points with it instead of silently invalidating them.
+ */
+export function expectedFirstDivisionQuality(): {
+  fullSquadOverall: number;
+  startingXiOverall: number;
+  meaningfulSigningOverall: number;
+  eliteOverall: number;
+} {
+  const projection = projectDivisionQuality(1, 1);
+  return {
+    fullSquadOverall: projection.fullSquadMean,
+    startingXiOverall: projection.startingXiMean,
+    // A "meaningful signing" is a player who would walk into the XI: the upper
+    // slice of the generated top-division population, not an arbitrary number.
+    meaningfulSigningOverall: projection.percentile(MEANINGFUL_SIGNING_PERCENTILE),
+    eliteOverall: projection.percentile(ELITE_PLAYER_PERCENTILE),
+  };
+}
+
 /** Configured all-age mean of the top division, straight from the curve. */
 export function configuredTopDivisionMean(): number {
   return divisionMean(1, 1);

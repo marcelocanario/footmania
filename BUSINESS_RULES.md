@@ -331,20 +331,55 @@ their age, and how much of their contract remains — with nothing else (form, p
 or club) factored in:
 
 ```
-Value = base value for their overall rating
-        × an age multiplier (peaks in the mid-20s, tapers off toward the late teens and late 30s)
+Value = what one season of that ability costs, read off the season-budget curve
+        × a career multiplier for their age
         × a small contract-length adjustment (more contract time left is worth slightly
           more, capped at a ±10% swing)
 ```
+
+**Ability** is priced in the same currency the pyramid pays out. A player is placed on
+the *same* tier-budget curve that decides how much money each division receives (§7.1):
+a player exactly at the top division's average ability sits at tier 1, and every
+population standard deviation of ability above or below that moves one continuous step
+along that curve. What he costs is then the slice of that tier's season budget that one
+meaningful first-team signing is expected to eat. Prices are therefore always
+commensurate with what a club can actually earn, and because the anchor is the *top*
+division's average, they don't shift when the pyramid gains or loses divisions. Value
+still grows steeply with ability — the budget curve is exponential — so an elite player
+costs far more than proportionally more than an average one.
+
+**Age** is priced by asking how much career the player still has left to give. He is
+projected forward along the game's *population-average* career curve — average growth,
+average decline, average peak age — and each future season is discounted by the chance
+he has retired by then (averaged across positions, so the goalkeepers' three-year
+retirement grace is included without value ever becoming position-dependent). That
+expected remaining output is compared against what the *same* ability would be worth at
+the average peak age, which is why a player at the peak age is exactly neutral. The
+comparison is deliberately tempered (by default its square root is used) so that sheer
+longevity cannot outweigh present ability. The consequence is that at equal ability the
+younger player is always worth more, and the age effect is substantially stronger than
+the contract effect.
+
+Crucially, this projection uses the *public* career curve, never the player's own hidden
+one. His real growth potential, growth speed, personal peak age, decline profile,
+current form, position and club are never consulted — so two players with the same
+visible rating and age are always worth exactly the same, and a price can never leak
+scouting information.
+
 The contract adjustment's neutral point — the length that leaves a player's value
 unchanged — is not configured separately: it is derived as the midpoint between the
 shortest possible deal (one season) and the longest allowed one
-(`maxContractSeasons`), so the per-season adjustment lands exactly on the configured
-minimum and maximum multiplier bounds at both extremes of the range.
-The base value itself grows steeply with ability — going from an average player to an
-elite one is worth far more than proportionally, since the underlying formula raises
-overall rating to a high power. A player's value is recalculated automatically any
-time their ability, age, or remaining contract length changes.
+(`maxContractSeasons`), so the per-season adjustment lands exactly on both ends of the
+configured ±10% range at the extremes. Remaining contract length is deliberately kept
+*out* of the career projection, so it is never also counted as extra expected service.
+
+A player's value is recalculated automatically any time their ability, age, or remaining
+contract length changes, and is re-derived from scratch whenever the world is rebuilt, so
+a change to the pricing model or its configuration reaches the existing population
+instead of leaving stale prices behind. Prices already fixed by an open transaction are
+the exception: the value snapshot taken when a transfer, free-agent or loan listing was
+opened stays frozen for that listing's lifetime, so a repricing can never move an
+auction underneath the clubs already bidding in it.
 
 A player's **release clause** — the fixed price at which any club can buy them out
 unilaterally — is set to half of their remaining nominal wages for the rest of their
@@ -899,19 +934,25 @@ itself* is currently in the lead, never what any other club has bid.
 
 ### 7.1 Season budgets
 
-Budget figures are **derived from the live player-generation configuration**, not
-hard-coded: what a healthy Division 1 squad averages, what its automatic XI averages,
-and what counts as a meaningful signing or an elite player are all read off the same
-generation projection the game actually uses. Retuning player quality therefore moves
-the budget curve with it, instead of silently invalidating it.
+The **Division 1 season budget is the anchor of the entire money economy**. It is a
+single configured figure, and both seasonal allocations and every player's market value
+(§3.4) are derived from it, so prices and incomes can never drift apart. It is
+configuration only: there is no database copy and no admin override, so the same
+configuration always reproduces the same economy — and a configuration rollout can't be
+silently overridden by a stale saved value. Previously the Division 1 budget was itself
+derived from player values, which were in turn derived from a separate price curve; that
+circular definition is gone.
 
 Every club receives a budget once per season, added on top of whatever cash it
 already has — it's never a reset to zero. Division 1 gets the largest budget; every
 tier below it gets a progressively smaller one, shrinking exponentially as you go down
 the pyramid but never falling below 30% of Division 1's figure (both that floor and
-the rate of shrinkage are tunable). There's deliberately **no other source of
-guaranteed income** — no gate receipts, no ticket sales, no sponsorship — the seasonal
-budget plus whatever a club earns on the transfer market is its entire income.
+the rate of shrinkage are tunable). Actual allocations are clamped at Division 1 and
+never extrapolate above it; the same curve *is* extended past that point, but only as
+the pricing scale for players better than a typical top-division player (§3.4). There's
+deliberately **no other source of guaranteed income** — no gate receipts, no ticket
+sales, no sponsorship — the seasonal budget plus whatever a club earns on the transfer
+market is its entire income.
 
 A brand-new club starts with **zero** cash of its own; its only funding is this same
 seasonal budget. A club joining before the season's roster lock gets a full budget for
@@ -987,6 +1028,11 @@ game's actual season length is ever different. That way, changing how long a sea
 lasts doesn't accidentally speed up or slow down the pace at which money moves through
 the game. A player's transfer value and release clause are deliberately *not*
 rescaled this way, since those are one-time prices rather than an ongoing flow.
+
+The season budget is not rescaled either: it is configured directly as the amount a
+Division 1 club receives per season, whatever the season's length. Since player prices
+are derived from that same figure (§3.4), transfer values and the budgets that pay for
+them always move together, and neither is quietly rescaled out from under the other.
 
 ### 7.6 Where money leaves the economy
 

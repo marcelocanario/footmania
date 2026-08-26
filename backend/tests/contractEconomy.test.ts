@@ -11,8 +11,8 @@ import {
 import { applyMaxBid, createTransferAuction, settleTransferAuction } from "../src/game/market";
 import { offerPlayerForLoan } from "../src/game/loans";
 import { generatePlayer } from "../src/game/player";
-import { projectDivisionQuality } from "../src/game/generationProjection";
-import { expectedFirstDivisionQuality, calculateInitialFirstDivisionSeasonBudget } from "../src/game/budget";
+import { expectedFirstDivisionQuality, projectDivisionQuality } from "../src/game/generationProjection";
+import { budgetSettings, calculateTierBudget, tierBudget } from "../src/game/budget";
 import { createRng } from "../src/game/rng";
 import { gameConfig } from "../src/config";
 import { makeClub, makeWorld } from "./helpers";
@@ -190,8 +190,25 @@ describe("derived economy assumptions", () => {
     expect(Math.abs(projection.fullSquadMean - gameConfig.playerGeneration.topDivisionMeanOverall)).toBeLessThan(1.5);
   });
 
-  it("produces a positive first-division budget consistent with the derived quality", () => {
-    expect(calculateInitialFirstDivisionSeasonBudget()).toBeGreaterThan(0);
+  it("anchors the tier budget curve on the configured Division 1 budget", () => {
+    const settings = budgetSettings();
+    expect(settings.firstDivisionBudget).toBe(gameConfig.firstDivisionSeasonBudget);
+    expect(settings.firstDivisionBudget).toBeGreaterThan(0);
+    // Division 1 pays exactly the configured amount and every tier below decays
+    // toward, but never through, the configured floor.
+    expect(tierBudget(1)).toBe(settings.firstDivisionBudget);
+    const floor = Math.round(settings.firstDivisionBudget * settings.minimumTierBudgetRatio);
+    let previous = tierBudget(1);
+    for (let tier = 2; tier <= 12; tier++) {
+      const budget = tierBudget(tier);
+      expect(budget).toBeLessThan(previous);
+      expect(budget).toBeGreaterThanOrEqual(floor);
+      previous = budget;
+    }
+    // Real allocations are clamped at tier 1 and never extrapolate above it.
+    expect(tierBudget(0)).toBe(tierBudget(1));
+    expect(calculateTierBudget(settings.firstDivisionBudget, settings.minimumTierBudgetRatio, settings.tierBudgetDecayRate, 1))
+      .toBe(settings.firstDivisionBudget);
   });
 });
 
