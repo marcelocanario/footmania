@@ -134,6 +134,28 @@ export function Join() {
       .catch(() => undefined);
   }, []);
 
+  // A preserved identity (world reset with identity preservation) is restored
+  // by the server on join regardless of the wizard payload, so prefill the
+  // fields it covers for an accurate preview. This hook must stay above the
+  // conditional returns below — React forbids conditional hook order.
+  const preserved = status?.preservedIdentity ?? null;
+  useEffect(() => {
+    if (!preserved) return;
+    if (!clubName.trim()) setClubName(preserved.name);
+    setTeamPrimary(preserved.primaryColor);
+    setTeamSecondary(preserved.secondaryColor);
+    setKits((current) => applyTeamColorPreset(current, preserved.primaryColor, preserved.secondaryColor));
+    if (!stadiumName.trim()) setStadiumName(preserved.stadiumName);
+    if (!coachName.trim()) setCoachName(preserved.coachName);
+    // The country list arrives async; only set the selection once the
+    // preserved country is present in the options (the server restores the
+    // archived country on join regardless, this is purely for the preview).
+    if (!selectedCountry && preserved.country && countries.some((c) => c.code === preserved.country)) {
+      setSelectedCountry(preserved.country);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preserved, countries, selectedCountry]);
+
   const countryOptions = useMemo(
     () =>
       [
@@ -319,21 +341,6 @@ export function Join() {
   }
 
   const season = status?.season;
-  const preserved = status?.preservedIdentity ?? null;
-
-  // A preserved identity (world reset with identity preservation) is restored
-  // by the server on join regardless of the wizard payload, so prefill the
-  // fields it covers for an accurate preview.
-  useEffect(() => {
-    if (!preserved) return;
-    if (!clubName.trim()) setClubName(preserved.name);
-    setTeamPrimary(preserved.primaryColor);
-    setTeamSecondary(preserved.secondaryColor);
-    setKits((current) => applyTeamColorPreset(current, preserved.primaryColor, preserved.secondaryColor));
-    if (!stadiumName.trim()) setStadiumName(preserved.stadiumName);
-    if (!coachName.trim()) setCoachName(preserved.coachName);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preserved]);
 
   const joinOpen = season?.joinState === "OPEN";
   const identityValid = !!selectedCountry && nameValid && stadiumValid && coachNameValid;

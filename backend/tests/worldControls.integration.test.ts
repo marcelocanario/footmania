@@ -265,7 +265,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
     // preserved identity to the join screen.
     const status = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: playerCookie } });
     expect(status.json().userClubId).toBeNull();
-    expect(status.json().preservedIdentity).toMatchObject({ name: "Archived United", hasCustomLogo: true });
+    expect(status.json().preservedIdentity).toMatchObject({ name: "Archived United", hasCustomLogo: true, country: "BRA" });
 
     // Rejoin: the archived identity is applied and the row consumed.
     const join = await app.inject({

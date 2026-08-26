@@ -214,8 +214,8 @@
   // (e.g. 5 = no player can be offered more than 5 seasons.)
   "maxContractSeasons": 5,
   // Minimum fractional raise a player expects per season of a new contract,
-  // regardless of how good he is (e.g. 0.02 = at least a 2% raise).
-  "renewalMinRaise": 0.02,
+  // regardless of how good he is (e.g. 0.1 = at least a 10% raise).
+  "renewalMinRaise": 0.1,
   // How strongly a player's skill (overall) influences the raise he demands.
   // Higher values make top players ask for much bigger raises than squad players.
   // (e.g. 0.08 = full skill adds up to 8 percentage points to the raise.)

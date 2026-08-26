@@ -119,10 +119,10 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
       : Promise.resolve([] as { id: number }[]),
     // A preserved identity from a world reset: presented to the user on the
     // join screen so their club comes back with its old name, colors, kit,
-    // crest, stadium and match-time availability. Consumed on next join.
+    // crest, stadium, country and match-time availability. Consumed on next join.
     prisma.clubIdentityArchive.findUnique({
       where: { userId },
-      select: { name: true, primaryColor: true, secondaryColor: true, customLogoData: true, stadiumName: true, coachName: true },
+      select: { name: true, primaryColor: true, secondaryColor: true, customLogoData: true, stadiumName: true, coachName: true, country: true },
     }),
   ]);
 
@@ -252,6 +252,7 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
           secondaryColor: preservedIdentityRow.secondaryColor,
           stadiumName: preservedIdentityRow.stadiumName,
           coachName: preservedIdentityRow.coachName,
+          country: preservedIdentityRow.country,
           hasCustomLogo: preservedIdentityRow.customLogoData != null && preservedIdentityRow.customLogoData.length > 0,
         }
       : null,

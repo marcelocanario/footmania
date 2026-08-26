@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api, type MarketUpdate } from "../api/client";
 import { useGame } from "../store/game";
 
@@ -30,6 +31,7 @@ interface MpWsMessage {
  */
 export function useMpSocket() {
   const { user, setUser, setLiveMatch, refresh } = useGame();
+  const navigate = useNavigate();
   const [attempts, setAttempts] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(5_000);
@@ -87,10 +89,14 @@ export function useMpSocket() {
           break;
         case "worldReset":
           // The whole world was wiped by an admin: drop every cached read
-          // model and the club snapshot; App routes club-less users to /join.
+          // model and the club snapshot. Every club — human or not, preserved
+          // identity or not — is gone, so all logged-in users must (re)join.
           setLiveMatch(null);
           api.cache.invalidate();
           void refresh();
+          if (location.pathname !== "/join") {
+            navigate("/join", { replace: true });
+          }
           break;
         case "marketUpdated": {
           if (msg.marketType && msg.listingId !== undefined && msg.status) {

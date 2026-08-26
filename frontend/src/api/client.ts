@@ -181,6 +181,7 @@ export interface MpStatus {
     secondaryColor: string;
     stadiumName: string;
     coachName: string;
+    country: string;
     hasCustomLogo: boolean;
   } | null;
 }
