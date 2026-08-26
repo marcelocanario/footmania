@@ -4,36 +4,8 @@ import { GripVertical, Target, Wand2 } from "lucide-react";
 import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { FootballKit } from "./kit/FootballKit";
-import { slotPointsForFormation } from "./matchPitchUtils";
+import { slotPointsForFormation, tacticalRoleLabel } from "./matchPitchUtils";
 import { FORMATIONS } from "../tacticsOptions";
-
-const SLOT_NAMES: Record<number, string> = {
-  1: "GK",
-  2: "LB",
-  3: "CB",
-  4: "CB",
-  5: "CB",
-  6: "RB",
-  7: "CB",
-  8: "CB",
-  9: "RB",
-  10: "LM",
-  11: "CDM",
-  12: "CM",
-  13: "CM",
-  14: "CM",
-  15: "CAM",
-  16: "CM",
-  17: "RM",
-  18: "ST",
-  19: "LW",
-  20: "LB",
-  21: "CB",
-  22: "CB",
-  23: "CB",
-  24: "CB",
-  25: "ST",
-};
 
 interface Ed {
   formation: number;
@@ -150,7 +122,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     for (const player of data?.squad ?? []) {
       players.set(player.id, {
         ...player,
-        tacticalPosition: player.tacPosName || positionLabel(player.position),
+        tacticalPosition: positionLabel(player.position),
       });
     }
     for (const player of data?.starters ?? []) {
@@ -220,7 +192,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     () => (data?.squad ?? []).map((player) => byId.get(player.id)).filter(isBoardPlayer).filter((player) => !starterIds.has(player.id) && !benchIds.has(player.id)),
     [benchIds, byId, data?.squad, starterIds]
   );
-  const slotNames = useMemo(() => (data?.slots ?? []).map((slot) => SLOT_NAMES[slot] ?? `#${slot}`), [data?.slots]);
+  const slotNames = useMemo(() => (data?.slots ?? []).map((slot) => tacticalRoleLabel(slot)), [data?.slots]);
   const slotPoints = useMemo(() => slotPointsForFormation(data?.formation ?? 0, data?.slots ?? []), [data?.formation, data?.slots]);
   const takerOptions = starters.filter(isBoardPlayer).map((player) => ({ id: player.id, label: `${player.name} (${player.overall})` }));
 

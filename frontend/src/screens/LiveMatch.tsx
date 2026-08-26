@@ -6,7 +6,7 @@ import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
-import { eventKey, hasPitchCue } from "../components/matchPitchUtils";
+import { eventKey, hasPitchCue, tacticalRoleLabel } from "../components/matchPitchUtils";
 import { enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
@@ -26,14 +26,12 @@ const PHASE_LABEL: Record<string, string> = {
   fulltime: "Full time",
 };
 
-const TACTICAL_POSITION_LABELS: Record<number, string> = {
-  1: "GK", 2: "LB", 3: "CB", 4: "CB", 5: "CB", 6: "RB", 7: "CB", 8: "CB", 9: "RB",
-  10: "LM", 11: "CDM", 12: "CM", 13: "CM", 14: "CM", 15: "CAM", 16: "CM", 17: "RM",
-  18: "ST", 19: "LW", 20: "LB", 21: "CB", 22: "CB", 23: "CB", 24: "CB", 25: "ST",
-};
+/** Natural (squad) position label: what position the player actually plays
+ *  (their base position), used for the bench list in the substitution panel. */
+const NATURAL_POSITION_LABELS = ["GK", "FB", "CB", "MF", "FW"];
 
-function playerPosition(player: LivePlayer): string {
-  return TACTICAL_POSITION_LABELS[player.tacPos] ?? ["GK", "FB", "CB", "MF", "FW"][player.position] ?? "PLAYER";
+function naturalPosition(player: LivePlayer): string {
+  return NATURAL_POSITION_LABELS[player.position] ?? "PLAYER";
 }
 
 function matchContextLabel(state: LiveState): string {
@@ -741,7 +739,7 @@ export function LiveMatch() {
                       className={`sub-row${subOut?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubOut(p)}
                     >
-                      <span className="pos-tag">{playerPosition(p)}</span>
+                      <span className="pos-tag">{tacticalRoleLabel(p.tacPos)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>
@@ -761,7 +759,7 @@ export function LiveMatch() {
                       onClick={() => setSubIn(p)}
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
-                      <span className="pos-tag">{playerPosition(p)}</span>
+                      <span className="pos-tag">{naturalPosition(p)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>

@@ -138,6 +138,25 @@ const FALLBACK_COLUMN_X: Record<number, number> = {
   18: 68, 19: 68, 20: 68, 21: 68, 22: 68, 23: 68, 24: 68, 25: 68,
 };
 
+/** Tactical slot → role name, mirroring the backend's TACTICAL_POSITION_NAMES
+ *  (game/constants.ts). Front-line codes (20/22/23/24) read as ST and the wide
+ *  wing codes (19/21) as LW/RW — matching the role the pitch layout renders
+ *  the slot at. NOTE: the same codes are reused as bench-slot markers
+ *  (BENCH_ORDER) with the same meaning; this label is only correct for
+ *  on-pitch players, not for bench rows (which should show the natural
+ *  position instead). */
+export function tacticalRoleLabel(tacPos: number): string {
+  return (
+    {
+      1: "GK",
+      2: "LB",
+      3: "CB", 4: "CB", 5: "CB", 6: "RB", 7: "CB", 8: "CB", 9: "RB",
+      10: "LM", 11: "CDM", 12: "CM", 13: "CM", 14: "CM", 15: "CAM", 16: "CM", 17: "RM",
+      18: "ST", 19: "LW", 20: "ST", 21: "RW", 22: "ST", 23: "ST", 24: "ST", 25: "ST",
+    } as Record<number, string>
+  )[tacPos] ?? "PLAYER";
+}
+
 /** Outfielders are spread evenly between these vertical bounds. */
 const SPREAD_TOP = 20;
 const SPREAD_BOTTOM = 80;
@@ -519,6 +538,23 @@ export interface IntentLine {
 // ---------------------------------------------------------------------------
 
 export type MoveStyle = "pass" | "cross" | "shot-blocked" | "shot-miss" | "corner" | "foul";
+
+/** Shot outcomes that ship with their own curated pitch cue: GOAL renders the
+ *  goal/miss overlay tracer, SAVE/WOODWORK drive the scripted ball sequence.
+ *  The possession snapshot can land in the same commit batch as — or one
+ *  commit ahead of — the event being dequeued into the active cue, so also
+ *  drawing a live trajectory for these shots races the curated one and shows
+ *  the same shot twice. BLOCKED/REBOUND/MISS shots emit no event at all
+ *  (open-play misses are deliberately unrecorded in the feed), so the live
+ *  trail is their only visualization and stays enabled. */
+const SHOT_OUTCOMES_WITH_CUE = new Set(["GOAL", "SAVE", "WOODWORK"]);
+
+/** Whether this ball snapshot's last action is a shot that carries its own
+ *  curated cue animation (see SHOT_OUTCOMES_WITH_CUE). */
+export function shotHasOwnCue(ball: LiveBall | null | undefined): boolean {
+  const action = ball?.lastBallAction;
+  return action?.action === "SHOT" && SHOT_OUTCOMES_WITH_CUE.has(action.outcome);
+}
 
 /** Classifies the move that produced the current ball snapshot. */
 export function classifyMove(ball: LiveBall | null | undefined): MoveStyle {

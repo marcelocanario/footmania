@@ -81,11 +81,11 @@ export const TACTICAL_POSITION_NAMES: Record<number, string> = {
   17: "RM",
   18: "ST",
   19: "LW",
-  20: "LB",
-  21: "CB",
-  22: "CB",
-  23: "CB",
-  24: "CB",
+  20: "ST",
+  21: "RW",
+  22: "ST",
+  23: "ST",
+  24: "ST",
   25: "ST",
 };
 

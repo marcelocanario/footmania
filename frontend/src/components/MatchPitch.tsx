@@ -13,6 +13,7 @@ import {
   isSetPieceStart,
   placeLiveBall,
   resolveColumnCollisions,
+  shotHasOwnCue,
   slotPointsFor,
   teamPitchPoints,
   turnoverIntent,
@@ -550,6 +551,16 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
       return;
     }
 
+    // Shots with their own curated cue (goal overlay, save/woodwork sequence)
+    // must not also draw a live trajectory: this effect can run a commit ahead
+    // of the event being dequeued into activeEvent, so the trail would paint a
+    // stray duplicate tracer right before the real one takes over. The ball
+    // position was already seeded above, so later moves still measure from it.
+    if (shotHasOwnCue(ball)) {
+      setTrail(null);
+      return;
+    }
+
     if (!prev) {
       setTrail(null);
       return;
@@ -751,7 +762,11 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
         {seq && seq.stage !== "start" && !motionReduced && (
           <svg className={`pitch-trail pitch-live-trail pitch-shot-trail${seq.stage === "leg" || seq.stage === "hold" ? " pitch-shot-trail-danger" : ""}${seq.stage === "rebound" ? " pitch-shot-trail-rebound" : ""}`} viewBox="0 0 100 64" aria-hidden="true">
             <line
-              key={`${seq.key}-${seq.stage}`}
+              // "hold" keeps the leg's exact geometry, so it must reuse the
+              // same element: keying by stage remounts the line at the hold,
+              // restarting pitchTrajectoryDraw and visibly redrawing the
+              // shooter→target tracer a second time while the ball pauses.
+              key={`${seq.key}-${seq.stage === "hold" ? "leg" : seq.stage}`}
               pathLength={100}
               x1={seq.from.x}
               y1={(seq.from.y / 100) * 64}
