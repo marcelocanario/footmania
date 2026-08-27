@@ -6,7 +6,7 @@ import { Dropdown } from "primereact/dropdown";
 import { MultiSelect } from "primereact/multiselect";
 import { Toast } from "primereact/toast";
 import { Tooltip } from "primereact/tooltip";
-import { Activity, AlertTriangle, BatteryLow, BatteryMedium, Dumbbell, HeartPulse, ShieldAlert, ShieldCheck, Sparkles, Users, Clapperboard } from "lucide-react";
+import { Activity, AlertTriangle, BatteryLow, BatteryMedium, CalendarDays, Clapperboard, Dumbbell, FileSignature, Handshake, HeartPulse, History as HistoryIcon, Pencil, ShieldAlert, ShieldCheck, Sparkles, Square, Tag, Target, Trash2, TrendingUp, UserMinus, Users } from "lucide-react";
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -23,9 +23,20 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
 import { countryFlag } from "../countryFlags";
+import { ListForSaleDialog } from "../components/market/ListForSaleDialog";
+import { squadActionState } from "./squadActions";
 
 type Tab = "seniors" | "juniors" | "tactics";
 type TrainingFocus = "assistant" | "primary" | "secondary";
+type PlayerPanelTab = "customization" | "history";
+type HistorySectionTab = "seasons" | "transfers" | "matches";
+
+type SquadHistoryData = {
+  player: PlayerView & { displayName?: string };
+  seasons: { seasonKey: string; clubName: string; appearances: number; goals: number; assists: number; yellows: number; reds: number }[];
+  transfers: { type: string; price: number; seasonKey: string }[];
+  matches: { minute: number; type: number; matchHomeScore: number | null; matchAwayScore: number | null }[];
+};
 
 const POSITION_OPTIONS = ["GK", "FB", "CB", "MF", "FW"].map((label, value) => ({ label, value }));
 
@@ -142,6 +153,36 @@ function contractBody(p: PlayerView & { contractSeasons: number }) {
   );
 }
 
+function historyEventLabel(type: number): string {
+  switch (type) {
+    case 1: return "Goal";
+    case 2: return "Yellow card";
+    case 3: return "Red card";
+    case 4: return "Second yellow";
+    case 5: return "Injury";
+    case 6: return "Substitution";
+    case 7: return "Missed penalty";
+    default: return "Match event";
+  }
+}
+
+function historyEventIcon(type: number) {
+  if (type === 1) return <Target size={14} />;
+  if (type === 2) return <Square size={13} fill="currentColor" />;
+  if (type === 3 || type === 4) return <ShieldAlert size={14} />;
+  if (type === 5) return <HeartPulse size={14} />;
+  if (type === 6) return <Users size={14} />;
+  if (type === 7) return <AlertTriangle size={14} />;
+  return <Activity size={14} />;
+}
+
+function historyEventTone(type: number): string {
+  if (type === 1) return "goal";
+  if (type === 2) return "yellow";
+  if (type === 3 || type === 4 || type === 5) return "danger";
+  return "neutral";
+}
+
 export function Squad() {
   const snapshot = useGame((s) => s.snapshot);
   const refresh = useGame((s) => s.refresh);
@@ -169,11 +210,14 @@ export function Squad() {
   const [nicknameBusy, setNicknameBusy] = useState(false);
   const [numberInput, setNumberInput] = useState<number | null>(null);
   const [numberBusy, setNumberBusy] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [historyData, setHistoryData] = useState<{ player: PlayerView & { displayName?: string }; seasons: { seasonKey: string; clubName: string; goals: number; assists: number; yellows: number; reds: number }[]; transfers: { type: string; price: number; seasonKey: string }[]; matches: { minute: number; type: number; matchHomeScore: number | null; matchAwayScore: number | null }[] } | null>(null);
+  const [playerPanelTab, setPlayerPanelTab] = useState<PlayerPanelTab>("customization");
+  const [historySectionTab, setHistorySectionTab] = useState<HistorySectionTab>("seasons");
+  const [historyData, setHistoryData] = useState<SquadHistoryData | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [filter, setFilter] = useState("");
   const [positionFilter, setPositionFilter] = useState<number[]>([]);
+  const [sellTarget, setSellTarget] = useState<PlayerView | null>(null);
   const [countryNames, setCountryNames] = useState<Record<string, string>>({});
   const seasonsOf = (days: number) => {
     const per = snapshot?.save.seasonDays;
@@ -396,6 +440,10 @@ export function Squad() {
     if (selectedPlayer) {
       setNicknameInput(selectedPlayer.nickname ?? "");
       setNumberInput(selectedPlayer.squadNumber ?? null);
+      setPlayerPanelTab("customization");
+      setHistorySectionTab("seasons");
+      setHistoryData(null);
+      setHistoryError(null);
     }
   }, [selectedPlayer?.id, selectedPlayer?.nickname, selectedPlayer?.squadNumber]);
 
@@ -453,15 +501,16 @@ export function Squad() {
   };
 
   const openHistory = async (p: PlayerView) => {
+    setPlayerPanelTab("history");
     setHistoryBusy(true);
-    setShowHistory(true);
     setHistoryData(null);
+    setHistoryError(null);
     try {
       const data = await api.playerHistory(p.id);
-      setHistoryData(data as never);
+      setHistoryData(data as unknown as SquadHistoryData);
     } catch (e) {
       toast.current?.show({ severity: "error", summary: "History", detail: (e as Error).message });
-      setShowHistory(false);
+      setHistoryError((e as Error).message);
     } finally {
       setHistoryBusy(false);
     }
@@ -569,7 +618,10 @@ export function Squad() {
                 selectionMode="single"
                 selection={selectedTablePlayer}
                 onSelectionChange={(e) => setSelected(e.value as PlayerView | null)}
-                rowClassName={(p) => (p.id === selectedPlayer?.id ? "human-row" : "")}
+                rowClassName={(p) => {
+                  if (p.id === selectedPlayer?.id) return "human-row";
+                  return p.onLoanOut ? "loan-out-row" : "";
+                }}
                 rows={15}
                 paginator
                 dataKey="id"
@@ -636,67 +688,144 @@ export function Squad() {
                         Injured · {strings.squad.injuredReturn.replace("{{day}}", String((selectedPlayer.injuryUntilAbsoluteGameDay ?? 0) + 1))}
                       </span>
                     )}
+                    {selectedPlayer.onLoan && <span className="flag-chip fc-loan" style={{ marginLeft: 6 }} title={`On loan from ${selectedPlayer.loanFromName ?? "another club"}`}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
+                    {selectedPlayer.onLoanOut && <span className="flag-chip fc-loan" style={{ marginLeft: 6 }} title={`On loan at ${selectedPlayer.loanClubName ?? "another club"}`}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
                   </div>
-                  <div style={{ display: "flex", gap: 6, marginTop: 8, alignItems: "center" }}>
-                    <button className="btn ghost sm" onClick={() => void openHistory(selectedPlayer)} disabled={historyBusy} title="View career history">{historyBusy ? "…" : "History"}</button>
-                  </div>
-                </div>
-                <span
-                  style={{
-                    fontFamily: "var(--font-display)",
-                    fontSize: "2.1rem",
-                    fontWeight: 800,
-                    minWidth: 62,
-                    textAlign: "center",
-                    background: "linear-gradient(180deg, rgba(61,220,132,0.16), rgba(35,165,90,0.08))",
-                    border: "1px solid rgba(61,220,132,0.3)",
-                    borderRadius: 14,
-                    padding: "4px 10px",
-                    color: "var(--grass-2)",
-                  }}
-                >
-                  {selectedPlayer.overall}
-                </span>
-              </div>
-
-              <div style={{ marginTop: 14, padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 12, background: "rgba(228,245,235,0.03)" }}>
-                <div className="section-label">Nickname</div>
-                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                  <InputText
-                    value={nicknameInput}
-                    onChange={(e) => setNicknameInput(e.target.value)}
-                    placeholder={selectedPlayer.nickname ?? "Add a nickname"}
-                    maxLength={24}
-                    style={{ flex: 1 }}
-                    disabled={!user?.isPro}
-                    onKeyDown={(e) => { if (e.key === "Enter") void saveNickname(); }}
-                  />
-                  <button className="btn" onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} title={!user?.isPro ? "Pro required" : undefined} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{nicknameBusy ? "Saving…" : "Save nick"}</button>
-                </div>
-                <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 6 }}>
-                  {user?.isPro
-                    ? `Shown everywhere instead of “${selectedPlayer.name}”. Leave empty to clear it.`
-                    : "Only Pro managers can set nicknames."}
                 </div>
               </div>
 
-              {selectedPlayer && (
-                <div style={{ marginTop: 10, padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 12, background: "rgba(228,245,235,0.03)" }}>
-                  <div className="section-label">Shirt number</div>
-                  <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
-                    <Dropdown
-                      value={numberInput}
-                      options={numberOptions}
-                      onChange={(e) => setNumberInput(e.value as number)}
-                      filter
-                      style={{ width: 140 }}
-                      aria-label="Shirt number"
-                    />
-                    <button className="btn" onClick={() => void saveNumber()} disabled={numberBusy || numberInput === selectedPlayer.squadNumber} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{numberBusy ? "Saving…" : "Save number"}</button>
-                    {numberSwapHint && <div style={{ color: "var(--gold-2)", fontSize: "0.8rem" }}>Swaps with the current wearer.</div>}
+              <div className="segmented squad-player-tabs" role="tablist" aria-label="Player panel">
+                <button type="button" role="tab" aria-selected={playerPanelTab === "customization"} className={playerPanelTab === "customization" ? "active" : ""} onClick={() => setPlayerPanelTab("customization")}>
+                  <Pencil size={14} /> Customize
+                </button>
+                <button type="button" role="tab" aria-selected={playerPanelTab === "history"} className={playerPanelTab === "history" ? "active" : ""} onClick={() => { if (!historyBusy) void openHistory(selectedPlayer); }}>
+                  <HistoryIcon size={14} /> History {historyBusy && "…"}
+                </button>
+              </div>
+
+              {playerPanelTab === "customization" ? (
+                <>
+                  <div style={{ marginTop: 14, padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 12, background: "rgba(228,245,235,0.03)" }}>
+                    <div className="section-label">Nickname</div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      <InputText
+                        value={nicknameInput}
+                        onChange={(e) => setNicknameInput(e.target.value)}
+                        placeholder={selectedPlayer.nickname ?? "Add a nickname"}
+                        maxLength={24}
+                        style={{ flex: 1 }}
+                        disabled={!user?.isPro}
+                        onKeyDown={(e) => { if (e.key === "Enter") void saveNickname(); }}
+                      />
+                      <button className="btn" onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} title={!user?.isPro ? "Pro required" : undefined} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{nicknameBusy ? "Saving…" : "Save nick"}</button>
+                    </div>
+                    <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 6 }}>
+                      {user?.isPro
+                        ? `Shown everywhere instead of “${selectedPlayer.name}”. Leave empty to clear it.`
+                        : "Only Pro managers can set nicknames."}
+                    </div>
                   </div>
+
+                  <div style={{ marginTop: 10, padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 12, background: "rgba(228,245,235,0.03)" }}>
+                    <div className="section-label">Shirt number</div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
+                      <Dropdown
+                        value={numberInput}
+                        options={numberOptions}
+                        onChange={(e) => setNumberInput(e.value as number)}
+                        filter
+                        style={{ width: 140 }}
+                        aria-label="Shirt number"
+                      />
+                      <button className="btn" onClick={() => void saveNumber()} disabled={numberBusy || numberInput === selectedPlayer.squadNumber} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{numberBusy ? "Saving…" : "Save number"}</button>
+                      {numberSwapHint && <div style={{ color: "var(--gold-2)", fontSize: "0.8rem" }}>Swaps with the current wearer.</div>}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="squad-history-panel">
+                  {!historyData ? (
+                    <div className="squad-history-empty">{historyError ? "Could not load player history." : historyBusy ? "Loading history…" : "No history available."}</div>
+                  ) : (
+                    <>
+                      <div className="squad-history-summary">
+                        <div className="squad-history-stat"><Target size={14} /><span><small>Career goals</small><strong>{historyData.player.careerGoals}</strong></span></div>
+                        <div className="squad-history-stat"><Handshake size={14} /><span><small>Career assists</small><strong>{historyData.player.careerAssists}</strong></span></div>
+                        <div className="squad-history-stat"><CalendarDays size={14} /><span><small>Seasons</small><strong>{historyData.seasons.length + 1}</strong></span></div>
+                        <div className="squad-history-stat"><ShieldAlert size={14} /><span><small>Cards</small><strong>{historyData.player.yellows}Y · {historyData.player.reds}R</strong></span></div>
+                      </div>
+                      <div className="segmented squad-history-tabs" role="tablist" aria-label="History section">
+                        <button type="button" role="tab" aria-selected={historySectionTab === "seasons"} className={historySectionTab === "seasons" ? "active" : ""} onClick={() => setHistorySectionTab("seasons")}>
+                          <CalendarDays size={13} /> Season records <span className="count">{historyData.seasons.length}</span>
+                        </button>
+                        <button type="button" role="tab" aria-selected={historySectionTab === "transfers"} className={historySectionTab === "transfers" ? "active" : ""} onClick={() => setHistorySectionTab("transfers")}>
+                          <Tag size={13} /> Transfers <span className="count">{historyData.transfers.length}</span>
+                        </button>
+                        <button type="button" role="tab" aria-selected={historySectionTab === "matches"} className={historySectionTab === "matches" ? "active" : ""} onClick={() => setHistorySectionTab("matches")}>
+                          <Activity size={13} /> Match events <span className="count">{historyData.matches.length}</span>
+                        </button>
+                      </div>
+
+                      <div className="squad-history-scroll">
+                        {historySectionTab === "seasons" && (
+                          <div className="squad-history-section">
+                            {historyData.seasons.length === 0 ? (
+                              <div className="squad-history-empty">No past seasons archived yet.</div>
+                            ) : (
+                              <div className="squad-history-list">
+                                {historyData.seasons.map((season) => (
+                                  <div className="squad-history-row" key={season.seasonKey} title={`${season.seasonKey} · ${season.clubName}`}>
+                                    <strong>{season.seasonKey}</strong>
+                                    <span className="squad-history-row-detail">{season.clubName} · {season.appearances} apps · {season.goals}G · {season.assists}A · {season.yellows}Y · {season.reds}R</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {historySectionTab === "transfers" && (
+                          <div className="squad-history-section">
+                            {historyData.transfers.length === 0 ? (
+                              <div className="squad-history-empty">No market moves.</div>
+                            ) : (
+                              <div className="squad-history-list">
+                                {historyData.transfers.map((transfer, index) => (
+                                  <div className="squad-history-row" key={`${transfer.seasonKey}-${transfer.type}-${index}`}>
+                                    <strong>{transfer.type}</strong>
+                                    <span className="squad-history-row-detail">{transfer.seasonKey}</span>
+                                    <strong className="squad-history-price">{money(transfer.price)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {historySectionTab === "matches" && (
+                          <div className="squad-history-section">
+                            {historyData.matches.length === 0 ? (
+                              <div className="squad-history-empty">No match events.</div>
+                            ) : (
+                              <div className="squad-history-list">
+                                {historyData.matches.map((match, index) => (
+                                  <div className="squad-history-row" key={`${match.minute}-${match.type}-${index}`}>
+                                    <span className={`squad-history-event-icon ${historyEventTone(match.type)}`}>{historyEventIcon(match.type)}</span>
+                                    <strong>{historyEventLabel(match.type)}</strong>
+                                    <span className="squad-history-row-detail">{match.minute}' · {match.matchHomeScore ?? "–"}–{match.matchAwayScore ?? "–"}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
+
+              <div className="squad-player-separator" />
 
               <div style={{ margin: "14px 0 4px" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.8rem", color: "var(--text-3)", marginBottom: 5 }}>
@@ -729,46 +858,43 @@ export function Squad() {
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && !selectedPlayer.onLoanOut && !selectedPlayer.onSale && <button className="btn" style={{ flex: 1 }} onClick={() => openRenew(selectedPlayer)}>{strings.squad.renew}</button>}
-                {selectedPlayer.isYouth && !selectedPlayer.onLoanOut && (
-                  <button className="btn" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "promote")}>{strings.squad.promoteYouth}</button>
-                )}
-                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && (
-                  <button
-                    className="btn ghost"
-                    style={{ flex: 1 }}
-                    title={!selectedPlayer.onLoanOut ? strings.transfers.lendLoanHint : undefined}
-                    onClick={() => loanAction(selectedPlayer)}
-                  >
-                    {selectedPlayer.onLoanOut ? "Recall from loan" : selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
-                  </button>
-                )}
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                {!selectedPlayer.isYouth && !selectedPlayer.onLoan && !selectedPlayer.onLoanOut && (
-                  <button
-                    className="btn ghost danger"
-                    style={{ flex: 1 }}
-                    disabled={(selectedPlayer.releaseClause ?? 0) > (club?.finance?.immediateAvailableCash ?? club?.cash ?? 0)}
-                    title={(selectedPlayer.releaseClause ?? 0) > (club?.finance?.immediateAvailableCash ?? club?.cash ?? 0) ? "The club cannot afford the release clause after binding bid reservations" : undefined}
-                    onClick={() => releasePlayer(selectedPlayer)}
-                  >
-                    {strings.squad.release} ({money(selectedPlayer.releaseClause ?? 0)})
-                  </button>
-                )}
-                {selectedPlayer.isYouth && !selectedPlayer.onLoan && (
-                  <button className="btn ghost danger" style={{ flex: 1 }} onClick={() => academyAction(selectedPlayer, "dismiss")}>
-                    {strings.squad.dismissYouth}
-                  </button>
-                )}
+              <div className="squad-actions-grid" style={{ marginTop: 16 }}>
+                {(() => {
+                  const a = squadActionState(selectedPlayer, club);
+                  if (a.senior) {
+                    return <>
+                      <button className="btn squad-action" disabled={a.renew.disabled} title={a.renew.reason} onClick={() => openRenew(selectedPlayer)}>
+                        <FileSignature size={13} /> {strings.squad.renew}
+                      </button>
+                      <button className="btn ghost squad-action" title={a.onLoanOut ? undefined : a.loan.reason ?? strings.transfers.lendLoanHint} disabled={a.onLoanOut ? a.recall.disabled : a.loan.disabled} onClick={() => loanAction(selectedPlayer)}>
+                        <Handshake size={13} /> {a.onLoanOut ? "Recall from loan" : selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
+                      </button>
+                      <button className="btn ghost squad-action" disabled={a.listed} title={a.listed ? "This player is already on the market" : undefined} onClick={() => setSellTarget(selectedPlayer)}>
+                        <Tag size={13} /> List for sale
+                      </button>
+                      <button className="btn ghost danger squad-action" disabled={a.release.disabled} title={a.release.reason} onClick={() => releasePlayer(selectedPlayer)}>
+                        <Trash2 size={13} /> {strings.squad.release} <span className="squad-action-price">({money(selectedPlayer.releaseClause ?? 0)})</span>
+                      </button>
+                    </>;
+                  }
+                  return <>
+                    <button className="btn squad-action" disabled={a.promote.disabled} title={a.promote.reason} onClick={() => academyAction(selectedPlayer, "promote")}>
+                      <TrendingUp size={13} /> {strings.squad.promoteYouth}
+                    </button>
+                    <button className="btn ghost danger squad-action" disabled={a.dismiss.disabled} title={a.dismiss.reason} onClick={() => academyAction(selectedPlayer, "dismiss")}>
+                      <UserMinus size={13} /> {strings.squad.dismissYouth}
+                    </button>
+                  </>;
+                })()}
               </div>
             </div>
           )}
         </div>
       )}
 
-      <Dialog header={strings.squad.renew} visible={showRenew} onHide={() => setShowRenew(false)} style={{ width: 400 }}>
+      <ListForSaleDialog player={sellTarget} onClose={() => setSellTarget(null)} onListed={() => { setSellTarget(null); refresh(); }} />
+
+      <Dialog header={strings.squad.renew} visible={showRenew} onHide={() => setShowRenew(false)} dismissableMask style={{ width: 400 }}>
         {selectedPlayer && (
           <>
             <h3 style={{ marginBottom: 4 }}>{selectedPlayer.name}</h3>
@@ -804,7 +930,7 @@ export function Squad() {
         )}
       </Dialog>
 
-      <Dialog header={confirmAction?.title ?? ""} visible={confirmAction !== null} onHide={() => setConfirmAction(null)} style={{ width: 400 }}>
+      <Dialog header={confirmAction?.title ?? ""} visible={confirmAction !== null} onHide={() => setConfirmAction(null)} dismissableMask style={{ width: 400 }}>
         {confirmAction && (
           <>
             <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{confirmAction.message}</div>
@@ -816,86 +942,6 @@ export function Squad() {
         )}
       </Dialog>
 
-      <Dialog header={historyData ? `${historyData.player.displayName ?? historyData.player.name} — Career` : "Career history"} visible={showHistory} onHide={() => setShowHistory(false)} style={{ width: 560 }}>
-        {!historyData ? (
-          <div className="empty-state" style={{ padding: 20 }}>{historyBusy ? "Loading…" : "No data"}</div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div className="card" style={{ padding: 14 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-                <div style={{ fontWeight: 800, fontSize: "1.05rem" }}>{historyData.player.displayName ?? historyData.player.name}</div>
-                <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{historyData.player.age} yrs · OVR {historyData.player.overall}</div>
-              </div>
-              <div className="stats-row" style={{ marginTop: 10 }}>
-                <div className="stat">
-                  <div className="label">Career</div>
-                  <div className="value" style={{ fontSize: "1rem" }}>{historyData.player.careerGoals}G {historyData.player.careerAssists}A</div>
-                </div>
-                <div className="stat">
-                  <div className="label">This season</div>
-                  <div className="value" style={{ fontSize: "1rem" }}>{historyData.player.seasonGoals}G {historyData.player.seasonAssists}A</div>
-                </div>
-                <div className="stat">
-                  <div className="label">Discipline</div>
-                  <div className="value" style={{ fontSize: "1rem" }}>{historyData.player.yellows}Y {historyData.player.reds}R</div>
-                </div>
-                <div className="stat">
-                  <div className="label">Injury</div>
-                  <div className="value" style={{ fontSize: "1rem" }}>{historyData.player.injuryDays > 0 ? `${historyData.player.injuryDays}d` : "Fit"}</div>
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <div className="section-label">Per-season</div>
-              {historyData.seasons.length === 0 ? (
-                <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No past seasons archived yet. Past seasons appear at rollover.</div>
-              ) : (
-                <div className="news-feed">
-                  {historyData.seasons.map((s) => (
-                    <div key={s.seasonKey} className="news-feed-item">
-                      <span>{s.seasonKey} · {s.clubName}</span>
-                      <span className="day">{s.goals}G {s.assists}A · {s.yellows}Y {s.reds}R</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="section-label">Transfers</div>
-              {historyData.transfers.length === 0 ? (
-                <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No market moves.</div>
-              ) : (
-                <div className="news-feed">
-                  {historyData.transfers.map((t, i) => (
-                    <div key={i} className="news-feed-item">
-                      <span>{t.type} · {t.seasonKey}</span>
-                      <span className="day">{money(t.price)}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div>
-              <div className="section-label">Recent matches (goals/cards/injuries)</div>
-              {historyData.matches.length === 0 ? (
-                <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No match events.</div>
-              ) : (
-                <div className="news-feed">
-                  {historyData.matches.slice(0, 12).map((m, i) => (
-                    <div key={i} className="news-feed-item">
-                      <span>Type {m.type} · {m.minute}'</span>
-                      <span className="day">{m.matchHomeScore ?? "–"}–{m.matchAwayScore ?? "–"}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </Dialog>
     </div>
   );
 }

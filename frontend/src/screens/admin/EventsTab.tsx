@@ -194,7 +194,7 @@ export function EventsTab({ version, notify, statusPreset }: TabProps & { status
         </div>
       </AdminCard>
 
-      <Dialog header="Event details" visible={detail !== null} onHide={() => setDetail(null)} style={{ width: 560 }}>
+      <Dialog header="Event details" visible={detail !== null} onHide={() => setDetail(null)} dismissableMask style={{ width: 560 }}>
         {detail && <EventDetail event={detail} actions={actionButtons(detail)} />}
       </Dialog>
     </div>

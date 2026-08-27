@@ -204,7 +204,7 @@ function ExtendDialog({ auction, onClose, onDone, onError }: { auction: Schedule
   };
 
   return (
-    <Dialog header="Extend auction" visible={auction !== null} onHide={onClose} style={{ width: 380 }}>
+    <Dialog header="Extend auction" visible={auction !== null} onHide={onClose} dismissableMask style={{ width: 380 }}>
       {auction && (
         <>
           <div style={{ color: "var(--text-2)", marginBottom: 14 }}>

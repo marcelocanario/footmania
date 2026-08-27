@@ -5,8 +5,10 @@ import { BadgeCheck, Flag, Globe2, Home, Save as SaveIcon, Shirt, Image as Image
 import { api } from "../api/client";
 import { KitDesigner } from "../components/kit/KitDesigner";
 import { deriveKitDefaults } from "../components/kit/defaults";
+import { ClubCrest } from "../components/ClubCrest";
 import type { ClubKits } from "../components/kit/types";
 import { useGame } from "../store/game";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 /**
  * Post-creation club editing (Kit Lab companion): rename the club and its
@@ -15,6 +17,7 @@ import { useGame } from "../store/game";
  */
 export function MyClub() {
   const { snapshot, loadClub, loadStatus } = useGame();
+  const isMobile = useIsMobile();
   const toast = useRef<Toast>(null);
   const club = snapshot?.club;
 
@@ -153,136 +156,157 @@ export function MyClub() {
         </div>
       </div>
 
-      <div className="card" style={{ maxWidth: 640 }}>
-        <h2 className="card-title">
-          <Flag size={17} /> Club identity
-        </h2>
-        <div className="form-group" style={{ marginTop: 12 }}>
-          <label className="jm-label" htmlFor="myclub-name">
-            <Flag size={13} /> Club name
-          </label>
-          <InputText
-            id="myclub-name"
-            value={clubName}
-            onChange={(e) => {
-              setClubName(e.target.value);
-              setProfileDirty(true);
-            }}
-            maxLength={30}
-            style={{ width: "100%" }}
-          />
-        </div>
-        <div className="form-group">
-          <label className="jm-label" htmlFor="myclub-stadium">
-            <Home size={13} /> Stadium
-          </label>
-          <InputText
-            id="myclub-stadium"
-            value={stadiumName}
-            onChange={(e) => {
-              setStadiumName(e.target.value);
-              setProfileDirty(true);
-            }}
-            maxLength={40}
-            style={{ width: "100%" }}
-          />
-        </div>
-        <div className="form-group">
-          <label className="jm-label" htmlFor="myclub-coach">
-            <UserRound size={13} /> Manager
-          </label>
-          <InputText
-            id="myclub-coach"
-            value={coachName}
-            onChange={(e) => {
-              setCoachName(e.target.value);
-              setProfileDirty(true);
-            }}
-            maxLength={40}
-            disabled={!club.coachEditAllowed}
-            style={{ width: "100%" }}
-          />
-          <div className="jm-hint">
-            {!club.coachEditAllowed ? "Pro feature: manager names can be changed once per season." : "Your manager name can be changed once per season."}
-          </div>
-        </div>
-        <div className="form-group">
-          <label className="jm-label">
-            <Globe2 size={13} /> Nation
-          </label>
-          <input className="select" value={club.country} disabled style={{ width: "100%" }} />
-          <div className="jm-hint">Locked — your nation shapes youth recruitment and league clustering.</div>
-        </div>
-        <button
-          className="btn gold"
-          style={{ marginTop: 8 }}
-          onClick={() => void saveProfile()}
-          disabled={savingProfile || !profileDirty || !nameValid || !stadiumValid || !coachNameValid}
-        >
-          <SaveIcon size={15} /> {savingProfile ? "Saving…" : "Save identity"}
-        </button>
-      </div>
-
-      <div className="card kd-card" style={{ maxWidth: 960, marginTop: 16 }}>
-        <h2 className="card-title">
-          <Shirt size={17} /> Kits
-        </h2>
-        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
-          Design your Home, Away and Goalkeeper kits. Changes are visible to every manager immediately.
-        </div>
-        <KitDesigner
-          value={kits}
-          onChange={(next) => {
-            setKits(next);
-            setKitsDirty(true);
-          }}
+      {/* Identity hero: shared ClubCrest (custom logo aware) + key facts. */}
+      <div className="myclub-hero" style={{ ["--hero-a" as string]: club.primaryColor, ["--hero-b" as string]: club.secondaryColor }}>
+        <ClubCrest
+          name={club.name}
+          primary={club.primaryColor}
+          secondary={club.secondaryColor}
+          kit={club.kits?.home ?? null}
+          size={72}
+          clubId={club.id}
+          hasCustomLogo={(club as unknown as { hasCustomLogo?: boolean }).hasCustomLogo}
         />
-        <button
-          className="btn gold"
-          style={{ marginTop: 14 }}
-          onClick={() => void saveKits()}
-          disabled={savingKits || !kitsDirty}
-        >
-          <SaveIcon size={15} /> {savingKits ? "Saving…" : "Save kits"}
-        </button>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 800, fontSize: "1.3rem" }}>{club.name}</div>
+          <div style={{ color: "var(--text-2)", fontSize: "0.88rem", marginTop: 2 }}>
+            <Globe2 size={12} /> {club.country} · <Home size={12} /> {club.stadiumName} · <UserRound size={12} /> {club.coachName}
+          </div>
+        </div>
       </div>
 
-      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
-        <h2 className="card-title">
-          <ImageIcon size={17} /> Crest
-        </h2>
-        <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
-          Your crest appears in standings and match headers. Only one SVG variant exists today; it tints with your club colours. <b>Pro</b> managers may upload a custom raster crest.
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
-          <div style={{ width: 72, height: 72, borderRadius: 12, border: "1px solid var(--line)", display: "grid", placeItems: "center", overflow: "hidden", background: "#0f2a43" }}>
-            {customLogoPreview ? <img src={customLogoPreview} alt="crest" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <span style={{ fontWeight: 800, color: "white" }}>{club.name.slice(0, 2).toUpperCase()}</span>}
+      <div className="myclub-grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 1fr) minmax(0, 1fr)", alignItems: "start" }}>
+        <div className="card">
+          <h2 className="card-title">
+            <Flag size={17} /> Club identity
+          </h2>
+          <div className="form-group" style={{ marginTop: 12 }}>
+            <label className="jm-label" htmlFor="myclub-name">
+              <Flag size={13} /> Club name
+            </label>
+            <InputText
+              id="myclub-name"
+              value={clubName}
+              onChange={(e) => {
+                setClubName(e.target.value);
+                setProfileDirty(true);
+              }}
+              maxLength={30}
+              style={{ width: "100%" }}
+            />
           </div>
-          <div>
-            <div style={{ fontWeight: 700 }}>{club.name}</div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>Variant {logoVariant} · {customLogoPreview ? "custom raster" : "recoloured SVG"}</div>
+          <div className="form-group">
+            <label className="jm-label" htmlFor="myclub-stadium">
+              <Home size={13} /> Stadium
+            </label>
+            <InputText
+              id="myclub-stadium"
+              value={stadiumName}
+              onChange={(e) => {
+                setStadiumName(e.target.value);
+                setProfileDirty(true);
+              }}
+              maxLength={40}
+              style={{ width: "100%" }}
+            />
           </div>
-        </div>
-        <div className="form-group">
-          <label className="jm-label">Variant</label>
-          <select className="select" value={logoVariant} onChange={(e) => void saveLogoVariant(Number(e.target.value))} style={{ width: "100%" }}>
-            <option value={0}>Classic shield (recoloured)</option>
-          </select>
-          <div className="jm-hint">More variants will appear as art lands.</div>
-        </div>
-        <div className="form-group">
-          <label className="jm-label"><BadgeCheck size={13} /> Custom crest {useGame.getState().user?.isPro ? "(Pro)" : "(Pro only)"}</label>
-          {useGame.getState().user?.isPro ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <label className="btn" style={{ cursor: "pointer" }}>
-                <Upload size={14} /> {uploadingLogo ? "Uploading…" : "Upload PNG/JPEG/WebP ≤256 KB"}
-                <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onLogoFile} style={{ display: "none" }} disabled={uploadingLogo} />
-              </label>
-              {customLogoPreview && <button className="btn ghost danger" onClick={() => void removeLogo()}>Remove custom</button>}
+          <div className="form-group">
+            <label className="jm-label" htmlFor="myclub-coach">
+              <UserRound size={13} /> Manager
+            </label>
+            <InputText
+              id="myclub-coach"
+              value={coachName}
+              onChange={(e) => {
+                setCoachName(e.target.value);
+                setProfileDirty(true);
+              }}
+              maxLength={40}
+              disabled={!club.coachEditAllowed}
+              style={{ width: "100%" }}
+            />
+            <div className="jm-hint">
+              {!club.coachEditAllowed ? "Pro feature: manager names can be changed once per season." : "Your manager name can be changed once per season."}
             </div>
-          ) : (
-            <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>Upgrade to <b>Pro</b> (admin-granted) to upload your own crest. Everyone sees nicknames and custom crests.</div>
-          )}
+          </div>
+          <div className="form-group">
+            <label className="jm-label">
+              <Globe2 size={13} /> Nation
+            </label>
+            <input className="select" value={club.country} disabled style={{ width: "100%" }} />
+            <div className="jm-hint">Locked — your nation shapes youth recruitment and league clustering.</div>
+          </div>
+          <button
+            className="btn gold"
+            style={{ marginTop: 8 }}
+            onClick={() => void saveProfile()}
+            disabled={savingProfile || !profileDirty || !nameValid || !stadiumValid || !coachNameValid}
+          >
+            <SaveIcon size={15} /> {savingProfile ? "Saving…" : "Save identity"}
+          </button>
+        </div>
+
+        <div className="card">
+          <h2 className="card-title">
+            <ImageIcon size={17} /> Crest
+          </h2>
+          <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
+            Your crest appears in standings and match headers. Only one SVG variant exists today; it tints with your club colours. <b>Pro</b> managers may upload a custom raster crest.
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+            <div style={{ width: 72, height: 72, borderRadius: 12, border: "1px solid var(--line)", display: "grid", placeItems: "center", overflow: "hidden", background: "#0f2a43" }}>
+              {customLogoPreview ? <img src={customLogoPreview} alt="crest" style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <span style={{ fontWeight: 800, color: "white" }}>{club.name.slice(0, 2).toUpperCase()}</span>}
+            </div>
+            <div>
+              <div style={{ fontWeight: 700 }}>{club.name}</div>
+              <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>{customLogoPreview ? "Custom crest" : "Default crest"}</div>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="jm-label">Variant</label>
+            <select className="select" value={logoVariant} onChange={(e) => void saveLogoVariant(Number(e.target.value))} style={{ width: "100%" }}>
+              <option value={0}>Classic shield (recoloured)</option>
+            </select>
+            <div className="jm-hint">More variants will appear as art lands.</div>
+          </div>
+          <div className="form-group">
+            <label className="jm-label"><BadgeCheck size={13} /> Custom crest {useGame.getState().user?.isPro ? "(Pro)" : "(Pro only)"}</label>
+            {useGame.getState().user?.isPro ? (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <label className="btn" style={{ cursor: "pointer" }}>
+                  <Upload size={14} /> {uploadingLogo ? "Uploading…" : "Upload PNG/JPEG/WebP ≤256 KB"}
+                  <input type="file" accept="image/png,image/jpeg,image/webp" onChange={onLogoFile} style={{ display: "none" }} disabled={uploadingLogo} />
+                </label>
+                {customLogoPreview && <button className="btn ghost danger" onClick={() => void removeLogo()}>Remove custom</button>}
+              </div>
+            ) : (
+              <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>Upgrade to <b>Pro</b> (admin-granted) to upload your own crest. Everyone sees nicknames and custom crests.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="card kd-card myclub-kits-card">
+          <h2 className="card-title">
+            <Shirt size={17} /> Kits
+          </h2>
+          <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
+            Design your Home, Away and Goalkeeper kits. Changes are visible to every manager immediately.
+          </div>
+          <KitDesigner
+            value={kits}
+            onChange={(next) => {
+              setKits(next);
+              setKitsDirty(true);
+            }}
+          />
+          <button
+            className="btn gold"
+            style={{ marginTop: 14 }}
+            onClick={() => void saveKits()}
+            disabled={savingKits || !kitsDirty}
+          >
+            <SaveIcon size={15} /> {savingKits ? "Saving…" : "Save kits"}
+          </button>
         </div>
       </div>
     </div>

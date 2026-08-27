@@ -208,7 +208,7 @@ export function ClubModerationDialog({ clubId, onClose, notify }: { clubId: numb
       <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
       <ModerationDialog request={moderation} onClose={() => setModeration(null)} />
       <WarningsDialog user={warningsFor} onClose={() => setWarningsFor(null)} />
-      <Dialog header="Club moderation" visible={clubId !== null} onHide={onClose} style={{ width: 560 }}>
+      <Dialog header="Club moderation" visible={clubId !== null} onHide={onClose} dismissableMask style={{ width: 560 }}>
         {detail.error && <div style={{ color: "#ff6b6b" }}>{detail.error}</div>}
         {!detail.error && detail.loading && !club && <div className="empty-state" style={{ padding: 24 }}>Loading…</div>}
         {!detail.error && club && (

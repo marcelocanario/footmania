@@ -1,20 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "primereact/dialog";
 import { Dropdown } from "primereact/dropdown";
 import { InputNumber } from "primereact/inputnumber";
 import { Toast } from "primereact/toast";
 import { Gavel, HandCoins, Users } from "lucide-react";
-import { api, type AuctionView, type FinanceSnapshot, type FreeAgentView, type LoanView, type PlayerView } from "../api/client";
+import { api, type AuctionView, type FinanceSnapshot, type FreeAgentView, type LoanView, type PlayerView, type SkillSet } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
-import { PlayerName, POSITION_CLASS, POSITION_LETTER, positionTitle } from "../components/PlayerName";
+import { POSITION_LETTER, positionTitle } from "../components/PlayerName";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
 import { money } from "../format";
 import { formatDuration, useCountdown } from "../components/useCountdown";
-import { auctionOpeningRange } from "../market";
+import { createMarketFilters, TransferFiltersSidebar, type MarketFilters, type SortOption } from "../components/market/TransferFiltersSidebar";
+import { TransferPlayerRow } from "../components/market/TransferPlayerRow";
+import { TransferStatusChips } from "../components/market/TransferStatusChips";
+import { ListForSaleDialog } from "../components/market/ListForSaleDialog";
+import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 
 type Tab = "auctions" | "free" | "loans" | "sell";
 
@@ -28,6 +32,68 @@ function AuctionCountdown({ deadline, paused }: { deadline: number; paused?: boo
 /** Hover hint for every market action the season pause gates server-side. */
 const SEASON_PAUSED_TITLE = "The season is paused by an administrator — bids, listings and loans are frozen.";
 
+const SORT_OPTIONS: SortOption[] = [
+  { value: "ovr-desc", label: "Rating (high → low)" },
+  { value: "ovr-asc", label: "Rating (low → high)" },
+  { value: "age-asc", label: "Age (youngest first)" },
+  { value: "age-desc", label: "Age (oldest first)" },
+  { value: "value-desc", label: "Value (high → low)" },
+  { value: "value-asc", label: "Value (low → high)" },
+  { value: "salary-desc", label: "Salary (high → low)" },
+  { value: "name-asc", label: "Name (A → Z)" },
+];
+
+const SELL_SORT_OPTIONS: SortOption[] = [
+  { value: "ovr-desc", label: "Rating (high → low)" },
+  { value: "ovr-asc", label: "Rating (low → high)" },
+  { value: "age-asc", label: "Age (youngest first)" },
+  { value: "age-desc", label: "Age (oldest first)" },
+  { value: "value-desc", label: "Value (high → low)" },
+  { value: "salary-desc", label: "Salary (high → low)" },
+  { value: "name-asc", label: "Name (A → Z)" },
+];
+
+/** Client-side filter + sort shared by every market list. */
+function useMarketList<T extends { position: number; age: number; overall: number }>(
+  items: T[],
+  filters: MarketFilters,
+  valueOf: (item: T) => number,
+  salaryOf: (item: T) => number,
+  nameOf: (item: T) => string,
+  priceOf: (item: T) => number,
+  skillsOf: (item: T) => Partial<Record<keyof SkillSet, number>> | undefined,
+) {
+  return useMemo(() => {
+    const inRange = (value: number, min: number | null, max: number | null) =>
+      (min === null || value >= min) && (max === null || value <= max);
+    const filtered = items.filter((item) => {
+      const q = filters.query.trim().toLowerCase();
+      const nameMatches = !q || nameOf(item).toLowerCase().includes(q);
+      const positionMatches = filters.positions.length === 0 || filters.positions.includes(item.position);
+      const profileMatches = inRange(item.overall, filters.overallMin, filters.overallMax)
+        && inRange(item.age, filters.ageMin, filters.ageMax)
+        && inRange(valueOf(item), filters.valueMin, filters.valueMax)
+        && inRange(salaryOf(item), filters.salaryMin, filters.salaryMax)
+        && inRange(priceOf(item), filters.priceMin, filters.priceMax);
+      const skills = skillsOf(item);
+      const skillsMatch = Object.entries(filters.skillMins).every(([key, minimum]) => (skills?.[key as keyof SkillSet] ?? 0) >= (minimum ?? 0));
+      return nameMatches && positionMatches && profileMatches && skillsMatch;
+    });
+    return [...filtered].sort((a, b) => {
+      switch (filters.sortKey) {
+        case "ovr-asc": return a.overall - b.overall;
+        case "age-asc": return a.age - b.age;
+        case "age-desc": return b.age - a.age;
+        case "value-desc": return valueOf(b) - valueOf(a);
+        case "value-asc": return valueOf(a) - valueOf(b);
+        case "salary-desc": return salaryOf(b) - salaryOf(a);
+        case "name-asc": return nameOf(a).localeCompare(nameOf(b));
+        default: return b.overall - a.overall;
+      }
+    });
+  }, [items, filters, valueOf, salaryOf, nameOf, priceOf, skillsOf]);
+}
+
 export function Transfers() {
   const snapshot = useGame((s) => s.snapshot);
   const status = useGame((s) => s.status);
@@ -38,8 +104,6 @@ export function Transfers() {
   const [loans, setLoans] = useState<LoanView[]>([]);
   const [tab, setTab] = useState<Tab>("auctions");
   const [sellPlayer, setSellPlayer] = useState<PlayerView | null>(null);
-  const [sellPreview, setSellPreview] = useState<{ value: number; baseValue: number; openingPriceRange: { min: number; max: number }; cooldownError: string | null; alreadyListed: boolean } | null>(null);
-  const [sellPrice, setSellPrice] = useState(0);
   const [freeAgentTarget, setFreeAgentTarget] = useState<FreeAgentView | null>(null);
   const [freeAgentBidAmount, setFreeAgentBidAmount] = useState(0);
   const [freeAgentContractSeasons, setFreeAgentContractSeasons] = useState(1);
@@ -52,6 +116,14 @@ export function Transfers() {
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [playerTarget, setPlayerTarget] = useState<{ id: number; name: string } | null>(null);
+
+  // Detailed sidebar filters are kept independently per market tab.
+  const [auctionFilters, setAuctionFilters] = useState<MarketFilters>(() => createMarketFilters());
+  const [freeFilters, setFreeFilters] = useState<MarketFilters>(() => createMarketFilters());
+  const [loanFilters, setLoanFilters] = useState<MarketFilters>(() => createMarketFilters());
+  const [sellFilters, setSellFilters] = useState<MarketFilters>(() => createMarketFilters());
+
   const toast = useRef<Toast>(null);
   const contractTermOptions = (demands: Record<number, number> | undefined, fallback: number) => Array.from({ length: maxContractSeasons }, (_, index) => index + 1).map((value) => ({
     label: `${value} additional season${value === 1 ? "" : "s"} - ${money(demands?.[value] ?? fallback)}/season`,
@@ -105,37 +177,6 @@ export function Transfers() {
     if (freeAgentContractSeasons > maxContractSeasons) setFreeAgentContractSeasons(maxContractSeasons);
     if (auctionContractSeasons > maxContractSeasons) setAuctionContractSeasons(maxContractSeasons);
   }, [auctionContractSeasons, freeAgentContractSeasons, maxContractSeasons]);
-
-  const sell = async () => {
-    if (!sellPlayer) return;
-    try {
-      await api.sellPlayer(sellPlayer.id, sellPrice > 0 ? sellPrice : undefined);
-      toast.current?.show({ severity: "success", summary: "Player listed for auction" });
-      setSellPlayer(null);
-      setSellPreview(null);
-      setSellPrice(0);
-      refresh();
-      loadAuctions();
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
-    }
-  };
-
-  const openSellDialog = async (p: PlayerView) => {
-    setSellPlayer(p);
-      setSellPreview(null);
-      setSellPrice(0);
-      try {
-        const preview = await api.auctionPreview(p.id);
-        setSellPreview(preview);
-        setSellPrice(preview.openingPriceRange.max);
-      } catch {
-        // Fall back to the client-side estimate when the preview is unavailable.
-        const range = auctionOpeningRange(p.value);
-        setSellPreview({ value: p.value, baseValue: p.value, openingPriceRange: range, cooldownError: null, alreadyListed: false });
-        setSellPrice(range.max);
-      }
-  };
 
   const submitFreeAgentBid = async () => {
     if (!freeAgentTarget) return;
@@ -248,6 +289,48 @@ export function Transfers() {
     return finance.financialCushion - (loan.player.salary * days) / snapshot.save.seasonDays;
   };
 
+  const filteredAuctions = useMarketList(
+    auctions,
+    auctionFilters,
+    (a) => a.value,
+    (a) => a.salary,
+    (a) => a.playerName,
+    (a) => a.currentPrice,
+    (a) => a.skills,
+  );
+  const filteredFreeAgents = useMarketList(
+    freeAgents,
+    freeFilters,
+    (fa) => fa.value,
+    (fa) => fa.salary,
+    (fa) => fa.playerName,
+    (fa) => fa.currentPrice,
+    (fa) => fa.skills,
+  );
+  const loanRows = useMemo(
+    () => loans.flatMap((loan) => loan.player ? [{ loan, ...loan.player }] : []),
+    [loans],
+  );
+  const filteredLoans = useMarketList(
+    loanRows,
+    loanFilters,
+    (row) => row.value,
+    (row) => row.salary,
+    (row) => row.name,
+    (row) => row.loan.feeAmount ?? 0,
+    (row) => row.skills,
+  );
+  const sellableSquad = useMemo(() => squad.filter((p) => !p.onSale && !p.onLoan && !p.onLoanOut), [squad]);
+  const filteredSellable = useMarketList(
+    sellableSquad,
+    sellFilters,
+    (p) => p.value,
+    (p) => p.salary,
+    (p) => p.displayName ?? p.name,
+    () => 0,
+    (p) => p.skills,
+  );
+
   return (
     <div>
       <Toast ref={toast} position="bottom-right" />
@@ -276,7 +359,8 @@ export function Transfers() {
       )}
 
       {tab === "auctions" && (
-        <div className="card">
+        <div className="transfer-layout">
+          <div className="card">
           {loading ? (
             <div className="empty-state">{strings.common.loading}</div>
           ) : auctions.length === 0 ? (
@@ -285,121 +369,189 @@ export function Transfers() {
               No auctions right now. Check back after the next match day.
             </div>
           ) : (
-            <div className="grid stagger">
-              {auctions.map((a) => {
-                const outbid = a.myMaxBid !== null && !a.amILeading;
-                return (
-                  <div className="card hoverable" key={a.id} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-                    <div style={{ flex: 1, minWidth: 200 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-                        <span className={`pos-tag ${POSITION_CLASS[a.position]}`} title={positionTitle(a.position)}>{POSITION_LETTER[a.position]}</span>
-                        {a.playerName}
-                        <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.15rem", color: "var(--grass-2)" }}>{a.overall}</span>
-                      </div>
-                      <div style={{ color: "var(--text-3)", fontSize: "0.86rem", marginTop: 5 }}>
-                        {a.age} yrs · Salary <b style={{ color: "var(--text-2)" }}>{money(a.salary)}/season</b> · Opening <b style={{ color: "var(--text-2)" }}>{money(a.openingPrice)}</b> · Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · Bidders {a.bidderCount}
-                      </div>
-                      <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>
-                        Ends in <AuctionCountdown deadline={a.deadline} paused={status?.paused} />
-                      </div>
-                      {a.amILeading && (
-                        <span className="chip" style={{ marginTop: 4, color: "var(--grass-2)", borderColor: "var(--grass-2)" }}>You are leading</span>
-                      )}
-                      {outbid && (
-                        <span className="chip" style={{ marginTop: 4, color: "var(--danger, #d66)", borderColor: "var(--danger, #d66)" }}>Outbid — raise your max</span>
-                      )}
-                      {!a.amILeading && !outbid && a.myMaxBid !== null && (
-                        <div style={{ color: "var(--text-3)", fontSize: "0.84rem", marginTop: 4 }}>Your max: {money(a.myMaxBid)}</div>
-                      )}
-                    </div>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>History</button>
-                      <button className="btn" {...pauseLock} onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
-                        {a.myMaxBid !== null ? "Increase Max" : strings.transfers.bid}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            <>
+              <div className="transfer-rows">
+                {filteredAuctions.map((a) => {
+                  const outbid = a.myMaxBid !== null && !a.amILeading;
+                  return (
+                    <TransferPlayerRow
+                      key={a.id}
+                      name={a.playerName}
+                      position={a.position}
+                      overall={a.overall}
+                      age={a.age}
+                      onClick={() => setPlayerTarget({ id: a.playerId, name: a.playerName })}
+                      meta={
+                        <>
+                          Salary <b style={{ color: "var(--text-2)" }}>{money(a.salary)}/season</b> · Opening <b style={{ color: "var(--text-2)" }}>{money(a.openingPrice)}</b> · Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · Bidders {a.bidderCount}
+                        </>
+                      }
+                      sub={<>Ends in <AuctionCountdown deadline={a.deadline} paused={status?.paused} /></>}
+                      statusChip={<TransferStatusChips amILeading={a.amILeading} outbid={outbid} myMaxBid={a.myMaxBid} myMaxLabel="Your max" />}
+                      right={
+                        <>
+                          <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>History</button>
+                          <button className="btn" {...pauseLock} onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
+                            {a.myMaxBid !== null ? "Increase Max" : strings.transfers.bid}
+                          </button>
+                        </>
+                      }
+                    />
+                  );
+                })}
+              </div>
+              {filteredAuctions.length === 0 && <div className="empty-state">No auctions match your filters.</div>}
+            </>
           )}
+          </div>
+          <TransferFiltersSidebar
+            filters={auctionFilters}
+            onChange={setAuctionFilters}
+            sortOptions={SORT_OPTIONS}
+            resultCount={filteredAuctions.length}
+            totalCount={auctions.length}
+            priceLabel="Current price"
+          />
         </div>
       )}
 
       {tab === "free" && (
-        <div className="card">
+        <div className="transfer-layout">
+          <div className="card">
           {freeAgents.length === 0 ? (
             <div className="empty-state">
               <span style={{ fontSize: 26 }}>🆓</span>
               No free agents available.
             </div>
           ) : (
-            <div className="grid stagger">
-              {freeAgents.map((fa) => (
-                <div className="card hoverable" key={fa.id} style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{fa.playerName}</div>
-                    <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5 }}>
-                      OVR <b style={{ color: "var(--text-2)" }}>{fa.overall}</b> · {fa.age} yrs · Salary {money(fa.salary)}/season · Value {money(fa.value)} · Signing {money(fa.currentPrice)} · Bidders {fa.bidderCount}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button className="btn ghost" onClick={() => void openAuctionHistory(fa as never, "FREE_AGENT")}>History</button>
-                    <button className="btn" {...pauseLock} onClick={() => { setFreeAgentTarget(fa); setFreeAgentContractSeasons(fa.myContractSeasons ?? 1); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
-                      {strings.transfers.sign}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="transfer-rows">
+                {filteredFreeAgents.map((fa) => {
+                  const outbid = fa.myMaxBid !== null && !fa.amILeading;
+                  return (
+                    <TransferPlayerRow
+                      key={fa.id}
+                      name={fa.playerName}
+                      position={fa.position}
+                      overall={fa.overall}
+                      age={fa.age}
+                      onClick={() => setPlayerTarget({ id: fa.playerId, name: fa.playerName })}
+                      meta={
+                        <>
+                          Salary {money(fa.salary)}/season · Value {money(fa.value)} · Signing <b style={{ color: "var(--gold-2)" }}>{money(fa.currentPrice)}</b> · Bidders {fa.bidderCount}
+                        </>
+                      }
+                      sub={<>Ends in <AuctionCountdown deadline={fa.deadline} paused={status?.paused} /></>}
+                      statusChip={<TransferStatusChips amILeading={fa.amILeading} outbid={outbid} myMaxBid={fa.myMaxBid} myMaxLabel="Your max" />}
+                      right={
+                        <>
+                          <button className="btn ghost" onClick={() => void openAuctionHistory(fa as never, "FREE_AGENT")}>History</button>
+                          <button className="btn" {...pauseLock} onClick={() => { setFreeAgentTarget(fa); setFreeAgentContractSeasons(fa.myContractSeasons ?? 1); setFreeAgentBidAmount(Math.max(fa.openingPrice, fa.currentPrice + fa.bidIncrement)); }}>
+                            {strings.transfers.sign}
+                          </button>
+                        </>
+                      }
+                    />
+                  );
+                })}
+              </div>
+              {filteredFreeAgents.length === 0 && <div className="empty-state">No free agents match your filters.</div>}
+            </>
           )}
+          </div>
+          <TransferFiltersSidebar
+            filters={freeFilters}
+            onChange={setFreeFilters}
+            sortOptions={SORT_OPTIONS}
+            resultCount={filteredFreeAgents.length}
+            totalCount={freeAgents.length}
+            priceLabel="Signing fee"
+          />
         </div>
       )}
 
       {tab === "loans" && (
-        <div className="card">
+        <div className="transfer-layout">
+          <div className="card">
           {loading ? <div className="empty-state">{strings.common.loading}</div> : loans.length === 0 ? <div className="empty-state">No players are currently listed for loan.</div> : (
-            <div className="grid stagger">
-              {loans.map((loan) => loan.player && (
-                <div className="card hoverable" key={loan.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{loan.player.name}</div>
-                    <div className="hint">
-                      {loan.player.overall} OVR · {loan.player.age} yrs · Salary {money(loan.player.salary)}/season · From{" "}
-                      <ClubNameLink clubId={loan.fromClubId} name={loan.fromClub} showCrest={false} />
-                    </div>
-                  </div>
-                  {loan.available && <button className="btn" title={strings.transfers.borrowLoanHint} {...pauseLock} onClick={() => setLoanTarget(loan)}>View profile & take</button>}
-                  {!loan.available && loan.claimableIn > 0 && !loan.toClub && <span className="chip">Claimable in {formatDuration(loan.claimableIn * 1000)}</span>}
-                  {!loan.available && loan.toClub && (
-                    <span className="chip">
-                      At {loan.toClubId != null ? <ClubNameLink clubId={loan.toClubId} name={loan.toClub} showCrest={false} /> : loan.toClub}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="transfer-rows">
+                {filteredLoans.map((row) => (
+                  <TransferPlayerRow
+                    key={row.loan.id}
+                    name={row.name}
+                    position={row.position}
+                    overall={row.overall}
+                    age={row.age}
+                    onClick={() => setPlayerTarget({ id: row.id, name: row.name })}
+                    meta={
+                      <>
+                        Salary {money(row.salary)}/season · From <ClubNameLink clubId={row.loan.fromClubId} name={row.loan.fromClub} showCrest={false} />
+                      </>
+                    }
+                    statusChip={
+                      !row.loan.available && row.loan.claimableIn > 0 && !row.loan.toClub
+                        ? <span className="chip">Claimable in {formatDuration(row.loan.claimableIn * 1000)}</span>
+                        : !row.loan.available && row.loan.toClub
+                          ? (
+                            <span className="chip">
+                              At {row.loan.toClubId != null ? <ClubNameLink clubId={row.loan.toClubId} name={row.loan.toClub} showCrest={false} /> : row.loan.toClub}
+                            </span>
+                          )
+                          : undefined
+                    }
+                    right={
+                      row.loan.available
+                        ? <button className="btn" title={strings.transfers.borrowLoanHint} {...pauseLock} onClick={() => setLoanTarget(row.loan)}>View profile & take</button>
+                        : undefined
+                    }
+                  />
+                ))}
+              </div>
+              {filteredLoans.length === 0 && <div className="empty-state">No loan listings match your filters.</div>}
+            </>
           )}
+          </div>
+          <TransferFiltersSidebar
+            filters={loanFilters}
+            onChange={setLoanFilters}
+            sortOptions={SORT_OPTIONS}
+            resultCount={filteredLoans.length}
+            totalCount={loanRows.length}
+            priceLabel="Loan fee"
+          />
         </div>
       )}
 
       {tab === "sell" && (
-        <div className="card">
+        <div className="transfer-layout">
+          <div className="card">
           {myActiveListings.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               <div className="kicker" style={{ marginBottom: 6 }}>Your active listings</div>
-              {myActiveListings.map((a) => (
-                <div className="card" key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{a.playerName} · {a.overall} OVR</div>
-                    <div className="hint">Current {money(a.currentPrice)} · {a.bidderCount} bidders · Ends in <AuctionCountdown deadline={a.deadline} paused={status?.paused} /></div>
-                  </div>
-                  {a.bidderCount === 0 && (
-                    <button className="btn ghost" {...pauseLock} onClick={() => cancelListing(a)}>Cancel listing</button>
-                  )}
-                  {a.bidderCount > 0 && <span className="chip">Bids received — cannot cancel</span>}
-                </div>
-              ))}
+              <div className="transfer-rows">
+                {myActiveListings.map((a) => (
+                  <TransferPlayerRow
+                    key={a.id}
+                    name={a.playerName}
+                    position={a.position}
+                    overall={a.overall}
+                    age={a.age}
+                    onClick={() => setPlayerTarget({ id: a.playerId, name: a.playerName })}
+                    meta={
+                      <>
+                        Current <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · {a.bidderCount} bidders
+                      </>
+                    }
+                    sub={<>Ends in <AuctionCountdown deadline={a.deadline} paused={status?.paused} /></>}
+                    right={
+                      a.bidderCount === 0
+                        ? <button className="btn ghost" {...pauseLock} onClick={() => cancelListing(a)}>Cancel listing</button>
+                        : <span className="chip">Bids received — cannot cancel</span>
+                    }
+                  />
+                ))}
+              </div>
             </div>
           )}
           {squad.length === 0 ? (
@@ -408,58 +560,40 @@ export function Transfers() {
               No players available to sell.
             </div>
           ) : (
-            <div className="grid stagger">
-              {squad.filter((p) => !p.onSale && !p.onLoan && !p.onLoanOut).map((p) => (
-                <div className="card hoverable" key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "space-between", flexWrap: "wrap" }}>
-                  <div>
-                    <PlayerName player={p} />
-                    <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5 }}>
-                      OVR <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · Value {money(p.value)}
-                    </div>
-                  </div>
-                  <button className="btn ghost" {...pauseLock} onClick={() => openSellDialog(p)}>
-                    {strings.transfers.sell}
-                  </button>
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="kicker" style={{ marginBottom: 6 }}>List a player</div>
+              <div className="transfer-rows">
+                {filteredSellable.map((p) => (
+                  <TransferPlayerRow
+                    key={p.id}
+                    name={p.displayName ?? p.name}
+                    position={p.position}
+                    overall={p.overall}
+                    age={p.age}
+                    onClick={() => setPlayerTarget({ id: p.id, name: p.name })}
+                    meta={<>OVR <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · Value {money(p.value)}</>}
+                    right={<button className="btn ghost" {...pauseLock} onClick={() => setSellPlayer(p)}>{strings.transfers.sell}</button>}
+                  />
+                ))}
+              </div>
+              {filteredSellable.length === 0 && <div className="empty-state">No squad players match your filters.</div>}
+            </>
           )}
+          </div>
+          <TransferFiltersSidebar
+            filters={sellFilters}
+            onChange={setSellFilters}
+            sortOptions={SELL_SORT_OPTIONS}
+            resultCount={filteredSellable.length}
+            totalCount={sellableSquad.length}
+            showPriceFilter={false}
+          />
         </div>
       )}
 
-      <Dialog header={`${strings.transfers.sell} — ${sellPlayer?.name ?? ""}`} visible={sellPlayer !== null} onHide={() => { setSellPlayer(null); setSellPreview(null); setSellPrice(0); }} style={{ width: 400 }}>
-        <div style={{ display: "grid", gap: 6, color: "var(--text-2)", marginBottom: 16 }}>
-          {sellPreview ? (
-            <>
-              <span>Value: <b style={{ color: "var(--gold-2)" }}>{money(sellPreview.value)}</b></span>
-              <span>Opening price base: <b style={{ color: "var(--gold-2)" }}>{money(sellPreview.baseValue)}</b></span>
-              <span>Allowed range: <b style={{ color: "var(--gold-2)" }}>{money(sellPreview.openingPriceRange.min)} – {money(sellPreview.openingPriceRange.max)}</b></span>
-              <span style={{ fontSize: "0.86rem", color: "var(--text-3)" }}>Choose the opening asking price inside the allowed range. Bidding may go above it up to the market cap.</span>
-              <div style={{ marginTop: 8 }}>
-                <InputNumber value={sellPrice} onValueChange={(e) => setSellPrice(e.value ?? 0)} min={sellPreview.openingPriceRange.min} max={sellPreview.openingPriceRange.max} mode="currency" currency="USD" locale="en-US" />
-              </div>
-            </>
-          ) : (
-            <span>Loading listing preview…</span>
-          )}
-        </div>
-        {sellPreview?.cooldownError && (
-          <div className="card" style={{ marginBottom: 12, padding: 12, fontSize: "0.9rem", color: "var(--danger, #d66)" }}>
-            {sellPreview.cooldownError}
-          </div>
-        )}
-        {sellPreview?.alreadyListed && (
-          <div className="card" style={{ marginBottom: 12, padding: 12, fontSize: "0.9rem", color: "var(--text-3)" }}>
-            This player already has an active listing.
-          </div>
-        )}
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setSellPlayer(null); setSellPreview(null); setSellPrice(0); }}>{strings.common.cancel}</button>
-          <button className="btn" style={{ flex: 1 }} disabled={status?.paused || !sellPreview || !!sellPreview.cooldownError || sellPreview.alreadyListed || sellPrice < sellPreview.openingPriceRange.min || sellPrice > sellPreview.openingPriceRange.max} title={status?.paused ? SEASON_PAUSED_TITLE : undefined} onClick={sell}>{strings.common.confirm}</button>
-        </div>
-      </Dialog>
+      <ListForSaleDialog player={sellPlayer} onClose={() => setSellPlayer(null)} onListed={() => { refresh(); loadAuctions(); }} />
 
-      <Dialog header={`${strings.transfers.sign} — ${freeAgentTarget?.playerName ?? ""}`} visible={freeAgentTarget !== null} onHide={() => setFreeAgentTarget(null)} style={{ width: 400 }}>
+      <Dialog header={`${strings.transfers.sign} — ${freeAgentTarget?.playerName ?? ""}`} visible={freeAgentTarget !== null} onHide={() => setFreeAgentTarget(null)} dismissableMask style={{ width: 400 }}>
         {freeAgentTarget && (
           <>
             <div className="transfer-player-summary">
@@ -510,7 +644,7 @@ export function Transfers() {
         </div>
       </Dialog>
 
-      <Dialog header={`${strings.transfers.bid} — ${auctionBidTarget?.playerName ?? ""}`} visible={auctionBidTarget !== null} onHide={() => setAuctionBidTarget(null)} style={{ width: 400 }}>
+      <Dialog header={`${strings.transfers.bid} — ${auctionBidTarget?.playerName ?? ""}`} visible={auctionBidTarget !== null} onHide={() => setAuctionBidTarget(null)} dismissableMask style={{ width: 400 }}>
         {auctionBidTarget && (
           <>
             <div className="transfer-player-summary">
@@ -561,7 +695,7 @@ export function Transfers() {
         </div>
       </Dialog>
 
-      <Dialog header={`Loan — ${loanTarget?.player?.name ?? ""}`} visible={loanTarget !== null} onHide={() => setLoanTarget(null)} style={{ width: 430 }}>
+      <Dialog header={`Loan — ${loanTarget?.player?.name ?? ""}`} visible={loanTarget !== null} onHide={() => setLoanTarget(null)} dismissableMask style={{ width: 430 }}>
         {loanTarget?.player && (
           <>
             <div className="transfer-player-summary">
@@ -593,7 +727,7 @@ export function Transfers() {
         )}
       </Dialog>
 
-      <Dialog header={historyTarget ? `${(historyTarget as AuctionView).playerName ?? (historyTarget as FreeAgentView).playerName} — Full history` : "Full history"} visible={historyTarget !== null} onHide={() => { setHistoryTarget(null); setHistoryData(null); }} style={{ width: 520 }}>
+      <Dialog header={historyTarget ? `${(historyTarget as AuctionView).playerName ?? (historyTarget as FreeAgentView).playerName} — Full history` : "Full history"} visible={historyTarget !== null} onHide={() => { setHistoryTarget(null); setHistoryData(null); }} dismissableMask style={{ width: 520 }}>
         {!historyData ? <div className="empty-state" style={{ padding: 20 }}>Loading…</div> : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div className="card" style={{ padding: 12 }}>
@@ -607,6 +741,8 @@ export function Transfers() {
           </div>
         )}
       </Dialog>
+
+      <PlayerDetailsDialog target={playerTarget} onClose={() => setPlayerTarget(null)} />
     </div>
   );
 }

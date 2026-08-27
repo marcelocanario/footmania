@@ -113,6 +113,7 @@ export function playerView(
     injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
     conditionLabel: conditionLabel(p, absoluteGameDay),
     isYouth: p.isYouth,
+    seasonAppearances: p.seasonAppearances ?? 0,
     seasonGoals: goals,
     seasonAssists: assists,
     careerGoals,

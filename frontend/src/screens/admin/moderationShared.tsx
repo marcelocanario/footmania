@@ -55,7 +55,7 @@ export function ModerationDialog({ request, onClose }: { request: ModerationRequ
   };
 
   return (
-    <Dialog header={request.title} visible onHide={onClose} style={{ width: 430 }}>
+    <Dialog header={request.title} visible onHide={onClose} dismissableMask style={{ width: 430 }}>
       <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{request.description}</div>
       <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
         {request.fields.map((field) => (
@@ -98,7 +98,7 @@ export function WarningsDialog({ user, onClose }: { user: { id: number; name: st
   }, [user]);
 
   return (
-    <Dialog header={user ? `Warnings · ${user.name}` : "Warnings"} visible={user !== null} onHide={onClose} style={{ width: 480 }}>
+    <Dialog header={user ? `Warnings · ${user.name}` : "Warnings"} visible={user !== null} onHide={onClose} dismissableMask style={{ width: 480 }}>
       {error && <div style={{ color: "#ff6b6b" }}>{error}</div>}
       {!error && warnings === null && <div className="empty-state" style={{ padding: 20 }}>Loading…</div>}
       {warnings !== null && warnings.length === 0 && <div className="empty-state" style={{ padding: 20 }}>No warnings issued.</div>}

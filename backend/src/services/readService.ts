@@ -501,18 +501,37 @@ export function buildTeamProfile(world: World, clubId: number) {
       if (a.position !== b.position) return a.position - b.position;
       return a.name.localeCompare(b.name);
     })
-    .map((p) => ({
-      id: p.id,
-      name: p.name,
-      nickname: p.nickname ?? null,
-      position: p.position,
-      positionName: POSITION_NAMES[p.position] ?? "",
-      tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
-      overall: p.overall,
-      age: p.age,
-      country: p.country,
-      isYouth: p.isYouth,
-    }));
+    .map((p) => {
+      // Loan context for colour-coding on the public squad list (same shape as
+      // the owning-manager snapshot). Loaned-out players are not part of this
+      // squad (they live at the borrowing club), so only the on-loan branch is
+      // reachable here; the others stay for shape consistency.
+      let onLoan = false;
+      let loanFromName: string | null = null;
+      if (p.loanId !== null) {
+        const loan = world.loans.find((l) => l.id === p.loanId);
+        if (loan && !loan.recalled && loan.toClubId !== null && loan.fromClubId !== clubId) {
+          onLoan = true;
+          loanFromName = world.clubs.find((c) => c.id === loan.fromClubId)?.name ?? null;
+        }
+      }
+      return {
+        id: p.id,
+        name: p.name,
+        nickname: p.nickname ?? null,
+        position: p.position,
+        positionName: POSITION_NAMES[p.position] ?? "",
+        tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
+        overall: p.overall,
+        age: p.age,
+        country: p.country,
+        isYouth: p.isYouth,
+        onLoan,
+        onLoanOut: false,
+        loanClubName: null,
+        loanFromName,
+      };
+    });
   // Total team value: full squad market value plus the cash balance.
   const totalValue = squad.reduce((sum, p) => sum + p.value, 0) + club.cash;
 

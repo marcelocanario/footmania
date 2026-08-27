@@ -86,6 +86,35 @@ body {
   background-image: var(--bg-pattern);
 }
 
+/* Branded scrollbars for the page and any scrollable content panels. The
+   navigation strips below explicitly hide their overflow indicators. */
+html,
+body,
+* {
+  scrollbar-color: var(--grass) var(--bg-2);
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: var(--bg-2); }
+*::-webkit-scrollbar-thumb {
+  border: 2px solid var(--bg-2);
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--grass-2), var(--grass-dark));
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--grass-2); }
+*::-webkit-scrollbar-corner { background: var(--bg-2); }
+
+/* The document scrollbar is the primary navigation rail; keep it more
+   prominent than the thinner scrollbars inside cards and panels. */
+html,
+body {
+  scrollbar-width: auto;
+}
+
+html::-webkit-scrollbar,
+body::-webkit-scrollbar { width: 14px; height: 14px; }
+
 h1, h2, h3, h4 {
   font-family: var(--font-display);
   font-weight: 700;
@@ -1228,6 +1257,157 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .player-name.on-loan { opacity: 0.6; }
 .player-name.on-loan .nm { text-decoration: line-through; }
+
+/* Loaned-in players (borrowed into your squad): loan-blue name. */
+.player-name.on-loan-in .nm { color: #9fb8d8; }
+
+/* Team screen: loaned-in player rows get the same loan-blue name. */
+.team-player-row .loan-in-name { color: #9fb8d8; }
+
+/* Owned-but-loaned-out rows in the squad table: greyed out. */
+.p-datatable .loan-out-row > td { opacity: 0.55; }
+.p-datatable .loan-out-row:hover > td { opacity: 0.75; }
+
+/* Squad detail: 2×2 transfer-action grid (icons + text, no overflow). */
+.squad-actions-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.squad-action { display: flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; white-space: normal; text-align: center; line-height: 1.2; font-size: 0.82rem; padding: 9px 6px; }
+.squad-action svg { flex-shrink: 0; }
+.squad-action-price { font-size: 0.76rem; opacity: 0.85; }
+
+/* Selected-player sidebar: keep the history summary and sub-tabs fixed while
+   each record list exposes three compact rows before it scrolls. */
+.squad-player-tabs { display: flex; width: 100%; margin-top: 14px; }
+.squad-player-tabs button { flex: 1; justify-content: center; padding: 8px 10px; font-size: 0.8rem; }
+.squad-history-tabs { display: flex; width: 100%; margin-top: 10px; border-radius: 10px; }
+.squad-history-tabs button { flex: 1; min-width: 0; justify-content: center; gap: 4px; padding: 7px 6px; font-size: 0.68rem; line-height: 1.1; text-align: center; white-space: normal; }
+.squad-history-tabs .count { padding: 1px 5px; font-size: 0.62rem; }
+.squad-history-panel { margin-top: 12px; min-width: 0; }
+.squad-history-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.squad-history-stat {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  padding: 8px; border: 1px solid var(--line); border-radius: 9px;
+  background: rgba(4, 13, 8, 0.42); color: var(--grass-2);
+}
+.squad-history-stat span { min-width: 0; }
+.squad-history-stat small { display: block; overflow: hidden; color: var(--text-3); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
+.squad-history-stat strong { display: block; margin-top: 2px; color: var(--text); font-family: var(--font-display); font-size: 0.95rem; line-height: 1.1; }
+.squad-history-scroll { margin-top: 10px; }
+.squad-history-list { display: grid; gap: 5px; max-height: 100px; overflow-y: auto; padding-right: 4px; }
+.squad-history-row { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 30px; padding: 5px 8px; border: 1px solid rgba(228, 245, 235, 0.08); border-radius: 8px; background: rgba(228, 245, 235, 0.035); line-height: 1.1; }
+.squad-history-row strong { flex-shrink: 0; overflow: hidden; color: var(--text); font-size: 0.78rem; text-overflow: ellipsis; white-space: nowrap; }
+.squad-history-row span { color: var(--text-3); font-size: 0.7rem; }
+.squad-history-row-detail { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.squad-history-price { flex-shrink: 0; color: var(--grass-2) !important; }
+.squad-history-event-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; border-radius: 7px; }
+.squad-history-event-icon.goal { background: rgba(61, 220, 132, 0.14); color: var(--grass-2); }
+.squad-history-event-icon.yellow { background: rgba(240, 180, 41, 0.14); color: var(--gold-2); }
+.squad-history-event-icon.danger { background: rgba(229, 72, 77, 0.14); color: var(--red-2); }
+.squad-history-event-icon.neutral { background: rgba(228, 245, 235, 0.08); color: var(--text-2); }
+.squad-history-empty { padding: 10px 2px; color: var(--text-3); font-size: 0.78rem; }
+.squad-player-separator { height: 1px; margin-top: 14px; background: var(--line); }
+
+@media (max-width: 560px) {
+  .squad-history-tabs button { min-width: 92px; }
+}
+
+/* ---------- market lists (transfers) ---------- */
+
+.transfer-rows { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+
+.transfer-row { transition: border-color 0.15s ease; }
+.transfer-row:hover { border-color: var(--line-2); }
+.transfer-row-muted { opacity: 0.62; }
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+.link-btn:hover { color: var(--grass-2); text-decoration: underline; }
+
+.market-filter-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(4, 13, 8, 0.3);
+}
+
+/* transfers: squad-style sidebar filters */
+.transfer-layout { display: grid; grid-template-columns: minmax(0, 3fr) 300px; gap: 16px; align-items: start; }
+.transfer-filters-card { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 16px; }
+.transfer-filters-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.transfer-filters-heading .card-title { margin: 0 0 4px; }
+.transfer-filter-bar-top { display: flex; gap: 10px; flex-wrap: wrap; }
+.transfer-filter-bar-top > * { min-width: 0; }
+.transfer-filter-section { border-top: 1px solid var(--line); padding-top: 12px; }
+.transfer-attr-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.transfer-filter-range { display: grid; gap: 4px; min-width: 0; }
+.transfer-filter-range > span { font-size: 0.74rem; font-weight: 600; color: var(--text-3); }
+.transfer-filter-range > div { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; min-width: 0; }
+.transfer-filter-range .p-inputnumber { min-width: 0; width: 100%; }
+.transfer-filter-range .p-inputnumber-input { width: 100%; min-width: 0; padding: 8px 6px; font-size: 0.78rem; }
+.transfer-skill-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px; }
+.transfer-skill-filters label { display: flex; align-items: center; justify-content: space-between; gap: 5px; min-width: 0; color: var(--text-2); font-size: 0.78rem; }
+.transfer-skill-filters .p-inputnumber { width: 52px; flex-shrink: 0; }
+.transfer-skill-filters .p-inputnumber-input { width: 100%; padding: 6px 4px; font-size: 0.78rem; text-align: center; }
+.transfer-filter-meta { color: var(--text-3); font-size: 0.84rem; }
+
+@media (max-width: 880px) {
+  .transfer-layout { grid-template-columns: 1fr; }
+  .transfer-filters-card { position: static; order: -1; }
+}
+
+/* Player details: compact fact tiles keep financial and performance data
+   visually distinct instead of mixing unrelated values in one stat row. */
+.player-card-section { border-top: 1px solid var(--line); padding-top: 10px; }
+.player-facts-grid { display: grid; gap: 8px; margin-top: 8px; }
+.player-facts-finance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.player-facts-performance { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.player-facts-career { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.player-fact-wide { grid-column: 1 / -1; }
+.player-fact {
+  display: flex; align-items: flex-start; gap: 8px; min-width: 0;
+  padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px;
+  background: rgba(4, 13, 8, 0.42);
+}
+.player-fact-icon { color: var(--grass-2); display: inline-flex; flex-shrink: 0; margin-top: 1px; }
+.player-fact > span:last-child { min-width: 0; }
+.player-fact-label { display: block; color: var(--text-3); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; line-height: 1.2; }
+.player-fact strong { display: block; margin-top: 3px; color: var(--text); font-family: var(--font-display); font-size: 1.05rem; line-height: 1.15; }
+.player-stat-pair { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; color: var(--text-2); font-size: 0.8rem; }
+.player-stat-pair span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.player-card-yellow { color: var(--gold-2); }
+.player-card-red { color: var(--red-2); }
+.player-performance-tabs { display: flex; width: 100%; margin-top: 8px; }
+.player-performance-tabs button { flex: 1; justify-content: center; }
+.pro-tab-pill {
+  padding: 2px 5px; border: 1px solid rgba(240, 180, 41, 0.55); border-radius: 999px;
+  background: rgba(240, 180, 41, 0.14); color: var(--gold-2); font-size: 0.58rem;
+  font-weight: 800; letter-spacing: 0.08em; line-height: 1;
+}
+.player-current-status { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.player-status-danger { color: var(--red-2); border-color: var(--red-2); }
+.player-pro-gate {
+  display: grid; justify-items: center; gap: 8px; margin-top: 8px; padding: 22px 16px;
+  border: 1px dashed rgba(240, 180, 41, 0.5); border-radius: 12px;
+  background: rgba(240, 180, 41, 0.06); color: var(--gold-2); text-align: center;
+}
+.player-pro-gate strong { color: var(--text); }
+.player-pro-gate span { max-width: 360px; color: var(--text-3); font-size: 0.82rem; line-height: 1.45; }
+
+@media (max-width: 560px) {
+  .player-facts-finance { grid-template-columns: 1fr; }
+  .player-facts-performance { grid-template-columns: 1fr; }
+  .player-facts-career { grid-template-columns: 1fr; }
+}
 
 /* ---------- tables ---------- */
 
@@ -3320,6 +3500,21 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .jm-season-pill { margin-left: auto; align-self: center; font-family: var(--font-display); font-size: 0.72rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; padding: 6px 10px; border-radius: 999px; white-space: nowrap; }
 .jm-season-pill.open { background: rgba(61, 220, 132, 0.18); color: var(--grass-2); border: 1px solid rgba(61, 220, 132, 0.35); }
 .jm-season-pill.locked { background: rgba(240, 180, 41, 0.16); color: var(--gold-2); border: 1px solid rgba(240, 180, 41, 0.35); }
+
+/* my-club page */
+.myclub-hero {
+  display: flex; align-items: center; gap: 16px;
+  background: linear-gradient(120deg, var(--hero-a, #0f2a43), var(--hero-b, #0a1f33));
+  border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px; margin-bottom: 16px;
+  position: relative; overflow: hidden;
+}
+.myclub-hero::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(600px 160px at 15% 0%, rgba(255, 255, 255, 0.09), transparent 60%);
+}
+.myclub-hero > * { position: relative; }
+.myclub-grid { display: grid; gap: 16px; }
+.myclub-kits-card { grid-column: 1 / -1; }
 
 /* shell */
 .jm-shell { display: grid; gap: 14px; }

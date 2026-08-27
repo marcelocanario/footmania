@@ -68,6 +68,8 @@ export interface PlayerView {
   injuryUntilAbsoluteGameDay?: number | null;
   conditionLabel?: string;
   isYouth: boolean;
+  /** League matches this season with at least one minute played. */
+  seasonAppearances?: number;
   seasonGoals: number;
   seasonAssists: number;
   careerGoals: number;
@@ -97,6 +99,26 @@ export type PlayerHistoryView = Omit<PlayerView, "skills"> & {
   clubName: string | null;
   isOwnTeam: boolean;
 };
+
+export interface PlayerHistorySeason {
+  seasonId: number;
+  seasonKey: string;
+  clubId: number;
+  clubName: string;
+  appearances: number;
+  goals: number;
+  assists: number;
+  yellows: number;
+  reds: number;
+  minutes: number;
+}
+
+export interface PlayerHistoryResponse {
+  player: PlayerHistoryView;
+  seasons: PlayerHistorySeason[];
+  transfers: unknown[];
+  matches: unknown[];
+}
 
 export interface ClubView {
   id: number;
@@ -608,6 +630,12 @@ export interface TeamPlayerRow {
   age: number;
   country: string;
   isYouth: boolean;
+  /** Loaned into the viewed club (colour-coded on the public squad list). */
+  onLoan?: boolean;
+  /** Always false on the public list (loaned-out players live elsewhere). */
+  onLoanOut?: boolean;
+  loanClubName?: string | null;
+  loanFromName?: string | null;
 }
 
 /** Full team-screen payload. Public identity, competitive results, squad
@@ -1452,7 +1480,7 @@ export const api = {
   uploadCustomLogo: (mime: string, data: string) => request<{ ok: boolean }>("/api/mp/club/logo", { method: "POST", body: JSON.stringify({ mime, data }) }),
   deleteCustomLogo: () => request<{ ok: boolean }>("/api/mp/club/logo", { method: "DELETE" }),
   nicknamePlayer: (playerId: number, nickname: string | null) => request<{ ok: boolean; nickname: string | null; displayName: string }>(`/api/mp/players/${playerId}/nickname`, { method: "PUT", body: JSON.stringify({ nickname }) }),
-  playerHistory: (playerId: number) => request<{ player: PlayerHistoryView; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/players/${playerId}/history`),
+  playerHistory: (playerId: number) => request<PlayerHistoryResponse>(`/api/players/${playerId}/history`),
   marketPlayerHistory: (listingId: number, marketType: "TRANSFER" | "FREE_AGENT") => request<{ player: PlayerView & { displayName: string }; seasons: unknown[]; transfers: unknown[]; matches: unknown[] }>(`/api/market/listings/${listingId}/player-history?marketType=${marketType}`),
 
   // Notifications & push

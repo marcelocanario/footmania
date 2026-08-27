@@ -12,7 +12,7 @@ export function PlayerName({ player, showPosition = true, preferNickname = false
   const hasNick = Boolean(nickname);
   const shown = preferNickname && nickname ? `“${nickname}”` : ((player as unknown as { displayName?: string }).displayName ?? player.name);
   return (
-    <span className={`player-name${player.onLoanOut ? " on-loan" : ""}`}>
+    <span className={`player-name${player.onLoan ? " on-loan-in" : ""}${player.onLoanOut ? " on-loan" : ""}`}>
       {showPosition && <span className={`pos-tag ${POSITION_CLASS[player.position] ?? ""}`} title={positionTitle(player.position)}>{POSITION_LETTER[player.position] ?? "?"}</span>}
       <span className="nm" title={preferNickname && hasNick ? player.name : undefined}>{shown}</span>
       {hasNick && !preferNickname && <span className="flag-chip" title={player.name} style={{ borderColor: "var(--gold-2)", color: "var(--gold-2)" }}>“{nickname}”</span>}

@@ -212,10 +212,11 @@ export function TeamScreen() {
             {profile.players.map((p) => {
               const playerFlag = countryFlag(p.country);
               return (
-                <button key={p.id} type="button" className="team-player-row" onClick={() => setPlayerTarget({ id: p.id, name: p.name })}>
+                <button key={p.id} type="button" className={`team-player-row${p.onLoan ? " team-player-loan-in" : ""}`} onClick={() => setPlayerTarget({ id: p.id, name: p.name })}>
                   <span className="rank-pill" title={positionTitle(p.position)}>{p.positionName}</span>
-                  <b>{p.name}{p.nickname ? <> "{p.nickname}"</> : null}</b>
+                  <b className={p.onLoan ? "loan-in-name" : undefined}>{p.name}{p.nickname ? <> "{p.nickname}"</> : null}</b>
                   {p.isYouth && <span className="chip" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>YTH</span>}
+                  {p.onLoan && <span className="flag-chip fc-loan" title={`On loan from ${p.loanFromName ?? "another club"}`}>LOAN</span>}
                   <span style={{ marginLeft: "auto", color: "var(--text-3)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                     {playerFlag ? `${playerFlag} ` : ""}{p.age} yrs
                   </span>

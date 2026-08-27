@@ -49,7 +49,7 @@ export function ConfirmDialog({ request, onClose }: { request: ConfirmRequest | 
   };
 
   return (
-    <Dialog header={request.title} visible onHide={onClose} style={{ width: 440 }}>
+    <Dialog header={request.title} visible onHide={onClose} dismissableMask style={{ width: 440 }}>
       <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{request.message}</div>
       {request.confirmWord && (
         <div className="form-group" style={{ marginTop: 14 }}>

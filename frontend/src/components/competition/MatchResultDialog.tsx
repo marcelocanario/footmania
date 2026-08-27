@@ -45,6 +45,7 @@ export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView |
           : fixture ? `${fixture.home} vs ${fixture.away}` : ""}
         visible={fixture !== null}
         onHide={onClose}
+        dismissableMask
         style={{ width: 540 }}
       >
         {!resultData ? (
