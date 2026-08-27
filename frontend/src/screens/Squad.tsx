@@ -11,7 +11,7 @@ import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
-import { PlayerName, POSITION_CLASS } from "../components/PlayerName";
+import { PlayerName, POSITION_CLASS, positionTitle } from "../components/PlayerName";
 import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
@@ -49,7 +49,7 @@ function conditionIcon(condition: string) {
 // parameter (plus other module-level helpers/components), so a fresh closure
 // per render (and per row) buys nothing and only adds allocation churn.
 function positionBody(p: PlayerView) {
-  return <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`}>{p.positionName}</span>;
+  return <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`} title={positionTitle(p.position)}>{p.positionName}</span>;
 }
 
 function squadNumberBody(p: PlayerView) {
@@ -625,7 +625,7 @@ export function Squad() {
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
                   {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>Real name: {selectedPlayer.name}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
-                    {selectedPlayer.positionName} · {selectedPlayer.age} yrs ·{" "}
+                    <span title={positionTitle(selectedPlayer.position)}>{selectedPlayer.positionName}</span> · {selectedPlayer.age} yrs ·{" "}
                     <span title={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
                       {selectedCountryFlag && <span aria-hidden="true">{selectedCountryFlag} </span>}
                       {selectedCountryName}

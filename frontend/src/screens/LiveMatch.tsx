@@ -7,6 +7,7 @@ import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
 import { eventKey, hasPitchCue, tacticalRoleLabel } from "../components/matchPitchUtils";
+import { positionTitle } from "../components/PlayerName";
 import { enqueueKickoffWhistle, enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
@@ -751,7 +752,7 @@ export function LiveMatch() {
                       className={`sub-row${subOut?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubOut(p)}
                     >
-                      <span className="pos-tag">{tacticalRoleLabel(p.tacPos)}</span>
+                      <span className="pos-tag" title={positionTitle(p.position)}>{tacticalRoleLabel(p.tacPos)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>
@@ -771,7 +772,7 @@ export function LiveMatch() {
                       onClick={() => setSubIn(p)}
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
-                      <span className="pos-tag">{naturalPosition(p)}</span>
+                      <span className="pos-tag" title={positionTitle(p.position)}>{naturalPosition(p)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>

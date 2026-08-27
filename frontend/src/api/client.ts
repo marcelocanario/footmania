@@ -183,6 +183,7 @@ export interface MpStatus {
     coachName: string;
     country: string;
     hasCustomLogo: boolean;
+    kits: { home: KitDesign; away: KitDesign; gk: KitDesign } | null;
   } | null;
 }
 

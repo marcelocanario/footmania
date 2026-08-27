@@ -8,7 +8,7 @@ import { api, type AuctionView, type FinanceSnapshot, type FreeAgentView, type L
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
-import { PlayerName, POSITION_CLASS, POSITION_LETTER } from "../components/PlayerName";
+import { PlayerName, POSITION_CLASS, POSITION_LETTER, positionTitle } from "../components/PlayerName";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
@@ -292,7 +292,7 @@ export function Transfers() {
                   <div className="card hoverable" key={a.id} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
                     <div style={{ flex: 1, minWidth: 200 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-                        <span className={`pos-tag ${POSITION_CLASS[a.position]}`}>{POSITION_LETTER[a.position]}</span>
+                        <span className={`pos-tag ${POSITION_CLASS[a.position]}`} title={positionTitle(a.position)}>{POSITION_LETTER[a.position]}</span>
                         {a.playerName}
                         <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.15rem", color: "var(--grass-2)" }}>{a.overall}</span>
                       </div>
@@ -465,7 +465,7 @@ export function Transfers() {
             <div className="transfer-player-summary">
               <div>
                 <div className="kicker">Player profile</div>
-                <h3>{POSITION_LETTER[freeAgentTarget.position] ?? "Player"}</h3>
+                <h3 title={positionTitle(freeAgentTarget.position)}>{POSITION_LETTER[freeAgentTarget.position] ?? "Player"}</h3>
               </div>
               <span className="transfer-overall">{freeAgentTarget.overall}</span>
             </div>
@@ -516,7 +516,7 @@ export function Transfers() {
             <div className="transfer-player-summary">
               <div>
                 <div className="kicker">Player profile</div>
-                <h3>{POSITION_LETTER[auctionBidTarget.position] ?? "Player"}</h3>
+                <h3 title={positionTitle(auctionBidTarget.position)}>{POSITION_LETTER[auctionBidTarget.position] ?? "Player"}</h3>
               </div>
               <span className="transfer-overall">{auctionBidTarget.overall}</span>
             </div>
@@ -567,7 +567,7 @@ export function Transfers() {
             <div className="transfer-player-summary">
               <div>
                 <div className="kicker">Player profile</div>
-                <h3>{loanTarget.player.positionName} · {loanTarget.player.age} yrs</h3>
+                <h3><span title={positionTitle(loanTarget.player.position)}>{loanTarget.player.positionName}</span> · {loanTarget.player.age} yrs</h3>
                 <div style={{ color: "var(--text-2)", marginTop: 4 }}>
                   From <ClubNameLink clubId={loanTarget.fromClubId} name={loanTarget.fromClub} showCrest={false} /> · Salary {money(loanTarget.player.salary)}/season
                 </div>

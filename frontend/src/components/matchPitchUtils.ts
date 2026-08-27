@@ -140,21 +140,17 @@ const FALLBACK_COLUMN_X: Record<number, number> = {
   18: 68, 19: 68, 20: 68, 21: 68, 22: 68, 23: 68, 24: 68, 25: 68,
 };
 
-/** Tactical slot → role name, mirroring the backend's TACTICAL_POSITION_NAMES
- *  (game/constants.ts). Front-line codes (20/22/23/24) read as ST and the wide
- *  wing codes (19/21) as LW/RW — matching the role the pitch layout renders
- *  the slot at. NOTE: the same codes are reused as bench-slot markers
- *  (BENCH_ORDER) with the same meaning; this label is only correct for
- *  on-pitch players, not for bench rows (which should show the natural
- *  position instead). */
+/** Tactical slot → primary position name, mirroring the backend's
+ *  TACTICAL_POSITION_NAMES (game/constants.ts). Slots draw players from exactly
+ *  one primary position group (club.ts:tacPosToBasePosition), so every slot
+ *  carries that group's name — there are no distinct tactical sub-positions. */
 export function tacticalRoleLabel(tacPos: number): string {
   return (
     {
       1: "GK",
-      2: "LB",
-      3: "CB", 4: "CB", 5: "CB", 6: "RB", 7: "CB", 8: "CB", 9: "RB",
-      10: "LM", 11: "CDM", 12: "CM", 13: "CM", 14: "CM", 15: "CAM", 16: "CM", 17: "RM",
-      18: "ST", 19: "LW", 20: "ST", 21: "RW", 22: "ST", 23: "ST", 24: "ST", 25: "ST",
+      2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "FB", 7: "CB", 8: "CB", 9: "FB",
+      10: "FB", 11: "MF", 12: "MF", 13: "MF", 14: "MF", 15: "MF", 16: "MF", 17: "FB",
+      18: "FW", 19: "FW", 20: "FW", 21: "FW", 22: "FW", 23: "FW", 24: "FW", 25: "FW",
     } as Record<number, string>
   )[tacPos] ?? "PLAYER";
 }

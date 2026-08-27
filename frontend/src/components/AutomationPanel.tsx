@@ -6,6 +6,7 @@ import { ChevronDown, Zap } from "lucide-react";
 import { api, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
+import { POSITION_FULL_NAMES } from "./PlayerName";
 import { DIRECTIONS, FORMATIONS, PRESSING, STYLES, formationLabel, withUnchanged } from "../tacticsOptions";
 
 /**
@@ -106,7 +107,7 @@ function RuleRow({
   onRemove: () => void;
 }) {
   const playerOptions = useMemo(
-    () => squad.map((pl) => ({ label: `${pl.displayName ?? pl.name} · ${pl.positionName} · ${pl.overall}`, value: pl.id })),
+    () => squad.map((pl) => ({ label: `${pl.displayName ?? pl.name} · ${POSITION_FULL_NAMES[pl.position] ?? pl.positionName} · ${pl.overall}`, value: pl.id })),
     [squad]
   );
   const issue = ruleIssue(rule);

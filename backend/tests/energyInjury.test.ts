@@ -15,16 +15,20 @@ import {
 
 describe("energy and injury model", () => {
   it("matches the neutral 90-minute reference loss", () => {
-    expect(energyLoss({ energy: 100, age: 26, physicalSkill: 50, position: 2, pressing: 50, involvement: 0.5, minutes: 90 })).toBeCloseTo(18, 10);
+    // Position 3 is the MID role (roleForPosition), which the reference loss
+    // and roleLoad are calibrated on.
+    expect(energyLoss({ energy: 100, age: 26, physicalSkill: 50, position: 3, pressing: 50, involvement: 0.5, minutes: 90 })).toBeCloseTo(18, 10);
   });
 
   it("preserves role and pressing ordering", () => {
     const base = { energy: 100, age: 26, physicalSkill: 50, pressing: 50, involvement: 0.5, minutes: 90 } as const;
     const gk = energyLoss({ ...base, position: 0 });
     const def = energyLoss({ ...base, position: 1 });
-    const mid = energyLoss({ ...base, position: 2 });
-    const att = energyLoss({ ...base, position: 3 });
+    const cb = energyLoss({ ...base, position: 2 });
+    const mid = energyLoss({ ...base, position: 3 });
+    const att = energyLoss({ ...base, position: 4 });
     expect(gk).toBeLessThan(def);
+    expect(cb).toBeCloseTo(def, 10);
     expect(def).toBeLessThan(att);
     expect(att).toBeLessThan(mid);
     expect(energyLoss({ ...base, position: 2, pressing: 0 })).toBeLessThan(energyLoss({ ...base, position: 2, pressing: 50 }));
@@ -96,7 +100,8 @@ describe("energy and injury model", () => {
  * two game-days between matches taken from the derived calendar. Simulates the
  * exact production order per game-day advance (plan §25): recentLoad decays and
  * Energy recovers EVERY game-day morning, then the scheduled league match kicks
- * off later that day. `restSlot` skips that slot's fixture entirely. */
+ * off later that day. `restSlot` skips that slot's fixture entirely. Position 3
+ * is the MID role (roleForPosition), which the reference loss is calibrated on. */
 function rotation(age: number, slots: number, restSlot?: number): { starts: number[] } {
   const spacing = calendarValues().matchSpacingDays;
   const player: any = { age, skills: { vel: 50, des: 50, arm: 50 } };
@@ -110,8 +115,8 @@ function rotation(age: number, slots: number, restSlot?: number): { starts: numb
     const isMatchDay = (day - 1) % spacing === spacing - 1;
     if (isMatchDay && slot !== restSlot) {
       starts.push(Math.round(energy));
-      energy = Math.max(0, energy - energyLoss({ energy, age, physicalSkill: 50, position: 2, pressing: 50, involvement: 0.5, minutes: 90 }));
-      load = Math.min(6, load + loadIncrement({ position: 2, pressing: 50, involvement: 0.5, minutes: 90 }));
+      energy = Math.max(0, energy - energyLoss({ energy, age, physicalSkill: 50, position: 3, pressing: 50, involvement: 0.5, minutes: 90 }));
+      load = Math.min(6, load + loadIncrement({ position: 3, pressing: 50, involvement: 0.5, minutes: 90 }));
     }
   }
   return { starts };

@@ -3,7 +3,7 @@ import type { Competition, SeasonHistoryEntry, World } from "../game/types";
 import { seasonKey } from "../game/clock";
 import { calendarValues, phaseForSeasonDayIndex, seasonSchedulePreview } from "./seasonCalendar";
 import { preferredHoursFromClubRow } from "./saveService";
-import { resolveClubKits, selectMatchKits } from "../game/kits";
+import { deserializeClubKits, resolveClubKits, selectMatchKits } from "../game/kits";
 import { standingsTiebreak } from "../game/league";
 import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf } from "../game/multiplayer";
 import { POSITION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
@@ -122,7 +122,7 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
     // crest, stadium, country and match-time availability. Consumed on next join.
     prisma.clubIdentityArchive.findUnique({
       where: { userId },
-      select: { name: true, primaryColor: true, secondaryColor: true, customLogoData: true, stadiumName: true, coachName: true, country: true },
+      select: { name: true, primaryColor: true, secondaryColor: true, customLogoData: true, stadiumName: true, coachName: true, country: true, kitJson: true },
     }),
   ]);
 
@@ -254,6 +254,10 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
           coachName: preservedIdentityRow.coachName,
           country: preservedIdentityRow.country,
           hasCustomLogo: preservedIdentityRow.customLogoData != null && preservedIdentityRow.customLogoData.length > 0,
+          // The full three-kit set (home/away/GK) so the join preview can show
+          // the manager's real kits — including a customized away jersey —
+          // instead of re-deriving defaults from the two identity colors.
+          kits: deserializeClubKits(preservedIdentityRow.kitJson),
         }
       : null,
   };

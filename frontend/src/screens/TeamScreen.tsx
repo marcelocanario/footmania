@@ -9,6 +9,7 @@ import { groupLabel } from "../components/competition/shared";
 import { ClubCrest } from "../components/ClubCrest";
 import { FootballKit } from "../components/kit/FootballKit";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
+import { positionTitle } from "../components/PlayerName";
 import { StandingsTable } from "../components/competition/StandingsTable";
 import { MatchResultDialog } from "../components/competition/MatchResultDialog";
 import { ClubNameLink } from "../components/ClubNameLink";
@@ -212,7 +213,7 @@ export function TeamScreen() {
               const playerFlag = countryFlag(p.country);
               return (
                 <button key={p.id} type="button" className="team-player-row" onClick={() => setPlayerTarget({ id: p.id, name: p.name })}>
-                  <span className="rank-pill">{p.positionName}</span>
+                  <span className="rank-pill" title={positionTitle(p.position)}>{p.positionName}</span>
                   <b>{p.name}{p.nickname ? <> "{p.nickname}"</> : null}</b>
                   {p.isYouth && <span className="chip" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>YTH</span>}
                   <span style={{ marginLeft: "auto", color: "var(--text-3)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>

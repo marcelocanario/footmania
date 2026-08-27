@@ -249,6 +249,19 @@ describe("admin world controls (season pause / fixture recalculation / world res
       headers: { cookie: playerCookie },
       payload: { enabled: false },
     });
+    // A custom away jersey must survive the reset: distinct colors + pattern.
+    const customAway = {
+      home: { primary: "#d40000", secondary: "#ffffff", accent: "#ffffff", numberColor: "#ffffff", pattern: "stripes" },
+      away: { primary: "#111133", secondary: "#ffcc00", accent: "#ffcc00", numberColor: "#ffffff", pattern: "diagonal-split" },
+      gk: { primary: "#00aa55", secondary: "#000000", accent: "#000000", numberColor: "#ffffff", pattern: "hoops" },
+    };
+    const kitSave = await app.inject({
+      method: "PUT",
+      url: "/api/mp/club/kit",
+      headers: { cookie: playerCookie },
+      payload: { kits: customAway },
+    });
+    expect(kitSave.statusCode).toBe(200);
 
     await ensureCurrentSeason(app.prisma);
     const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "keep the team identities across the wipe", keepIdentity: true } });
@@ -260,12 +273,16 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(archive.name).toBe("Archived United");
     expect(archive.customLogoData).toContain("iVBORw0KGgo");
     expect(archive.friendGroupingOptIn).toBe(false);
+    // The custom away jersey is archived.
+    const archivedKits = JSON.parse(archive.kitJson!);
+    expect(archivedKits.away).toMatchObject({ primary: "#111133", secondary: "#ffcc00", pattern: "diagonal-split" });
 
     // The world is fresh (no human clubs) but the status advertises the
-    // preserved identity to the join screen.
+    // preserved identity to the join screen — including the full kit set.
     const status = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: playerCookie } });
     expect(status.json().userClubId).toBeNull();
     expect(status.json().preservedIdentity).toMatchObject({ name: "Archived United", hasCustomLogo: true, country: "BRA" });
+    expect(status.json().preservedIdentity.kits.away).toMatchObject({ primary: "#111133", secondary: "#ffcc00", pattern: "diagonal-split" });
 
     // Rejoin: the archived identity is applied and the row consumed.
     const join = await app.inject({
@@ -293,6 +310,8 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(club!.country).toBe("BRA");
     expect(club!.customLogo).toMatchObject({ mime: "image/png" });
     expect(club!.friendGroupingOptIn).toBe(false);
+    // The custom away jersey survived the full reset -> rejoin cycle.
+    expect(club!.kits?.away).toMatchObject({ primary: "#111133", secondary: "#ffcc00", pattern: "diagonal-split" });
     // The wizard's name/country/stadium/coach were overridden by the archive.
     expect(club!.coachName).not.toBe("Wizard Coach");
     // The first join lifted the waiting-for-first-human hold and formed

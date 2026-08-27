@@ -5,6 +5,7 @@ import { useGame } from "../store/game";
 import { countryFlag } from "../countryFlags";
 import { ClubNameLink } from "./ClubNameLink";
 import { PlayerSkillsRadar } from "./PlayerSkillsRadar";
+import { positionTitle } from "./PlayerName";
 
 /** Refresh the card while it is open so a goal scored mid-match (or the
  *  full-time commit right after) shows up without closing/reopening the dialog.
@@ -62,7 +63,7 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                     : player.clubName ?? "Free agent"}
                 </div>
                 <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 2 }}>
-                  {player.positionName} · {player.age} yrs · <span title={player.country} aria-label={`Country: ${player.country}`}>{country ? `${country} ` : ""}{player.country}</span>
+                  <span title={positionTitle(player.position)}>{player.positionName}</span> · {player.age} yrs · <span title={player.country} aria-label={`Country: ${player.country}`}>{country ? `${country} ` : ""}{player.country}</span>
                 </div>
               </div>
               <strong style={{ fontSize: "1.5rem", fontFamily: "var(--font-display)" }}>{player.overall}</strong>

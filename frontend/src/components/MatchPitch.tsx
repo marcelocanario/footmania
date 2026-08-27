@@ -2,6 +2,7 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import type { KitDesign, LiveBall, LiveEvent, LiveMissingPlayer, LivePlayer } from "../api/client";
 import { FootballKit } from "./kit/FootballKit";
 import { ClubNameLink } from "./ClubNameLink";
+import { POSITION_FULL_NAMES } from "./PlayerName";
 import {
   BALL_CENTER_POINT,
   bendSignFor,
@@ -161,7 +162,7 @@ const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighte
       className={`pitch-player${highlighted ? " pitch-player-highlight" : ""}${player.injuryDays > 0 ? " pitch-player-injured" : ""}`}
       style={style}
       aria-label={player.number != null ? `${player.number} ${player.name}` : player.name}
-      title={player.number != null ? `${player.number} · ${player.name}` : player.name}
+      title={player.number != null ? `${player.number} · ${player.name} · ${POSITION_FULL_NAMES[player.position] ?? ""}` : `${player.name} · ${POSITION_FULL_NAMES[player.position] ?? ""}`}
       onClick={() => onPlayerClick?.(player.id, player.name)}
     >
       <span className="pitch-player-kit" aria-hidden="true">

@@ -60,8 +60,8 @@ export function physicalSkill(player: Pick<Player, "skills">): number {
 
 export function roleForPosition(position: Position | number): "GK" | "DEF" | "MID" | "ATT" {
   if (position === 0) return "GK";
-  if (position === 1) return "DEF";
-  if (position === 2) return "MID";
+  if (position === 1 || position === 2) return "DEF";
+  if (position === 3) return "MID";
   return "ATT";
 }
 

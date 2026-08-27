@@ -91,10 +91,12 @@ export function useMpSocket() {
           // The whole world was wiped by an admin: drop every cached read
           // model and the club snapshot. Every club — human or not, preserved
           // identity or not — is gone, so all logged-in users must (re)join.
+          // Exception: the admin panel is where the reset was triggered — don't
+          // yank the admin out of it mid-task.
           setLiveMatch(null);
           api.cache.invalidate();
           void refresh();
-          if (location.pathname !== "/join") {
+          if (location.pathname !== "/join" && location.pathname !== "/admin") {
             navigate("/join", { replace: true });
           }
           break;

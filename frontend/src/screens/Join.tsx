@@ -144,7 +144,11 @@ export function Join() {
     if (!clubName.trim()) setClubName(preserved.name);
     setTeamPrimary(preserved.primaryColor);
     setTeamSecondary(preserved.secondaryColor);
-    setKits((current) => applyTeamColorPreset(current, preserved.primaryColor, preserved.secondaryColor));
+    // Restore the FULL archived kit set (home/away/GK) so the preview shows
+    // the manager's real jerseys — a customized away kit must not be replaced
+    // by a color-derived default.
+    if (preserved.kits) setKits(preserved.kits);
+    else setKits((current) => applyTeamColorPreset(current, preserved.primaryColor, preserved.secondaryColor));
     if (!stadiumName.trim()) setStadiumName(preserved.stadiumName);
     if (!coachName.trim()) setCoachName(preserved.coachName);
     // The country list arrives async; only set the selection once the

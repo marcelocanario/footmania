@@ -2,8 +2,16 @@ import { BarChart3 } from "lucide-react";
 import { api, type AdminAnalytics, type AdminAnalyticsDivision, type AdminAnalyticsPopulationFlow } from "../../api/client";
 import { AdminCard, useAdminFetch, type TabProps } from "./adminShared";
 import { groupLabel } from "../../components/competition/shared";
+import { POSITION_FULL_NAMES } from "../../components/PlayerName";
 
 const POSITION_ORDER = ["GK", "FB", "CB", "MF", "FW"];
+const POSITION_FULL: Record<string, string> = {
+  GK: POSITION_FULL_NAMES[0],
+  FB: POSITION_FULL_NAMES[1],
+  CB: POSITION_FULL_NAMES[2],
+  MF: POSITION_FULL_NAMES[3],
+  FW: POSITION_FULL_NAMES[4],
+};
 
 /**
  * World analytics for admins. Compares the living world against the same
@@ -264,7 +272,7 @@ function PositionBalanceRow({ rows }: { rows: AdminAnalyticsDivision[] }) {
           <tr style={{ color: "var(--text-3)", textAlign: "left" }}>
             <th style={{ padding: "4px 10px" }}>Group</th>
             {POSITION_ORDER.map((pos) => (
-              <th key={pos} style={{ padding: "4px 10px" }}>{pos}</th>
+              <th key={pos} style={{ padding: "4px 10px" }} title={POSITION_FULL[pos]}>{pos}</th>
             ))}
           </tr>
         </thead>

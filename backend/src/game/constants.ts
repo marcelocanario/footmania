@@ -61,32 +61,18 @@ export const STYLE_NAMES = ["Balanced", "Total Attack", "Counter-attack"];
 export const PRESSING_NAMES = ["Light", "Heavy", "Very Heavy"];
 export const DIRECTION_NAMES = ["Through the middle", "Down the wings"];
 
+/**
+ * Tactical slot -> primary position name (same vocabulary as POSITION_NAMES).
+ * Slots draw players from exactly one primary position group (see
+ * tacPosToBasePosition in club.ts), so every slot carries that group's name —
+ * there are no distinct tactical sub-positions in this game. Kept in sync with
+ * club.ts:tacPosToBasePosition and matchSim.ts:tacPosRole.
+ */
 export const TACTICAL_POSITION_NAMES: Record<number, string> = {
   1: "GK",
-  2: "LB",
-  3: "CB",
-  4: "CB",
-  5: "CB",
-  6: "RB",
-  7: "CB",
-  8: "CB",
-  9: "RB",
-  10: "LM",
-  11: "CDM",
-  12: "CM",
-  13: "CM",
-  14: "CM",
-  15: "CAM",
-  16: "CM",
-  17: "RM",
-  18: "ST",
-  19: "LW",
-  20: "ST",
-  21: "RW",
-  22: "ST",
-  23: "ST",
-  24: "ST",
-  25: "ST",
+  2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "FB", 7: "CB", 8: "CB", 9: "FB",
+  10: "FB", 11: "MF", 12: "MF", 13: "MF", 14: "MF", 15: "MF", 16: "MF", 17: "FB",
+  18: "FW", 19: "FW", 20: "FW", 21: "FW", 22: "FW", 23: "FW", 24: "FW", 25: "FW",
 };
 
 export const BENCH_ORDER = [1, 22, 24, 11, 13, 14, 16, 2, 9, 3, 5];

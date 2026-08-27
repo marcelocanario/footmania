@@ -5,6 +5,7 @@ import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { FootballKit } from "./kit/FootballKit";
 import { slotPointsForFormation, tacticalRoleLabel } from "./matchPitchUtils";
+import { POSITION_FULL_NAMES } from "./PlayerName";
 import { FORMATIONS } from "../tacticsOptions";
 
 interface Ed {
@@ -78,6 +79,17 @@ function isBoardPlayer(player: BoardPlayer | null | undefined): player is BoardP
 
 function positionLabel(position: number): string {
   return ["GK", "FB", "CB", "MF", "FW"][position] ?? "PLAYER";
+}
+
+/** Map a primary-position code to its full name for tooltips. */
+function positionFull(position: number): string {
+  return POSITION_FULL_NAMES[position] ?? "Player";
+}
+
+/** Reverse lookup of the abbreviated label back to its position code. */
+function positionLabelToIndex(label: string): number {
+  const index = ["GK", "FB", "CB", "MF", "FW"].indexOf(label);
+  return index >= 0 ? index : -1;
 }
 
 export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange }: Props) {
@@ -435,7 +447,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     onPointerDown={(event) => player && beginDrag(location, event)}
                     onClick={() => player && selectLocation(location)}
                   >
-                    <span className="tb-slot-role">{slotNames[index] ?? `#${index + 1}`}</span>
+                    <span className="tb-slot-role" title={POSITION_FULL_NAMES[positionLabelToIndex(slotNames[index] ?? "")] ?? slotNames[index]}>{slotNames[index] ?? `#${index + 1}`}</span>
                     {player ? (
                       <span className="tb-player-chip">
                         <span className="tb-player-kit">
@@ -477,7 +489,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     onClick={() => player && selectLocation(location)}
                   >
                     <span className="tb-row-number">{index + 1}</span>
-                    <span className="tb-row-position">{player?.tacticalPosition ?? "—"}</span>
+                    <span className="tb-row-position" title={player ? positionFull(player.position) : undefined}>{player?.tacticalPosition ?? "—"}</span>
                     <span className="tb-row-name">{player?.name ?? "Empty bench slot"}</span>
                     <span className="tb-row-energy">EN {player ? Math.round(player.energy) : "—"}</span>
                     <span className="tb-row-rating">{player?.overall ?? "—"}</span>
@@ -512,7 +524,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     title={unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined}
                     onPointerDown={(event) => !unavailable && beginDrag(location, event)}
                   >
-                    <span className="tb-row-position">{player.tacticalPosition}</span>
+                    <span className="tb-row-position" title={positionFull(player.position)}>{player.tacticalPosition}</span>
                     <span className="tb-row-name">{player.name}</span>
                     <span className="tb-row-energy">EN {Math.round(player.energy)}</span>
                     <span className="tb-row-rating">{player.overall}</span>
