@@ -148,7 +148,7 @@ export function tacticalRoleLabel(tacPos: number): string {
   return (
     {
       1: "GK",
-      2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "FB", 7: "CB", 8: "CB", 9: "FB",
+      2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "CB", 7: "CB", 8: "CB", 9: "FB",
       10: "FB", 11: "MF", 12: "MF", 13: "MF", 14: "MF", 15: "MF", 16: "MF", 17: "FB",
       18: "FW", 19: "FW", 20: "FW", 21: "FW", 22: "FW", 23: "FW", 24: "FW", 25: "FW",
     } as Record<number, string>

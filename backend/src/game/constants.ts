@@ -66,11 +66,12 @@ export const DIRECTION_NAMES = ["Through the middle", "Down the wings"];
  * Slots draw players from exactly one primary position group (see
  * tacPosToBasePosition in club.ts), so every slot carries that group's name —
  * there are no distinct tactical sub-positions in this game. Kept in sync with
- * club.ts:tacPosToBasePosition and matchSim.ts:tacPosRole.
+ * club.ts:tacPosToBasePosition; matchSim.ts additionally maps these slots to
+ * its fine deployed-role taxonomy.
  */
 export const TACTICAL_POSITION_NAMES: Record<number, string> = {
   1: "GK",
-  2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "FB", 7: "CB", 8: "CB", 9: "FB",
+  2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "CB", 7: "CB", 8: "CB", 9: "FB",
   10: "FB", 11: "MF", 12: "MF", 13: "MF", 14: "MF", 15: "MF", 16: "MF", 17: "FB",
   18: "FW", 19: "FW", 20: "FW", 21: "FW", 22: "FW", 23: "FW", 24: "FW", 25: "FW",
 };

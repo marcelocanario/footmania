@@ -211,7 +211,7 @@ function pickFallbackForTacPos(players: Player[], tacPos: number, excluded: Set<
 // ---------------------------------------------------------------------------
 
 /** Tactical slots played out wide (fullbacks, wing midfielders, wingers). */
-const WIDE_TAC_POS = new Set([2, 6, 9, 10, 17, 19, 20]);
+const WIDE_TAC_POS = new Set([2, 9, 10, 17, 19, 21]);
 
 interface AiTacticsProfile {
   pace: number;
