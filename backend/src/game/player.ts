@@ -201,6 +201,7 @@ export function aging(player: Player) {
   player.age += 1;
   player.seasonGoals = 0;
   player.seasonAssists = 0;
+  player.seasonMvps = 0;
   player.seasonAppearances = 0;
   player.yellows = 0;
   player.reds = 0;

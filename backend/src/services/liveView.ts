@@ -12,6 +12,65 @@ import { displayName } from "../game/displayName";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { MP_CONFIG } from "../config";
 import { injuryDaysRemaining, conditionLabel } from "../game/energyInjury";
+import { liveRatingFromAccum, primaryCoarseRole } from "../game/matchRatings";
+
+/** Base scoreboard row shape (kept for API compatibility). */
+interface PlayerMatchScore {
+  playerId: number;
+  clubId: number;
+  goals: number;
+  assists: number;
+  score: number;
+  won: boolean;
+  minutes: number;
+}
+
+/** Player score row for the live "Scores" tab. */
+export interface LivePlayerScoreView extends PlayerMatchScore {
+  name: string;
+  /** Coarse deployed role for the current rating. */
+  role?: string;
+  /** True when this is a live rating (from the accumulator), not a points
+   *  score. */
+  live?: boolean;
+  /** Live 3.0–10.0 rating; null before 10 match-minutes. */
+  rating?: number | null;
+}
+
+/** Build the live scoreboard from the rating accumulator (plan §17): each
+ *  on-pitch player's live 3.0–10.0 rating (null until 10 match-minutes),
+ *  sorted best first. Replaces the old points scoreboard. */
+function liveRatingsView(world: World, st: LiveMatchState, byId: Map<number, Player>): LivePlayerScoreView[] {
+  const seasonId = world.mp.seasonId;
+  const calibration: Record<string, import("../game/types").RoleCalibrationEntry> | undefined = (() => {
+    const cals = (world.roleCalibrations ?? []).filter((c) => c.seasonId === seasonId);
+    if (cals.length === 0) return undefined;
+    const out: Record<string, import("../game/types").RoleCalibrationEntry> = {};
+    for (const c of cals) out[c.role] = c;
+    return out;
+  })();
+  const out: LivePlayerScoreView[] = [];
+  for (const [pid, accum] of Object.entries(st.ratingAccum ?? {})) {
+    const playerId = Number(pid);
+    const p = byId.get(playerId);
+    if (!p) continue;
+    const rating = liveRatingFromAccum(accum, calibration);
+    out.push({
+      playerId,
+      clubId: accum.clubId,
+      goals: 0,
+      assists: 0,
+      score: rating ?? 0,
+      won: false,
+      minutes: Math.round(accum.roleSecondsTotal / 60),
+      name: displayName(p),
+      role: primaryCoarseRole(accum),
+      live: true,
+      rating,
+    });
+  }
+  return out.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0) || a.playerId - b.playerId);
+}
 
 export interface LiveEventView {
   sequence: number;
@@ -52,14 +111,15 @@ export interface LivePlayerView {
  * A player missing from the pitch with cause: sent off (RED) or injured while
  * no substitution slot/candidate remained (INJURY). Auto-subbed injuries do
  * not appear — their SUB event removes them from this projection. The pitch
- * renders a ghost marker at the vacated tactical slot.
+ * uses this projection for short-handed status only; absent players are not
+ * rendered as on-pitch markers.
  */
 export interface LiveMissingPlayerView {
   /** 0 = home, 1 = away. */
   side: 0 | 1;
   playerId: number;
   name: string;
-  /** Squad shirt number for the ghost marker. */
+  /** Squad shirt number for the short-handed status. */
   number: number | null;
   kind: "INJURY" | "RED";
   /** Tactical slot he last occupied. */
@@ -148,6 +208,9 @@ export interface LiveStateView {
   shootout: { scores: [number, number]; winner: string } | null;
   stats: LiveMatchState["stats"];
   events: LiveEventView[];
+  /** Per-player MVP scores (goals*2 + assists + win bonus) for the current
+   *  state of the match; only players with pitch minutes appear. */
+  scores: LivePlayerScoreView[];
   homeOn: LivePlayerView[];
   awayOn: LivePlayerView[];
   homeBench: LivePlayerView[];
@@ -194,13 +257,23 @@ export interface LiveStateDeltaView {
   awayScore: number;
   stats: LiveMatchState["stats"];
   newEvents: LiveEventView[];
+  /** Per-player MVP scores for the current state (recomputed on every delta so
+   *  the live Scores tab updates as goals/assists happen). */
+  scores: LivePlayerScoreView[];
   automationFiredCount: number;
   progressPct: number;
   currentAddedTime: number | null;
   homeTacticsCooldownMinutes: number;
   awayTacticsCooldownMinutes: number;
+  /** Cards, injuries and substitutions can change rosters without a phase
+   *  change, so deltas carry the authoritative current roster lists. */
+  homeOn: LivePlayerView[];
+  awayOn: LivePlayerView[];
+  homeBench: LivePlayerView[];
+  awayBench: LivePlayerView[];
+  usedSubs: [number, number];
   /** Full missing-player snapshot each delta so the pitch stays correct
-   *  between full-state pushes (deltas carry no roster lists). */
+   *  between full-state pushes. */
   missingPlayers: LiveMissingPlayerView[];
   ball: LiveBallView;
 }
@@ -218,6 +291,29 @@ export function viewerFieldsFor(world: World, st: LiveMatchState, viewerUserId?:
   return {
     humanSide: humanClubId !== null ? (st.homeClubId === humanClubId ? 0 : 1) : 1,
     isParticipant: humanClubId !== null && (st.homeClubId === humanClubId || st.awayClubId === humanClubId),
+  };
+}
+
+function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Player>, id: number): LivePlayerView | null {
+  const p = byId.get(id);
+  if (!p) return null;
+  const gameDay = world.mp.absoluteGameDay ?? world.dayIndex;
+  return {
+    id: p.id,
+    name: p.name,
+    displayName: displayName(p),
+    nickname: p.nickname ?? null,
+    position: p.position,
+    tacPos: p.tacPos,
+    number: p.squadNumber ?? null,
+    overall: p.overall,
+    energy: st.playerEnergy?.[p.id] ?? p.energy,
+    injuryDays: injuryDaysRemaining(p, gameDay),
+    injuryDaysRemaining: injuryDaysRemaining(p, gameDay),
+    injuryCause: p.injuryCause ?? null,
+    injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+    conditionLabel: conditionLabel(p, gameDay),
+    suspended: p.suspendedGames > 0,
   };
 }
 
@@ -311,6 +407,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
       : null,
     stats: st.stats,
     events,
+    scores: liveRatingsView(world, st, byId),
     homeOn: toPlayers(st.homeOn),
     awayOn: toPlayers(st.awayOn),
     homeBench: toPlayers(st.homeSubs),
@@ -490,7 +587,11 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     ...(e.addedTime !== undefined ? { addedTime: e.addedTime } : {}),
     ...(e.type === EVENT_CODES.INJURY ? { goalType: e.goalType } : {}),
   }));
+  const toPlayers = (ids: number[]): LivePlayerView[] => ids
+    .map((id) => livePlayerView(world, st, byId, id))
+    .filter((p): p is LivePlayerView => !!p);
   const { progressPct, currentAddedTime } = clockProgress(st);
+  const scores = liveRatingsView(world, st, byId);
   return {
     matchId: st.matchId,
     minute: st.minute,
@@ -500,11 +601,17 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     awayScore: st.scores[1],
     stats: st.stats,
     newEvents,
+    scores,
     automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
     progressPct,
     currentAddedTime,
     homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),
     awayTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 1),
+    homeOn: toPlayers(st.homeOn),
+    awayOn: toPlayers(st.awayOn),
+    homeBench: toPlayers(st.homeSubs),
+    awayBench: toPlayers(st.awaySubs),
+    usedSubs: st.usedSubs,
     missingPlayers: missingPlayersView(st, byId),
     ball: ballView(st),
   };

@@ -155,6 +155,8 @@ model Save {
   marketReservations MarketReservation[]
   playerMarketTransactions PlayerMarketTransaction[]
   playerSeasonHistories PlayerSeasonHistory[]
+  playerMatchRatings PlayerMatchRating[]
+  roleCalibrations RoleCalibration[]
   gameClock       GameClock?
   scheduledEvents ScheduledEvent[]
   schedulerAudits AdminSchedulerAudit[]
@@ -356,6 +358,11 @@ model Player {
   careerAssists   Int
   seasonGoals     Int
   seasonAssists   Int
+  // Matches in which the player was named MVP (best performer on the winning
+  // team). careerMvps is a lifetime counter; seasonMvps resets at season
+  // rollover like the other season counters.
+  careerMvps      Int      @default(0)
+  seasonMvps      Int      @default(0)
   // League matches this season with at least one minute on the pitch.
   seasonAppearances Int @default(0)
   yellows         Int
@@ -512,6 +519,8 @@ model Match {
   homeWasHuman     Boolean  @default(false)
   awayWasHuman     Boolean  @default(false)
   eloProcessed     Boolean  @default(false)
+  // Player named MVP of the match (computed at finalization; null = not set).
+  mvpPlayerId      Int?
 
   @@id([saveId, id])
   @@index([saveId])
@@ -1033,10 +1042,68 @@ model PlayerSeasonHistory {
   yellows    Int
   reds       Int
   minutes    Int
+  // Season MVP count snapshot (matches named MVP that season).
+  mvps       Int      @default(0)
+  // End-of-season snapshot for the player-trend charts (evolution of overall
+  // and market value across seasons). Nullable: rows predating this field have
+  // no snapshot, and the world is reset on rollout so no backfill is needed.
+  overall    Int?
+  value      Int?
   createdAt  DateTime @default(now())
 
   @@unique([saveId, playerId, seasonId])
   @@index([saveId, playerId])
+  @@index([saveId, seasonId])
+}
+
+// Player match performance ratings (plan §16). Save-scoped, written at match
+// finalization from the live rating accumulator; match-time facts (club, tier,
+// season) are frozen so transfers never rewrite history.
+model PlayerMatchRating {
+  id                Int      @id @default(autoincrement())
+  saveId            Int
+  save              Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  matchId           Int
+  playerId          Int
+  clubId            Int
+  seasonId          Int
+
+  tier              Int
+  primaryRole       String
+  minutesPlayed     Int
+
+  rawImpact         Float
+  rawVariance       Float
+  rawZ              Float
+  balancedZ         Float
+  ratingExact       Float?
+
+  shootingImpact    Float
+  passingImpact     Float
+  dribblingImpact   Float
+  defendingImpact   Float
+  goalkeepingImpact Float
+
+  createdAt         DateTime @default(now())
+
+  @@unique([saveId, matchId, playerId])
+  @@index([saveId, playerId, createdAt])
+  @@index([saveId, playerId, seasonId])
+  @@index([saveId, seasonId, primaryRole])
+}
+
+// Season-frozen positional calibration snapshot (plan §10). One row per coarse
+// role, holding the historical Z_raw distribution used for the
+// empirical-percentile Gaussianization during that season.
+model RoleCalibration {
+  id                Int    @id @default(autoincrement())
+  saveId            Int
+  save              Save   @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  seasonId          Int
+  role              String
+  zRawsJson         String
+
+  @@unique([saveId, seasonId, role])
   @@index([saveId, seasonId])
 }
 

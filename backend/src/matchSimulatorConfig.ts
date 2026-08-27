@@ -289,7 +289,7 @@ const aiPregameTacticsSchema = z.object({
   counterFinishingWeight: nonNegativeNumber,
   pressingVeryHeavyPhysicalMin: z.number().min(0).max(100),
   pressingHeavyPhysicalMin: z.number().min(0).max(100),
-  /** Very Heavy pressing additionally requires this mean squad energy. */
+  /** Heavy pressing additionally requires this mean squad energy. */
   pressingEnergyReserveMin: z.number().min(0).max(100),
   /** Wide slots must beat central slots by this many tactical-rating points to play down the wings. */
   wideDirectionAdvantageMin: nonNegativeNumber,

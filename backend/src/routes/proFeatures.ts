@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld } from "../services/saveService";
 import { withGlobalLock } from "../services/lock";
-import { hasPro } from "../services/pro";
+import { hasPro, canViewPlayerPerformance } from "../services/pro";
 import { AUTOMATION_CONFIG, LOGO_CONFIG } from "../config";
 import { presetsSchema, validatePresetQuotas } from "../game/automation";
 import { validateNickname, normalizeNickname, nicknameSchema } from "../game/nickname";
@@ -12,8 +12,10 @@ import { displayName } from "../game/displayName";
 import { StaleWorldError } from "../services/saveService";
 import { publishUserWorldEvent } from "../services/worldEvents";
 import { injuryDaysRemaining } from "../game/energyInjury";
+import { EVENT_CODES, GOAL_SUBTYPES } from "../game/constants";
 import { liveMatchStatDeltas, playerView } from "../services/snapshot";
 import { matchNotificationKey } from "../services/notifications";
+import { playerMatchScoreView } from "../services/playerPerformance";
 
 const nicknameBodySchema = z.object({
   nickname: z.string().nullable().optional(),
@@ -204,7 +206,8 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     // (the Player rows are only committed at full time). Include them so the
     // card reflects a goal the moment it happens.
     const liveDelta = liveMatchStatDeltas(worldLoaded.world).get(player.id) ?? null;
-    const isOwner = player.clubId !== null && worldLoaded.world.clubs.find((c) => c.id === player.clubId)?.ownerUserId === req.user!.id;
+    const viewerClub = worldLoaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
+    const isOwner = player.clubId !== null && player.clubId === viewerClub?.id;
     const pro = hasPro(req.user);
     let allowHistory = isOwner || pro;
     if (!allowHistory) {
@@ -214,6 +217,10 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
       if (activeAuction || activeFA) allowHistory = true;
     }
     const allowSkills = isOwner || pro;
+    const allowPerformance = canViewPlayerPerformance(req.user, player, {
+      viewerClubId: viewerClub?.id ?? null,
+      loans: worldLoaded.world.loans,
+    });
 
     // Past seasons (immutable write-once rows)
     const seasons = allowHistory ? await app.prisma.playerSeasonHistory.findMany({ where: { saveId: globalSave.id, playerId }, orderBy: { seasonId: "asc" } }) : [];
@@ -225,6 +232,23 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const matchIds = Array.from(new Set(events.map((e) => e.matchId)));
     const matches = matchIds.length > 0 ? await app.prisma.match.findMany({ where: { saveId: globalSave.id, id: { in: matchIds } } }) : [];
     const matchById = new Map(matches.map((m) => [m.id, m]));
+    const currentSeasonId = worldLoaded.world.mp.seasonId;
+    // Per-match performance ratings for the player (plan §16/§20): from the
+    // persisted rating rows, newest first. Matches are limited to the most
+    // recent 10 rated appearances.
+    const playerRatings = allowPerformance ? (worldLoaded.world.playerMatchRatings ?? [])
+      .filter((r) => r.playerId === playerId)
+      .sort((a, b) => b.matchId - a.matchId) : [];
+    const matchScores = playerRatings.slice(0, 10).map((r) => ({
+      ...playerMatchScoreView(worldLoaded.world, r),
+      currentSeason: r.seasonId === currentSeasonId,
+    }));
+    // Running average of the player's rated appearances this season, so the
+    // card can chart "Avg rating · this season" before the season ends.
+    const currentSeasonRatings = playerRatings.filter((r) => r.seasonId === currentSeasonId && r.ratingExact !== null);
+    const currentSeasonAvg = currentSeasonRatings.length > 0
+      ? currentSeasonRatings.reduce((sum, r) => sum + (r.ratingExact ?? 0), 0) / currentSeasonRatings.length
+      : null;
      const gameDay = worldLoaded.world.mp.absoluteGameDay ?? worldLoaded.world.dayIndex;
     const historyEvents = events.map((e) => {
       const m = matchById.get(e.matchId);
@@ -252,9 +276,66 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
 
     return {
        player: playerPayload,
-      seasons: seasons.map((s) => ({ seasonId: s.seasonId, seasonKey: s.seasonKey, clubId: s.clubId, clubName: s.clubName, appearances: s.appearances, goals: s.goals, assists: s.assists, yellows: s.yellows, reds: s.reds, minutes: s.minutes })),
+      seasons: seasons.map((s) => {
+        const seasonRated = playerRatings.filter((r) => r.seasonId === s.seasonId && r.ratingExact !== null);
+        const avgScore = seasonRated.length > 0 ? seasonRated.reduce((sum, r) => sum + (r.ratingExact ?? 0), 0) / seasonRated.length : null;
+        return {
+          seasonId: s.seasonId, seasonKey: s.seasonKey, clubId: s.clubId, clubName: s.clubName,
+          appearances: s.appearances, goals: s.goals, assists: s.assists, yellows: s.yellows, reds: s.reds,
+          minutes: s.minutes, overall: s.overall, value: s.value, mvps: s.mvps ?? 0,
+          // Average performance rating for the player's rated appearances in
+          // that season (plan §21); null when none were rated.
+          avgScore,
+        };
+      }),
       transfers: transfers.map((t) => ({ id: t.id, type: t.type, fromClubId: t.fromClubId, toClubId: t.toClubId, price: t.price, seasonKey: t.seasonKey, contractSeasons: t.contractSeasons, contractSalary: t.contractSalary, timestamp: Number(t.timestamp) })),
       matches: historyEvents,
+      matchScores,
+      currentSeasonAvg: allowPerformance ? currentSeasonAvg : null,
+    };
+  });
+
+  // ---- Player performance ratings (plan §24/§25) ----------------------------
+  app.get("/players/:id/performance", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const playerId = Number((req.params as { id: string }).id);
+    if (!Number.isFinite(playerId)) return reply.code(400).send({ error: "Invalid player id" });
+    const globalSave = await app.prisma.save.findFirst({ where: { isGlobal: true } });
+    if (!globalSave) return reply.code(500).send({ error: "World unavailable" });
+    const worldLoaded = await loadGlobalWorldReadOnly(app.prisma);
+    if (!worldLoaded) return reply.code(500).send({ error: "World unavailable" });
+    const world = worldLoaded.world;
+    const player = world.players.find((p) => p.id === playerId);
+    if (!player) return reply.code(404).send({ error: "Player not found" });
+    const viewerClub = world.clubs.find((c) => c.ownerUserId === req.user!.id);
+    const allowed = canViewPlayerPerformance(req.user, player, {
+      viewerClubId: viewerClub?.id ?? null,
+      loans: world.loans,
+    });
+    if (!allowed) return reply.code(403).send({ error: "Performance ratings are a Pro feature for other clubs' players" });
+
+    const ratings = (world.playerMatchRatings ?? []).filter((r) => r.playerId === playerId).sort((a, b) => b.matchId - a.matchId);
+    const last10Games = ratings.slice(0, 10).map((r) => ({
+      ...playerMatchScoreView(world, r),
+      clubId: r.clubId,
+      tier: r.tier,
+      primaryRole: r.primaryRole,
+    }));
+    // Last 10 seasons (current + previous 9 by seasonId).
+    const seasonIds = Array.from(new Set(ratings.map((r) => r.seasonId))).sort((a, b) => b - a).slice(0, 10);
+    const last10Seasons = seasonIds.map((seasonId) => {
+      const seasonRatings = ratings.filter((r) => r.seasonId === seasonId && r.ratingExact !== null);
+      const avg = seasonRatings.length > 0 ? seasonRatings.reduce((s, r) => s + (r.ratingExact ?? 0), 0) / seasonRatings.length : null;
+      return { seasonId, appearances: seasonRatings.length, average: avg };
+    });
+    const currentSeasonId = world.mp.seasonId;
+    const currentRated = ratings.filter((r) => r.seasonId === currentSeasonId && r.ratingExact !== null);
+    const currentAverage = currentRated.length > 0 ? currentRated.reduce((s, r) => s + (r.ratingExact ?? 0), 0) / currentRated.length : null;
+    return {
+      last10Games,
+      last10Seasons,
+      currentAverage,
     };
   });
 
@@ -314,9 +395,22 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
         injuryDaysRemaining: injuryDaysRemaining(player, worldLoaded.world.mp.absoluteGameDay ?? worldLoaded.world.dayIndex),
         injuryCause: player.injuryCause ?? null,
       },
-      seasons: seasons.map((s) => ({ seasonId: s.seasonId, seasonKey: s.seasonKey, clubId: s.clubId, clubName: s.clubName, appearances: s.appearances, goals: s.goals, assists: s.assists, yellows: s.yellows, reds: s.reds, minutes: s.minutes })),
+      seasons: seasons.map((s) => {
+        const seasonRated = (worldLoaded.world.playerMatchRatings ?? []).filter((r) => r.playerId === playerId && r.seasonId === s.seasonId && r.ratingExact !== null);
+        const avgScore = seasonRated.length > 0 ? seasonRated.reduce((sum, r) => sum + (r.ratingExact ?? 0), 0) / seasonRated.length : null;
+        return { seasonId: s.seasonId, seasonKey: s.seasonKey, clubId: s.clubId, clubName: s.clubName, appearances: s.appearances, goals: s.goals, assists: s.assists, yellows: s.yellows, reds: s.reds, minutes: s.minutes, overall: s.overall, value: s.value, mvps: s.mvps ?? 0, avgScore };
+      }),
       transfers: transfers.map((t) => ({ id: t.id, type: t.type, fromClubId: t.fromClubId, toClubId: t.toClubId, price: t.price, seasonKey: t.seasonKey, contractSeasons: t.contractSeasons, contractSalary: t.contractSalary, timestamp: Number(t.timestamp) })),
       matches: historyEvents,
+      matchScores: (worldLoaded.world.playerMatchRatings ?? [])
+        .filter((r) => r.playerId === playerId && r.seasonId === worldLoaded.world.mp.seasonId)
+        .sort((a, b) => b.matchId - a.matchId)
+        .slice(0, 10)
+        .map((r) => ({ ...playerMatchScoreView(worldLoaded.world, r), currentSeason: true })),
+      currentSeasonAvg: (() => {
+        const rated = (worldLoaded.world.playerMatchRatings ?? []).filter((r) => r.playerId === playerId && r.seasonId === worldLoaded.world.mp.seasonId && r.ratingExact !== null);
+        return rated.length > 0 ? rated.reduce((sum, r) => sum + (r.ratingExact ?? 0), 0) / rated.length : null;
+      })(),
     };
   });
 

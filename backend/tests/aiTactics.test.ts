@@ -147,7 +147,7 @@ describe("chooseAiTactics", () => {
     chooseAiTactics(heavy, heavySquad);
     chooseAiTactics(light, lightSquad);
     expect(heavy.tactics.pressing).toBeGreaterThan(light.tactics.pressing);
-    expect(heavy.tactics.pressing).toBe(2); // Very Heavy: physical + fresh
+    expect(heavy.tactics.pressing).toBe(2); // Heavy: physical + fresh
     expect(light.tactics.pressing).toBe(0); // Light
   });
 

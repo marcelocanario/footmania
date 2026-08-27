@@ -18,6 +18,7 @@ const EVENT_LABELS: Record<number, string> = {
   16: "Off the post!",
   17: "Shot off target",
   18: "Shot blocked",
+  19: "Man of the match",
 };
 
 function EventIcon({ type, subtype }: { type: number; subtype: number }) {
@@ -39,6 +40,7 @@ function EventIcon({ type, subtype }: { type: number; subtype: number }) {
   else if (type === 16) { cls = "event-ico event-detail"; glyph = "💥"; }
   else if (type === 17) { cls = "event-ico event-detail"; glyph = "↗"; }
   else if (type === 18) { cls = "event-ico event-detail"; glyph = "🛡️"; }
+  else if (type === 19) { cls = "event-ico event-mvp"; glyph = "🏆"; }
   return <span className={cls}>{glyph}</span>;
 }
 
@@ -116,6 +118,8 @@ export function MatchHistory({
               <><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">saved shot by</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 18 && event.player2 ? (
               <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">blocked by</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
+            ) : event.type === 19 ? (
+              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             ) : (
               <><span className="ev-label">{EVENT_LABELS[event.type] ?? "Event"}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             )}

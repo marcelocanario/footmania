@@ -6,6 +6,8 @@
 export interface TacticOption {
   label: string;
   value: number;
+  /** Short one-line explanation shown under the label in dropdown menus. */
+  desc?: string;
 }
 
 export const FORMATIONS: TacticOption[] = [
@@ -25,20 +27,20 @@ export const FORMATIONS: TacticOption[] = [
 ];
 
 export const STYLES: TacticOption[] = [
-  { label: "Balanced", value: 0 },
-  { label: "Total Attack", value: 1 },
-  { label: "Counter-attack", value: 2 },
+  { label: "Balanced", value: 0, desc: "No strong lean either way: safe, lower-risk actions with balanced execution." },
+  { label: "Offensive", value: 1, desc: "Press and attack aggressively — more pressure on the opponent, at the cost of more risk." },
+  { label: "Counter-attack", value: 2, desc: "Sit back and strike quickly when transitioning from defense to attack." },
 ];
 
 export const PRESSING: TacticOption[] = [
-  { label: "Light", value: 0 },
-  { label: "Heavy", value: 1 },
-  { label: "Very Heavy", value: 2 },
+  { label: "Light", value: 0, desc: "Minimal pressing. Conserves energy and reduces foul risk." },
+  { label: "Balanced", value: 1, desc: "Moderate pressing: a middle ground between pressure and fatigue." },
+  { label: "Heavy", value: 2, desc: "Maximum press intensity. Forces more mistakes, but tires players faster and risks more fouls." },
 ];
 
 export const DIRECTIONS: TacticOption[] = [
-  { label: "Through the middle", value: 0 },
-  { label: "Down the wings", value: 1 },
+  { label: "Through the middle", value: 0, desc: "Focus attacks through the center of the pitch." },
+  { label: "Down the wings", value: 1, desc: "Focus attacks down the flanks, stretching the opponent's shape." },
 ];
 
 export function formationLabel(value: number): string {

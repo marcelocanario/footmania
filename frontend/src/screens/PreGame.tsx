@@ -195,18 +195,21 @@ export function PreGame() {
             <select id="pregame-style" className="select" value={tactics.style} disabled={tacticsBusy} onChange={(e) => setTactics({ ...tactics, style: Number(e.target.value) })}>
               {STYLES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{STYLES[tactics.style]?.desc}</div>
           </div>
           <div className="form-group">
             <label htmlFor="pregame-press">{strings.squad.pressing}</label>
             <select id="pregame-press" className="select" value={tactics.pressing} disabled={tacticsBusy} onChange={(e) => setTactics({ ...tactics, pressing: Number(e.target.value) })}>
               {PRESSING.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{PRESSING[tactics.pressing]?.desc}</div>
           </div>
           <div className="form-group">
             <label htmlFor="pregame-dir">{strings.squad.direction}</label>
             <select id="pregame-dir" className="select" value={tactics.direction} disabled={tacticsBusy} onChange={(e) => setTactics({ ...tactics, direction: Number(e.target.value) })}>
               {DIRECTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{DIRECTIONS[tactics.direction]?.desc}</div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button className="btn" onClick={() => void saveTactics()} disabled={tacticsBusy} style={{ flex: 1 }}>

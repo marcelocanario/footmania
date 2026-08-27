@@ -15,7 +15,6 @@ import {
   placeLiveBall,
   resolveColumnCollisions,
   shotHasOwnCue,
-  slotPointsFor,
   teamPitchPoints,
   turnoverIntent,
   type IntentLine,
@@ -173,41 +172,6 @@ const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighte
   );
 });
 
-const MISSING_COPY: Record<LiveMissingPlayer["kind"], string> = {
-  RED: "Sent off",
-  INJURY: "Injured · no substitution left",
-};
-
-/** Ghost marker for a vacated tactical slot: dimmed jersey with a persistent
- *  cause badge (🟥 red card / ✚ injury), so short-handed teams read at a
- *  glance. */
-const MissingMarker = memo(function MissingMarker({ missing, point, kit, onPlayerClick }: { missing: LiveMissingPlayer; point: PitchPoint; kit: PitchTeam["kit"]; onPlayerClick?: (id: number, name: string) => void }) {
-  const style = {
-    left: `${point.x}%`,
-    top: `${point.y}%`,
-    "--kit": kit.primary,
-    "--kit-2": kit.secondary,
-  } as CSSProperties;
-  return (
-    <button
-      type="button"
-      className="pitch-player pitch-missing"
-      style={style}
-      aria-label={`${missing.number != null ? `${missing.number} ${missing.name}, ` : `${missing.name}, `}${MISSING_COPY[missing.kind]}`}
-      title={`${missing.number != null ? `${missing.number} · ` : ""}${missing.name} · ${MISSING_COPY[missing.kind]}`}
-      onClick={() => onPlayerClick?.(missing.playerId, missing.name)}
-    >
-      <span className="pitch-player-kit" aria-hidden="true">
-        <FootballKit {...kit} number={missing.number ?? ""} size="100%" flat />
-      </span>
-      <span className={`pitch-missing-badge pitch-missing-${missing.kind === "RED" ? "red" : "injury"}`} aria-hidden="true">
-        {missing.kind === "RED" ? "🟥" : "✚"}
-      </span>
-      <span className="pitch-player-name">{missing.name}</span>
-    </button>
-  );
-});
-
 const CueOverlay = memo(function CueOverlay({ cue, active, reducedMotion }: { cue: PitchCue; active: boolean; reducedMotion: boolean }) {
   const { actorPoint, targetPoint } = cue;
   const activeClass = reducedMotion ? " pitch-cue-reduced" : "";
@@ -280,30 +244,27 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     return () => query.removeEventListener("change", onChange);
   }, []);
 
-  const players = useMemo(() => [...home.players, ...away.players], [home.players, away.players]);
+  // A delta can arrive just before a full roster refresh. Missing-player IDs
+  // are still authoritative, so never draw a stale dismissed/injured marker.
+  const missingIds = useMemo(() => new Set(missing.map((entry) => entry.playerId)), [missing]);
+  const homePitchPlayers = useMemo(() => home.players.filter((player) => !missingIds.has(player.id)), [home.players, missingIds]);
+  const awayPitchPlayers = useMemo(() => away.players.filter((player) => !missingIds.has(player.id)), [away.players, missingIds]);
+  const players = useMemo(() => [...homePitchPlayers, ...awayPitchPlayers], [homePitchPlayers, awayPitchPlayers]);
   // Computed together (not as two independent memos) because two
   // independently-authored formations can otherwise place a home line and a
   // mirrored away line at nearly the same x purely by coincidence, rendering
   // both teams' markers on top of each other — resolveColumnCollisions nudges
   // any such pair apart, so it needs both sides' points at once.
   const { homePoints, awayPoints } = useMemo(() => {
-    const home_ = teamPitchPoints(home.players, "home", home.formationId);
-    const away_ = teamPitchPoints(away.players, "away", away.formationId);
+    const home_ = teamPitchPoints(homePitchPlayers, "home", home.formationId);
+    const away_ = teamPitchPoints(awayPitchPlayers, "away", away.formationId);
     resolveColumnCollisions(home_, away_);
     return { homePoints: home_, awayPoints: away_ };
-  }, [home.players, home.formationId, away.players, away.formationId]);
-  // Missing-player ghosts: red cards and unreplaced injuries leave vacated
-  // tactical slots; each marker sits where the player used to stand.
+  }, [homePitchPlayers, home.formationId, awayPitchPlayers, away.formationId]);
+  // Keep the short-handed status in the team header without drawing a marker
+  // for a player who has left the pitch.
   const homeMissing = useMemo(() => missing.filter((entry) => entry.side === 0), [missing]);
   const awayMissing = useMemo(() => missing.filter((entry) => entry.side === 1), [missing]);
-  const homeMissingPoints = useMemo(
-    () => slotPointsFor(homeMissing.map((entry) => entry.tacPos), "home", home.formationId),
-    [homeMissing, home.formationId]
-  );
-  const awayMissingPoints = useMemo(
-    () => slotPointsFor(awayMissing.map((entry) => entry.tacPos), "away", away.formationId),
-    [awayMissing, away.formationId]
-  );
   const shortSuffix = (sideMissing: LiveMissingPlayer[]) => {
     if (sideMissing.length === 0) return "";
     const icons = sideMissing.map((entry) => (entry.kind === "RED" ? "🟥" : "✚")).join("");
@@ -311,11 +272,11 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   };
   useEffect(() => {
     for (const player of players) {
-      const side: PitchSide = home.players.some((p) => p.id === player.id) ? "home" : "away";
+      const side: PitchSide = homePitchPlayers.some((p) => p.id === player.id) ? "home" : "away";
       const points = side === "home" ? homePoints : awayPoints;
       rememberedRef.current.set(player.id, points.get(player.id) ?? { x: 50, y: 50 });
     }
-  }, [players, home.players, homePoints, awayPoints]);
+  }, [players, homePitchPlayers, homePoints, awayPoints]);
 
   // Boundary events (half-time, full-time, coin toss, shootout announcement)
   // have no pitch cue at all — queuing them anyway would occupy the "one cue
@@ -338,10 +299,10 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
       return { idle: true as const, carrierId: null, point: BALL_CENTER_POINT };
     }
     const homePossesses = ball.side === 0;
-    const players = homePossesses ? home.players : away.players;
+    const players = homePossesses ? homePitchPlayers : awayPitchPlayers;
     const points = homePossesses ? homePoints : awayPoints;
     return { idle: false as const, side: (homePossesses ? "home" : "away") as PitchSide, ...placeLiveBall(ball, players, points) };
-  }, [ball, phase, home.players, away.players, homePoints, awayPoints]);
+  }, [ball, phase, homePitchPlayers, awayPitchPlayers, homePoints, awayPoints]);
 
   const lastBallPointRef = useRef<PitchPoint | null>(null);
   const trailSeqRef = useRef(0);
@@ -634,7 +595,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     const attemptedAction = action?.action ?? ball?.lastAction;
     const attemptedZone = action?.fromZone ?? ball?.prevZone;
     if (prevMeta && attemptedAction && attemptedZone && prevMeta.side !== ballSide) {
-      const lostPlayers = prevMeta.side === "home" ? home.players : away.players;
+      const lostPlayers = prevMeta.side === "home" ? homePitchPlayers : awayPitchPlayers;
       const lostPoints = prevMeta.side === "home" ? homePoints : awayPoints;
       intent = turnoverIntent(prev, attemptedZone, prevMeta.side, lostPlayers, lostPoints, action?.targetPlayerId ?? null);
       intentColor = prevMeta.side === "home" ? home.kit.primary : away.kit.primary;
@@ -651,7 +612,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
     }
     trailSeqRef.current += 1;
     setTrail({ from: prev, to: liveBall.point, key: trailSeqRef.current, intent, style, control, intentColor, solidColor });
-  }, [seq, liveBall, motionReduced, shotCueActive, ball, home.players, away.players, homePoints, awayPoints, home.kit.primary, away.kit.primary]);
+  }, [seq, liveBall, motionReduced, shotCueActive, ball, homePitchPlayers, awayPitchPlayers, homePoints, awayPoints, home.kit.primary, away.kit.primary]);
 
   useEffect(() => {
     if (!foulPing) return;
@@ -719,10 +680,10 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   const secondaryId = cueActive && cue ? cue.event.player2Id : null;
   // Short-circuit to null up front while no cue is active: these four scans
   // only ever matter while a cue is playing.
-  const homeHighlighted = !cueActive ? null : actorId != null && home.players.some((player) => player.id === actorId) ? actorId : null;
-  const awayHighlighted = !cueActive ? null : actorId != null && away.players.some((player) => player.id === actorId) ? actorId : null;
-  const homeSecondaryHighlighted = !cueActive ? null : secondaryId != null && home.players.some((player) => player.id === secondaryId) ? secondaryId : null;
-  const awaySecondaryHighlighted = !cueActive ? null : secondaryId != null && away.players.some((player) => player.id === secondaryId) ? secondaryId : null;
+  const homeHighlighted = !cueActive ? null : actorId != null && homePitchPlayers.some((player) => player.id === actorId) ? actorId : null;
+  const awayHighlighted = !cueActive ? null : actorId != null && awayPitchPlayers.some((player) => player.id === actorId) ? actorId : null;
+  const homeSecondaryHighlighted = !cueActive ? null : secondaryId != null && homePitchPlayers.some((player) => player.id === secondaryId) ? secondaryId : null;
+  const awaySecondaryHighlighted = !cueActive ? null : secondaryId != null && awayPitchPlayers.some((player) => player.id === secondaryId) ? secondaryId : null;
   // The scripted sequence owns the ⚽ while it plays; otherwise the possession
   // ball renders normally (hidden under goal/miss cues which animate their own).
   const showLiveBall = (!!liveBall && !overlayBallActive) || !!seq;
@@ -827,10 +788,8 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
         )}
         {cueActive && cue && <CueOverlay cue={cue} active={cueActive} reducedMotion={motionReduced} />}
         <div className="pitch-players">
-          {home.players.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
-          {away.players.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
-          {homeMissing.map((entry) => <MissingMarker key={`home-missing-${entry.playerId}`} missing={entry} point={homeMissingPoints.get(entry.tacPos) ?? { x: 50, y: 50 }} kit={entry.tacPos === 1 ? home.gkKit : home.kit} onPlayerClick={onPlayerClick} />)}
-          {awayMissing.map((entry) => <MissingMarker key={`away-missing-${entry.playerId}`} missing={entry} point={awayMissingPoints.get(entry.tacPos) ?? { x: 50, y: 50 }} kit={entry.tacPos === 1 ? away.gkKit : away.kit} onPlayerClick={onPlayerClick} />)}
+          {homePitchPlayers.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
+          {awayPitchPlayers.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
         </div>
         {cue && activeEvent && BANNER_KINDS.has(cue.kind) && <div className="pitch-event-banner"><b>{EVENT_COPY[cue.kind]}</b><span>{cue.event.player || cue.event.player2}</span></div>}
       </div>

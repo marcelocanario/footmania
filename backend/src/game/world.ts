@@ -12,6 +12,8 @@ import { gameConfig, MP_CONFIG } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { syncClubSeasons } from "./multiplayer";
 import { applyMatchElo } from "./elo";
+import { computeMatchRatingRows, mvpFromRatings } from "./matchRatings";
+import { EVENT_CODES } from "./constants";
 import { processAutomation } from "./automation";
 import { applyMatchFamiliarity } from "./familiarity";
 
@@ -250,11 +252,41 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   const live = world.liveMatches.find((x) => x.matchId === st.matchId);
   const match = live ? buildMatchFromState(live, home, away, world.players) : null;
   if (!match) return null;
+  const comp = fixture ? findCompetition(world, fixture.competitionId) : undefined;
+  const tier = comp?.tier ?? 1;
+  const seasonId = world.mp.seasonId;
+  // Post-final-whistle ratings (plan §16/§18): compute durable rows from the
+  // live accumulator, applying the season-frozen calibration. Then the MVP is
+  // the highest-rated player on the winning team (user directive).
+  const ratingRows = computeMatchRatingRows({
+    match,
+    seasonId,
+    tier,
+    calibration: calibrationFor(world, seasonId),
+    accum: st.ratingAccum,
+    players: world.players,
+  });
+  world.playerMatchRatings ??= [];
+  // Idempotent: replace any prior rows for this match.
+  world.playerMatchRatings = [...world.playerMatchRatings.filter((r) => r.matchId !== match.id), ...ratingRows];
+  const mvp = mvpFromRatings(ratingRows, match);
+  if (mvp && !match.events.some((e) => e.type === EVENT_CODES.MVP)) {
+    match.events.push({
+      minute: 90,
+      half: 2,
+      type: EVENT_CODES.MVP,
+      subtype: 0,
+      clubId: mvp.clubId,
+      playerId: mvp.playerId,
+      player2Id: null,
+      goalType: 0,
+    });
+  }
+  if (mvp) match.mvpPlayerId = mvp.playerId;
   const existing = world.matches.find((m) => m.id === st.matchId);
   match.homeWasHuman = existing?.homeWasHuman ?? home.ownerUserId !== null;
   match.awayWasHuman = existing?.awayWasHuman ?? away.ownerUserId !== null;
   match.eloProcessed = existing?.eloProcessed ?? false;
-  const comp = fixture ? findCompetition(world, fixture.competitionId) : undefined;
 
   if (existing) Object.assign(existing, match, { id: st.matchId });
   else world.matches.push(match);
@@ -284,6 +316,15 @@ export function finalizeLiveMatch(world: World, st: LiveMatchState): Match | nul
   world.liveMatches = world.liveMatches.filter((x) => x.matchId !== st.matchId);
   for (const club of [home, away]) club.liveMatchAt = null;
   return match;
+}
+
+/** Season-frozen calibration map for ratings (plan §10). */
+function calibrationFor(world: World, seasonId: number): Record<string, import("./types").RoleCalibrationEntry> | undefined {
+  const cal = (world.roleCalibrations ?? []).filter((c) => c.seasonId === seasonId);
+  if (cal.length === 0) return undefined;
+  const out: Record<string, import("./types").RoleCalibrationEntry> = {};
+  for (const c of cal) out[c.role] = c;
+  return out;
 }
 
 export function roundLabelFor(competition: Competition, round: number): string {

@@ -118,6 +118,8 @@ export function playerView(
     seasonAssists: assists,
     careerGoals,
     careerAssists,
+    seasonMvps: p.seasonMvps ?? 0,
+    careerMvps: p.careerMvps ?? 0,
     yellows: p.yellows,
     reds: p.reds,
     turnYellows: p.turnYellows ?? 0,

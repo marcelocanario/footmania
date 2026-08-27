@@ -25,6 +25,9 @@ import {
 } from "./familiarity";
 import { currentSkillsVersion } from "./skillsVersion";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { buildRoleBenchmarks, type RoleBenchmarks } from "./player-rating";
+import { createRatingObserver, type RatingObserver } from "./ratingObserver";
+import { tacPosRole } from "./matchSim";
 
 // ---------------------------------------------------------------------------
 // Public match-engine facade (plans/6. match-simulator-overhaul.md).
@@ -357,6 +360,54 @@ export interface LiveTickResult {
   atHalfTime: boolean;
 }
 
+/** Build the rating observer for a match (plan §17). Same-role benchmarks are
+ *  computed once per match from the world's senior population; the observer
+ *  accumulates into st.ratingAccum (persisted across streamed ticks). When the
+ *  world has no ratings enabled this returns null (engine stays byte-identical). */
+export function ratingObserverFor(st: LiveMatchState, allPlayers: Player[]): RatingObserver | null {
+  if (!allPlayers || allPlayers.length === 0) return null;
+  const byId = new Map(allPlayers.map((p) => [p.id, p]));
+  // Roles are derived from the LIVE lineup (st.homeOn/st.awayOn) because the
+  // engine assigns tactical positions during setupMatch; the Player rows still
+  // carry tacPos -1 before kickoff. Fall back to the natural-position role for
+  // players not on the pitch (bench, or legacy states without an XI).
+  const liveTacPos = new Map<number, number>();
+  for (const ids of [st.homeOn, st.awayOn]) {
+    for (const id of ids) {
+      const p = byId.get(id);
+      if (p && p.tacPos >= 0) liveTacPos.set(id, p.tacPos);
+    }
+  }
+  const deployedRoleOf = (p: Player): string => {
+    const tac = liveTacPos.get(p.id) ?? (p.tacPos >= 0 ? p.tacPos : -1);
+    return tac >= 0 ? tacPosRole(tac) : tacPosRole(p.position === 0 ? 1 : 4);
+  };
+  // Freeze the same-role benchmarks at kickoff and persist the snapshot on the
+  // live state. Streamed ticks and server reloads reuse the SAME snapshot so
+  // ratings cannot drift when player data or tacPos assignments change
+  // mid-match.
+  let benchmarks = st.ratingBenchmarksJson ? (() => {
+    try {
+      return JSON.parse(st.ratingBenchmarksJson) as RoleBenchmarks;
+    } catch {
+      return null;
+    }
+  })() : null;
+  if (!benchmarks) {
+    benchmarks = buildRoleBenchmarks(allPlayers, deployedRoleOf);
+    st.ratingBenchmarksJson = JSON.stringify(benchmarks);
+  }
+  st.ratingAccum ??= {};
+  return createRatingObserver({
+    benchmarks,
+    fineRoleOf: (playerId) => {
+      const p = byId.get(playerId);
+      return p ? deployedRoleOf(p) : "CM";
+    },
+    base: st.ratingAccum,
+  });
+}
+
 // centersFor is called on every live-match tick (and once per instant
 // simulation) with the same `world.players` array reference across an entire
 // advanceLiveMatches() batch. Every mutation site that changes a skill
@@ -473,7 +524,8 @@ export function tickLiveMatch(
   const rawFirst = MS.timing.firstHalfEndSeconds;
   const pauseAtHalftime = atPeriod1 && !opts?.ignoreHalfTime && !opts?.resume && target >= rawFirst;
 
-  advancePossessionMatch(rng, home, away, allPlayers, st, Math.max(0, (target - startClock) / 60), centers, { pauseAtHalftime });
+  const ratingObserver = ratingObserverFor(st, allPlayers);
+  advancePossessionMatch(rng, home, away, allPlayers, st, Math.max(0, (target - startClock) / 60), centers, { pauseAtHalftime, ...(ratingObserver ? { ratingObserver } : {}) });
   const newEvents = st.events.slice(beforeEvents);
   const finished = st.ended;
   const atHalfTime = isHalftime(st);
@@ -487,10 +539,10 @@ export function simulateMatch(
   home: Club,
   away: Club,
   allPlayers: Player[],
-  opts: { competitionId: number; fixtureId: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; collectDiagnostics?: boolean; absoluteGameDay?: number; roundsPerSeason?: number; matchSpacingDays?: number }
+  opts: { competitionId: number; fixtureId: number; matchId?: number; homeNeutral?: boolean; decider?: boolean; compKind?: "league" | "cup" | "state" | "division"; year?: number; collectDiagnostics?: boolean; absoluteGameDay?: number; roundsPerSeason?: number; matchSpacingDays?: number }
 ) {
   const st = createLiveMatchState(rng, home, away, allPlayers, {
-    matchId: opts.fixtureId,
+    matchId: opts.matchId ?? opts.fixtureId,
     competitionId: opts.competitionId,
     fixtureId: opts.fixtureId,
     homeNeutral: opts.homeNeutral,
@@ -514,7 +566,8 @@ export function simulateMatch(
     deadBallSeconds: 0,
     controlledBallSeconds: [0, 0] as [number, number],
   } : undefined;
-  simulatePossessionMatch(rng, home, away, allPlayers, st, centers, undefined, simulationDiagnostics);
+  const ratingObserver = ratingObserverFor(st, allPlayers);
+  simulatePossessionMatch(rng, home, away, allPlayers, st, centers, undefined, simulationDiagnostics, ratingObserver ?? undefined);
   applyLiveMatchEnergy(st, allPlayers);
   const match = buildMatchFromState(st, home, away, allPlayers);
   if (simulationDiagnostics) match.simulationDiagnostics = simulationDiagnostics;
@@ -555,6 +608,10 @@ export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, 
   const stats: MatchStats = st.teamStats
     ? { home: { ...st.teamStats.home }, away: { ...st.teamStats.away } }
     : st.stats;
+  const minutes = { ...st.playerMinutes };
+  // MVP is decided at finalization from the ratings (highest rating on the
+  // winning team) — never inside the replay-stable engine path, so instant and
+  // streamed digests stay byte-identical. mvpPlayerId is set by the caller.
   return {
     id: st.matchId,
     fixtureId: st.fixtureId,
@@ -569,7 +626,8 @@ export function buildMatchFromState(st: LiveMatchState, home: Club, away: Club, 
     stats,
     extraTime: st.extraTimePlayed,
     minuteEvents: [],
-    minutes: { ...st.playerMinutes },
+    minutes,
+    ratingAccum: st.ratingAccum,
   };
 }
 
@@ -782,6 +840,22 @@ export function applyMatchGoalsToPlayers(match: Match, players: Player[]): void 
       }
     }
   }
+  // MVP award: credited once per finalized match from the authoritative
+  // match-level mvpPlayerId. Post-match only; never consumed by the match
+  // engine. Shared by the live full-time commit (applyMatchToPlayers) and
+  // instant simulations (simulateMatch), exactly like the goal counters.
+  applyMatchMvpToPlayers(match.mvpPlayerId, players);
+}
+
+/** Credit an already-finalized MVP exactly once at the caller's match
+ * finalization boundary. Kept separate from goals so instant simulations can
+ * select the rating-based MVP after their goal effects have been applied. */
+export function applyMatchMvpToPlayers(mvpPlayerId: number | null | undefined, players: Player[]): void {
+  if (mvpPlayerId === null || mvpPlayerId === undefined) return;
+  const p = players.find((player) => player.id === mvpPlayerId);
+  if (!p) return;
+  p.careerMvps = (p.careerMvps ?? 0) + 1;
+  p.seasonMvps = (p.seasonMvps ?? 0) + 1;
 }
 
 /**

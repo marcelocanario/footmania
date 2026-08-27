@@ -2,6 +2,7 @@ import type { Club, LiveBallAction, LiveCardState, LiveInjuryState, LiveMatchSta
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
 import { nextDouble, nextInt, gamma } from "./rng";
 import { EVENT_CODES, GOAL_SUBTYPES } from "./constants";
+import type { RatingObserver, RatingDecisionInput } from "./ratingObserver";
 import { ENERGY_INJURY_MODEL, energyLoss, injuryRiskMultiplier, loadIncrement, physicalSkill, readiness, recordInjury } from "./energyInjury";
 import { gameConfig, MP_CONFIG } from "../config";
 import { tacticalSkillRating } from "./rating";
@@ -184,7 +185,7 @@ function weightedMean(values: number[], weights: number[]): number {
 // Role mapping + formation geometry
 // ---------------------------------------------------------------------------
 
-function tacPosRole(tacPos: number): string {
+export function tacPosRole(tacPos: number): string {
   if (tacPos === 1) return "GK";
   if (tacPos === 2) return "LB";
   if (tacPos === 9) return "RB";
@@ -216,7 +217,7 @@ export function engineDirection(direction: number): "CENTRE" | "WIDE" {
   return direction === 1 ? "WIDE" : "CENTRE";
 }
 export function enginePressing(pressing: number): number {
-  // Club.tactics.pressing is a 0-2 scale (Light/Heavy/Very Heavy). Normalize to
+  // Club.tactics.pressing is a 0-2 scale (Light/Balanced/Heavy). Normalize to
   // [0,1] so press intensity is meaningful; `pressing.intensityDivisor` in
   // config targets a 0-100 scale that the club model does not use.
   return Math.max(0, Math.min(1, pressing / 2));
@@ -257,6 +258,8 @@ interface Engine {
   st: LiveMatchState;
   home: Side;
   away: Side;
+  /** Read-only rating observer (plan §17); no-op when absent. */
+  ratingObserver?: RatingObserver;
   possessionSide: 0 | 1;
   phase: MatchPhase;
   zone: MatchZone;
@@ -324,6 +327,67 @@ function sideOf(eng: Engine, side: 0 | 1): Side {
 }
 function opp(eng: Engine, side: 0 | 1): Side {
   return side === 0 ? eng.away : eng.home;
+}
+
+/** Read-only snapshot of the engine context for the rating observer (plan
+ *  §5.2). Never mutates state and never consumes RNG. When `action` is given,
+ *  the engine's actual action-quality / defensive-resistance aggregates for
+ *  that action are captured so the observer's counterfactual re-derivation
+ *  has the correct non-substituted baseline. */
+function ratingContext(eng: Engine, action?: string): RatingDecisionInput {
+  const sideView = (s: Side): RatingDecisionInput["sides"]["home"] => {
+    const local = involvedPlayers(s, eng.zone);
+    const readiness = local.length > 0 ? weightedMean(local.map((l) => l.ps.readiness), local.map((l) => l.weight)) : 1;
+    return {
+      involved: local,
+      localDensity: localDensity(s, eng.zone),
+      supportRatio: (s.support[eng.zone] ?? 0) / Math.max(1e-6, s.expectedSupport[eng.zone] ?? 1),
+      coverageRatio: (s.coverage[eng.zone] ?? 0) / Math.max(1e-6, s.expectedSupport[eng.zone] ?? 1),
+      readinessMean: readiness,
+      organisation: s.organisation,
+      tactics: { style: s.tactics.style, pressing: s.tactics.pressing, direction: s.tactics.direction, familiarity: s.tactics.familiarity },
+      gk: s.on.find((ps) => ps.tacPos === 1),
+      ...(action ? { actionQuality: actionQualityFor(s, eng.zone, action), defensiveResistance: defensiveResistanceFor(s, eng.zone, action) } : {}),
+    };
+  };
+  return {
+    phase: eng.phase,
+    zone: eng.zone,
+    possessionSide: eng.possessionSide,
+    homeNeutral: eng.st.homeNeutral,
+    stateValue: stateValue(eng),
+    homeClubId: eng.home.club.id,
+    awayClubId: eng.away.club.id,
+    possessionThreat: possessionThreat(eng),
+    sides: { home: sideView(eng.home), away: sideView(eng.away) },
+  };
+}
+
+/** Emit a decision observation to the engine's rating observer (no-op when
+ *  absent). `probabilities` carries the engine's actual normalized vector. */
+function emitDecision(
+  eng: Engine,
+  kind: "control-failure" | "intent" | "outcome" | "next-zone" | "shot" | "cards",
+  probabilities: Record<string, number | string>,
+  resolved: string,
+  participants: number[],
+): void {
+  const action = kind === "outcome" || kind === "intent" || kind === "next-zone" ? (typeof probabilities.action === "string" ? probabilities.action : undefined) : undefined;
+  eng.ratingObserver?.onDecision(kind, ratingContext(eng, action), probabilities, resolved, participants);
+}
+
+/** Credit both sides' on-pitch players with `seconds` of rating time (plan
+ *  §12: rating minutes = on-pitch match time, including dead-ball restarts so
+ *  a full-match player accumulates the full match clock). Read-only. */
+function observeRatingSeconds(eng: Engine, seconds: number): void {
+  if (!eng.ratingObserver) return;
+  const perPlayer: Record<number, { seconds: number; fineRole: string }> = {};
+  for (const side of [eng.home, eng.away]) {
+    for (const ps of side.on) {
+      perPlayer[ps.id] = { seconds, fineRole: tacPosRole(ps.tacPos) };
+    }
+  }
+  eng.ratingObserver.onSeconds(perPlayer);
 }
 
 function phaseForZone(zone: MatchZone): MatchPhase {
@@ -794,12 +858,15 @@ function controlFailureStep(eng: Engine): FailureAction | null {
   const zOppPress = pressSignal(eng, def, eng.zone);
   const logitP = logit(controlFailureProbability) - INFLUENCE_SCALES.teamScale * zBallSecurity + INFLUENCE_SCALES.tacticsScale * zOppPress;
   const pFail = logistic(logitP);
-  if (nextDouble(eng.rng) < pFail) {
+  const failed = nextDouble(eng.rng) < pFail;
+  let failure: FailureAction | null = null;
+  if (failed) {
     const misU = Math.log(miscontrol);
     const dispU = Math.log(dispossessed);
-    return choice(eng.rng, ["MISCONTROL", "DISPOSSESSED"], [misU, dispU]) as FailureAction;
+    failure = choice(eng.rng, ["MISCONTROL", "DISPOSSESSED"], [misU, dispU]) as FailureAction;
   }
-  return null;
+  emitDecision(eng, "control-failure", { FAIL: pFail, KEEP: 1 - pFail }, failed ? "FAIL" : "KEEP", involvedPlayers(sideOf(eng, att), eng.zone).map((l) => l.ps.id));
+  return failure;
 }
 
 // ---------------------------------------------------------------------------
@@ -845,7 +912,13 @@ function selectIntentionalAction(eng: Engine): string {
     const cu = contextUtility(eng, action) + asymmetricActionUtility(eng, action);
     return utility(eng, baseLogP, zTeam, zTactics, cu);
   });
-  return choice(eng.rng, labels, utilities);
+  const chosen = choice(eng.rng, labels, utilities) as string;
+  const weights = utilities.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
+  const total = weights.reduce((s, w) => s + w, 0) || 1;
+  const probs: Record<string, number | string> = {};
+  labels.forEach((l, i) => { probs[l] = weights[i] / total; });
+  emitDecision(eng, "intent", probs, chosen, involvedPlayers(sideOf(eng, att), eng.zone).map((l) => l.ps.id));
+  return chosen;
 }
 
 /** Centered action-mix correction outside the neutral CONTROL/CONTROL matchup. */
@@ -944,7 +1017,18 @@ function resolveOutcome(eng: Engine, action: string): Outcome {
   const foulShift = foulContextShift(eng, def);
   const foulU = utility(eng, Math.log(base.foul), 0, 0, foulShift);
   const retainedU = utility(eng, Math.log(base.retainedRestart), 0, 0, 0);
-  return choice(eng.rng, ["CONTINUE", "TURNOVER", "FOUL", "RETAINED_RESTART"], [continueU, turnoverU, foulU, retainedU]) as Outcome;
+  const out = choice(eng.rng, ["CONTINUE", "TURNOVER", "FOUL", "RETAINED_RESTART"], [continueU, turnoverU, foulU, retainedU]) as Outcome;
+  const weights = [continueU, turnoverU, foulU, retainedU].map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
+  const total = weights.reduce((s, w) => s + w, 0) || 1;
+  const probs: Record<string, number | string> = {
+    CONTINUE: weights[0] / total,
+    TURNOVER: weights[1] / total,
+    FOUL: weights[2] / total,
+    RETAINED_RESTART: weights[3] / total,
+    action,
+  };
+  emitDecision(eng, "outcome", probs, out, [...involvedPlayers(sideOf(eng, att), eng.zone).map((l) => l.ps.id), ...involvedPlayers(def, eng.zone).map((l) => l.ps.id)]);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,7 +1095,14 @@ function pickNextZone(eng: Engine, action: string): MatchZone {
   const candidates = ZONES.filter((z) => (baseline[z] ?? 0) > 0);
   if (candidates.length === 0) return eng.zone;
   const utilities = candidates.map((z) => destinationUtility(eng, action, z));
-  return choice(eng.rng, candidates, utilities) as MatchZone;
+  const chosen = choice(eng.rng, candidates, utilities) as MatchZone;
+  const weights = utilities.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
+  const total = weights.reduce((s, w) => s + w, 0) || 1;
+  const probs: Record<string, number | string> = {};
+  candidates.forEach((z, i) => { probs[z] = weights[i] / total; });
+  probs.action = action;
+  emitDecision(eng, "next-zone", probs, chosen, involvedPlayers(sideOf(eng, eng.possessionSide), eng.zone).map((l) => l.ps.id));
+  return chosen;
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1409,27 @@ function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
     }
   }
 
+  // Rating observer: capture the shot's actual outcome probabilities (the
+  // engine's computed values, read-only; no RNG).
+  const onTargetShares = MS.shotModel.nonGoalOutcome.onTarget;
+  const offTargetShares = MS.shotModel.nonGoalOutcome.notOnTarget;
+  const blockP = pressured ? offTargetShares.blockUnderPressure : offTargetShares.blockNoPressure;
+  const shotProbs: Record<string, number | string> = {
+    GOAL: finalXgC,
+    SAVE: (1 - finalXgC) * pOnTarget * (onTargetShares.saveControlled + onTargetShares.saveRebound),
+    BLOCK: (1 - finalXgC) * (1 - pOnTarget) * blockP,
+    WOODWORK: (1 - finalXgC) * pOnTarget * onTargetShares.woodwork + (1 - finalXgC) * (1 - pOnTarget) * offTargetShares.woodwork,
+    MISS: (1 - finalXgC) * (1 - pOnTarget) * (1 - blockP - offTargetShares.woodwork),
+    baselineXg: finalXgC,
+    pressured: pressured ? 1 : 0,
+    zFinish,
+    zGk,
+  };
+  // Only the shooter and goalkeeper have usable-Z terms in the shot model.
+  // Other zone-involved attackers must not inherit the shooter's contribution.
+  const shotParticipants = [shooter.id, ...(gk ? [gk.id] : [])];
+  emitDecision(eng, "shot", shotProbs, goal ? "GOAL" : saved ? "SAVE" : blocked ? "BLOCK" : woodwork ? "WOODWORK" : "MISS", shotParticipants);
+
   return { goal, onTarget, blocked, saved, woodwork, rebound, blockerId, finalXg: finalXgC, shooter, situation, pressured, distance };
 }
 
@@ -1353,6 +1465,14 @@ function stateValue(eng: Engine): number {
   return row ?? 0.05;
 }
 
+/** EPV threat for the currently-possessing side (mirrors stateValue). Exposed
+ *  to the rating observer for expected-threat utilities. Clamped to a bounded
+ *  [0,1] probability so an EPV-table anomaly can never poison rating math. */
+function possessionThreat(eng: Engine): number {
+  const v = stateValue(eng);
+  return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.05;
+}
+
 const epvTable: Record<string, number> & { __computed?: boolean } = {};
 
 function selectFouler(eng: Engine, def: Side): LivePlayerState {
@@ -1375,6 +1495,8 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
   const alreadyBooked = (eng.playerYellows[fouler.id] ?? 0) >= 1;
   const yellowU = logit(pYellow) + shift - (alreadyBooked ? MS.cards.secondYellowLogitPenalty : 0);
   const yellowP = logistic(yellowU);
+
+  emitDecision(eng, "cards", { pRed, pYellow, secondYellow: alreadyBooked ? 1 : 0 }, "", [fouler.id]);
 
   const isRed = nextDouble(eng.rng) < redP;
   const isYellow = !isRed && nextDouble(eng.rng) < yellowP;
@@ -1957,6 +2079,13 @@ function stepPossession(eng: Engine): void {
     eng.playerMinutes[ps.id] = (eng.playerMinutes[ps.id] ?? 0) + dt / 60;
   }
 
+  // Rating-only seconds counter (plan §17 §12): the observer tracks each
+  // on-pitch player's seconds per fine role for the 10-minute rule and role
+  // durations. BOTH sides' on-pitch players accumulate the same match-clock
+  // seconds per step (the defending side plays the same dt). Read-only; never
+  // affects gameplay.
+  observeRatingSeconds(eng, dt);
+
   // Ensure stoppage is frozen as soon as we enter it so the very first
   // stoppage event is stamped with 45+ / 90+ correctly.
   if (eng.clockSeconds >= MS.timing.firstHalfEndSeconds && (eng.st.firstHalfAddedMinutes ?? 0) === 0) {
@@ -2205,6 +2334,7 @@ function stepPossession(eng: Engine): void {
     beginPossession(eng, restart);
     eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
     eng.deadBallSeconds += MS.timing.deadBallSecondsPerRestart;
+    observeRatingSeconds(eng, MS.timing.deadBallSecondsPerRestart);
     finishBallAction(ballAction, { toZone: eng.zone, targetPlayerId: eng.ballCarrierId });
     return;
   }
@@ -2231,6 +2361,7 @@ function stepPossession(eng: Engine): void {
     if (restart === "THROW_IN" || restart === "FREE_KICK" || restart === "GOAL_KICK" || restart === "CORNER") {
       eng.clockSeconds += MS.timing.deadBallSecondsPerRestart;
       eng.deadBallSeconds += MS.timing.deadBallSecondsPerRestart;
+      observeRatingSeconds(eng, MS.timing.deadBallSecondsPerRestart);
     }
     beginPossession(eng, restart, false, restartCarrierId);
     finishBallAction(ballAction, { outcome: "RETAINED_RESTART", toZone: eng.zone, targetPlayerId: eng.ballCarrierId });
@@ -2413,7 +2544,8 @@ function buildEngine(
   away: Club,
   players: Player[],
   st: LiveMatchState,
-  centers: AttributeCenters
+  centers: AttributeCenters,
+  ratingObserver?: RatingObserver
 ): Engine {
   // The engine's authoritative RNG stream is the persisted state stream, so a
   // live match resumes deterministically after a reload; `rng` is only the
@@ -2489,6 +2621,7 @@ function buildEngine(
     st,
     home: homeSide,
     away: awaySide,
+    ratingObserver,
     possessionSide: (st.withBall as 0 | 1) ?? 0,
     phase: (st.phase as MatchPhase) ?? "BUILD_UP",
     zone: (st.zone as MatchZone) ?? "DEF_CENTRAL",
@@ -2603,9 +2736,10 @@ export function simulatePossessionMatch(
   st: LiveMatchState,
   centers: AttributeCenters,
   targetSeconds?: number,
-  diagnosticsOut?: MatchSimulationDiagnostics
+  diagnosticsOut?: MatchSimulationDiagnostics,
+  ratingObserver?: RatingObserver
 ): void {
-  const eng = buildEngine(rng, home, away, players, st, centers);
+  const eng = buildEngine(rng, home, away, players, st, centers, ratingObserver);
   runMatch(eng, targetSeconds);
   writeBack(eng, st, diagnosticsOut);
 }
@@ -2619,9 +2753,9 @@ export function advancePossessionMatch(
   st: LiveMatchState,
   matchMinutes: number,
   centers: AttributeCenters,
-  opts?: { pauseAtHalftime?: boolean }
+  opts?: { pauseAtHalftime?: boolean; ratingObserver?: RatingObserver }
 ): void {
-  const eng = buildEngine(rng, home, away, players, st, centers);
+  const eng = buildEngine(rng, home, away, players, st, centers, opts?.ratingObserver);
   const startClock = eng.clockSeconds;
   const firstAdded = st.firstHalfAddedMinutes ?? 0;
   const secondAdded = st.secondHalfAddedMinutes ?? 0;

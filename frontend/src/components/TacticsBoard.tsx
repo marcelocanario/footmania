@@ -35,6 +35,7 @@ interface Props {
   onSaved?: (state?: LiveState) => void;
   /** Notified whenever the selected formation changes (initial load or picker), so parents can scope tactic-bound UI. */
   onFormationChange?: (formation: number) => void;
+  customTooltips?: boolean;
 }
 
 type BoardArea = "starter" | "bench" | "pool";
@@ -92,7 +93,7 @@ function positionLabelToIndex(label: string): number {
   return index >= 0 ? index : -1;
 }
 
-export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange }: Props) {
+export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange, customTooltips = false }: Props) {
   const snapshot = useGame((state) => state.snapshot);
   const [data, setData] = useState<LineupView | null>(null);
   const [ed, setEd] = useState<Ed | null>(null);
@@ -447,7 +448,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     onPointerDown={(event) => player && beginDrag(location, event)}
                     onClick={() => player && selectLocation(location)}
                   >
-                    <span className="tb-slot-role" title={POSITION_FULL_NAMES[positionLabelToIndex(slotNames[index] ?? "")] ?? slotNames[index]}>{slotNames[index] ?? `#${index + 1}`}</span>
+                    <span className={`tb-slot-role${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": POSITION_FULL_NAMES[positionLabelToIndex(slotNames[index] ?? "")] ?? slotNames[index] } : { title: POSITION_FULL_NAMES[positionLabelToIndex(slotNames[index] ?? "")] ?? slotNames[index] })}>{slotNames[index] ?? `#${index + 1}`}</span>
                     {player ? (
                       <span className="tb-player-chip">
                         <span className="tb-player-kit">
@@ -489,7 +490,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     onClick={() => player && selectLocation(location)}
                   >
                     <span className="tb-row-number">{index + 1}</span>
-                    <span className="tb-row-position" title={player ? positionFull(player.position) : undefined}>{player?.tacticalPosition ?? "—"}</span>
+                    <span className={`tb-row-position${customTooltips && player ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player ? positionFull(player.position) : undefined } : { title: player ? positionFull(player.position) : undefined })}>{player?.tacticalPosition ?? "—"}</span>
                     <span className="tb-row-name">{player?.name ?? "Empty bench slot"}</span>
                     <span className="tb-row-energy">EN {player ? Math.round(player.energy) : "—"}</span>
                     <span className="tb-row-rating">{player?.overall ?? "—"}</span>
@@ -516,15 +517,15 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                   <button
                     key={`pool-${player.id}`}
                     type="button"
-                    className={`tb-list-row tb-pool-row${unavailable ? " is-unavailable" : ""}`}
+                    className={`tb-list-row tb-pool-row${unavailable ? " is-unavailable" : ""}${customTooltips && unavailable ? " squad-tooltip-trigger" : ""}`}
                     data-tb-drop-area="pool"
                     data-tb-drop-index={index}
                     data-tb-drop-id={player.id}
                     disabled={unavailable}
-                    title={unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined}
+                    {...(customTooltips ? { "data-pr-tooltip": unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined } : { title: unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined })}
                     onPointerDown={(event) => !unavailable && beginDrag(location, event)}
                   >
-                    <span className="tb-row-position" title={positionFull(player.position)}>{player.tacticalPosition}</span>
+                    <span className={`tb-row-position${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": positionFull(player.position) } : { title: positionFull(player.position) })}>{player.tacticalPosition}</span>
                     <span className="tb-row-name">{player.name}</span>
                     <span className="tb-row-energy">EN {Math.round(player.energy)}</span>
                     <span className="tb-row-rating">{player.overall}</span>

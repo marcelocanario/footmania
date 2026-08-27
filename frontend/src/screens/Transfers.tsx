@@ -112,7 +112,7 @@ export function Transfers() {
   const [auctionBidAmount, setAuctionBidAmount] = useState(0);
   const [auctionContractSeasons, setAuctionContractSeasons] = useState(1);
   const [historyTarget, setHistoryTarget] = useState<AuctionView | FreeAgentView | null>(null);
-  const [historyData, setHistoryData] = useState<{ player: { displayName: string; name: string; age: number; overall: number; careerGoals: number; careerAssists?: number; seasonGoals: number; seasonAssists?: number }; seasons: { seasonKey: string; clubName: string; goals: number; assists: number }[]; transfers: { type: string; price: number; seasonKey: string }[]; matches: { minute: number; type: number }[] } | null>(null);
+  const [historyData, setHistoryData] = useState<{ player: { displayName: string; name: string; age: number; overall: number; careerGoals: number; careerAssists?: number; seasonGoals: number; seasonAssists?: number; careerMvps?: number; seasonMvps?: number }; seasons: { seasonKey: string; clubName: string; goals: number; assists: number }[]; transfers: { type: string; price: number; seasonKey: string }[]; matches: { minute: number; type: number }[] } | null>(null);
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -733,6 +733,7 @@ export function Transfers() {
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 800 }}>{historyData.player.displayName} <span style={{ color: "var(--text-3)", fontWeight: 400 }}>· {historyData.player.age} yrs · OVR {historyData.player.overall}</span></div>
               <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginTop: 4 }}>Career {historyData.player.careerGoals}G {(historyData.player.careerAssists ?? 0)}A · Season {historyData.player.seasonGoals}G</div>
+              <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>{(historyData.player.careerMvps ?? 0) > 0 ? `${historyData.player.careerMvps} career MVP · ` : ""}{(historyData.player.seasonMvps ?? 0) > 0 ? `${historyData.player.seasonMvps} MVP this season` : ""}</div>
             </div>
             <div><div className="section-label">Per-season</div>{historyData.seasons.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No season history yet.</div> : historyData.seasons.map((s, i) => <div key={i} className="news-item" style={{ display: "flex", justifyContent: "space-between" }}><span>{s.seasonKey} · {s.clubName}</span><span>{s.goals}G {s.assists}A</span></div>)}</div>
             <div><div className="section-label">Market moves</div>{historyData.transfers.length === 0 ? <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>No moves.</div> : historyData.transfers.map((t, i) => <div key={i} className="news-item">{t.type} {money(t.price)} {t.seasonKey}</div>)}</div>

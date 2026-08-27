@@ -7,7 +7,7 @@ import { api, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
 import { POSITION_FULL_NAMES } from "./PlayerName";
-import { DIRECTIONS, FORMATIONS, PRESSING, STYLES, formationLabel, withUnchanged } from "../tacticsOptions";
+import { DIRECTIONS, FORMATIONS, PRESSING, STYLES, formationLabel, withUnchanged, type TacticOption } from "../tacticsOptions";
 
 /**
  * Match automation editor, scoped to the currently chosen tactic (formation).
@@ -69,6 +69,16 @@ const UNCHANGED_FORMATION = withUnchanged(FORMATIONS);
 const UNCHANGED_STYLE = withUnchanged(STYLES);
 const UNCHANGED_PRESSING = withUnchanged(PRESSING);
 const UNCHANGED_DIRECTION = withUnchanged(DIRECTIONS);
+
+/** Dropdown menu item for tactic options: label plus optional one-line description. */
+function automationItemTemplate(option: TacticOption | { label: string; value: null }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 600 }}>{option.label}</div>
+      {"desc" in option && option.desc && <div style={{ fontSize: "0.8rem", opacity: 0.85, marginTop: 2, lineHeight: 1.4 }}>{option.desc}</div>}
+    </div>
+  );
+}
 
 function uid() {
   return Math.random().toString(36).slice(2, 9);
@@ -206,6 +216,7 @@ function RuleRow({
             placeholder="Style"
             style={{ minWidth: 150, flex: 1 }}
             aria-label="New style"
+            itemTemplate={automationItemTemplate}
           />
           <Dropdown
             value={rule.action.pressing ?? null}
@@ -214,6 +225,7 @@ function RuleRow({
             placeholder="Pressing"
             style={{ minWidth: 140, flex: 1 }}
             aria-label="New pressing"
+            itemTemplate={automationItemTemplate}
           />
           <Dropdown
             value={rule.action.direction ?? null}
@@ -222,6 +234,7 @@ function RuleRow({
             placeholder="Direction"
             style={{ minWidth: 170, flex: 1 }}
             aria-label="New direction"
+            itemTemplate={automationItemTemplate}
           />
         </div>
       )}
@@ -241,12 +254,14 @@ function PresetBlock({
   maxRules,
   onChange,
   onRemove,
+  customTooltips,
 }: {
   preset: Preset;
   squad: PlayerView[];
   maxRules: number;
   onChange: (next: Preset) => void;
   onRemove: () => void;
+  customTooltips: boolean;
 }) {
   return (
     <div>
@@ -261,7 +276,7 @@ function PresetBlock({
         <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: "0.85rem", cursor: "pointer" }}>
           <input type="checkbox" checked={preset.enabled} onChange={(e) => onChange({ ...preset, enabled: e.target.checked })} /> Enabled
         </label>
-        <span className="chip" title="This rule set only fires when the team starts a match in this formation">
+        <span className={`chip${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": "This rule set only fires when the team starts a match in this formation" } : { title: "This rule set only fires when the team starts a match in this formation" })}>
           {formationLabel(preset.formationId)}
         </span>
         <button className="btn ghost danger sm" onClick={onRemove}>
@@ -299,7 +314,7 @@ function PresetBlock({
   );
 }
 
-export function AutomationPanel({ formation }: { formation: number }) {
+export function AutomationPanel({ formation, customTooltips = false }: { formation: number; customTooltips?: boolean }) {
   const toast = useRef<Toast>(null);
   const user = useGame((s) => s.user);
   const snap = useGame((s) => s.snapshot);
@@ -391,7 +406,7 @@ export function AutomationPanel({ formation }: { formation: number }) {
               ✓ Automation saved
             </span>
           )}
-          <button className={`btn ${dirty ? "gold" : ""}`} onClick={() => void save()} disabled={!canSave || busy} title={issues.length > 0 ? issues[0] : undefined}>
+          <button className={`btn ${dirty ? "gold" : ""}${customTooltips && issues.length > 0 ? " squad-tooltip-trigger" : ""}`} onClick={() => void save()} disabled={!canSave || busy} {...(customTooltips ? { "data-pr-tooltip": issues.length > 0 ? issues[0] : undefined } : { title: issues.length > 0 ? issues[0] : undefined })}>
             {busy ? "Saving…" : dirty ? "Save changes" : "Saved"}
           </button>
         </div>
@@ -412,6 +427,7 @@ export function AutomationPanel({ formation }: { formation: number }) {
             maxRules={MAX_RULES_PER_PRESET}
             onChange={(next) => mutate((prev) => prev.map((p) => (p.id === current.id ? next : p)))}
             onRemove={() => mutate((prev) => prev.filter((p) => p.id !== current.id))}
+            customTooltips={customTooltips}
           />
         </div>
       ) : (
@@ -457,6 +473,7 @@ export function AutomationPanel({ formation }: { formation: number }) {
                     maxRules={MAX_RULES_PER_PRESET}
                     onChange={(next) => mutate((prev) => prev.map((x) => (x.id === p.id ? next : x)))}
                     onRemove={() => mutate((prev) => prev.filter((x) => x.id !== p.id))}
+                    customTooltips={customTooltips}
                   />
                 </div>
               )}

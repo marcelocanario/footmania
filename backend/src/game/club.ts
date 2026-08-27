@@ -166,7 +166,7 @@ export function buildLineup(club: Club, allPlayers: Player[], options: { futureF
 }
 
 /**
- * Club.tactics.pressing is a 0–2 scale (Light/Heavy/Very Heavy); the Energy
+ * Club.tactics.pressing is a 0–2 scale (Light/Balanced/Heavy); the Energy
  * model expects the engine's 0–100 scale (same mapping as `enginePressing`).
  */
 function enginePressingScale(pressing: number): number {
@@ -323,7 +323,7 @@ export function chooseAiTactics(club: Club, allPlayers: Player[]): void {
   }
 
   // Pressing intensity: escalate only while the squad is physical enough to
-  // sustain it; Very Heavy additionally requires an energy reserve.
+  // sustain it; Heavy additionally requires an energy reserve.
   let pressing = 0;
   if (profile.physical >= cfg.pressingHeavyPhysicalMin) pressing = 1;
   if (profile.physical >= cfg.pressingVeryHeavyPhysicalMin && profile.energy >= cfg.pressingEnergyReserveMin) pressing = 2;

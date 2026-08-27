@@ -5,6 +5,7 @@ import { Crown } from "lucide-react";
 import { api, type FixtureView, type MatchEvents } from "../../api/client";
 import { useGame } from "../../store/game";
 import { MatchHistory } from "../MatchHistory";
+import { PlayerScoresTable } from "../PlayerScoresTable";
 import { MatchStatsPanel } from "../MatchStatsPanel";
 import { PlayerDetailsDialog } from "../PlayerDetailsDialog";
 
@@ -62,6 +63,14 @@ export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView |
                 onPlayerClick={(id, name) => setPlayerTarget({ id, name })}
               />
             </TabPanel>
+            <TabPanel header="Scores">
+              <PlayerScoresTable
+                scores={resultData.scores ?? []}
+                homeClubId={fixture?.homeClubId ?? 0}
+                onPlayerClick={(id, name) => setPlayerTarget({ id, name })}
+                emptyText="No player scores recorded."
+              />
+            </TabPanel>
             <TabPanel
               header={isPro ? "Stats" : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Crown size={12} /> Stats</span>}
             >
@@ -70,7 +79,10 @@ export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView |
                   Detailed match stats are a <b>Pro</b> feature.
                 </div>
               ) : resultData.match.stats ? (
-                <MatchStatsPanel stats={resultData.match.stats} />
+                <MatchStatsPanel
+                  stats={resultData.match.stats}
+                  mvp={{ name: resultData.match.mvpPlayerName ?? null, clubName: null }}
+                />
               ) : (
                 <div className="empty-state" style={{ padding: 14 }}>No stats available.</div>
               )}

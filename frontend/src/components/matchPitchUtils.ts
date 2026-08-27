@@ -282,32 +282,6 @@ export function resolveColumnCollisions(homePoints: Map<number, PitchPoint>, awa
 }
 
 /**
- * Pitch points for formation slots that have no on-pitch player — used to
- * place missing-player ghost markers at the vacated tactical position. Keyed
- * by tacPos. Reuses the exact placement pipeline via synthetic entries so
- * ghosts sit where the player used to stand.
- */
-export function slotPointsFor(tacPoss: number[], side: PitchSide, formationId: number): Map<number, PitchPoint> {
-  const ghosts: LivePlayer[] = tacPoss.map((tacPos, index) => ({
-    id: -(index + 1),
-    name: "",
-    position: 0,
-    tacPos,
-    overall: 0,
-    energy: 0,
-    injuryDays: 0,
-    suspended: false,
-  }));
-  const placed = teamPitchPoints(ghosts, side, formationId);
-  const out = new Map<number, PitchPoint>();
-  for (const ghost of ghosts) {
-    const point = placed.get(ghost.id);
-    if (point) out.set(ghost.tacPos, point);
-  }
-  return out;
-}
-
-/**
  * Vertical pitch slot points for the tactics editor. Reuses the same
  * FORMATION_LAYOUTS but maps horizontal depth (x) to vertical depth (y =
  * 100 - x) so GK sits at the bottom and attackers at the top, and spreads

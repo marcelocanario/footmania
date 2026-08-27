@@ -57,8 +57,8 @@ export const FORMATION_NAMES = [
   "4-2-3-1 Wide",
 ];
 
-export const STYLE_NAMES = ["Balanced", "Total Attack", "Counter-attack"];
-export const PRESSING_NAMES = ["Light", "Heavy", "Very Heavy"];
+export const STYLE_NAMES = ["Balanced", "Offensive", "Counter-attack"];
+export const PRESSING_NAMES = ["Light", "Balanced", "Heavy"];
 export const DIRECTION_NAMES = ["Through the middle", "Down the wings"];
 
 /**
@@ -99,6 +99,9 @@ export const EVENT_CODES = {
   WOODWORK: 16,
   SHOT_MISS: 17,
   SHOT_BLOCKED: 18,
+  // Post-final-whistle award: best performer on the winning team. Appended to
+  // the event feed at finalization (no RNG, no simulation feedback).
+  MVP: 19,
 };
 
 export const GOAL_SUBTYPES = {

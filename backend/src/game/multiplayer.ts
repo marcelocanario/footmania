@@ -1,6 +1,8 @@
 import type { Club, Competition, Fixture, MpClubSeasonEntry, Player, StandingsRow, World } from "./types";
 import { createLeagueFixtures, emptyStandingsRow, standingsTiebreak, updateStandings, validateDoubleRoundRobinFixtures } from "./league";
-import { simulateMatch } from "./match";
+import { applyMatchMvpToPlayers, simulateMatch } from "./match";
+import { computeMatchRatingRows, mvpFromRatings } from "./matchRatings";
+import { EVENT_CODES } from "./constants";
 import { seasonKey, joinLockRound } from "./clock";
 import { calendarValues, roundDayIndex } from "../services/seasonCalendar";
 import { pickFixtureKickoff, pickSynchronizedKickoff, stableHash, type PreferenceInput } from "./scheduling";
@@ -450,9 +452,13 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
     const home = clubById(world, f.homeClubId);
     const away = clubById(world, f.awayClubId);
     if (!home || !away) continue;
+    // Reserve the durable match ID before simulation. Ratings must reference
+    // the same ID as Match/MatchEvent, never the fixture ID.
+    const matchId = world.nextId++;
     const sim = simulateMatch(world.rng, home, away, world.players, {
       competitionId: comp.id,
       fixtureId: f.id,
+      matchId,
       homeNeutral: false,
       decider: false,
       compKind: "division",
@@ -464,8 +470,33 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
       matchSpacingDays: calendarValues().matchSpacingDays,
     });
     f.played = true;
+    const seasonId = world.mp.seasonId;
+    const ratingRows = computeMatchRatingRows({
+      match: sim.match,
+      seasonId,
+      tier: comp.tier ?? 1,
+      calibration: calibrationForSeason(world, seasonId),
+      accum: sim.match.ratingAccum,
+      players: world.players,
+    });
+    world.playerMatchRatings ??= [];
+    world.playerMatchRatings = [...world.playerMatchRatings.filter((r) => r.matchId !== sim.match.id), ...ratingRows];
+    const mvp = mvpFromRatings(ratingRows, sim.match);
+    if (mvp && !sim.match.events.some((e) => e.type === EVENT_CODES.MVP)) {
+      sim.match.events.push({
+        minute: 90,
+        half: 2,
+        type: EVENT_CODES.MVP,
+        subtype: 0,
+        clubId: mvp.clubId,
+        playerId: mvp.playerId,
+        player2Id: null,
+        goalType: 0,
+      });
+    }
+    if (mvp) sim.match.mvpPlayerId = mvp.playerId;
     world.matches.push({
-      id: world.nextId++,
+      id: matchId,
       fixtureId: f.id,
       competitionId: comp.id,
       homeClubId: f.homeClubId,
@@ -480,11 +511,22 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
         homeWasHuman: home.ownerUserId !== null,
         awayWasHuman: away.ownerUserId !== null,
         eloProcessed: false,
+        mvpPlayerId: sim.match.mvpPlayerId ?? null,
       });
+    applyMatchMvpToPlayers(sim.match.mvpPlayerId, world.players);
     applyMatchElo(world, world.matches[world.matches.length - 1]);
     updateStandings(comp, f.homeClubId, f.awayClubId, sim.homeGoals, sim.awayGoals);
   }
   if (comp.status === "SIMULATING_HISTORY") comp.status = "ACTIVE";
+}
+
+/** Season-frozen calibration map (plan §10). */
+function calibrationForSeason(world: World, seasonId: number): Record<string, import("./types").RoleCalibrationEntry> | undefined {
+  const cals = (world.roleCalibrations ?? []).filter((c) => c.seasonId === seasonId);
+  if (cals.length === 0) return undefined;
+  const out: Record<string, import("./types").RoleCalibrationEntry> = {};
+  for (const c of cals) out[c.role] = c;
+  return out;
 }
 
 /**

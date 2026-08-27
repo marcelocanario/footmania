@@ -198,6 +198,13 @@ describe("engine injury auto-substitution", () => {
         ).length;
       expect(st.homeOn.length).toBe(11 - homeInjuries - dismissals(st.homeClubId));
       expect(st.awayOn.length).toBe(11 - awayInjuries - dismissals(st.awayClubId));
+      const removedIds = st.events
+        .filter((event) => event.type === EVENT_CODES.INJURY || event.type === EVENT_CODES.RED || event.type === EVENT_CODES.YELLOW_RED)
+        .map((event) => event.playerId);
+      for (const removedId of removedIds) {
+        expect(st.homeOn).not.toContain(removedId);
+        expect(st.awayOn).not.toContain(removedId);
+      }
     } finally {
       setup.restore();
     }
@@ -327,6 +334,28 @@ describe("live view missing-player projection", () => {
     const { world, st } = setup();
     const delta = liveStateDeltaView(world, st, 0);
     expect(delta.missingPlayers).toHaveLength(2);
+  });
+
+  it("sends the current roster after a red card and an unreplaced injury", () => {
+    const { world, st, sentOff, stuckInjury } = setup();
+    const homeOn = st.homeOn.filter((id) => id !== sentOff.id && id !== stuckInjury.id);
+    st.homeOn = [sentOff.id, stuckInjury.id, ...homeOn].slice(0, 11);
+    st.cards = [{ playerId: sentOff.id, kind: "RED", minute: 30 }];
+    st.injuries = [{ playerId: stuckInjury.id, days: 9, minute: 50 }];
+    st.events = [
+      { minute: 30, half: 1, type: EVENT_CODES.RED, subtype: 0, clubId: st.homeClubId, playerId: sentOff.id, player2Id: null, goalType: 0 },
+      { minute: 50, half: 1, type: EVENT_CODES.INJURY, subtype: 0, clubId: st.homeClubId, playerId: stuckInjury.id, player2Id: null, goalType: 9 },
+    ];
+    st.homeOn = st.homeOn.filter((id) => id !== sentOff.id && id !== stuckInjury.id);
+    st.usedSubs = [MP_CONFIG.maxSubsPerSide, 0];
+
+    const delta = liveStateDeltaView(world, st, 0);
+    expect(delta.homeOn.map((player) => player.id)).not.toContain(sentOff.id);
+    expect(delta.homeOn.map((player) => player.id)).not.toContain(stuckInjury.id);
+    expect(delta.usedSubs[0]).toBe(MP_CONFIG.maxSubsPerSide);
+    expect(delta.missingPlayers.map((entry) => entry.playerId).sort((a, b) => a - b)).toEqual(
+      [sentOff.id, stuckInjury.id].sort((a, b) => a - b),
+    );
   });
 });
 

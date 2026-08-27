@@ -6,7 +6,7 @@ import type { CSSProperties } from "react";
  * marker + delta text). Colors follow the shared health/energy gradient:
  * red below 30, gold to 69, green from 70.
  */
-export function FamiliarityBar({ value, projected, style }: { value: number; projected?: number | null; style?: CSSProperties }) {
+export function FamiliarityBar({ value, projected, style, customTooltips = false }: { value: number; projected?: number | null; style?: CSSProperties; customTooltips?: boolean }) {
   const clamped = Math.max(0, Math.min(100, value));
   const color = clamped < 30 ? "var(--red)" : clamped < 70 ? "var(--gold-2)" : "var(--grass-2)";
   const showProjection = typeof projected === "number" && Math.round(projected) !== Math.round(clamped);
@@ -34,7 +34,8 @@ export function FamiliarityBar({ value, projected, style }: { value: number; pro
         />
         {showProjection && (
           <div
-            title="Familiarity if you adopt this setup"
+            className={customTooltips ? "squad-tooltip-trigger" : undefined}
+            {...(customTooltips ? { "data-pr-tooltip": "Familiarity if you adopt this setup" } : { title: "Familiarity if you adopt this setup" })}
             style={{
               position: "absolute",
               top: -1,

@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "primereact/dialog";
-import { CalendarDays, Handshake, HeartPulse, History, Landmark, ShieldAlert, Square, Target, Trophy, Wallet, Zap } from "lucide-react";
-import { api, type PlayerHistorySeason, type PlayerHistoryView } from "../api/client";
+import { CalendarDays, Handshake, HeartPulse, History, Landmark, ShieldAlert, Sparkles, Square, Target, Trophy, Wallet, Zap } from "lucide-react";
+import { api, type PlayerHistorySeason, type PlayerHistoryView, type PlayerMatchScoreView } from "../api/client";
 import { useGame } from "../store/game";
 import { countryFlag } from "../countryFlags";
 import { ClubNameLink } from "./ClubNameLink";
 import { PlayerSkillsRadar } from "./PlayerSkillsRadar";
+import { PlayerTrendSparkline } from "./PlayerTrendSparkline";
+import { PlayerScoresBarChart } from "./PlayerScoresBarChart";
 import { POSITION_CLASS, POSITION_LETTER, positionTitle } from "./PlayerName";
 import { money } from "../format";
 
@@ -24,7 +26,9 @@ const seasonsOf = (days: number, seasonDays: number): string => {
 export function PlayerDetailsDialog({ target, onClose }: { target: { id: number; name: string } | null; onClose: () => void }) {
   const [player, setPlayer] = useState<PlayerHistoryView | null>(null);
   const [historySeasons, setHistorySeasons] = useState<PlayerHistorySeason[]>([]);
-  const [performanceTab, setPerformanceTab] = useState<"season" | "career">("season");
+  const [matchScores, setMatchScores] = useState<PlayerMatchScoreView[]>([]);
+  const [currentSeasonAvg, setCurrentSeasonAvg] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<"season" | "career" | "skills">("season");
   const [busy, setBusy] = useState(false);
   const user = useGame((state) => state.user);
   const seasonDays = useGame((state) => state.snapshot?.save.seasonDays ?? 30);
@@ -33,20 +37,26 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
     if (!target) {
       setPlayer(null);
       setHistorySeasons([]);
-      setPerformanceTab("season");
+      setMatchScores([]);
+      setCurrentSeasonAvg(null);
+      setActiveTab("season");
       return;
     }
     let alive = true;
     setBusy(true);
     setPlayer(null);
     setHistorySeasons([]);
-    setPerformanceTab("season");
+    setMatchScores([]);
+    setCurrentSeasonAvg(null);
+    setActiveTab("season");
     const load = () =>
       api.playerHistory(target.id)
         .then((result) => {
           if (alive) {
             setPlayer(result.player);
             setHistorySeasons(result.seasons);
+            setMatchScores(result.matchScores ?? []);
+            setCurrentSeasonAvg(result.currentSeasonAvg ?? null);
           }
         })
         .catch(() => undefined)
@@ -64,6 +74,9 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
   const ownTeam = player?.isOwnTeam ?? false;
   const isPro = Boolean(user?.isPro);
   const canSeeSkills = Boolean(player?.skills) && (ownTeam || Boolean(user?.isPro));
+  // Scores for the current world season only (career history lives in the
+  // season-average chart and the Squad history tab).
+  const thisSeasonScores = matchScores.filter((m) => m.currentSeason);
   const country = player ? countryFlag(player.country) : null;
   const careerYellows = (player?.yellows ?? 0) + historySeasons.reduce((total, season) => total + season.yellows, 0);
   const careerReds = (player?.reds ?? 0) + historySeasons.reduce((total, season) => total + season.reds, 0);
@@ -71,6 +84,15 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
     ...historySeasons.map((season) => season.clubName),
     ...(player?.clubName ? [player.clubName] : []),
   ].filter(Boolean));
+  // End-of-season snapshots plus the live current season as the newest point,
+  // oldest first so the trend renders left→right.
+  const trendSeasons = [...historySeasons].sort((a, b) => a.seasonId - b.seasonId);
+  const overallTrend = player
+    ? [...trendSeasons.map((s) => s.overall), player.overall]
+    : trendSeasons.map((s) => s.overall);
+  const valueTrend = player
+    ? [...trendSeasons.map((s) => s.value), player.value]
+    : trendSeasons.map((s) => s.value);
 
   return (
     <Dialog header="Player details" visible={target !== null} onHide={onClose} dismissableMask style={{ width: 520 }}>
@@ -121,15 +143,18 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
 
             <div className="player-card-section" style={{ marginTop: 12 }}>
               <div className="section-label">Performance</div>
-              <div className="segmented player-performance-tabs" role="tablist" aria-label="Performance period">
-                <button type="button" role="tab" aria-selected={performanceTab === "season"} className={performanceTab === "season" ? "active" : ""} onClick={() => setPerformanceTab("season")}>
+              <div className="segmented player-performance-tabs" role="tablist" aria-label="Player details">
+                <button type="button" role="tab" aria-selected={activeTab === "season"} className={activeTab === "season" ? "active" : ""} onClick={() => setActiveTab("season")}>
                   <Trophy size={14} /> This season
                 </button>
-                <button type="button" role="tab" aria-selected={performanceTab === "career"} className={performanceTab === "career" ? "active" : ""} onClick={() => setPerformanceTab("career")}>
+                <button type="button" role="tab" aria-selected={activeTab === "career"} className={activeTab === "career" ? "active" : ""} onClick={() => setActiveTab("career")}>
                   <History size={14} /> Career <span className="pro-tab-pill">PRO</span>
                 </button>
+                <button type="button" role="tab" aria-selected={activeTab === "skills"} className={activeTab === "skills" ? "active" : ""} onClick={() => setActiveTab("skills")}>
+                  <Sparkles size={14} /> Skills {!ownTeam && <span className="pro-tab-pill">PRO</span>}
+                </button>
               </div>
-              {performanceTab === "season" ? (
+              {activeTab === "season" ? (
                 <>
                   <div className="player-facts-grid player-facts-performance">
                     <div className="player-fact">
@@ -148,10 +173,28 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                       <span className="player-fact-icon"><Handshake size={15} /></span>
                       <span><span className="player-fact-label">Assists</span><strong>{player.seasonAssists}</strong></span>
                     </div>
-                    <div className="player-fact player-fact-wide">
+                    <div className="player-fact">
+                      <span className="player-fact-icon"><Trophy size={15} /></span>
+                      <span><span className="player-fact-label">MVP</span><strong>{player.seasonMvps ?? 0}</strong></span>
+                    </div>
+                    <div className="player-fact">
                       <span className="player-fact-icon"><ShieldAlert size={15} /></span>
                       <span><span className="player-fact-label">Discipline</span><span className="player-stat-pair"><span className="player-card-yellow"><Square size={11} fill="currentColor" /> {player.yellows} yellow</span><span className="player-card-red"><Square size={11} fill="currentColor" /> {player.reds} red</span></span></span>
                     </div>
+                  </div>
+                  <div className="player-trend-grid">
+                    <PlayerScoresBarChart
+                      label="Avg rating · this season"
+                      points={[
+                        { key: "this-season", value: currentSeasonAvg, title: currentSeasonAvg != null ? `This season · avg ${currentSeasonAvg.toFixed(2)}` : "No rated appearances yet" },
+                        ...thisSeasonScores.map((m) => ({
+                          key: `m${m.matchId}`,
+                          value: m.rating,
+                          title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
+                        })),
+                      ]}
+                      maxScore={10}
+                    />
                   </div>
                   <div className="player-current-status">
                     {player.conditionLabel && (
@@ -165,6 +208,16 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                     )}
                   </div>
                 </>
+              ) : activeTab === "skills" ? (
+                !canSeeSkills || !player.skills ? (
+                  <div className="player-pro-gate">
+                    <Sparkles size={22} />
+                    <strong>Player skills are a Pro feature</strong>
+                    <span>Skill profiles of other clubs' players are available to Pro managers.</span>
+                  </div>
+                ) : (
+                  <PlayerSkillsRadar skills={player.skills} />
+                )
               ) : !isPro ? (
                 <div className="player-pro-gate">
                   <History size={22} />
@@ -183,6 +236,10 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                       <span><span className="player-fact-label">Career assists</span><strong>{player.careerAssists}</strong></span>
                     </div>
                     <div className="player-fact">
+                      <span className="player-fact-icon"><Trophy size={15} /></span>
+                      <span><span className="player-fact-label">Career MVP</span><strong>{player.careerMvps ?? 0}</strong></span>
+                    </div>
+                    <div className="player-fact">
                       <span className="player-fact-icon"><Landmark size={15} /></span>
                       <span><span className="player-fact-label">Clubs represented</span><strong>{careerClubs.size}</strong></span>
                     </div>
@@ -190,18 +247,30 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                       <span className="player-fact-icon"><CalendarDays size={15} /></span>
                       <span><span className="player-fact-label">Seasons</span><strong>{historySeasons.length + 1}</strong></span>
                     </div>
-                    <div className="player-fact player-fact-wide">
+                    <div className="player-fact">
                       <span className="player-fact-icon"><ShieldAlert size={15} /></span>
                       <span><span className="player-fact-label">Career discipline</span><span className="player-stat-pair"><span className="player-card-yellow"><Square size={11} fill="currentColor" /> {careerYellows} yellow</span><span className="player-card-red"><Square size={11} fill="currentColor" /> {careerReds} red</span></span></span>
                     </div>
                   </div>
+                  <div className="player-trend-grid">
+                    <PlayerTrendSparkline label="Overall per season" values={overallTrend} />
+                    <PlayerTrendSparkline label="Market value per season" values={valueTrend} unit="money" />
+                    <PlayerScoresBarChart
+                      label="Avg rating per season"
+                      unit="avg"
+                      points={trendSeasons.map((s) => ({
+                        key: s.seasonKey,
+                        value: s.avgScore ?? null,
+                        title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(2)}`,
+                      })).concat(
+                        currentSeasonAvg != null ? [{ key: "current", value: currentSeasonAvg, title: `This season · avg ${currentSeasonAvg.toFixed(2)}` }] : []
+                      )}
+                      maxScore={10}
+                    />
+                  </div>
                 </>
               )}
             </div>
-          </div>
-          <div className="player-skills-panel">
-            {!ownTeam && <span className="pro-feature-pill">PRO</span>}
-            {canSeeSkills && player.skills ? <PlayerSkillsRadar skills={player.skills} /> : !ownTeam ? <div className="empty-state" style={{ padding: 18 }}>Player skills are available to Pro managers.</div> : null}
           </div>
         </div>
       )}

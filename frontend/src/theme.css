@@ -1306,6 +1306,18 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .squad-history-empty { padding: 10px 2px; color: var(--text-3); font-size: 0.78rem; }
 .squad-player-separator { height: 1px; margin-top: 14px; background: var(--line); }
 
+/* ---------- player trend sparklines ---------- */
+
+.player-trend-grid { display: grid; gap: 8px; margin-top: 10px; }
+.player-trend { min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: rgba(4, 13, 8, 0.42); }
+.player-trend-label { display: block; overflow: hidden; color: var(--text-3); font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
+.player-trend-chart { display: flex; align-items: center; gap: 8px; margin-top: 4px; min-width: 0; }
+.player-trend-chart svg { flex: 1; min-width: 0; display: block; }
+.player-trend-current { flex-shrink: 0; font-family: var(--font-display); font-size: 0.9rem; font-weight: 700; }
+.player-trend-empty { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.player-trend-note { color: var(--text-3); font-size: 0.72rem; }
+.squad-history-trends { display: grid; gap: 6px; margin-top: 8px; }
+
 @media (max-width: 560px) {
   .squad-history-tabs button { min-width: 92px; }
 }
@@ -2452,32 +2464,6 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .pitch-player-injured .pitch-player-dot { filter: saturate(0.55); }
 .pitch-player-injured .pitch-player-kit { filter: saturate(0.55) drop-shadow(0 3px 5px rgba(0, 0, 0, 0.55)); }
 
-/* Ghost marker for a vacated slot (red card / unreplaced injury): the jersey
-   reads as absent — desaturated, translucent, dashed outline — with a
-   persistent cause badge pinned to its corner. */
-.pitch-missing { opacity: 0.62; }
-.pitch-missing .pitch-player-kit {
-  filter: grayscale(0.75) saturate(0.4) brightness(0.8);
-  outline: 1.5px dashed rgba(255, 255, 255, 0.55);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
-.pitch-missing-badge {
-  position: absolute;
-  top: -7px;
-  right: 6px;
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: rgba(4, 19, 10, 0.85);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.6);
-  font-size: 0.62rem;
-  line-height: 1;
-}
-.pitch-missing-injury { color: #ff8a8a; }
-
 .pitch-cue-icon {
   position: absolute;
   z-index: 6;
@@ -2621,6 +2607,31 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   cursor: pointer;
 }
 .event-player-link:hover { text-decoration: underline; }
+
+/* Per-player MVP scoreboard (live "Scores" tab + match result dialog). */
+.player-scores-table { display: flex; flex-direction: column; gap: 4px; }
+.player-score-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0;
+  padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: rgba(4, 13, 8, 0.35);
+}
+.player-score-row.won { border-color: rgba(240, 180, 41, 0.45); }
+.ps-side {
+  flex-shrink: 0; width: 18px; height: 18px; display: inline-flex;
+  align-items: center; justify-content: center; border-radius: 5px;
+  font-size: 0.6rem; font-weight: 800;
+}
+.ps-home { background: rgba(35, 165, 90, 0.35); color: var(--grass-2); }
+.ps-away { background: rgba(240, 180, 41, 0.2); color: var(--gold-2); }
+.ps-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.ps-detail { flex-shrink: 0; color: var(--text-3); font-size: 0.72rem; }
+.ps-score {
+  flex-shrink: 0; min-width: 26px; text-align: center;
+  font-family: var(--font-display); font-weight: 800; font-size: 0.95rem;
+  color: var(--text); border-radius: 6px; padding: 2px 5px;
+  background: rgba(228, 245, 235, 0.08);
+}
+.live-side-content .player-scores-table { max-height: none; }
 
 .player-skills-panel { position: relative; min-width: 0; }
 .pro-feature-pill {
@@ -3267,7 +3278,7 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   gap: 2px;
   max-width: 100%;
 }
-.squad-condition, .squad-suspension {
+.squad-condition, .squad-suspension, .squad-yellowcard {
   display: inline-grid;
   place-items: center;
   width: 24px;
@@ -3279,10 +3290,25 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   cursor: help;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
+.squad-condition-icon { position: relative; display: inline-flex; }
+.squad-injury-days {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0 2px;
+  border-radius: 999px;
+  background: var(--red-2);
+  color: #07140b;
+  font-size: 0.58rem;
+  font-weight: 800;
+  line-height: 11px;
+  text-align: center;
+  pointer-events: none;
+}
 .squad-suspension { color: var(--red-2); }
 .squad-yellowcard {
-  font-size: 13px;
-  line-height: 1;
   color: var(--gold-2);
 }
 .squad-condition:hover, .squad-condition:focus-visible,

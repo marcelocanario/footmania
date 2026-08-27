@@ -31,4 +31,9 @@ Thumbs.db
 
 #Calibration
 calibration/
-plans/
+# Planning docs are intentionally versioned alongside the code they specify.
+plans/*.md
+!plans/player-performance-ratings.md
+
+# Calibration output artifacts (match sweeps, reports) are throwaway runs.
+backend/plans/

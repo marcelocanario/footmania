@@ -183,12 +183,35 @@ async function writePlayerSeasonHistories(prisma: PrismaClient, world: World, co
     try {
       await prisma.playerSeasonHistory.upsert({
         where: { saveId_playerId_seasonId: { saveId: save.id, playerId: p.id, seasonId: context.sourceSeasonId } },
-        create: { saveId: save.id, playerId: p.id, seasonId: context.sourceSeasonId, seasonKey, clubId: p.clubId ?? 0, clubName, appearances, goals: p.seasonGoals, assists: p.seasonAssists, yellows: p.yellows, reds: p.reds, minutes },
-        update: {},
+        create: { saveId: save.id, playerId: p.id, seasonId: context.sourceSeasonId, seasonKey, clubId: p.clubId ?? 0, clubName, appearances, goals: p.seasonGoals, assists: p.seasonAssists, yellows: p.yellows, reds: p.reds, minutes, overall: p.overall, value: p.value, mvps: p.seasonMvps ?? 0 },
+        // Retried rollovers (idempotent by design) refresh the snapshot so the
+        // trend chart never goes stale: OVR/value are derived at rollover time.
+        update: { overall: p.overall, value: p.value },
       });
     } catch {
       // Unique race across concurrent rollover retries is fine (idempotent)
     }
+  }
+}
+
+/** Freeze the just-finished season's Z_raw distribution per coarse role for
+ *  the next season (plan §10). The calibration is stored on the World mirror
+ *  and persisted by persistWorld; a retried rollover replaces it idempotently.
+ *  Only rated performances (>= 10 minutes) from the source season are used. */
+function buildNextSeasonCalibration(world: World, sourceSeasonId: number): void {
+  const ratings = world.playerMatchRatings?.filter((r) => r.seasonId === sourceSeasonId && r.ratingExact !== null) ?? [];
+  if (ratings.length === 0) return;
+  const byRole = new Map<string, number[]>();
+  for (const r of ratings) {
+    const list = byRole.get(r.primaryRole) ?? [];
+    list.push(r.rawZ);
+    byRole.set(r.primaryRole, list);
+  }
+  const nextSeasonId = sourceSeasonId + 1;
+  world.roleCalibrations ??= [];
+  world.roleCalibrations = world.roleCalibrations.filter((c) => !(c.seasonId === nextSeasonId));
+  for (const [role, zRaws] of byRole) {
+    world.roleCalibrations.push({ seasonId: nextSeasonId, role, zRaws });
   }
 }
 
@@ -215,6 +238,9 @@ export async function executeRolloverStep(
     archiveSeasonResults(world, context);
     // Write-once per-player season snapshots for history (visible to Pro + auction viewers).
     await writePlayerSeasonHistories(prisma, world, context);
+    // Season-frozen rating calibration (plan §10): freeze this season's Z_raw
+    // distribution per coarse role for the NEXT season. Idempotent (replaces).
+    buildNextSeasonCalibration(world, context.sourceSeasonId);
     world.mp.rolloverPhase = "RESULTS_FINALIZED";
   } else if (step === "INTERSEASON_START") {
     world.mp.seasonStatus = "INTERSEASON";

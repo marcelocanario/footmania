@@ -6,7 +6,7 @@ import { Dropdown } from "primereact/dropdown";
 import { MultiSelect } from "primereact/multiselect";
 import { Toast } from "primereact/toast";
 import { Tooltip } from "primereact/tooltip";
-import { Activity, AlertTriangle, BatteryLow, BatteryMedium, CalendarDays, Clapperboard, Dumbbell, FileSignature, Handshake, HeartPulse, History as HistoryIcon, Pencil, ShieldAlert, ShieldCheck, Sparkles, Square, Tag, Target, Trash2, TrendingUp, UserMinus, Users } from "lucide-react";
+import { Activity, AlertTriangle, BatteryLow, BatteryMedium, CalendarDays, Clapperboard, Dumbbell, FileSignature, Handshake, HeartPulse, History as HistoryIcon, Pencil, ShieldAlert, ShieldCheck, Sparkles, Square, Tag, Target, Trash2, TrendingUp, Trophy, UserMinus, Users } from "lucide-react";
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -14,11 +14,13 @@ import { strings } from "../strings";
 import { PlayerName, POSITION_CLASS, positionTitle } from "../components/PlayerName";
 import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
+import { PlayerTrendSparkline } from "../components/PlayerTrendSparkline";
+import { PlayerScoresBarChart } from "../components/PlayerScoresBarChart";
 import { Segmented } from "../components/Segmented";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { AutomationPanel } from "../components/AutomationPanel";
 import { FamiliarityBar } from "../components/FamiliarityBar";
-import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
+import { DIRECTIONS, PRESSING, STYLES, type TacticOption } from "../tacticsOptions";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
@@ -32,10 +34,12 @@ type PlayerPanelTab = "customization" | "history";
 type HistorySectionTab = "seasons" | "transfers" | "matches";
 
 type SquadHistoryData = {
-  player: PlayerView & { displayName?: string };
-  seasons: { seasonKey: string; clubName: string; appearances: number; goals: number; assists: number; yellows: number; reds: number }[];
+  player: PlayerView & { displayName?: string; careerMvps?: number };
+  seasons: { seasonId: number; seasonKey: string; clubName: string; appearances: number; goals: number; assists: number; yellows: number; reds: number; overall: number | null; value: number | null; mvps?: number; avgScore?: number | null }[];
   transfers: { type: string; price: number; seasonKey: string }[];
   matches: { minute: number; type: number; matchHomeScore: number | null; matchAwayScore: number | null }[];
+  matchScores?: { matchId: number; score: number; rating: number | null; goals: number; assists: number; won: boolean; result: string | null; minutesPlayed?: number; role?: string; currentSeason?: boolean }[];
+  currentSeasonAvg?: number | null;
 };
 
 const POSITION_OPTIONS = ["GK", "FB", "CB", "MF", "FW"].map((label, value) => ({ label, value }));
@@ -60,7 +64,18 @@ function conditionIcon(condition: string) {
 // parameter (plus other module-level helpers/components), so a fresh closure
 // per render (and per row) buys nothing and only adds allocation churn.
 function positionBody(p: PlayerView) {
-  return <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""}`} title={positionTitle(p.position)}>{p.positionName}</span>;
+  const positionTooltip = positionTitle(p.position);
+  return <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""} squad-tooltip-trigger`} data-pr-tooltip={positionTooltip}>{p.positionName}</span>;
+}
+
+/** Dropdown menu item for tactic options: label plus optional one-line description. */
+function tacticItemTemplate(option: TacticOption) {
+  return (
+    <div>
+      <div style={{ fontWeight: 600 }}>{option.label}</div>
+      {option.desc && <div style={{ fontSize: "0.8rem", opacity: 0.85, marginTop: 2, lineHeight: 1.4 }}>{option.desc}</div>}
+    </div>
+  );
 }
 
 function squadNumberBody(p: PlayerView) {
@@ -68,7 +83,7 @@ function squadNumberBody(p: PlayerView) {
 }
 
 function nameBody(p: PlayerView) {
-  return <span className="squad-player-cell"><PlayerName player={p} showPosition={false} preferNickname showSuspended={false} /></span>;
+  return <span className="squad-player-cell"><PlayerName player={p} showPosition={false} preferNickname showSuspended={false} showInjury={false} customTooltips /></span>;
 }
 
 function ratingBody(p: PlayerView) {
@@ -98,21 +113,22 @@ function conditionBody(p: PlayerView) {
         type="button"
         className="squad-condition squad-tooltip-trigger"
         data-pr-tooltip={conditionText}
-        title={conditionText}
         aria-label={conditionText}
         style={{ color: condition === "Needs rest" || condition === "Injured" ? "var(--red-2)" : "var(--text-2)" }}
       >
-        <Icon size={16} aria-hidden="true" />
+        <span className="squad-condition-icon">
+          <Icon size={16} aria-hidden="true" />
+          {condition === "Injured" && injuryDays > 0 && <span className="squad-injury-days" aria-hidden="true">{injuryDays}</span>}
+        </span>
       </button>
       {p.yellowWarning && (
         <button
           type="button"
           className="squad-yellowcard squad-tooltip-trigger"
           data-pr-tooltip={yellowWarningText}
-          title={yellowWarningText}
           aria-label={yellowWarningText}
         >
-          🟨
+          <Square size={15} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
         </button>
       )}
       {p.suspended && (
@@ -120,7 +136,6 @@ function conditionBody(p: PlayerView) {
           type="button"
           className="squad-suspension squad-tooltip-trigger"
           data-pr-tooltip={suspensionText}
-          title={suspensionText}
           aria-label={suspensionText}
         >
           <ShieldAlert size={16} aria-hidden="true" />
@@ -219,12 +234,52 @@ export function Squad() {
   const [positionFilter, setPositionFilter] = useState<number[]>([]);
   const [sellTarget, setSellTarget] = useState<PlayerView | null>(null);
   const [countryNames, setCountryNames] = useState<Record<string, string>>({});
+  const tooltipRef = useRef<Tooltip>(null);
+  const tooltipHandlersRef = useRef(new Map<HTMLElement, { show: EventListener; hide: EventListener }>());
   const seasonsOf = (days: number) => {
     const per = snapshot?.save.seasonDays;
     if (!per) return `${days}d`;
     const s = Math.round(days / per);
     return `${s} season${s === 1 ? "" : "s"}`;
   };
+
+  useEffect(() => {
+    const syncTooltipTargets = () => {
+      const targets = new Set(Array.from(document.querySelectorAll<HTMLElement>(".squad-tooltip-trigger")));
+      for (const [target, handlers] of tooltipHandlersRef.current) {
+        if (targets.has(target)) continue;
+        target.removeEventListener("mouseenter", handlers.show);
+        target.removeEventListener("mouseleave", handlers.hide);
+        target.removeEventListener("focus", handlers.show);
+        target.removeEventListener("blur", handlers.hide);
+        tooltipHandlersRef.current.delete(target);
+      }
+      for (const target of targets) {
+        if (tooltipHandlersRef.current.has(target)) continue;
+        const show: EventListener = (event) => tooltipRef.current?.show(event as never);
+        const hide: EventListener = (event) => tooltipRef.current?.hide(event as never);
+        target.addEventListener("mouseenter", show);
+        target.addEventListener("mouseleave", hide);
+        target.addEventListener("focus", show);
+        target.addEventListener("blur", hide);
+        tooltipHandlersRef.current.set(target, { show, hide });
+      }
+    };
+    syncTooltipTargets();
+    const observer = new MutationObserver(syncTooltipTargets);
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      for (const [target, handlers] of tooltipHandlersRef.current) {
+        target.removeEventListener("mouseenter", handlers.show);
+        target.removeEventListener("mouseleave", handlers.hide);
+        target.removeEventListener("focus", handlers.show);
+        target.removeEventListener("blur", handlers.hide);
+      }
+      tooltipHandlersRef.current.clear();
+      tooltipRef.current?.hide();
+    };
+  }, []);
 
   const club = snapshot?.club;
   // plans/6 §17 UI: familiarity bars for the drafted tactic combination. The
@@ -502,6 +557,7 @@ export function Squad() {
 
   const openHistory = async (p: PlayerView) => {
     setPlayerPanelTab("history");
+    if (historyData !== null && historyData.player.id === p.id) return;
     setHistoryBusy(true);
     setHistoryData(null);
     setHistoryError(null);
@@ -519,6 +575,7 @@ export function Squad() {
   return (
     <div>
       <Toast ref={toast} position="bottom-right" />
+      <Tooltip ref={tooltipRef} position="top" className="squad-tooltip" />
       <div className="page-head">
         <div>
           <div className="kicker">{club?.name ?? strings.squad.title}</div>
@@ -549,26 +606,26 @@ export function Squad() {
           <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)", alignItems: "start", gap: 16 }}>
             <div className="card">
               <h2 className="card-title"><ShieldCheck size={17} /> {strings.squad.tactics}</h2>
-              <TacticsBoard mode="club" onFormationChange={setBoardFormation} />
+              <TacticsBoard mode="club" onFormationChange={setBoardFormation} customTooltips />
             </div>
           <div className="card">
             <h2 className="card-title"><Clapperboard size={17} /> Match Strategy</h2>
             <div className="form-group">
               <label htmlFor="tac-style">{strings.squad.style}</label>
-              <Dropdown id="tac-style" value={tactics.style} options={STYLES} onChange={(e) => setTactics({ ...tactics, style: e.value })} style={{ width: "100%" }} />
+              <Dropdown id="tac-style" value={tactics.style} options={STYLES} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, style: e.value })} style={{ width: "100%" }} />
             </div>
             <div className="form-group">
               <label htmlFor="tac-press">{strings.squad.pressing}</label>
-              <Dropdown id="tac-press" value={tactics.pressing} options={PRESSING} onChange={(e) => setTactics({ ...tactics, pressing: e.value })} style={{ width: "100%" }} />
+              <Dropdown id="tac-press" value={tactics.pressing} options={PRESSING} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, pressing: e.value })} style={{ width: "100%" }} />
             </div>
             <div className="form-group">
               <label htmlFor="tac-dir">{strings.squad.direction}</label>
-              <Dropdown id="tac-dir" value={tactics.direction} options={DIRECTIONS} onChange={(e) => setTactics({ ...tactics, direction: e.value })} style={{ width: "100%" }} />
+              <Dropdown id="tac-dir" value={tactics.direction} options={DIRECTIONS} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, direction: e.value })} style={{ width: "100%" }} />
             </div>
             {clubTactics?.familiarity !== undefined && (
               <div className="form-group">
                 <label>Tactical familiarity</label>
-                <FamiliarityBar value={shownFamiliarity ?? clubTactics.familiarity} projected={draftMatchesSaved ? null : formationSaved ? draftProjection : null} />
+                <FamiliarityBar value={shownFamiliarity ?? clubTactics.familiarity} projected={draftMatchesSaved ? null : formationSaved ? draftProjection : null} customTooltips />
                 <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
                   Familiarity grows with every match played in a setup and fades when unused. Switching setups keeps only part of it — similar setups carry more over.
                 </div>
@@ -590,10 +647,16 @@ export function Squad() {
                 id="training-focus"
                 value={trainingFocus}
                 options={[
-                  { label: strings.squad.trainingAssistant, value: "assistant" },
-                  { label: strings.squad.trainingPrimary, value: "primary" },
-                  { label: strings.squad.trainingSecondary, value: "secondary" },
+                  { label: strings.squad.trainingAssistant, desc: strings.squad.trainingAssistantDesc, value: "assistant" },
+                  { label: strings.squad.trainingPrimary, desc: strings.squad.trainingPrimaryDesc, value: "primary" },
+                  { label: strings.squad.trainingSecondary, desc: strings.squad.trainingSecondaryDesc, value: "secondary" },
                 ]}
+                itemTemplate={(option) => (
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{option.label}</div>
+                    <div style={{ fontSize: "0.8rem", opacity: 0.85, marginTop: 2, lineHeight: 1.4 }}>{option.desc}</div>
+                  </div>
+                )}
                 onChange={(e) => void saveTrainingFocus(e.value as TrainingFocus)}
                 style={{ width: "100%" }}
               />
@@ -602,17 +665,16 @@ export function Squad() {
               </div>
             </div>
             <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 12, lineHeight: 1.5 }}>
-              Style, pressing and direction apply to every match. The starting eleven, bench and set-piece takers are saved with the lineup above.
+              {strings.squad.tacticsHint}
             </div>
           </div>
           </div>
-          <AutomationPanel formation={boardFormation} />
+          <AutomationPanel formation={boardFormation} customTooltips />
         </>
       ) : (
         <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
           <div className="card" style={{ padding: isMobile ? 10 : 20 }}>
             <div className="table-wrap squad-table-wrap">
-              <Tooltip target=".squad-tooltip-trigger" event="both" position="top" className="squad-tooltip" />
               <DataTable
                 value={filteredRows}
                 selectionMode="single"
@@ -677,19 +739,19 @@ export function Squad() {
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
                   {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>Real name: {selectedPlayer.name}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
-                    <span title={positionTitle(selectedPlayer.position)}>{selectedPlayer.positionName}</span> · {selectedPlayer.age} yrs ·{" "}
-                    <span title={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
+                    <span className="squad-tooltip-trigger" data-pr-tooltip={positionTitle(selectedPlayer.position)}>{selectedPlayer.positionName}</span> · {selectedPlayer.age} yrs ·{" "}
+                    <span className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
                       {selectedCountryFlag && <span aria-hidden="true">{selectedCountryFlag} </span>}
                       {selectedCountryName}
                     </span>
                     {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
                     {!!selectedPlayer.injuryDaysRemaining && selectedPlayer.injuryDaysRemaining > 0 && (
-                      <span className="flag-chip" style={{ marginLeft: 6 }} title={`${strings.squad.injuryCause}: ${selectedPlayer.injuryCause ?? "—"}`}>
+                      <span className="flag-chip squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`${strings.squad.injuryCause}: ${selectedPlayer.injuryCause ?? "—"}`}>
                         Injured · {strings.squad.injuredReturn.replace("{{day}}", String((selectedPlayer.injuryUntilAbsoluteGameDay ?? 0) + 1))}
                       </span>
                     )}
-                    {selectedPlayer.onLoan && <span className="flag-chip fc-loan" style={{ marginLeft: 6 }} title={`On loan from ${selectedPlayer.loanFromName ?? "another club"}`}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
-                    {selectedPlayer.onLoanOut && <span className="flag-chip fc-loan" style={{ marginLeft: 6 }} title={`On loan at ${selectedPlayer.loanClubName ?? "another club"}`}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
+                    {selectedPlayer.onLoan && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`On loan from ${selectedPlayer.loanFromName ?? "another club"}`}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
+                    {selectedPlayer.onLoanOut && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`On loan at ${selectedPlayer.loanClubName ?? "another club"}`}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
                   </div>
                 </div>
               </div>
@@ -717,7 +779,7 @@ export function Squad() {
                         disabled={!user?.isPro}
                         onKeyDown={(e) => { if (e.key === "Enter") void saveNickname(); }}
                       />
-                      <button className="btn" onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} title={!user?.isPro ? "Pro required" : undefined} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{nicknameBusy ? "Saving…" : "Save nick"}</button>
+                      <button className={`btn${!user?.isPro ? " squad-tooltip-trigger" : ""}`} onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} data-pr-tooltip={!user?.isPro ? "Pro required" : undefined} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{nicknameBusy ? "Saving…" : "Save nick"}</button>
                     </div>
                     <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 6 }}>
                       {user?.isPro
@@ -753,6 +815,46 @@ export function Squad() {
                         <div className="squad-history-stat"><Handshake size={14} /><span><small>Career assists</small><strong>{historyData.player.careerAssists}</strong></span></div>
                         <div className="squad-history-stat"><CalendarDays size={14} /><span><small>Seasons</small><strong>{historyData.seasons.length + 1}</strong></span></div>
                         <div className="squad-history-stat"><ShieldAlert size={14} /><span><small>Cards</small><strong>{historyData.player.yellows}Y · {historyData.player.reds}R</strong></span></div>
+                        <div className="squad-history-stat"><Trophy size={14} /><span><small>Career MVP</small><strong>{historyData.player.careerMvps ?? 0}</strong></span></div>
+                      </div>
+                      <div className="squad-history-trends">
+                        <PlayerTrendSparkline
+                          label="Overall per season"
+                          values={[...historyData.seasons.map((s) => s.overall), selectedPlayer.overall]}
+                        />
+                        <PlayerTrendSparkline
+                          label="Market value per season"
+                          values={[...historyData.seasons.map((s) => s.value), selectedPlayer.value]}
+                          unit="money"
+                        />
+                        <PlayerScoresBarChart
+                          label="Avg rating · this season"
+                          points={[
+                            { key: "this-season", value: historyData.currentSeasonAvg ?? null, title: historyData.currentSeasonAvg != null ? `This season · avg ${historyData.currentSeasonAvg.toFixed(2)}` : "No rated appearances yet" },
+                            ...(historyData.matchScores ?? [])
+                              .filter((m) => m.currentSeason)
+                              .map((m) => ({
+                                key: `m${m.matchId}`,
+                                value: m.rating,
+                                title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
+                              })),
+                          ]}
+                          maxScore={10}
+                        />
+                        {user?.isPro && (
+                          <PlayerScoresBarChart
+                            label="Avg rating per season"
+                            unit="avg"
+                            points={historyData.seasons.map((s) => ({
+                              key: s.seasonKey,
+                              value: s.avgScore ?? null,
+                              title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(2)}`,
+                            })).concat(
+                              historyData.currentSeasonAvg != null ? [{ key: "current", value: historyData.currentSeasonAvg, title: `This season · avg ${historyData.currentSeasonAvg.toFixed(2)}` }] : []
+                            )}
+                            maxScore={10}
+                          />
+                        )}
                       </div>
                       <div className="segmented squad-history-tabs" role="tablist" aria-label="History section">
                         <button type="button" role="tab" aria-selected={historySectionTab === "seasons"} className={historySectionTab === "seasons" ? "active" : ""} onClick={() => setHistorySectionTab("seasons")}>
@@ -774,9 +876,9 @@ export function Squad() {
                             ) : (
                               <div className="squad-history-list">
                                 {historyData.seasons.map((season) => (
-                                  <div className="squad-history-row" key={season.seasonKey} title={`${season.seasonKey} · ${season.clubName}`}>
+                                  <div className="squad-history-row squad-tooltip-trigger" key={season.seasonKey} data-pr-tooltip={`${season.seasonKey} · ${season.clubName}`}>
                                     <strong>{season.seasonKey}</strong>
-                                    <span className="squad-history-row-detail">{season.clubName} · {season.appearances} apps · {season.goals}G · {season.assists}A · {season.yellows}Y · {season.reds}R</span>
+                                    <span className="squad-history-row-detail">{season.clubName} · {season.appearances} apps · {season.goals}G · {season.assists}A · {season.yellows}Y · {season.reds}R{(season.mvps ?? 0) > 0 ? ` · ${season.mvps} MVP` : ""}</span>
                                   </div>
                                 ))}
                               </div>
@@ -856,6 +958,10 @@ export function Squad() {
                   <div className="label">Season</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{selectedPlayer.seasonGoals}G {selectedPlayer.seasonAssists}A</div>
                 </div>
+                <div className="stat">
+                  <div className="label">Season MVP</div>
+                  <div className="value" style={{ fontSize: "1.15rem" }}>{selectedPlayer.seasonMvps ?? 0}</div>
+                </div>
               </div>
 
               <div className="squad-actions-grid" style={{ marginTop: 16 }}>
@@ -863,25 +969,25 @@ export function Squad() {
                   const a = squadActionState(selectedPlayer, club);
                   if (a.senior) {
                     return <>
-                      <button className="btn squad-action" disabled={a.renew.disabled} title={a.renew.reason} onClick={() => openRenew(selectedPlayer)}>
+                      <button className="btn squad-action squad-tooltip-trigger" disabled={a.renew.disabled} data-pr-tooltip={a.renew.reason} onClick={() => openRenew(selectedPlayer)}>
                         <FileSignature size={13} /> {strings.squad.renew}
                       </button>
-                      <button className="btn ghost squad-action" title={a.onLoanOut ? undefined : a.loan.reason ?? strings.transfers.lendLoanHint} disabled={a.onLoanOut ? a.recall.disabled : a.loan.disabled} onClick={() => loanAction(selectedPlayer)}>
+                      <button className="btn ghost squad-action squad-tooltip-trigger" data-pr-tooltip={a.onLoanOut ? undefined : a.loan.reason ?? strings.transfers.lendLoanHint} disabled={a.onLoanOut ? a.recall.disabled : a.loan.disabled} onClick={() => loanAction(selectedPlayer)}>
                         <Handshake size={13} /> {a.onLoanOut ? "Recall from loan" : selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
                       </button>
-                      <button className="btn ghost squad-action" disabled={a.listed} title={a.listed ? "This player is already on the market" : undefined} onClick={() => setSellTarget(selectedPlayer)}>
+                      <button className="btn ghost squad-action squad-tooltip-trigger" disabled={a.listed} data-pr-tooltip={a.listed ? "This player is already on the market" : undefined} onClick={() => setSellTarget(selectedPlayer)}>
                         <Tag size={13} /> List for sale
                       </button>
-                      <button className="btn ghost danger squad-action" disabled={a.release.disabled} title={a.release.reason} onClick={() => releasePlayer(selectedPlayer)}>
+                      <button className="btn ghost danger squad-action squad-tooltip-trigger" disabled={a.release.disabled} data-pr-tooltip={a.release.reason} onClick={() => releasePlayer(selectedPlayer)}>
                         <Trash2 size={13} /> {strings.squad.release} <span className="squad-action-price">({money(selectedPlayer.releaseClause ?? 0)})</span>
                       </button>
                     </>;
                   }
                   return <>
-                    <button className="btn squad-action" disabled={a.promote.disabled} title={a.promote.reason} onClick={() => academyAction(selectedPlayer, "promote")}>
+                    <button className="btn squad-action squad-tooltip-trigger" disabled={a.promote.disabled} data-pr-tooltip={a.promote.reason} onClick={() => academyAction(selectedPlayer, "promote")}>
                       <TrendingUp size={13} /> {strings.squad.promoteYouth}
                     </button>
-                    <button className="btn ghost danger squad-action" disabled={a.dismiss.disabled} title={a.dismiss.reason} onClick={() => academyAction(selectedPlayer, "dismiss")}>
+                    <button className="btn ghost danger squad-action squad-tooltip-trigger" disabled={a.dismiss.disabled} data-pr-tooltip={a.dismiss.reason} onClick={() => academyAction(selectedPlayer, "dismiss")}>
                       <UserMinus size={13} /> {strings.squad.dismissYouth}
                     </button>
                   </>;
@@ -892,7 +998,7 @@ export function Squad() {
         </div>
       )}
 
-      <ListForSaleDialog player={sellTarget} onClose={() => setSellTarget(null)} onListed={() => { setSellTarget(null); refresh(); }} />
+      <ListForSaleDialog player={sellTarget} onClose={() => setSellTarget(null)} onListed={() => { setSellTarget(null); refresh(); }} customTooltips />
 
       <Dialog header={strings.squad.renew} visible={showRenew} onHide={() => setShowRenew(false)} dismissableMask style={{ width: 400 }}>
         {selectedPlayer && (

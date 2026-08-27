@@ -74,6 +74,9 @@ export interface PlayerView {
   seasonAssists: number;
   careerGoals: number;
   careerAssists: number;
+  /** Matches named MVP (best performer on the winning team). */
+  seasonMvps?: number;
+  careerMvps?: number;
   yellows: number;
   reds: number;
   /** Yellow cards in the current league turn (per-turn disciplinary limit). */
@@ -111,6 +114,31 @@ export interface PlayerHistorySeason {
   yellows: number;
   reds: number;
   minutes: number;
+  /** End-of-season snapshot; null for seasons archived before the field existed. */
+  overall: number | null;
+  value: number | null;
+  /** Season MVP count snapshot. */
+  mvps?: number;
+  /** Average MVP score (goals*2 + assists)/appearances; null when no apps. */
+  avgScore?: number | null;
+}
+
+/** One of a player's recent matches with his performance rating. */
+export interface PlayerMatchScoreView {
+  matchId: number;
+  /** 3.0–10.0 rating; 0 when NR (under 10 minutes). */
+  score: number;
+  rating: number | null;
+  goals: number;
+  assists: number;
+  won: boolean;
+  result: string | null;
+  /** Season the match belongs to. */
+  seasonId?: number | null;
+  /** True when the match belongs to the current world season. */
+  currentSeason?: boolean;
+  minutesPlayed?: number;
+  role?: string;
 }
 
 export interface PlayerHistoryResponse {
@@ -118,6 +146,10 @@ export interface PlayerHistoryResponse {
   seasons: PlayerHistorySeason[];
   transfers: unknown[];
   matches: unknown[];
+  /** Player's scores for his last 10 appearances, newest first. */
+  matchScores?: PlayerMatchScoreView[];
+  /** Running average rating for the current season; null when not rated/visible. */
+  currentSeasonAvg?: number | null;
 }
 
 export interface ClubView {
@@ -816,6 +848,23 @@ export interface LivePlayer {
   suspended: boolean;
 }
 
+export interface LivePlayerScore {
+  playerId: number;
+  clubId: number;
+  goals: number;
+  assists: number;
+  score: number;
+  won: boolean;
+  minutes: number;
+  name?: string;
+  /** Coarse deployed role (live ratings). */
+  role?: string;
+  /** True when this is a live rating row, not a legacy points score. */
+  live?: boolean;
+  /** 3.0–10.0 rating; null before 10 match-minutes (NR). */
+  rating?: number | null;
+}
+
 export interface LiveEvent {
   sequence?: number;
   minute: number;
@@ -959,6 +1008,9 @@ export interface LiveState {
   shootout: { scores: [number, number]; winner: string } | null;
   stats: MatchStats;
   events: LiveEvent[];
+  /** Per-player MVP scores (goals*2 + assists + win bonus) for the current
+   *  match state; only players with pitch minutes appear. */
+  scores?: LivePlayerScore[];
   homeOn: LivePlayer[];
   awayOn: LivePlayer[];
   homeBench: LivePlayer[];
@@ -1009,7 +1061,15 @@ export interface LiveStateDelta {
   currentAddedTime: number | null;
   homeTacticsCooldownMinutes: number;
   awayTacticsCooldownMinutes: number;
-  /** Full missing-player snapshot each delta (deltas carry no roster lists). */
+  homeOn: LivePlayer[];
+  awayOn: LivePlayer[];
+  homeBench: LivePlayer[];
+  awayBench: LivePlayer[];
+  usedSubs: [number, number];
+  /** Per-player MVP scores for the current state (updates as goals/assists
+   *  happen so the live Scores tab stays fresh). */
+  scores?: LivePlayerScore[];
+  /** Full missing-player snapshot each delta. */
   missingPlayers?: LiveMissingPlayer[];
   ball?: LiveBall;
 }
@@ -1045,8 +1105,14 @@ export interface MatchEvents {
     awayScore: number;
     /** Detailed stats are a Pro feature; null for regular users. */
     stats: MatchStats | null;
+    /** MVP award (best performer on the winning team); null when none. */
+    mvpPlayerId?: number | null;
+    mvpPlayerName?: string | null;
+    mvpClubId?: number | null;
   };
   events: LiveEvent[];
+  /** Per-player MVP scores for the finished match (only players with minutes). */
+  scores?: LivePlayerScore[];
 }
 
 export interface Settings {

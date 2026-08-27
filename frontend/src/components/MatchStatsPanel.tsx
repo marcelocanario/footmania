@@ -7,7 +7,7 @@ function share(home: number, away: number): [number, number] {
   return [homeShare, 100 - homeShare];
 }
 
-export function MatchStatsPanel({ stats, usedSubs }: { stats: MatchStats; usedSubs?: [number, number] }) {
+export function MatchStatsPanel({ stats, usedSubs, mvp }: { stats: MatchStats; usedSubs?: [number, number]; mvp?: { name: string | null; clubName?: string | null } | null }) {
   const possession = share(stats.home.controlledBallSeconds, stats.away.controlledBallSeconds);
   const fieldTilt = share(stats.home.attackingThirdControlledSeconds, stats.away.attackingThirdControlledSeconds);
   const bar = (label: string, home: number, away: number) => {
@@ -25,6 +25,12 @@ export function MatchStatsPanel({ stats, usedSubs }: { stats: MatchStats; usedSu
 
   return (
     <div className="match-stats-panel live-stats">
+      {mvp?.name ? (
+        <div className="mvp-line">
+          <span className="bar-label">🏆 Man of the match</span>
+          <span className="mvp-name">{mvp.name}{mvp.clubName ? ` · ${mvp.clubName}` : ""}</span>
+        </div>
+      ) : null}
       {bar("Possession", possession[0], possession[1])}
       {bar("Shots", stats.home.shots, stats.away.shots)}
       {bar("Shots on target", stats.home.shotsOnTarget, stats.away.shotsOnTarget)}

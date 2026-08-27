@@ -11,6 +11,7 @@ import { positionTitle } from "../components/PlayerName";
 import { enqueueKickoffWhistle, enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
+import { PlayerScoresTable } from "../components/PlayerScoresTable";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 import { FamiliarityBar } from "../components/FamiliarityBar";
@@ -83,7 +84,7 @@ export function LiveMatch() {
   const [liveId, setLiveId] = useState<number | null>(null);
   const [autoBusy, setAutoBusy] = useState(false);
   const [halftimeBusy, setHalftimeBusy] = useState(false);
-  const [sideTab, setSideTab] = useState<"events" | "stats" | "tactics">("events");
+  const [sideTab, setSideTab] = useState<"events" | "scores" | "stats" | "tactics">("events");
   const [tacticDraft, setTacticDraft] = useState({ style: 0, pressing: 0, direction: 0 });
   const [tacticsBusy, setTacticsBusy] = useState(false);
   const [tacticsStatus, setTacticsStatus] = useState("");
@@ -264,6 +265,12 @@ export function LiveMatch() {
       awayScore: delta.awayScore,
       stats: delta.stats,
       events,
+      scores: delta.scores ?? current.scores,
+      homeOn: delta.homeOn,
+      awayOn: delta.awayOn,
+      homeBench: delta.homeBench,
+      awayBench: delta.awayBench,
+      usedSubs: delta.usedSubs,
       automationFiredCount: delta.automationFiredCount,
       progressPct: delta.progressPct,
       currentAddedTime: delta.currentAddedTime,
@@ -590,7 +597,7 @@ export function LiveMatch() {
               {wsMode && !reconnecting ? <><span className="pulse-dot" /> Live</> : <><RefreshCw size={10} /> {reconnecting ? "Reconnecting" : "Fallback"}</>}
             </span>
             <div className="live-side-tabs" role="tablist" aria-label="Live match sidebar">
-              {(["events", "stats", "tactics"] as const).map((tab) => (
+              {(["events", "scores", "stats", "tactics"] as const).map((tab) => (
                 <button key={tab} type="button" role="tab" aria-selected={sideTab === tab} className={`live-side-tab${sideTab === tab ? " active" : ""}`} onClick={() => setSideTab(tab)}>
                   {tab === "events" ? "Match history" : tab[0].toUpperCase() + tab.slice(1)}
                 </button>
@@ -601,6 +608,12 @@ export function LiveMatch() {
           {sideTab === "events" && (
             <div className="live-side-content">
               <MatchHistory events={historyEvents} homeClubId={state.homeClubId} homeName={state.home} awayName={state.away} emptyText={isDone ? "No goals, cards or injuries to report." : "The match is about to start..."} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
+            </div>
+          )}
+
+          {sideTab === "scores" && (
+            <div className="live-side-content">
+              <PlayerScoresTable scores={state.scores ?? []} homeClubId={state.homeClubId} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
             </div>
           )}
 
@@ -620,9 +633,12 @@ export function LiveMatch() {
                   Tactics are locked for {tacticsCooldownMinutes} more minute{tacticsCooldownMinutes === 1 ? "" : "s"} after your last change.
                 </div>
               )}
-              <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{PRESSING.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-              <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+              <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <div className="live-tactics-hint">{STYLES[tacticDraft.style]?.desc}</div></label>
+              <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{PRESSING.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <div className="live-tactics-hint">{PRESSING[tacticDraft.pressing]?.desc}</div></label>
+              <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <div className="live-tactics-hint">{DIRECTIONS[tacticDraft.direction]?.desc}</div></label>
               {typeof liveTactics?.familiarity === "number" && (
                 <div>
                   <FamiliarityBar value={liveTactics.familiarity} projected={draftMatchesLive ? null : draftProjection} />

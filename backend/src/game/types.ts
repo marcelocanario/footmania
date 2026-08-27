@@ -73,6 +73,11 @@ export interface Player {
   careerAssists: number;
   seasonGoals: number;
   seasonAssists: number;
+  /** Matches in which the player was named MVP (best performer on the winning
+   *  team). Optional so worlds/tests built before the field existed load
+   *  unchanged; undefined behaves as zero everywhere. */
+  careerMvps?: number;
+  seasonMvps?: number;
   /** League matches this season with at least one minute on the pitch.
    *  Optional so worlds persisted before the field existed load unchanged. */
   seasonAppearances?: number;
@@ -444,6 +449,14 @@ export interface Match {
   homeWasHuman?: boolean;
   awayWasHuman?: boolean;
   eloProcessed?: boolean;
+  /** Player named MVP (best performer on the winning team), computed at
+   *  finalization. Null for matches finished before the feature or draws
+   *  without a pick. */
+  mvpPlayerId?: number | null;
+  /** Live rating accumulator snapshot (plan §17); not persisted — copied onto
+   *  the match at build time so instant-simulation finalization can compute
+   *  rating rows. */
+  ratingAccum?: Record<number, import("./ratingObserver").PlayerRatingAccum>;
   // not persisted — used for activity tracking
   minutes?: Record<number, number>;
   /** not persisted — available for calibration/instrumentation consumers */
@@ -623,6 +636,13 @@ export interface LiveMatchState {
   automationFiredRuleIds?: string[];
   /** Automation: per-side kill-switch set when viewer explicitly disables automation. */
   automationDisabled?: [boolean, boolean];
+  /** Per-player rating accumulator (plan §17). Written by the rating observer,
+   *  persisted with the live state, and never read by gameplay logic. */
+  ratingAccum?: Record<number, import("./ratingObserver").PlayerRatingAccum>;
+  /** Frozen same-role rating benchmarks (plan §6.1) captured at kickoff.
+   *  Persisted so streamed ticks and server reloads reuse the SAME benchmark
+   *  snapshot instead of rebuilding it from mutable player/tacPos data. */
+  ratingBenchmarksJson?: string;
 }
 
 /** One persisted fact inside a grouped dashboard news message. */
@@ -1155,6 +1175,34 @@ export interface SeasonHistoryEntry {
   }[];
 }
 
+/** One persisted player match rating (plan §16), mirror of PlayerMatchRating. */
+export interface PlayerMatchRatingEntry {
+  matchId: number;
+  playerId: number;
+  clubId: number;
+  seasonId: number;
+  tier: number;
+  primaryRole: string;
+  minutesPlayed: number;
+  rawImpact: number;
+  rawVariance: number;
+  rawZ: number;
+  balancedZ: number;
+  ratingExact: number | null;
+  shootingImpact: number;
+  passingImpact: number;
+  dribblingImpact: number;
+  defendingImpact: number;
+  goalkeepingImpact: number;
+}
+
+/** One season-frozen role calibration (plan §10), mirror of RoleCalibration. */
+export interface RoleCalibrationEntry {
+  seasonId: number;
+  role: string;
+  zRaws: number[];
+}
+
 export interface World {
   seed: number;
   year: number;
@@ -1205,6 +1253,12 @@ export interface World {
   friendships?: MpFriendshipEntry[];
   // Multiplayer: final standings snapshots for completed seasons (plan §70).
   seasonHistory: SeasonHistoryEntry[];
+  /** Player match performance ratings (plan §16); mirror of PlayerMatchRating
+   *  rows, written at finalization and synced by persistWorld. */
+  playerMatchRatings?: PlayerMatchRatingEntry[];
+  /** Season-frozen role calibration snapshots (plan §10); mirror of
+   *  RoleCalibration rows. */
+  roleCalibrations?: RoleCalibrationEntry[];
   // Idempotency ledger for player generation events (player-generation §45/§46).
   // Keys: "academy-intake:{clubId}:{seasonId}", "club-creation:{clubId}".
   generationEvents: string[];

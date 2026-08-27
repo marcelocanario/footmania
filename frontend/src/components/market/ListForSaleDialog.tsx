@@ -26,10 +26,12 @@ export function ListForSaleDialog({
   player,
   onClose,
   onListed,
+  customTooltips = false,
 }: {
   player: PlayerView | null;
   onClose: () => void;
   onListed: () => void;
+  customTooltips?: boolean;
 }) {
   const status = useGame((s) => s.status);
   const [preview, setPreview] = useState<SellPreview | null>(null);
@@ -122,7 +124,6 @@ export function ListForSaleDialog({
       <div style={{ display: "flex", gap: 8 }}>
         <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>{strings.common.cancel}</button>
         <button
-          className="btn"
           style={{ flex: 1 }}
           disabled={
             status?.paused ||
@@ -132,7 +133,8 @@ export function ListForSaleDialog({
             price < preview.openingPriceRange.min ||
             price > preview.openingPriceRange.max
           }
-          title={status?.paused ? SEASON_PAUSED_TITLE : undefined}
+          className={`btn${customTooltips && status?.paused ? " squad-tooltip-trigger" : ""}`}
+          {...(customTooltips ? { "data-pr-tooltip": status?.paused ? SEASON_PAUSED_TITLE : undefined } : { title: status?.paused ? SEASON_PAUSED_TITLE : undefined })}
           onClick={() => void sell()}
         >
           {strings.common.confirm}

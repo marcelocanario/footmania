@@ -106,6 +106,8 @@ function changedWorldCollections(previous: World | undefined, world: World): Set
   if (changed("seasonAwards")) tables.add("seasonAward");
   if (changed("records")) tables.add("careerRecord");
   if (changed("liveMatches")) tables.add("liveMatch");
+  if (changed("playerMatchRatings")) tables.add("playerMatchRating");
+  if (changed("roleCalibrations")) tables.add("roleCalibration");
   return tables;
 }
 
@@ -162,6 +164,8 @@ const TABLE_NAMES = [
   "seasonAward",
   "careerRecord",
   "liveMatch",
+  "playerMatchRating",
+  "roleCalibration",
 ] as const;
 
 function jsonOr<T>(raw: string | null | undefined, fallback: T): T {
@@ -520,6 +524,20 @@ export async function persistWorld(
       if (rewriteTables.has("playerMarketTransaction")) {
         await syncStableEntities(tx, "playerMarketTransaction", saveId, previous.playerMarketHistory, world.playerMarketHistory, (entity) => playerMarketTransactionRow(entity, saveId), "id", (_saveId, id) => ({ id }));
         stableDeltaTables.add("playerMarketTransaction");
+      }
+      if (rewriteTables.has("playerMatchRating")) {
+        // Delete-and-reinsert (plan §16): rows are small and keyed by
+        // (saveId, matchId, playerId); full rewrite is idempotent and retry-safe.
+        await tx.playerMatchRating.deleteMany({ where: { saveId } });
+        const rows = (world.playerMatchRatings ?? []).map((r) => playerMatchRatingRow(r, saveId));
+        if (rows.length > 0) await createManyChunked(tx.playerMatchRating, rows);
+        stableDeltaTables.add("playerMatchRating");
+      }
+      if (rewriteTables.has("roleCalibration")) {
+        await tx.roleCalibration.deleteMany({ where: { saveId } });
+        const rows = (world.roleCalibrations ?? []).map((c) => roleCalibrationRow(c, saveId));
+        if (rows.length > 0) await createManyChunked(tx.roleCalibration, rows);
+        stableDeltaTables.add("roleCalibration");
       }
       if (rewriteTables.has("newsItem")) {
         await syncAutoEntities(tx, "newsItem", saveId, previous.news, world.news, (entity) => newsRow(entity, saveId));
@@ -993,6 +1011,8 @@ function playerRow(p: Player, saveId: number) {
     careerAssists: p.careerAssists,
     seasonGoals: p.seasonGoals,
     seasonAssists: p.seasonAssists,
+    careerMvps: p.careerMvps ?? 0,
+    seasonMvps: p.seasonMvps ?? 0,
     seasonAppearances: p.seasonAppearances ?? 0,
     yellows: p.yellows,
     reds: p.reds,
@@ -1055,11 +1075,19 @@ function fixtureRow(f: Fixture, saveId: number) {
 }
 
 function matchRow(m: Match, saveId: number) {
-  return { id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null, homeWasHuman: m.homeWasHuman ?? false, awayWasHuman: m.awayWasHuman ?? false, eloProcessed: m.eloProcessed ?? false };
+  return { id: m.id, saveId, fixtureId: m.fixtureId, competitionId: m.competitionId, homeClubId: m.homeClubId, awayClubId: m.awayClubId, homeScore: m.homeScore, awayScore: m.awayScore, penaltyWinnerId: m.penaltyWinnerId, penaltyScoreJson: m.penaltyScore ? JSON.stringify(m.penaltyScore) : null, extraTime: m.extraTime ?? false, scheduledAt: m.scheduledAt !== undefined ? BigInt(m.scheduledAt) : null, homeWasHuman: m.homeWasHuman ?? false, awayWasHuman: m.awayWasHuman ?? false, eloProcessed: m.eloProcessed ?? false, mvpPlayerId: m.mvpPlayerId ?? null };
 }
 
 function clubEloEventRow(event: ClubEloEvent, saveId: number) {
   return { id: event.id, saveId, matchId: event.matchId, clubId: event.clubId, opponentClubId: event.opponentClubId, ratingBefore: event.ratingBefore, ratingAfter: event.ratingAfter, delta: event.delta, expectedScore: event.expectedScore, actualScore: event.actualScore, createdAt: new Date(event.createdAt) };
+}
+
+function playerMatchRatingRow(r: import("../game/types").PlayerMatchRatingEntry, saveId: number) {
+  return { saveId, matchId: r.matchId, playerId: r.playerId, clubId: r.clubId, seasonId: r.seasonId, tier: r.tier, primaryRole: r.primaryRole, minutesPlayed: r.minutesPlayed, rawImpact: r.rawImpact, rawVariance: r.rawVariance, rawZ: r.rawZ, balancedZ: r.balancedZ, ratingExact: r.ratingExact, shootingImpact: r.shootingImpact, passingImpact: r.passingImpact, dribblingImpact: r.dribblingImpact, defendingImpact: r.defendingImpact, goalkeepingImpact: r.goalkeepingImpact };
+}
+
+function roleCalibrationRow(c: import("../game/types").RoleCalibrationEntry, saveId: number) {
+  return { saveId, seasonId: c.seasonId, role: c.role, zRawsJson: JSON.stringify(c.zRaws) };
 }
 
 function transferAuctionRow(a: TransferAuction, saveId: number) {
@@ -1393,6 +1421,8 @@ async function rebuildWorld(
       mpActivityRows,
       clubEloEventRows,
       friendshipRows,
+      playerMatchRatingRows,
+      roleCalibrationRows,
    ] = await Promise.all([
      prisma.club.findMany({ where: { saveId: saveRow.id } }),
      prisma.player.findMany({ where: { saveId: saveRow.id } }),
@@ -1421,6 +1451,8 @@ async function rebuildWorld(
        prisma.mpActivity.findMany({ orderBy: { id: "asc" } }),
        prisma.clubEloEvent.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
        prisma.friendship.findMany({ orderBy: { id: "asc" } }),
+       prisma.playerMatchRating.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
+       prisma.roleCalibration.findMany({ where: { saveId: saveRow.id }, orderBy: { id: "asc" } }),
    ]);
 
     const clubs: Club[] = clubRows.map((r) => {
@@ -1537,6 +1569,8 @@ async function rebuildWorld(
         careerAssists: r.careerAssists,
         seasonGoals: r.seasonGoals,
         seasonAssists: r.seasonAssists,
+        careerMvps: (r as unknown as { careerMvps?: number }).careerMvps ?? 0,
+        seasonMvps: (r as unknown as { seasonMvps?: number }).seasonMvps ?? 0,
         seasonAppearances: (r as unknown as { seasonAppearances?: number }).seasonAppearances ?? 0,
         yellows: r.yellows,
         reds: r.reds,
@@ -1648,6 +1682,7 @@ async function rebuildWorld(
        homeWasHuman: (r as typeof r & { homeWasHuman?: boolean }).homeWasHuman ?? false,
        awayWasHuman: (r as typeof r & { awayWasHuman?: boolean }).awayWasHuman ?? false,
        eloProcessed: (r as typeof r & { eloProcessed?: boolean }).eloProcessed ?? false,
+       mvpPlayerId: (r as typeof r & { mvpPlayerId?: number | null }).mvpPlayerId ?? null,
        minuteEvents: [],
       scheduledAt: (r as unknown as { scheduledAt: bigint | null }).scheduledAt !== null && (r as unknown as { scheduledAt: bigint | null }).scheduledAt !== undefined ? Number((r as unknown as { scheduledAt: bigint | null }).scheduledAt) : undefined,
     };
@@ -1904,6 +1939,31 @@ async function rebuildWorld(
     if (persistedIds.length > 0) world.nextId = Math.max(world.nextId, Math.max(...persistedIds) + 1);
     world.mp.seasonDayIndex ??= Math.max(0, Math.min(gameConfig.seasonDays - 1, world.dayIndex));
     world.mp.phase = phaseForSeasonDayIndex(world.mp.seasonDayIndex, gameConfig);
+    // Player match ratings + season-frozen role calibration (plan §16/§10).
+    world.playerMatchRatings = (playerMatchRatingRows ?? []).map((r) => ({
+      matchId: r.matchId,
+      playerId: r.playerId,
+      clubId: r.clubId,
+      seasonId: r.seasonId,
+      tier: r.tier,
+      primaryRole: r.primaryRole,
+      minutesPlayed: r.minutesPlayed,
+      rawImpact: r.rawImpact,
+      rawVariance: r.rawVariance,
+      rawZ: r.rawZ,
+      balancedZ: r.balancedZ,
+      ratingExact: r.ratingExact,
+      shootingImpact: r.shootingImpact,
+      passingImpact: r.passingImpact,
+      dribblingImpact: r.dribblingImpact,
+      defendingImpact: r.defendingImpact,
+      goalkeepingImpact: r.goalkeepingImpact,
+    }));
+    world.roleCalibrations = (roleCalibrationRows ?? []).map((c) => ({
+      seasonId: c.seasonId,
+      role: c.role,
+      zRaws: jsonOr<number[]>(c.zRawsJson, []),
+    }));
     return world;
 }
 

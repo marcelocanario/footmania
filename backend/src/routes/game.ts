@@ -13,7 +13,8 @@ import { calculateReleaseClause, contractDaysForTerm, remainingSeasons } from ".
 import { resetPayrollPeriod, settlePlayerPayroll } from "../game/payroll";
 import { applyLiveTacticsUpdate, performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { recordActivity } from "../game/multiplayer";
-import { hasPro } from "../services/pro";
+import { canViewPlayerPerformance, hasPro } from "../services/pro";
+import { playerMatchScoreView } from "../services/playerPerformance";
 import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup, seniorRosterFullError, seniorRosterOverflowError } from "../game/club";
@@ -164,6 +165,41 @@ export async function gameRoutes(app: FastifyInstance) {
       // Injury events carry the estimated days out in goalType.
       goalType: e.goalType,
     }));
+    const mvpPlayer = match.mvpPlayerId != null ? loaded.world.players.find((p) => p.id === match.mvpPlayerId) : undefined;
+    const playerById = new Map(loaded.world.players.map((p) => [p.id, p]));
+    const viewerClub = userClub(loaded.world, req.user!.id);
+    const canViewMvp = mvpPlayer !== undefined && canViewPlayerPerformance(req.user, mvpPlayer, {
+      viewerClubId: viewerClub?.id ?? null,
+      loans: loaded.world.loans,
+    });
+    // Finished-match scores come from the persisted rating rows (plan §16).
+    const scores = (loaded.world.playerMatchRatings ?? [])
+      .filter((r) => r.matchId === match.id)
+      .filter((r) => {
+        const player = playerById.get(r.playerId);
+        return player !== undefined && canViewPlayerPerformance(req.user, player, {
+          viewerClubId: viewerClub?.id ?? null,
+          loans: loaded.world.loans,
+        });
+      })
+      .map((r) => {
+        const p = playerById.get(r.playerId);
+        const facts = playerMatchScoreView(loaded.world, r);
+        return {
+          playerId: r.playerId,
+          clubId: r.clubId,
+          goals: facts.goals,
+          assists: facts.assists,
+          score: facts.score,
+          won: facts.won,
+          minutes: r.minutesPlayed,
+          name: p?.name ?? "",
+          role: r.primaryRole,
+          live: false,
+          rating: r.ratingExact,
+        };
+      })
+      .sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
     return {
       match: {
         id: match.id,
@@ -173,8 +209,12 @@ export async function gameRoutes(app: FastifyInstance) {
         awayScore: match.awayScore,
         // Null for regular users; the UI shows a locked tab instead.
         stats: isPro ? match.stats : null,
+        mvpPlayerId: canViewMvp ? match.mvpPlayerId ?? null : null,
+        mvpPlayerName: canViewMvp ? mvpPlayer?.name ?? null : null,
+        mvpClubId: canViewMvp ? mvpPlayer?.clubId ?? null : null,
       },
       events,
+      scores,
     };
   });
 
