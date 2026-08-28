@@ -410,7 +410,12 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
   // reproduce the same tournament calendar.
   const orderSeed = stableHash(`${comp.seasonId}:${comp.id}`);
   const fixtures = createLeagueFixtures(orderSeed, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
-  const seasonStart = world.mp.seasonStartAt ?? Date.now();
+  // Midnight-aligned: kickoffs must land on the 30m UTC grid (00:00, 00:30...).
+  // A raw seasonStartAt at 18:26 would produce 18:26/18:56 slots — fix by
+  // truncating to UTC midnight before adding round offsets.
+  const rawSeasonStart = world.mp.seasonStartAt ?? Date.now();
+  const d = new Date(rawSeasonStart);
+  const seasonStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   const prefOf = (clubId: number): PreferenceInput => {
     const club = clubById(world, clubId);
     return { preferredSlots: club?.preferredHours ?? null };

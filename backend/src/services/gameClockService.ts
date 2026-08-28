@@ -33,6 +33,11 @@ export interface AdvanceGameDayOptions {
   leaseHeld?: boolean;
 }
 
+function midnightUtcOf(ms: number): number {
+  const d = new Date(ms);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+}
+
 function normalizeWorldClock(world: import("../game/types").World): void {
   const absoluteGameDay = world.mp.absoluteGameDay ?? Math.max(0, world.dayIndex);
   const seasonDayIndex = world.mp.seasonDayIndex ?? Math.max(0, Math.min(gameConfig.seasonDays - 1, world.dayIndex));
@@ -42,7 +47,18 @@ function normalizeWorldClock(world: import("../game/types").World): void {
   world.mp.seasonNumber ??= Math.max(1, world.year);
   world.mp.phase = phaseForSeasonDayIndex(seasonDayIndex, gameConfig);
   world.mp.clockVersion ??= 0;
-  world.mp.seasonStartAt ??= world.mp.lastAdvancedAt ?? Date.now();
+  // Midnight-aligned: kickoffs are on the 30m UTC grid (00:00, 00:30...).
+  // A raw seasonStartAt at 18:26 would produce 18:26/18:56 slots. Align to
+  // midnight unless the world is currently paused — pause/shift preserves
+  // the exact wall-clock mapping and will be re-anchored to midnight at
+  // the next rollover (seasonRolloverService).
+  const isPaused = world.mp.pausedAt !== null && world.mp.pausedAt !== undefined;
+  if (world.mp.seasonStartAt === null || world.mp.seasonStartAt === undefined) {
+    world.mp.seasonStartAt = midnightUtcOf(world.mp.lastAdvancedAt ?? Date.now());
+  } else if (!isPaused) {
+    const mid = midnightUtcOf(world.mp.seasonStartAt);
+    if (mid !== world.mp.seasonStartAt) world.mp.seasonStartAt = mid;
+  }
 }
 
 export async function ensureGameClock(prisma: PrismaClient, saveId: number, world?: import("../game/types").World): Promise<GameClockView> {
@@ -125,8 +141,14 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
     const seasonBeforeMandatory = world.mp.seasonId;
 
     if (!options.force) {
+      // Elegant fix: a live match (already started) is allowed to spill over
+      // to the next calendar day — the scheduler should not block rollover
+      // for a match that has already kicked off. Only fixtures with no
+      // liveMatch at all (future or failed to start) block advancement.
+      // This makes 23:30 + 35m = 00:05 spillover harmless, while still
+      // preventing the day from skipping before today's fixtures have started.
       const dayFixtures = world.fixtures.filter((fixture) => fixture.scheduledSeasonDayIndex === currentIndex || (fixture.scheduledSeasonDayIndex === undefined && fixture.dayIndex === currentIndex));
-      const unresolvedFixtures = dayFixtures.filter((fixture) => !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixture.id && match.ended));
+      const unresolvedFixtures = dayFixtures.filter((fixture) => !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixture.id));
       if (unresolvedFixtures.length > 0) {
         const details = unresolvedFixtures.map((fixture) => {
           const live = world.liveMatches.find((match) => match.fixtureId === fixture.id);

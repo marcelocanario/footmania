@@ -54,34 +54,52 @@ export async function schedulerProcessor(ctx: Pick<JobContext, "prisma"> & Parti
        }
         await ctx.prisma.setting.deleteMany({ where: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW" } });
          try {
-           for (let i = 0; i < missingDays; i++) {
-             executed += await executeDueEventsInLock(ctx.prisma, loaded.save.id, now, { excludeTypes: new Set([ScheduledEventType.GAME_DAY_ADVANCE]) });
-             // Diagnostic: before each automatic day advance, log unresolved fixtures if any
-             const preAdvance = await loadGlobalWorldMutable(ctx.prisma);
-             if (preAdvance) {
-               const idx = preAdvance.world.mp.seasonDayIndex ?? preAdvance.world.dayIndex;
-               const dayFixtures = preAdvance.world.fixtures.filter((f) => f.scheduledSeasonDayIndex === idx || (f.scheduledSeasonDayIndex === undefined && f.dayIndex === idx));
-               const unresolvedPre = dayFixtures.filter((f) => !f.played && !preAdvance.world.liveMatches.some((m) => m.fixtureId === f.id && m.ended));
-               if (unresolvedPre.length > 0) {
-                 console.warn(`[scheduler] day advance blocked: ${unresolvedPre.length} unresolved for seasonDayIndex ${idx} (attempt ${i + 1}/${missingDays})`, unresolvedPre.map((f) => ({ fixtureId: f.id, round: f.round, home: f.homeClubId, away: f.awayClubId, kickoffAt: f.kickoffAt ? new Date(f.kickoffAt).toISOString() : null, played: f.played, live: preAdvance.world.liveMatches.find((m) => m.fixtureId === f.id) ? { ended: preAdvance.world.liveMatches.find((m) => m.fixtureId === f.id)!.ended, minute: preAdvance.world.liveMatches.find((m) => m.fixtureId === f.id)!.minute } : null })));
-               }
-             }
-             await advanceGameDayInLock(ctx.prisma, { source: "AUTOMATIC", now, leaseHeld: true });
-             current = await loadGlobalWorldMutable(ctx.prisma);
-             if (!current) break;
-           }
-         } catch (error) {
-           // Attach scheduler context to help diagnose which match blocked the rollover
-           const diag = await loadGlobalWorldMutable(ctx.prisma).catch(() => null);
-           if (diag) {
-             const idx = diag.world.mp.seasonDayIndex ?? diag.world.dayIndex;
-             const dayFixtures = diag.world.fixtures.filter((f) => f.scheduledSeasonDayIndex === idx || (f.scheduledSeasonDayIndex === undefined && f.dayIndex === idx));
-             const unresolved = dayFixtures.filter((f) => !f.played && !diag.world.liveMatches.some((m) => m.fixtureId === f.id && m.ended));
-             console.error(`[scheduler] advanceGameDay failed at seasonDayIndex ${idx} absolute ${diag.world.mp.absoluteGameDay} missingDays=${missingDays} unresolved=${unresolved.length}`, { unresolved: unresolved.map((f) => ({ id: f.id, kickoffAt: f.kickoffAt ? new Date(f.kickoffAt).toISOString() : null, played: f.played, live: diag.world.liveMatches.find((m) => m.fixtureId === f.id) ?? null })), error: error instanceof Error ? error.message : String(error) });
-           }
-           await ctx.prisma.setting.upsert({ where: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW" }, update: { value: "1" }, create: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW", value: "1" } });
-           throw error;
-         }
+            for (let i = 0; i < missingDays; i++) {
+              executed += await executeDueEventsInLock(ctx.prisma, loaded.save.id, now, { excludeTypes: new Set([ScheduledEventType.GAME_DAY_ADVANCE]) });
+              // Diagnostic: before each automatic day advance, log unresolved fixtures if any
+              // Note: spillover live matches are *not* blocking — only fixtures with
+              // no liveMatch at all (future/failed) block rollover.
+              const preAdvance = await loadGlobalWorldMutable(ctx.prisma);
+              if (preAdvance) {
+                const idx = preAdvance.world.mp.seasonDayIndex ?? preAdvance.world.dayIndex;
+                const dayFixtures = preAdvance.world.fixtures.filter((f) => f.scheduledSeasonDayIndex === idx || (f.scheduledSeasonDayIndex === undefined && f.dayIndex === idx));
+                const unresolvedPre = dayFixtures.filter((f) => !f.played && !preAdvance.world.liveMatches.some((m) => m.fixtureId === f.id));
+                if (unresolvedPre.length > 0) {
+                  console.warn(`[scheduler] day advance blocked: ${unresolvedPre.length} unresolved for seasonDayIndex ${idx} (attempt ${i + 1}/${missingDays})`, unresolvedPre.map((f) => ({ fixtureId: f.id, round: f.round, home: f.homeClubId, away: f.awayClubId, kickoffAt: f.kickoffAt ? new Date(f.kickoffAt).toISOString() : null, played: f.played, live: preAdvance.world.liveMatches.find((m) => m.fixtureId === f.id) ? { ended: preAdvance.world.liveMatches.find((m) => m.fixtureId === f.id)!.ended, minute: preAdvance.world.liveMatches.find((m) => m.fixtureId === f.id)!.minute } : null })));
+                }
+              }
+              await advanceGameDayInLock(ctx.prisma, { source: "AUTOMATIC", now, leaseHeld: true });
+              current = await loadGlobalWorldMutable(ctx.prisma);
+              if (!current) break;
+            }
+          } catch (error) {
+            const isUnresolvedBlock = error instanceof Error && error.message.includes("scheduled match is unresolved");
+            // Spillover / future-fixture blocks are expected mid-day — don't
+            // flag admin review, just wait for next tick. Only true domain
+            // errors (stale lease, missing prerequisite, etc.) need review.
+            if (isUnresolvedBlock) {
+              const diag = await loadGlobalWorldMutable(ctx.prisma).catch(() => null);
+              if (diag) {
+                const idx = diag.world.mp.seasonDayIndex ?? diag.world.dayIndex;
+                const dayFixtures = diag.world.fixtures.filter((f) => f.scheduledSeasonDayIndex === idx || (f.scheduledSeasonDayIndex === undefined && f.dayIndex === idx));
+                const unresolved = dayFixtures.filter((f) => !f.played && !diag.world.liveMatches.some((m) => m.fixtureId === f.id));
+                console.warn(`[scheduler] day advance deferred (will retry): seasonDayIndex ${idx} unresolved=${unresolved.length} liveSpillover=${dayFixtures.length - unresolved.length}`, { unresolved: unresolved.map((f) => ({ id: f.id, kickoffAt: f.kickoffAt ? new Date(f.kickoffAt).toISOString() : null })) });
+              } else {
+                console.warn(`[scheduler] day advance deferred: ${error instanceof Error ? error.message : String(error)}`);
+              }
+              return { saveId: loaded.save.id, executed };
+            }
+            // Attach scheduler context to help diagnose which match blocked the rollover
+            const diag = await loadGlobalWorldMutable(ctx.prisma).catch(() => null);
+            if (diag) {
+              const idx = diag.world.mp.seasonDayIndex ?? diag.world.dayIndex;
+              const dayFixtures = diag.world.fixtures.filter((f) => f.scheduledSeasonDayIndex === idx || (f.scheduledSeasonDayIndex === undefined && f.dayIndex === idx));
+              const unresolved = dayFixtures.filter((f) => !f.played && !diag.world.liveMatches.some((m) => m.fixtureId === f.id));
+              console.error(`[scheduler] advanceGameDay failed at seasonDayIndex ${idx} absolute ${diag.world.mp.absoluteGameDay} missingDays=${missingDays} unresolved=${unresolved.length}`, { unresolved: unresolved.map((f) => ({ id: f.id, kickoffAt: f.kickoffAt ? new Date(f.kickoffAt).toISOString() : null, played: f.played, live: diag.world.liveMatches.find((m) => m.fixtureId === f.id) ?? null })), error: error instanceof Error ? error.message : String(error) });
+            }
+            await ctx.prisma.setting.upsert({ where: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW" }, update: { value: "1" }, create: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW", value: "1" } });
+            throw error;
+          }
        executed += await executeDueEventsInLock(ctx.prisma, loaded.save.id, now);
        return { saveId: loaded.save.id, executed };
      }));

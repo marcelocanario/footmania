@@ -312,7 +312,7 @@ export async function executeRolloverStep(
     world.mp.joinState = "OPEN";
     world.mp.lastProcessedGameDay = 0;
     world.mp.manualRound = null;
-    world.mp.seasonStartAt = now;
+    world.mp.seasonStartAt = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
     for (const [tier, humans] of byTier) rebuildTierDivisions(world, context.targetSeasonId, tier, humans, ref, { generateFixtures: false, assignmentSeed: context.groupAssignmentSeed });
     if (byTier.size === 0) {
       // No human clubs anywhere: do NOT pre-create an all-AI Division 1. The
@@ -386,7 +386,7 @@ export async function executeRolloverStep(
     world.mp.phase = "ACTIVE";
     world.mp.seasonDayIndex = 0;
     world.mp.startAbsoluteGameDay = (world.mp.absoluteGameDay ?? world.dayIndex) + 1;
-    world.mp.seasonStartAt = now;
+    world.mp.seasonStartAt = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
     world.mp.lastAdvancedAt = now;
     // One pre-season briefing per human club on the first day of the new
     // season. Idempotent per club/season; flow data is consumed and cleared.
