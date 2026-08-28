@@ -31,7 +31,7 @@ import { squadActionState } from "./squadActions";
 type Tab = "seniors" | "juniors" | "tactics";
 type TrainingFocus = "assistant" | "primary" | "secondary";
 type PlayerPanelTab = "customization" | "history";
-type HistorySectionTab = "seasons" | "transfers" | "matches";
+type HistorySectionTab = "seasons" | "transfers" | "evolution";
 
 type SquadHistoryData = {
   player: PlayerView & { displayName?: string; careerMvps?: number };
@@ -197,6 +197,8 @@ function historyEventTone(type: number): string {
   if (type === 3 || type === 4 || type === 5) return "danger";
   return "neutral";
 }
+// Helpers retained for potential future use; Match Events tab was replaced by Evolution.
+void historyEventLabel; void historyEventIcon; void historyEventTone;
 
 export function Squad() {
   const snapshot = useGame((s) => s.snapshot);
@@ -817,45 +819,6 @@ export function Squad() {
                         <div className="squad-history-stat"><ShieldAlert size={14} /><span><small>Cards</small><strong>{historyData.player.yellows}Y · {historyData.player.reds}R</strong></span></div>
                         <div className="squad-history-stat"><Trophy size={14} /><span><small>Career MVP</small><strong>{historyData.player.careerMvps ?? 0}</strong></span></div>
                       </div>
-                      <div className="squad-history-trends">
-                        <PlayerTrendSparkline
-                          label="Overall per season"
-                          values={[...historyData.seasons.map((s) => s.overall), selectedPlayer.overall]}
-                        />
-                        <PlayerTrendSparkline
-                          label="Market value per season"
-                          values={[...historyData.seasons.map((s) => s.value), selectedPlayer.value]}
-                          unit="money"
-                        />
-                        <PlayerScoresBarChart
-                          label="Avg rating · this season"
-                          points={[
-                            { key: "this-season", value: historyData.currentSeasonAvg ?? null, title: historyData.currentSeasonAvg != null ? `This season · avg ${historyData.currentSeasonAvg.toFixed(2)}` : "No rated appearances yet" },
-                            ...(historyData.matchScores ?? [])
-                              .filter((m) => m.currentSeason)
-                              .map((m) => ({
-                                key: `m${m.matchId}`,
-                                value: m.rating,
-                                title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
-                              })),
-                          ]}
-                          maxScore={10}
-                        />
-                        {user?.isPro && (
-                          <PlayerScoresBarChart
-                            label="Avg rating per season"
-                            unit="avg"
-                            points={historyData.seasons.map((s) => ({
-                              key: s.seasonKey,
-                              value: s.avgScore ?? null,
-                              title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(2)}`,
-                            })).concat(
-                              historyData.currentSeasonAvg != null ? [{ key: "current", value: historyData.currentSeasonAvg, title: `This season · avg ${historyData.currentSeasonAvg.toFixed(2)}` }] : []
-                            )}
-                            maxScore={10}
-                          />
-                        )}
-                      </div>
                       <div className="segmented squad-history-tabs" role="tablist" aria-label="History section">
                         <button type="button" role="tab" aria-selected={historySectionTab === "seasons"} className={historySectionTab === "seasons" ? "active" : ""} onClick={() => setHistorySectionTab("seasons")}>
                           <CalendarDays size={13} /> Season records <span className="count">{historyData.seasons.length}</span>
@@ -863,8 +826,8 @@ export function Squad() {
                         <button type="button" role="tab" aria-selected={historySectionTab === "transfers"} className={historySectionTab === "transfers" ? "active" : ""} onClick={() => setHistorySectionTab("transfers")}>
                           <Tag size={13} /> Transfers <span className="count">{historyData.transfers.length}</span>
                         </button>
-                        <button type="button" role="tab" aria-selected={historySectionTab === "matches"} className={historySectionTab === "matches" ? "active" : ""} onClick={() => setHistorySectionTab("matches")}>
-                          <Activity size={13} /> Match events <span className="count">{historyData.matches.length}</span>
+                        <button type="button" role="tab" aria-selected={historySectionTab === "evolution"} className={historySectionTab === "evolution" ? "active" : ""} onClick={() => setHistorySectionTab("evolution")}>
+                          <TrendingUp size={13} /> Evolution
                         </button>
                       </div>
 
@@ -904,21 +867,50 @@ export function Squad() {
                           </div>
                         )}
 
-                        {historySectionTab === "matches" && (
+                        {historySectionTab === "evolution" && (
                           <div className="squad-history-section">
-                            {historyData.matches.length === 0 ? (
-                              <div className="squad-history-empty">No match events.</div>
-                            ) : (
-                              <div className="squad-history-list">
-                                {historyData.matches.map((match, index) => (
-                                  <div className="squad-history-row" key={`${match.minute}-${match.type}-${index}`}>
-                                    <span className={`squad-history-event-icon ${historyEventTone(match.type)}`}>{historyEventIcon(match.type)}</span>
-                                    <strong>{historyEventLabel(match.type)}</strong>
-                                    <span className="squad-history-row-detail">{match.minute}' · {match.matchHomeScore ?? "–"}–{match.matchAwayScore ?? "–"}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                            <div className="squad-history-trends">
+                              <PlayerTrendSparkline
+                                label="Overall per season"
+                                values={[...historyData.seasons.map((s) => s.overall), selectedPlayer.overall]}
+                              />
+                              <PlayerTrendSparkline
+                                label="Market value per season"
+                                values={[...historyData.seasons.map((s) => s.value), selectedPlayer.value]}
+                                unit="money"
+                              />
+                              <PlayerScoresBarChart
+                                label="Avg rating · this season"
+                                points={(historyData.matchScores ?? [])
+                                  .filter((m) => m.currentSeason)
+                                  .map((m) => ({
+                                    key: `m${m.matchId}`,
+                                    value: m.rating,
+                                    title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
+                                  }))}
+                                maxScore={10}
+                                sideValue={historyData.currentSeasonAvg ?? null}
+                              />
+                              {user?.isPro ? (
+                                <PlayerScoresBarChart
+                                  label="Avg rating per season"
+                                  unit="avg"
+                                  points={historyData.seasons.map((s) => ({
+                                    key: s.seasonKey,
+                                    value: s.avgScore ?? null,
+                                    title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(1)}`,
+                                  })).concat(
+                                    historyData.currentSeasonAvg != null ? [{ key: "current", value: historyData.currentSeasonAvg, title: `This season · avg ${historyData.currentSeasonAvg.toFixed(1)}` }] : []
+                                  )}
+                                  maxScore={10}
+                                />
+                              ) : (
+                                <div className="player-trend player-trend-empty">
+                                  <span className="player-trend-label">Avg rating per season</span>
+                                  <span className="player-trend-note">Pro required</span>
+                                </div>
+                              )}
+                            </div>
                           </div>
                         )}
                       </div>

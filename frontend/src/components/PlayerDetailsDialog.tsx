@@ -185,15 +185,13 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                   <div className="player-trend-grid">
                     <PlayerScoresBarChart
                       label="Avg rating · this season"
-                      points={[
-                        { key: "this-season", value: currentSeasonAvg, title: currentSeasonAvg != null ? `This season · avg ${currentSeasonAvg.toFixed(2)}` : "No rated appearances yet" },
-                        ...thisSeasonScores.map((m) => ({
-                          key: `m${m.matchId}`,
-                          value: m.rating,
-                          title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
-                        })),
-                      ]}
+                      points={thisSeasonScores.map((m) => ({
+                        key: `m${m.matchId}`,
+                        value: m.rating,
+                        title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
+                      }))}
                       maxScore={10}
+                      sideValue={currentSeasonAvg}
                     />
                   </div>
                   <div className="player-current-status">
@@ -261,9 +259,9 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                       points={trendSeasons.map((s) => ({
                         key: s.seasonKey,
                         value: s.avgScore ?? null,
-                        title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(2)}`,
+                        title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(1)}`,
                       })).concat(
-                        currentSeasonAvg != null ? [{ key: "current", value: currentSeasonAvg, title: `This season · avg ${currentSeasonAvg.toFixed(2)}` }] : []
+                        currentSeasonAvg != null ? [{ key: "current", value: currentSeasonAvg, title: `This season · avg ${currentSeasonAvg.toFixed(1)}` }] : []
                       )}
                       maxScore={10}
                     />

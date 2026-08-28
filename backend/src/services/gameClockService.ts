@@ -125,10 +125,52 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
     const seasonBeforeMandatory = world.mp.seasonId;
 
     if (!options.force) {
-      const unresolved = world.fixtures.filter((fixture) => fixture.scheduledSeasonDayIndex === currentIndex || (fixture.scheduledSeasonDayIndex === undefined && fixture.dayIndex === currentIndex)).some(
-        (fixture) => !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixture.id && match.ended),
-      );
-      if (unresolved) throw new Error("Cannot advance while a scheduled match is unresolved");
+      const dayFixtures = world.fixtures.filter((fixture) => fixture.scheduledSeasonDayIndex === currentIndex || (fixture.scheduledSeasonDayIndex === undefined && fixture.dayIndex === currentIndex));
+      const unresolvedFixtures = dayFixtures.filter((fixture) => !fixture.played && !world.liveMatches.some((match) => match.fixtureId === fixture.id && match.ended));
+      if (unresolvedFixtures.length > 0) {
+        const details = unresolvedFixtures.map((fixture) => {
+          const live = world.liveMatches.find((match) => match.fixtureId === fixture.id);
+          const scheduledAt = fixture.kickoffAt !== undefined ? new Date(fixture.kickoffAt).toISOString() : "no-kickoff";
+          const nowIso = (options.now ?? new Date()).toISOString();
+          return {
+            fixtureId: fixture.id,
+            competitionId: fixture.competitionId,
+            round: fixture.round,
+            homeClubId: fixture.homeClubId,
+            awayClubId: fixture.awayClubId,
+            dayIndex: fixture.dayIndex,
+            scheduledSeasonDayIndex: fixture.scheduledSeasonDayIndex,
+            played: fixture.played,
+            kickoffAt: fixture.kickoffAt,
+            kickoffAtIso: scheduledAt,
+            liveMatch: live ? { matchId: live.matchId, ended: live.ended, minute: live.minute, half: live.half, matchClockSeconds: live.matchClockSeconds, lastAdvancedAt: live.lastAdvancedAt ? new Date(live.lastAdvancedAt).toISOString() : null, halftimeStartedAt: live.halftimeStartedAt ? new Date(live.halftimeStartedAt).toISOString() : null, period: live.period } : null,
+            msUntilKickoff: fixture.kickoffAt !== undefined ? fixture.kickoffAt - (options.now ?? new Date()).getTime() : null,
+            msSinceKickoff: fixture.kickoffAt !== undefined ? (options.now ?? new Date()).getTime() - fixture.kickoffAt : null,
+          };
+        });
+        const debug = {
+          currentIndex,
+          currentAbsolute,
+          seasonDayIndex: world.mp.seasonDayIndex,
+          absoluteGameDay: world.mp.absoluteGameDay,
+          seasonId: world.mp.seasonId,
+          seasonNumber: world.mp.seasonNumber,
+          now: (options.now ?? new Date()).toISOString(),
+          seasonStartAt: world.mp.seasonStartAt ? new Date(world.mp.seasonStartAt).toISOString() : null,
+          lastAdvancedAt: world.mp.lastAdvancedAt ? new Date(world.mp.lastAdvancedAt).toISOString() : null,
+          totalDayFixtures: dayFixtures.length,
+          totalFixtures: world.fixtures.length,
+          unresolvedCount: unresolvedFixtures.length,
+          unresolvedFixtures: details,
+        };
+        console.error(`[gameClock] Cannot advance: unresolved matches for seasonDayIndex ${currentIndex} (absolute ${currentAbsolute})`, JSON.stringify(debug, null, 2));
+        const summary = unresolvedFixtures.map((fixture) => {
+          const live = world.liveMatches.find((m) => m.fixtureId === fixture.id);
+          const kickoff = fixture.kickoffAt ? new Date(fixture.kickoffAt).toISOString() : "none";
+          return `fixture ${fixture.id} (comp ${fixture.competitionId} round ${fixture.round} ${fixture.homeClubId} vs ${fixture.awayClubId}) kickoff=${kickoff} played=${fixture.played} live=${live ? `matchId ${live.matchId} ended=${live.ended} minute=${live.minute}` : "none"}`;
+        }).join("; ");
+        throw new Error(`Cannot advance while a scheduled match is unresolved: ${summary} | debug=${JSON.stringify(debug)}`);
+      }
     }
 
     await executeMandatoryEventsInLock(prisma, loaded.save.id, currentAbsolute, options.now ?? new Date(), loaded);
