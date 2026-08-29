@@ -15,9 +15,12 @@ import { applyLiveTacticsUpdate, performLiveSub, isPregame, isHalftime, rebuildL
 import { recordActivity } from "../game/multiplayer";
 import { canViewPlayerPerformance, hasPro } from "../services/pro";
 import { playerMatchScoreView } from "../services/playerPerformance";
-import { FORMATION_POSITIONS, TACTICAL_POSITION_NAMES } from "../game/constants";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup, seniorRosterFullError, seniorRosterOverflowError } from "../game/club";
+import { formationById, formationOptions } from "../game/formations";
+import { positionGroup, positionName } from "../game/positions";
+import { adjustedTacticalRating, rolePenalty, suitabilityLabel } from "../game/outOfPosition";
+import type { DeployedRole } from "../game/positions";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
 import { setPlayerSquadNumber } from "../game/squadNumbers";
 import { NEWS_SUBJECTS, publishNews } from "../game/news";
@@ -294,49 +297,105 @@ export async function gameRoutes(app: FastifyInstance) {
     const query = req.query as Record<string, unknown>;
     const auto = String(query.auto ?? "") === "1";
     const formationParam = query.formation;
-    const formationRaw = typeof formationParam === "string" && formationParam.trim() !== "" ? Number(formationParam) : Number.NaN;
-    const formation = Number.isInteger(formationRaw) && formationRaw >= 0 && formationRaw <= 12 ? formationRaw : club.tactics.formation;
+    const previewPlayerIdParam = query.previewPlayerId;
+    // Validate formation if provided
+    let formation: number;
+    if (typeof formationParam === "string" && formationParam.trim() !== "") {
+      const raw = Number(formationParam);
+      if (!Number.isInteger(raw) || !formationById(raw)) {
+        return reply.code(400).send({ error: "Invalid formation" });
+      }
+      formation = raw;
+    } else if (formationParam !== undefined && formationParam !== null && String(formationParam).trim() !== "") {
+      return reply.code(400).send({ error: "Invalid formation" });
+    } else {
+      formation = club.tactics.formation;
+    }
+    const formationDef = formationById(formation)!;
     const lineup = peekLineup(
       { ...club, savedLineup: auto ? null : club.savedLineup, tactics: { ...club.tactics, formation } },
       loaded.world.players
     );
     const players = loaded.world.players.filter((p) => p.clubId === club.id);
     const gameDay = loaded.world.mp.absoluteGameDay ?? loaded.world.dayIndex;
-    const view = (id: number) => {
-      const p = players.find((x) => x.id === id);
-      return p
-        ? {
-            id: p.id,
-            name: p.name,
-            position: p.position,
-            overall: p.overall,
-            energy: p.energy,
-            injuryDays: injuryDaysRemaining(p, gameDay),
-            injuryDaysRemaining: injuryDaysRemaining(p, gameDay),
-            injuryCause: p.injuryCause ?? null,
-            injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
-            conditionLabel: conditionLabel(p, gameDay),
-            suspended: p.suspendedGames > 0,
-            number: p.squadNumber ?? null,
-          }
-        : null;
+    // §7 authority: game/outOfPosition.ts. This route must not re-derive
+    // penalties, labels or adjusted ratings — four private copies of that
+    // arithmetic had already drifted apart on what `null` means.
+    const getPenalty = (player: typeof players[number], role: string): number | null =>
+      rolePenalty(player.position, role as DeployedRole);
+    const adjustedRating = (player: typeof players[number], role: string): number | null =>
+      adjustedTacticalRating(player.skills, player.position, role as DeployedRole);
+    const playerViewWithSlot = (p: typeof players[number], slotIndex: number | null, slot: ReturnType<typeof formationById> extends infer T ? T extends { slots: readonly (infer S)[] } ? S : never : never) => {
+      const penalty = slot ? getPenalty(p, slot.role) : null;
+      const label = suitabilityLabel(penalty);
+      const rating = slot ? adjustedRating(p, slot.role) : null;
+      const grp = positionGroup(p.position as import("../game/positions").NaturalPosition);
+      const full = positionName(p.position as import("../game/positions").NaturalPosition);
+      return {
+        id: p.id,
+        name: p.name,
+        naturalPosition: p.position,
+        positionGroup: grp,
+        positionName: full,
+        overall: p.overall,
+        energy: p.energy,
+        injuryDays: injuryDaysRemaining(p, gameDay),
+        injuryDaysRemaining: injuryDaysRemaining(p, gameDay),
+        injuryCause: p.injuryCause ?? null,
+        injuryUntilAbsoluteGameDay: p.injuryUntilAbsoluteGameDay ?? null,
+        conditionLabel: conditionLabel(p, gameDay),
+        suspended: p.suspendedGames > 0,
+        number: p.squadNumber ?? null,
+        slotIndex,
+        deployedRole: slot?.role ?? null,
+        rolePenalty: penalty,
+        suitabilityLabel: label,
+        adjustedTacticalRating: rating,
+      };
     };
-    return {
-      formation,
-      starters: (lineup?.starters ?? []).map((p) => view(p.id)),
-      subs: (lineup?.subs ?? []).map((p) => view(p.id)),
-      penaltyTakerId: club.penaltyTakerId,
-      freeKickTakerId: club.savedLineup?.freeKickTakerId ?? null,
-      slots: FORMATION_POSITIONS[formation] ?? FORMATION_POSITIONS[4],
-      squad: players
-        .sort((a, b) => b.overall - a.overall)
-        .map((p) => ({
+    // Build starters with slot assignments
+    const starters = (lineup?.starters ?? []).map((p, idx) => {
+      const slot = formationDef.slots[idx];
+      const player = players.find((x) => x.id === p.id) ?? p as unknown as typeof players[number];
+      return playerViewWithSlot(player as typeof players[number], idx, slot as unknown as ReturnType<typeof formationById> extends infer T ? T extends { slots: readonly (infer S)[] } ? S : never : never);
+    });
+    // Handle previewPlayerId
+    let previewPlayerId: number | undefined = undefined;
+    let slotPreviews: Array<{ slotIndex: number; deployedRole: string; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }> = [];
+    if (previewPlayerIdParam !== undefined && String(previewPlayerIdParam).trim() !== "") {
+      const rawId = Number(previewPlayerIdParam);
+      if (!Number.isInteger(rawId)) return reply.code(400).send({ error: "Invalid previewPlayerId" });
+      const previewPlayer = players.find((x) => x.id === rawId);
+      if (!previewPlayer) return reply.code(400).send({ error: "Player not in squad" });
+      previewPlayerId = rawId;
+      slotPreviews = formationDef.slots.map((slot, idx) => {
+        const penalty = getPenalty(previewPlayer, slot.role);
+        const label = suitabilityLabel(penalty);
+        const rating = adjustedRating(previewPlayer, slot.role);
+        return {
+          slotIndex: idx,
+          deployedRole: slot.role,
+          rolePenalty: penalty,
+          suitabilityLabel: label,
+          adjustedTacticalRating: rating,
+        };
+      });
+    }
+    const squadView = players
+      .sort((a, b) => b.overall - a.overall)
+      .map((p) => {
+        const grp = positionGroup(p.position as import("../game/positions").NaturalPosition);
+        const full = positionName(p.position as import("../game/positions").NaturalPosition);
+        return {
           id: p.id,
           name: p.name,
-          position: p.position,
+          naturalPosition: p.position,
+          positionGroup: grp,
+          positionName: full,
           overall: p.overall,
           energy: p.energy,
-          tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
+          slotIndex: null,
+          deployedRole: null,
           injuryDays: injuryDaysRemaining(p, gameDay),
           injuryDaysRemaining: injuryDaysRemaining(p, gameDay),
           injuryCause: p.injuryCause ?? null,
@@ -344,7 +403,23 @@ export async function gameRoutes(app: FastifyInstance) {
           conditionLabel: conditionLabel(p, gameDay),
           suspended: p.suspendedGames > 0,
           number: p.squadNumber ?? null,
-        })),
+        };
+      });
+    return {
+      formation,
+      formationName: formationDef.name,
+      // §15.3: `slots` IS the authoritative slot metadata. There is no numeric
+      // slot array beside it — the index in this array is the slot index.
+      slots: formationDef.slots.map((s, idx) => ({ index: idx, key: s.key, role: s.role, lane: s.lane, line: s.line, x: s.x, y: s.y, label: s.label })),
+      starters,
+      subs: (lineup?.subs ?? []).map((p) => {
+        const player = players.find((x) => x.id === p.id) ?? p as unknown as typeof players[number];
+        return playerViewWithSlot(player as typeof players[number], null, null as unknown as ReturnType<typeof formationById> extends infer T ? T extends { slots: readonly (infer S)[] } ? S : never : never);
+      }),
+      penaltyTakerId: club.penaltyTakerId,
+      freeKickTakerId: club.savedLineup?.freeKickTakerId ?? null,
+      squad: squadView,
+      ...(previewPlayerId !== undefined ? { previewPlayerId, slotPreviews } : { slotPreviews: [] }),
     };
   });
 

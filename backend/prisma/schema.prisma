@@ -115,6 +115,12 @@ model Save {
   // Optimistic concurrency: bumped on every persist; conditional updates use
   // it to detect lost updates when multiple processes write the global world.
   revision    Int      @default(0)
+  // Position-model version: 1 = legacy numeric GK/FB/CB/MF/FW with Player.side
+  // and Player.tacPos; 2 = nine natural positions, no side/tacPos (§14.1).
+  // The default is 1 so every pre-existing row is correctly marked legacy and
+  // the application migration actually runs; new worlds write 2 explicitly in
+  // ensureGlobalSave. Startup refuses to load below 2.
+  positionModelVersion Int @default(1)
   // Multiplayer runtime state (current season id, join state, etc.) persisted
   // as JSON so it survives reloads. Mirrors World.mp.
   mpStateJson String?
@@ -332,7 +338,6 @@ model Player {
   country         String
   age             Int
   position        Int
-  side            Int
   overall         Int
   energy          Int
   recentLoad      Float    @default(0)
@@ -367,7 +372,6 @@ model Player {
   seasonAppearances Int @default(0)
   yellows         Int
   reds            Int
-  tacPos          Int
   // Squad shirt number; unique within a club. Null = not yet assigned.
   squadNumber     Int?
   onSale          Boolean
@@ -380,11 +384,11 @@ model Player {
   yellowsTurnKey  Int?
   loanId          Int?
   skillGol        Int
-  skillVel        Int
+  skillPace       Int
   skillTec        Int
   skillPas        Int
   skillDes        Int
-  skillArm        Int
+  skillPlaymaking Int
   skillFin        Int
   nickname        String?
   skillAccJson    String

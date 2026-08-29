@@ -585,7 +585,7 @@ export function runFinancialIntervention(
       club.ledger.income.push({ code: 15, amount: candidate.price, day: world.dayIndex, label: `Financial intervention: ${player.name}` });
       player.clubId = null;
       player.onSale = false;
-      player.tacPos = -1;
+      player.starter = false;
       player.starter = false;
       resetPayrollPeriod(player, world.dayIndex);
 

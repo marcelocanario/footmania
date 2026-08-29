@@ -105,7 +105,7 @@ export function replaceActiveClubWithAi(world: World, club: Club, now: number): 
       if (!loanStillExists) {
         player.loanId = null;
         player.clubId = null;
-        player.tacPos = -1;
+        player.starter = false;
       }
     }
   }

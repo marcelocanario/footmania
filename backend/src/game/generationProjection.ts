@@ -27,8 +27,9 @@ import { tierBudget } from "./budget";
  * conditioning are identical to production.
  */
 
-/** Best-XI shape: one GK, two full-backs, two centre-backs, four midfielders, two forwards. */
-const STARTING_XI_SHAPE: readonly number[] = [1, 2, 2, 4, 2];
+/** Best-XI shape: the fixed 4-3-3 natural-position shape (§13.5): 1 GK, 1 LB,
+ *  1 RB, 2 CB, 1 DM, 2 AM, 1 LW, 1 RW, 1 ST. */
+const STARTING_XI_SHAPE: readonly import("./positions").NaturalPosition[] = ["GK", "LB", "RB", "CB", "CB", "DM", "AM", "AM", "LW", "RW", "ST"];
 
 const PROJECTION_SAMPLES = 400;
 const PROJECTION_SEED = 0x5eed_1234;
@@ -83,12 +84,16 @@ function sampleSquadOveralls(
 
 function selectStartingXi(squad: { position: Position; overall: number }[]): number[] {
   const selected: number[] = [];
-  for (let position = 0; position < STARTING_XI_SHAPE.length; position++) {
+  const counts = new Map<string, number>();
+  for (const position of STARTING_XI_SHAPE) {
+    const used = counts.get(position) ?? 0;
     const pool = squad
       .filter((player) => player.position === position)
       .sort((a, b) => b.overall - a.overall)
-      .slice(0, STARTING_XI_SHAPE[position]);
-    for (const player of pool) selected.push(player.overall);
+      .slice(0, used + 1);
+    const player = pool[used];
+    if (player) selected.push(player.overall);
+    counts.set(position, used + 1);
   }
   return selected.sort((a, b) => a - b);
 }

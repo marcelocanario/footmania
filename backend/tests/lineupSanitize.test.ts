@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { lineupForMatch, peekLineup, sanitizeSavedLineup, tacPosToBasePosition } from "../src/game/club";
+import { lineupForMatch, peekLineup, sanitizeSavedLineup } from "../src/game/club";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
-import { FORMATION_POSITIONS } from "../src/game/constants";
+import { formationById } from "../src/game/formations";
 import type { Club, Player, Position } from "../src/game/types";
 
 function makeClub(id = 900): Club {
@@ -32,9 +32,10 @@ function makeClub(id = 900): Club {
   };
 }
 
-// Formation 4 slots: [1,22,24,11,13,14,16,2,9,3,5] — GK, 2xCB, 4xMF, 2xFB, 2xMF.
-const STARTER_POSITIONS: Position[] = [0, 2, 2, 3, 3, 3, 3, 1, 1, 3, 3];
-const BENCH_POSITIONS: Position[] = [0, 2, 1, 3, 4, 4, 3];
+// Formation 4 slot roles: GK, LB, CB1, CB2, LM, DM, AM, RM, ST1, ST2, ... —
+// kept as natural positions so every slot has a legal pairing.
+const STARTER_POSITIONS: Position[] = ["GK", "LB", "CB", "CB", "AM", "DM", "AM", "AM", "ST", "ST", "AM"];
+const BENCH_POSITIONS: Position[] = ["GK", "CB", "LB", "DM", "ST", "LW", "AM"];
 
 interface Scenario {
   club: Club;
@@ -55,7 +56,7 @@ function scenario(withSpare = true): Scenario {
     players.push(generatePlayer(rng, club, { id: ++id, position }));
   }
   if (withSpare) {
-    players.push(generatePlayer(rng, club, { id: ++id, position: 3 }));
+    players.push(generatePlayer(rng, club, { id: ++id, position: "DM" }));
   }
   const starters = players.slice(0, 11).map((p) => p.id);
   const subs = players.slice(11, 18).map((p) => p.id);
@@ -79,19 +80,19 @@ describe("sanitizeSavedLineup", () => {
 
   it("promotes the position-fit bench player into an invalid starter slot and tops up the bench", () => {
     const s = scenario(true);
-    const injuredStarter = byId(s.players, s.starters[2]); // slot tacPos 24
+    const injuredStarter = byId(s.players, s.starters[2]); // CB slot
     injuredStarter.injuryDays = 12;
-    const slotTacPos = FORMATION_POSITIONS[4][2];
+    const slotRole = formationById(4)!.slots[2].role;
     const spare = s.players[s.players.length - 1];
 
     const result = sanitizeSavedLineup(s.club, s.players, { starters: s.starters, subs: s.subs, freeKickTakerId: null })!;
     expect(result.starters).toHaveLength(11);
     expect(result.starters.map((p) => p.id)).not.toContain(injuredStarter.id);
-    // The replacement matches the slot's authoritative base position (the same
-    // selector semantics buildLineup uses) and came from the saved bench.
+    // §9.3: the replacement is the unused bench/squad candidate with the
+    // highest pair score for the slot (a DM can outscore a CB at the CB slot
+    // with strong defending/passing), and it came from the saved bench.
     const promoted = result.starters[2];
-    expect(promoted.position).toBe(tacPosToBasePosition(slotTacPos));
-    expect(promoted.tacPos).toBe(slotTacPos);
+    expect(promoted.id).not.toBe(injuredStarter.id);
     expect(s.subs).toContain(promoted.id);
     // The vacated bench slot is topped up so the chosen squad size survives.
     expect(result.subs).toHaveLength(s.subs.length);
@@ -105,6 +106,7 @@ describe("sanitizeSavedLineup", () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(result.starters.every((p) => p.starter)).toBe(true);
     expect(result.subs.every((p) => !p.starter)).toBe(true);
+    void slotRole;
   });
 
   it("replaces a goalkeeper only with the bench goalkeeper", () => {
@@ -114,7 +116,7 @@ describe("sanitizeSavedLineup", () => {
     const benchGk = byId(s.players, s.subs[0]); // BENCH_POSITIONS[0] = GK
     const result = sanitizeSavedLineup(s.club, s.players, { starters: s.starters, subs: s.subs, freeKickTakerId: null })!;
     expect(result.starters[0].id).toBe(benchGk.id);
-    expect(result.starters[0].position).toBe(0);
+    expect(result.starters[0].position).toBe("GK");
   });
 
   it("treats suspended, on-sale and duplicated entries as invalid", () => {

@@ -19,7 +19,8 @@ import { makeWorld } from "./helpers";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../src/matchSimulatorConfig";
-import { FORMATION_POSITIONS, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../src/game/constants";
+import { STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../src/game/constants";
+import { formationById } from "../src/game/formations";
 import type { Club, Player } from "../src/game/types";
 
 let clubId = 1;
@@ -73,15 +74,21 @@ function club(overrides: Partial<Club> = {}): Club {
 }
 
 function squad(rng: ReturnType<typeof createRng>, forClub: Club): Player[] {
-  const balanced = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4] as const;
+  const balanced = ["GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "RB", "CB", "CB", "CB", "CB", "CB", "CB", "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM", "AM", "LW", "LW", "RW", "RW", "ST", "ST"] as const;
   return balanced.map((position, i) => generatePlayer(rng, forClub, { id: forClub.id * 1000 + i + 1, position }));
 }
 
 function jaccard(a: number, b: number): number {
-  const ca = new Map<number, number>();
-  const cb = new Map<number, number>();
-  for (const s of FORMATION_POSITIONS[a]) ca.set(s, (ca.get(s) ?? 0) + 1);
-  for (const s of FORMATION_POSITIONS[b]) cb.set(s, (cb.get(s) ?? 0) + 1);
+  // §4.4: multiset Jaccard over role:lane:line tokens from the catalog.
+  const tokens = (id: number): string[] => {
+    const def = formationById(id);
+    if (!def) return [];
+    return def.slots.map((s) => `${s.role}:${s.lane}:${s.line}`);
+  };
+  const ca = new Map<string, number>();
+  const cb = new Map<string, number>();
+  for (const s of tokens(a)) ca.set(s, (ca.get(s) ?? 0) + 1);
+  for (const s of tokens(b)) cb.set(s, (cb.get(s) ?? 0) + 1);
   let inter = 0;
   let union = 0;
   for (const s of new Set([...ca.keys(), ...cb.keys()])) {

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "energy": {
     "referenceFullMatchLoss": 18.0,
     "roleLoad": { "GK": 0.2, "DEF": 0.75, "MID": 1.0, "ATT": 0.9 },
@@ -60,8 +60,8 @@
     "minimumEquivalentRealDays": 14.0, "probabilityMaximum": 0.20, "probabilityScaleDays": 45.0, "probabilityExponent": 1.6,
     "magnitudeBase": 0.50, "magnitudeScale": 2.50, "magnitudeBetaAlpha": 2.0, "magnitudeBetaBeta": 3.0,
     "magnitudeSeverityScaleDays": 60.0,
-    "outfieldWeights": { "pace": 0.45, "physical": 0.45, "technical": 0.10 },
-    "goalkeeperWeights": { "pace": 0.20, "physical": 0.50, "goalkeeping": 0.30 },
+    "outfieldWeights": { "pace": 0.675, "defending": 0.225, "technical": 0.10 },
+    "goalkeeperWeights": { "pace": 0.45, "defending": 0.25, "goalkeeping": 0.30 },
     "careerGrowthLossShare": 0.50
   }
 }

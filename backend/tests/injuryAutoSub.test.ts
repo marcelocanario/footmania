@@ -7,6 +7,8 @@ import {
 } from "../src/game/matchSim";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
+import { readiness } from "../src/game/energyInjury";
+import { adjustedTacticalRating } from "../src/game/outOfPosition";
 import { EVENT_CODES } from "../src/game/constants";
 import { gameConfig, MP_CONFIG } from "../src/config";
 import { liveStateDeltaView, liveStateView } from "../src/services/liveView";
@@ -44,10 +46,7 @@ function makeClub(): Club {
 }
 
 function makeSquad(rng: RngState, club: Club, count: number, offset = 0): Player[] {
-  const balanced: Position[] = [
-    0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
-    3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4,
-  ];
+  const balanced: Position[] = ["GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "RB", "CB", "CB", "CB", "CB", "CB", "CB", "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM", "AM", "LW", "LW", "RW", "RW", "ST", "ST"];
   const players: Player[] = [];
   for (let i = 0; i < count; i++) {
     players.push(generatePlayer(rng, club, { id: offset + i + 1, position: balanced[i % balanced.length] }));
@@ -64,41 +63,53 @@ function player(id: number, position: Position, overrides: Partial<Player> = {})
 describe("pickInjuryReplacement", () => {
   it("prefers the highest-overall healthy bench player of the same position", () => {
     const bench = [
-      player(1, 2, { overall: 60 }),
-      player(2, 2, { overall: 74 }),
-      player(3, 2, { overall: 70, injuryDays: 4 }),
-      player(4, 3, { overall: 90 }),
+      player(1, "CB", { overall: 60 }),
+      player(2, "CB", { overall: 74 }),
+      player(3, "CB", { overall: 70, injuryDays: 4 }),
+      player(4, "AM", { overall: 90 }),
     ];
-    expect(pickInjuryReplacement(bench, 2)?.id).toBe(2);
+    expect(pickInjuryReplacement(bench, "CB")?.id).toBe(2);
   });
 
-  it("falls back to the best remaining outfielder when no same-position player exists", () => {
+  it("falls back to the best adjusted-score outfielder when no same-position player exists", () => {
     const bench = [
-      player(5, 3, { overall: 66 }),
-      player(6, 4, { overall: 71 }),
-      player(7, 3, { overall: 80, suspendedGames: 2 }),
+      player(5, "AM", { overall: 66 }),
+      player(6, "ST", { overall: 71 }),
+      player(7, "AM", { overall: 80, suspendedGames: 2 }),
     ];
-    expect(pickInjuryReplacement(bench, 2)?.id).toBe(6);
+    // §9.5: rank by actual adjusted role rating, not natural-position equality.
+    const picked = pickInjuryReplacement(bench, "CB");
+    expect(picked).not.toBeNull();
+    expect(picked!.id).not.toBe(7); // suspended
+    // The winner is whichever outfielder has the highest CB-adjusted rating
+    // (an AM can legitimately outscore a ST at CB).
+    const score = (p: Player) => (adjustedTacticalRating(p.skills, p.position, "CB") ?? 0) * readiness(p.energy);
+    const expected = [5, 6].sort((a, b) => score(bench.find((p) => p.id === b)!) - score(bench.find((p) => p.id === a)!) || a - b)[0];
+    expect(picked!.id).toBe(expected);
   });
 
   it("never replaces an outfielder with a goalkeeper when outfielders exist", () => {
-    expect(pickInjuryReplacement([player(9, 4, { overall: 40 })], 3)?.id).toBe(9);
+    expect(pickInjuryReplacement([player(9, "ST", { overall: 40 })], "ST")?.id).toBe(9);
   });
 
   it("replaces a goalkeeper only with a goalkeeper", () => {
-    const bench = [player(10, 3, { overall: 95 }), player(11, 0, { overall: 55 })];
-    expect(pickInjuryReplacement(bench, 0)?.id).toBe(11);
+    const bench = [player(10, "AM", { overall: 95 }), player(11, "GK", { overall: 55 })];
+    expect(pickInjuryReplacement(bench, "GK")?.id).toBe(11);
   });
 
   it("returns null when nothing eligible remains", () => {
-    expect(pickInjuryReplacement([], 2)).toBeNull();
-    expect(pickInjuryReplacement([player(12, 2, { injuryDays: 9 })], 2)).toBeNull();
-    expect(pickInjuryReplacement([player(13, 0)], 3)).toBeNull();
+    expect(pickInjuryReplacement([], "CB")).toBeNull();
+    expect(pickInjuryReplacement([player(12, "CB", { injuryDays: 9 })], "CB")).toBeNull();
+    expect(pickInjuryReplacement([player(13, "GK")], "ST")).toBeNull();
   });
 
-  it("breaks overall ties deterministically by lower id", () => {
-    const bench = [player(21, 3, { overall: 70 }), player(20, 3, { overall: 70 })];
-    expect(pickInjuryReplacement(bench, 3)?.id).toBe(20);
+  it("breaks score ties deterministically by lower id", () => {
+    const skills = { gol: 40, pace: 60, tec: 60, pas: 60, des: 60, playmaking: 60, fin: 60 };
+    const bench = [
+      player(21, "AM", { overall: 70, skills: { ...skills } }),
+      player(20, "AM", { overall: 70, skills: { ...skills } }),
+    ];
+    expect(pickInjuryReplacement(bench, "AM")?.id).toBe(20);
   });
 });
 
@@ -180,7 +191,7 @@ describe("engine injury auto-substitution", () => {
   });
 
   it("keeps the team a man short when no substitution slots remain", () => {
-    const setup = setupMatch(7, 6);
+    const setup = setupMatch(7, 20);
     try {
       setup.st.usedSubs = [5, 5];
       simulatePossessionMatch(createRng(1), setup.home, setup.away, setup.players, setup.st, setup.centers);
@@ -299,10 +310,12 @@ describe("live view missing-player projection", () => {
     const sentOff = homeSquad[0];
     const replacedInjury = homeSquad[1];
     const stuckInjury = homeSquad[2];
-    sentOff.tacPos = 6;
-    replacedInjury.tacPos = 13;
-    stuckInjury.tacPos = 24;
     st.cards = [{ playerId: sentOff.id, kind: "RED", minute: 30 }];
+    st.homeSlotByPlayerId ??= {};
+    // Red cards/injuries remove the player's live slot-map entry (§9.1).
+    delete st.homeSlotByPlayerId[sentOff.id];
+    delete st.homeSlotByPlayerId[replacedInjury.id];
+    delete st.homeSlotByPlayerId[stuckInjury.id];
     st.injuries = [
       { playerId: replacedInjury.id, days: 5, minute: 40 },
       { playerId: stuckInjury.id, days: 9, minute: 50 },
@@ -323,11 +336,14 @@ describe("live view missing-player projection", () => {
     expect(missing.map((entry) => entry.playerId).sort((a, b) => a - b)).toEqual([sentOff.id, stuckInjury.id].sort((a, b) => a - b));
     const red = missing.find((entry) => entry.kind === "RED")!;
     expect(red.side).toBe(0);
-    expect(red.tacPos).toBe(sentOff.tacPos);
+    // Red cards/injuries remove the player's live slot-map entry (plan §9.1),
+    // so missing players carry no slot assignment.
+    expect(red.slotIndex).toBeNull();
+    expect(red.deployedRole).toBeNull();
     expect(red.name.length).toBeGreaterThan(0);
     const injured = missing.find((entry) => entry.kind === "INJURY")!;
     expect(injured.playerId).toBe(stuckInjury.id);
-    expect(injured.tacPos).toBe(24);
+    expect(injured.slotIndex).toBeNull();
   });
 
   it("carries the same snapshot on deltas so the pitch stays correct between state pushes", () => {
@@ -369,9 +385,6 @@ describe("automation SUB-rule invalidation", () => {
     const healthyBench = squad[1];
     const injuredBench = squad[2];
     injuredBench.injuryDays = 4;
-    onPitch.tacPos = 13;
-    healthyBench.tacPos = 14;
-    injuredBench.tacPos = 15;
     const st = {
       matchId: 1,
       fixtureId: 1,

@@ -2,7 +2,7 @@ import type { Club, PopulationLedger, World } from "./types";
 import { shuffle } from "./rng";
 import { isEphemeralAI } from "./club";
 import { expectedActivePlayerLifetimeFromAcademyEntry, retirementProbability } from "./careerCurves";
-import { ACADEMY_POSITION_WEIGHTS, playerRng } from "./playerGeneration";
+import { academyPositionWeights, playerRng } from "./playerGeneration";
 import { gameConfig } from "../config";
 
 /**
@@ -101,7 +101,7 @@ export function targetActivePopulation(activeClubCount: number): number {
  * population slot over the full academy-to-terminal-drain lifetime.
  */
 export function retirementBaselinePerClub(): number {
-  const lifetime = expectedActivePlayerLifetimeFromAcademyEntry(ACADEMY_POSITION_WEIGHTS);
+  const lifetime = expectedActivePlayerLifetimeFromAcademyEntry(academyPositionWeights());
   if (lifetime <= 0) return 0;
   return gameConfig.playerGenerationRules.targetOwnedPlayersPerActiveClub / lifetime;
 }

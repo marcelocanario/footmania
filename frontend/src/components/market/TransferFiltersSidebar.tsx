@@ -4,6 +4,7 @@ import { InputText } from "primereact/inputtext";
 import { MultiSelect } from "primereact/multiselect";
 import { Filter, RotateCcw } from "lucide-react";
 import type { SkillSet } from "../../api/client";
+import { DISPLAY_ORDER } from "../../positions";
 
 export interface SortOption {
   value: string;
@@ -12,7 +13,7 @@ export interface SortOption {
 
 export interface MarketFilters {
   query: string;
-  positions: number[];
+  positions: string[];
   sortKey: string;
   overallMin: number | null;
   overallMax: number | null;
@@ -46,14 +47,14 @@ export function createMarketFilters(): MarketFilters {
   };
 }
 
-const POSITION_OPTIONS = ["GK", "FB", "CB", "MF", "FW"].map((label, value) => ({ label, value }));
+const POSITION_OPTIONS = DISPLAY_ORDER.map((label) => ({ label, value: label }));
 const SKILL_OPTIONS: [keyof SkillSet, string][] = [
   ["gol", "Goalkeeping"],
-  ["vel", "Speed"],
+  ["pace", "Pace"],
   ["tec", "Technique"],
   ["pas", "Passing"],
   ["des", "Defending"],
-  ["arm", "Playmaking"],
+  ["playmaking", "Playmaking"],
   ["fin", "Finishing"],
 ];
 
@@ -171,7 +172,7 @@ export function TransferFiltersSidebar({
         <MultiSelect
           value={filters.positions}
           options={POSITION_OPTIONS}
-          onChange={(event) => update("positions", event.value as number[])}
+          onChange={(event) => update("positions", event.value as string[])}
           optionLabel="label"
           optionValue="value"
           placeholder="All positions"

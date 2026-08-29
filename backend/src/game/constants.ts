@@ -23,60 +23,11 @@ export const SENIOR_SQUAD_FLOOR = 20;
  */
 export const MOTD_NEWS_KIND = "motd";
 
-export const POSITION_NAMES = ["GK", "FB", "CB", "MF", "FW"];
-
-export const FORMATION_POSITIONS: number[][] = [
-  [1, 20, 11, 13, 14, 16, 2, 9, 6, 4, 8],
-  [1, 20, 11, 13, 14, 16, 2, 9, 6, 4, 8],
-  [1, 22, 24, 12, 14, 16, 2, 9, 6, 4, 8],
-  [1, 23, 11, 13, 15, 2, 9, 6, 8, 10, 17],
-  [1, 22, 24, 11, 13, 14, 16, 2, 9, 3, 5],
-  [1, 19, 21, 11, 12, 13, 15, 2, 9, 6, 8],
-  [1, 22, 24, 12, 14, 15, 16, 2, 9, 6, 8],
-  [1, 22, 23, 24, 12, 14, 16, 2, 9, 6, 8],
-  [1, 19, 20, 21, 11, 13, 15, 2, 9, 6, 8],
-  [1, 22, 24, 11, 13, 15, 4, 6, 8, 10, 17],
-  [1, 18, 25, 23, 11, 13, 4, 6, 8, 10, 17],
-  [1, 23, 14, 16, 15, 13, 11, 2, 9, 6, 8],
-  [1, 20, 10, 17, 15, 13, 11, 2, 9, 6, 8],
-];
-
-export const FORMATION_NAMES = [
-  "5-4-1",
-  "5-4-1 Wide",
-  "5-3-2",
-  "4-5-1",
-  "4-4-2",
-  "4-4-2 Diamond",
-  "4-4-2 Attacking",
-  "4-3-3",
-  "4-3-3 Holding",
-  "3-5-2",
-  "3-4-3",
-  "4-2-3-1",
-  "4-2-3-1 Wide",
-];
+// Formation names/geometry live in game/formations.ts (the single catalog).
 
 export const STYLE_NAMES = ["Balanced", "Offensive", "Counter-attack"];
 export const PRESSING_NAMES = ["Light", "Balanced", "Heavy"];
 export const DIRECTION_NAMES = ["Through the middle", "Down the wings"];
-
-/**
- * Tactical slot -> primary position name (same vocabulary as POSITION_NAMES).
- * Slots draw players from exactly one primary position group (see
- * tacPosToBasePosition in club.ts), so every slot carries that group's name —
- * there are no distinct tactical sub-positions in this game. Kept in sync with
- * club.ts:tacPosToBasePosition; matchSim.ts additionally maps these slots to
- * its fine deployed-role taxonomy.
- */
-export const TACTICAL_POSITION_NAMES: Record<number, string> = {
-  1: "GK",
-  2: "FB", 3: "CB", 4: "CB", 5: "CB", 6: "CB", 7: "CB", 8: "CB", 9: "FB",
-  10: "FB", 11: "MF", 12: "MF", 13: "MF", 14: "MF", 15: "MF", 16: "MF", 17: "FB",
-  18: "FW", 19: "FW", 20: "FW", 21: "FW", 22: "FW", 23: "FW", 24: "FW", 25: "FW",
-};
-
-export const BENCH_ORDER = [1, 22, 24, 11, 13, 14, 16, 2, 9, 3, 5];
 
 export const EVENT_CODES = {
   GOAL: 1,

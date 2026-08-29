@@ -653,7 +653,7 @@ function retireFillerClub(world: World, clubId: number, now: number): void {
       player.loanId = null;
       player.clubId = null;
       player.starter = false;
-      player.tacPos = -1;
+      player.starter = false;
     }
   }
 

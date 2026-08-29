@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { actionSchema, parseStoredPresets, presetSchema, ruleSchema, triggerSchema, validatePresetQuotas } from "../src/game/automation";
-import { DIRECTION_NAMES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "../src/game/constants";
+import { DIRECTION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "../src/game/constants";
+import { FORMATIONS } from "../src/game/formations";
 import type { AutomationPreset } from "../src/game/types";
 
 const MIN_FORMATION = 0;
-const MAX_FORMATION = FORMATION_NAMES.length - 1;
+const MAX_FORMATION = FORMATIONS.length - 1;
 const MAX_STYLE = STYLE_NAMES.length - 1;
 const MAX_PRESSING = PRESSING_NAMES.length - 1;
 const MAX_DIRECTION = DIRECTION_NAMES.length - 1;

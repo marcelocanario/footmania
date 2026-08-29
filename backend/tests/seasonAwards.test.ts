@@ -36,8 +36,8 @@ function division(clubIds: number[], seasonId = 1): Competition {
 }
 
 function squad(clubId: number, rngSeed: number): Player[] {
-  // One keeper plus outfield slots so a full Best XI can be picked.
-  const positions = [0, 1, 1, 2, 2, 3, 3, 4, 4] as const;
+  // Full 4-3-3-shaped pool so a complete Best XI can be picked.
+  const positions = ["GK", "LB", "RB", "CB", "CB", "DM", "AM", "AM", "LW", "RW", "ST"] as const;
   const rng = createRng(rngSeed);
   return positions.map((position, slot) => generatePlayer(rng, makeClub({ id: clubId }), { id: clubId * 100 + slot + 1, position }));
 }
@@ -52,9 +52,9 @@ describe("computeSeasonAwards", () => {
     const [a, b] = [makeClub({ id: 1 }), makeClub({ id: 2 })];
     const players = [...squad(1, 11), ...squad(2, 22)];
     for (const p of players) p.seasonAppearances = 5;
-    const strikerA = players.find((p) => p.clubId === 1 && p.position === 4)!;
+    const strikerA = players.find((p) => p.clubId === 1 && p.position === "ST")!;
     strikerA.seasonGoals = 7;
-    const playmakerB = players.find((p) => p.clubId === 2 && p.position === 3)!;
+    const playmakerB = players.find((p) => p.clubId === 2 && p.position === "AM")!;
     playmakerB.seasonAssists = 4;
     const world = worldWith([division([a.id, b.id])], [a, b], players);
 
@@ -77,8 +77,8 @@ describe("computeSeasonAwards", () => {
     const clubs = [makeClub({ id: 1, name: "A" }), makeClub({ id: 2, name: "B" }), makeClub({ id: 3, name: "C" }), makeClub({ id: 4, name: "D" })];
     const players = [...squad(1, 31), ...squad(2, 32), ...squad(3, 33), ...squad(4, 34)];
     for (const p of players) p.seasonAppearances = 5;
-    players.find((p) => p.clubId === 1 && p.position === 4)!.seasonGoals = 9;
-    players.find((p) => p.clubId === 3 && p.position === 4)!.seasonGoals = 5;
+    players.find((p) => p.clubId === 1 && p.position === "ST")!.seasonGoals = 9;
+    players.find((p) => p.clubId === 3 && p.position === "ST")!.seasonGoals = 5;
     const divOne = division([1, 2]);
     const divTwo = division([3, 4]);
     const world = worldWith([divOne, divTwo], clubs, players);
@@ -89,8 +89,8 @@ describe("computeSeasonAwards", () => {
     expect(scorers).toHaveLength(2);
     expect(scorers.map((award) => award.competitionId).sort()).toEqual([divOne.id, divTwo.id].sort());
     expect(scorers.map((award) => award.playerId)).toEqual(expect.arrayContaining([
-      players.find((p) => p.clubId === 1 && p.position === 4)!.id,
-      players.find((p) => p.clubId === 3 && p.position === 4)!.id,
+      players.find((p) => p.clubId === 1 && p.position === "ST")!.id,
+      players.find((p) => p.clubId === 3 && p.position === "ST")!.id,
     ]));
   });
 
@@ -100,12 +100,12 @@ describe("computeSeasonAwards", () => {
     // Two-game season → one required appearance. The bench-warmer played none
     // yet dominates on raw talent and production.
     for (const p of players) p.seasonAppearances = 5;
-    const benchWarmer = players.find((p) => p.clubId === 1 && p.position === 3)!;
+    const benchWarmer = players.find((p) => p.clubId === 1 && p.position === "AM")!;
     benchWarmer.overall = 99;
     benchWarmer.seasonAppearances = 0;
     benchWarmer.seasonGoals = 20;
     benchWarmer.seasonAssists = 20;
-    const starter = players.find((p) => p.clubId === 2 && p.position === 4)!;
+    const starter = players.find((p) => p.clubId === 2 && p.position === "ST")!;
     starter.overall = 50;
     starter.seasonGoals = 40;
     const world = worldWith([division([1, 2])], clubs, players);

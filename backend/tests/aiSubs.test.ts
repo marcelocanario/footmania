@@ -43,8 +43,8 @@ function makeClub(isHuman = false): Club {
 }
 
 const BALANCED: Position[] = [
-  0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
-  3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4,
+  "GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "RB", "CB", "CB", "CB", "CB", "CB", "CB",
+  "DM", "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM", "LW", "LW", "RW", "RW", "ST", "ST",
 ];
 
 function makeSquad(rng: RngState, club: Club, count: number, offset = 0): Player[] {
@@ -58,7 +58,7 @@ function makeSquad(rng: RngState, club: Club, count: number, offset = 0): Player
 /** Drain every outfield player's energy so fatigue dominates substitution need. */
 function drainOutfield(players: Player[], energy: number): void {
   for (const p of players) {
-    if (p.position !== 0) p.energy = energy;
+    if (p.position !== "GK") p.energy = energy;
   }
 }
 
@@ -301,8 +301,8 @@ describe("AI tactical substitutions", () => {
 });
 
 describe("pickAiReplacement", () => {
-  function skills(values: { des?: number; vel?: number; tec?: number; pas?: number; arm?: number; fin?: number; gol?: number }): Player["skills"] {
-    return { gol: values.gol ?? 20, vel: values.vel ?? 20, tec: values.tec ?? 20, pas: values.pas ?? 20, des: values.des ?? 20, arm: values.arm ?? 20, fin: values.fin ?? 20 };
+  function skills(values: { des?: number; pace?: number; tec?: number; pas?: number; playmaking?: number; fin?: number; gol?: number }): Player["skills"] {
+    return { gol: values.gol ?? 20, pace: values.pace ?? 20, tec: values.tec ?? 20, pas: values.pas ?? 20, des: values.des ?? 20, playmaking: values.playmaking ?? 20, fin: values.fin ?? 20 };
   }
 
   function benchPlayer(id: number, position: Position, overrides: Partial<Player> = {}): Player {
@@ -312,47 +312,47 @@ describe("pickAiReplacement", () => {
   }
 
   it("prefers higher effective skill for the vacated slot", () => {
-    const weak = benchPlayer(1, 2, { skills: skills({ des: 40, vel: 40, tec: 40, pas: 40, arm: 40 }) });
-    const strong = benchPlayer(2, 2, { skills: skills({ des: 85, vel: 80, tec: 70, pas: 70, arm: 75 }) });
-    const picked = pickAiReplacement([weak, strong], 3, () => 50);
+    const weak = benchPlayer(1, "CB", { skills: skills({ des: 40, pace: 40, tec: 40, pas: 40, playmaking: 40 }) });
+    const strong = benchPlayer(2, "CB", { skills: skills({ des: 85, pace: 80, tec: 70, pas: 70, playmaking: 75 }) });
+    const picked = pickAiReplacement([weak, strong], "DM", () => 50);
     expect(picked?.id).toBe(2);
   });
 
   it("weighs freshness: an equally skilled but tired player loses", () => {
-    const base = { des: 70, vel: 70, tec: 60, pas: 60, arm: 60 };
-    const fresh = benchPlayer(1, 2, { skills: skills(base) });
-    const tired = benchPlayer(2, 2, { skills: skills(base) });
-    const picked = pickAiReplacement([tired, fresh], 3, (id) => (id === tired.id ? 10 : 90));
+    const base = { des: 70, pace: 70, tec: 60, pas: 60, playmaking: 60 };
+    const fresh = benchPlayer(1, "CB", { skills: skills(base) });
+    const tired = benchPlayer(2, "CB", { skills: skills(base) });
+    const picked = pickAiReplacement([tired, fresh], "DM", (id) => (id === tired.id ? 10 : 90));
     expect(picked?.id).toBe(fresh.id);
   });
 
   it("skips injured and suspended bench players", () => {
     const bench = [
-      benchPlayer(1, 2, { injuryDays: 4 }),
-      benchPlayer(2, 2, { suspendedGames: 1 }),
-      benchPlayer(3, 3),
+      benchPlayer(1, "CB", { injuryDays: 4 }),
+      benchPlayer(2, "CB", { suspendedGames: 1 }),
+      benchPlayer(3, "AM"),
     ];
-    expect(pickAiReplacement(bench, 3, () => 80)?.id).toBe(3);
+    expect(pickAiReplacement(bench, "DM", () => 80)?.id).toBe(3);
   });
 
   it("never sends a goalkeeper on for an outfield tactical slot", () => {
-    const freshKeeper = benchPlayer(1, 0);
-    const tiredOutfielder = benchPlayer(2, 3);
-    const picked = pickAiReplacement([freshKeeper, tiredOutfielder], 4, (id) => (id === freshKeeper.id ? 100 : 5));
+    const freshKeeper = benchPlayer(1, "GK");
+    const tiredOutfielder = benchPlayer(2, "AM");
+    const picked = pickAiReplacement([freshKeeper, tiredOutfielder], "ST", (id) => (id === freshKeeper.id ? 100 : 5));
     expect(picked?.id).toBe(2);
-    expect(pickAiReplacement([freshKeeper], 4, () => 100)).toBeNull();
+    expect(pickAiReplacement([freshKeeper], "ST", () => 100)).toBeNull();
   });
 
   it("breaks value ties deterministically by lower id", () => {
-    const base = { des: 65, vel: 60, tec: 55, pas: 55, arm: 60 };
-    const late = benchPlayer(9, 2, { skills: skills(base) });
-    const early = benchPlayer(4, 2, { skills: skills(base) });
-    const picked = pickAiReplacement([late, early], 3, () => 60);
+    const base = { des: 65, pace: 60, tec: 55, pas: 55, playmaking: 60 };
+    const late = benchPlayer(9, "CB", { skills: skills(base) });
+    const early = benchPlayer(4, "CB", { skills: skills(base) });
+    const picked = pickAiReplacement([late, early], "DM", () => 60);
     expect(picked?.id).toBe(4);
   });
 
   it("returns null when nothing is eligible", () => {
-    expect(pickAiReplacement([], 3, () => 50)).toBeNull();
-    expect(pickAiReplacement([benchPlayer(1, 2, { injuryDays: 2 })], 3, () => 50)).toBeNull();
+    expect(pickAiReplacement([], "DM", () => 50)).toBeNull();
+    expect(pickAiReplacement([benchPlayer(1, "CB", { injuryDays: 2 })], "DM", () => 50)).toBeNull();
   });
 });

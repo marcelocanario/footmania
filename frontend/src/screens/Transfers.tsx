@@ -8,7 +8,6 @@ import { api, type AuctionView, type FinanceSnapshot, type FreeAgentView, type L
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
-import { POSITION_LETTER, positionTitle } from "../components/PlayerName";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { Segmented } from "../components/Segmented";
@@ -54,7 +53,7 @@ const SELL_SORT_OPTIONS: SortOption[] = [
 ];
 
 /** Client-side filter + sort shared by every market list. */
-function useMarketList<T extends { position: number; age: number; overall: number }>(
+function useMarketList<T extends { naturalPosition: string; age: number; overall: number }>(
   items: T[],
   filters: MarketFilters,
   valueOf: (item: T) => number,
@@ -69,7 +68,7 @@ function useMarketList<T extends { position: number; age: number; overall: numbe
     const filtered = items.filter((item) => {
       const q = filters.query.trim().toLowerCase();
       const nameMatches = !q || nameOf(item).toLowerCase().includes(q);
-      const positionMatches = filters.positions.length === 0 || filters.positions.includes(item.position);
+      const positionMatches = filters.positions.length === 0 || filters.positions.includes(item.naturalPosition);
       const profileMatches = inRange(item.overall, filters.overallMin, filters.overallMax)
         && inRange(item.age, filters.ageMin, filters.ageMax)
         && inRange(valueOf(item), filters.valueMin, filters.valueMax)
@@ -377,7 +376,7 @@ export function Transfers() {
                     <TransferPlayerRow
                       key={a.id}
                       name={a.playerName}
-                      position={a.position}
+                      position={a.naturalPosition}
                       overall={a.overall}
                       age={a.age}
                       onClick={() => setPlayerTarget({ id: a.playerId, name: a.playerName })}
@@ -432,7 +431,7 @@ export function Transfers() {
                     <TransferPlayerRow
                       key={fa.id}
                       name={fa.playerName}
-                      position={fa.position}
+                      position={fa.naturalPosition}
                       overall={fa.overall}
                       age={fa.age}
                       onClick={() => setPlayerTarget({ id: fa.playerId, name: fa.playerName })}
@@ -480,7 +479,7 @@ export function Transfers() {
                   <TransferPlayerRow
                     key={row.loan.id}
                     name={row.name}
-                    position={row.position}
+                    position={row.naturalPosition}
                     overall={row.overall}
                     age={row.age}
                     onClick={() => setPlayerTarget({ id: row.id, name: row.name })}
@@ -534,7 +533,7 @@ export function Transfers() {
                   <TransferPlayerRow
                     key={a.id}
                     name={a.playerName}
-                    position={a.position}
+                    position={a.naturalPosition}
                     overall={a.overall}
                     age={a.age}
                     onClick={() => setPlayerTarget({ id: a.playerId, name: a.playerName })}
@@ -567,7 +566,7 @@ export function Transfers() {
                   <TransferPlayerRow
                     key={p.id}
                     name={p.displayName ?? p.name}
-                    position={p.position}
+                    position={p.naturalPosition}
                     overall={p.overall}
                     age={p.age}
                     onClick={() => setPlayerTarget({ id: p.id, name: p.name })}
@@ -599,7 +598,7 @@ export function Transfers() {
             <div className="transfer-player-summary">
               <div>
                 <div className="kicker">Player profile</div>
-                <h3 title={positionTitle(freeAgentTarget.position)}>{POSITION_LETTER[freeAgentTarget.position] ?? "Player"}</h3>
+                <h3 title={freeAgentTarget.positionName}>{freeAgentTarget.naturalPosition}</h3>
               </div>
               <span className="transfer-overall">{freeAgentTarget.overall}</span>
             </div>
@@ -650,7 +649,7 @@ export function Transfers() {
             <div className="transfer-player-summary">
               <div>
                 <div className="kicker">Player profile</div>
-                <h3 title={positionTitle(auctionBidTarget.position)}>{POSITION_LETTER[auctionBidTarget.position] ?? "Player"}</h3>
+                <h3 title={auctionBidTarget.positionName}>{auctionBidTarget.naturalPosition}</h3>
               </div>
               <span className="transfer-overall">{auctionBidTarget.overall}</span>
             </div>
@@ -701,7 +700,7 @@ export function Transfers() {
             <div className="transfer-player-summary">
               <div>
                 <div className="kicker">Player profile</div>
-                <h3><span title={positionTitle(loanTarget.player.position)}>{loanTarget.player.positionName}</span> · {loanTarget.player.age} yrs</h3>
+                <h3><span title={loanTarget.player.positionName}>{loanTarget.player.naturalPosition}</span> · {loanTarget.player.age} yrs</h3>
                 <div style={{ color: "var(--text-2)", marginTop: 4 }}>
                   From <ClubNameLink clubId={loanTarget.fromClubId} name={loanTarget.fromClub} showCrest={false} /> · Salary {money(loanTarget.player.salary)}/season
                 </div>

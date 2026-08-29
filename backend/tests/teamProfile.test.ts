@@ -134,10 +134,10 @@ describe("buildTeamProfile", () => {
     const club = makeClub({ id: 1, name: "Alpha FC", ownerUserId: 11, cash: 1_000_000 });
     const rival = makeClub({ id: 2, name: "Beta FC", ownerUserId: null, isHuman: false });
     // Ordering rule: not-youth first, then pitch position, then name.
-    const gk = makeSquadPlayer(club, 101, { clubId: 1, value: 4_500_000, overall: 80, isYouth: false, position: 0, name: "Ed", nickname: "The Wall" });
-    const forward = makeSquadPlayer(club, 102, { clubId: 1, value: 500_000, overall: 55, isYouth: false, position: 3, name: "Carl" });
-    const mid = makeSquadPlayer(club, 103, { clubId: 1, value: 600_000, overall: 70, isYouth: false, position: 2, name: "Bob" });
-    const youthStriker = makeSquadPlayer(club, 104, { clubId: 1, value: 100_000, overall: 90, isYouth: true, position: 3, name: "Amy" });
+    const gk = makeSquadPlayer(club, 101, { clubId: 1, value: 4_500_000, overall: 80, isYouth: false, position: "GK", name: "Ed", nickname: "The Wall" });
+    const forward = makeSquadPlayer(club, 102, { clubId: 1, value: 500_000, overall: 55, isYouth: false, position: "DM", name: "Carl" });
+    const mid = makeSquadPlayer(club, 103, { clubId: 1, value: 600_000, overall: 70, isYouth: false, position: "CB", name: "Bob" });
+    const youthStriker = makeSquadPlayer(club, 104, { clubId: 1, value: 100_000, overall: 90, isYouth: true, position: "DM", name: "Amy" });
     const rivalsPlayer = makeSquadPlayer(rival, 201, { clubId: 2, value: 9_999_999, overall: 90 });
     const comp = division(50, 1, { 1: tableRow(1, 9), 2: tableRow(2, 6) });
     const world = worldWith([club, rival], [comp], [], [gk, forward, mid, youthStriker, rivalsPlayer]);

@@ -37,8 +37,8 @@ function makeClub(overrides: Partial<Club> = {}): Club {
 
 function makeSquad(rng: RngState, club: Club, count: number, offset = 0): Player[] {
   const balanced: Position[] = [
-    0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2,
-    3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4,
+    "GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "RB", "CB", "CB", "CB", "CB", "CB", "CB",
+    "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM", "AM", "LW", "LW", "RW", "RW", "ST", "ST",
   ];
   const players: Player[] = [];
   for (let i = 0; i < count; i++) {
@@ -55,7 +55,6 @@ function clonePlayer(p: Player): Player {
     recentMinutes: [...p.recentMinutes],
     careerProfile: { ...p.careerProfile },
     energy: 100,
-    tacPos: -1,
     starter: false,
     injuryDays: 0,
     suspendedGames: 0,

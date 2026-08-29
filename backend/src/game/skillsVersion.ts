@@ -1,6 +1,6 @@
 // Monotonic counter bumped whenever a mutation could change the result of
-// computeAttributeCenters over world.players: a player's tec/vel/physical
-// (des+arm)/fin/gol/des skill value, or the population of world.players
+// computeAttributeCenters over world.players: a player's tec/pace/physical
+// (des+playmaking)/fin/gol/des skill value, or the population of world.players
 // itself (a push; array *reassignment* self-invalidates callers' caches via
 // reference identity and does not need a bump). Consumers cache attribute
 // centers keyed on this version plus the players-array reference, so a

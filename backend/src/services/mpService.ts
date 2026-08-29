@@ -130,12 +130,12 @@ export function removeFillerClubs(world: World): void {
       player.clubId = null;
       player.loanId = null;
       player.starter = false;
-      player.tacPos = -1;
+      player.starter = false;
     } else if (player.loanId !== null && loanIds.has(player.loanId)) {
       player.loanId = null;
       player.clubId = null;
       player.starter = false;
-      player.tacPos = -1;
+      player.starter = false;
     }
   }
   world.players = world.players.filter((player) => !removedPlayerIds.has(player.id));

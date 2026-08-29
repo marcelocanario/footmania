@@ -1,8 +1,6 @@
 Brasfoot/
 Elifoot/
 
-.kilo
-
 node_modules/
 
 # TypeScript build metadata
@@ -26,13 +24,17 @@ Thumbs.db
 # Playwright MCP snapshots
 .playwright-mcp/
 
+# Specific harnesses
+.kilo
+.claude
+
 #To-do file
 ./todo.txt
 
 #Calibration
 calibration/
 # Planning docs are intentionally versioned alongside the code they specify.
-plans/*.md
+plans
 !plans/player-performance-ratings.md
 
 # Calibration output artifacts (match sweeps, reports) are throwaway runs.

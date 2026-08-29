@@ -176,9 +176,9 @@ describe("position-normalized development", () => {
   it("converts an OVR-equivalent budget into comparable OVR movement for every position", () => {
     const club = testClub({ trainingFocus: "assistant" });
     const moved: number[] = [];
-    for (const position of [0, 1, 2, 3, 4] as Position[]) {
+    for (const position of ["GK", "LB", "CB", "DM", "ST"] as Position[]) {
       const player = makePlayer({ position });
-      player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
+      player.skills = { gol: 50, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 };
       player.overall = overallFromSkills(position, player.skills);
       player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
       player.age = 20;
@@ -200,7 +200,7 @@ describe("position-normalized development", () => {
 
   it("computes sensitivity from the position's OVR weights and the training distribution", () => {
     const club = testClub({ trainingFocus: "primary" });
-    for (const position of [0, 1, 2, 3, 4] as Position[]) {
+    for (const position of ["GK", "LB", "CB", "DM", "ST"] as Position[]) {
       const player = makePlayer({ position });
       const weights = effectiveSkillWeights(player, club, true);
       expect(overallSensitivity(position, weights)).toBeGreaterThan(0);
@@ -212,23 +212,23 @@ describe("position-normalized development", () => {
 
   it("redistributes progress blocked by a capped skill instead of losing it", () => {
     const club = testClub({ trainingFocus: "primary" });
-    const player = makePlayer({ position: 4 });
-    player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 100 };
+    const player = makePlayer({ position: "ST" });
+    player.skills = { gol: 50, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 100 };
     // `fin` is the primary focus for a forward and is already pinned at 100.
     const weights = effectiveSkillWeights(player, club, true);
     expect(weights.fin).toBe(0);
     const total = SKILL_KEYS.reduce((sum, key) => sum + weights[key], 0);
     expect(total).toBeCloseTo(1, 10);
     // Every remaining eligible skill keeps its relative share of the budget.
-    expect(weights.vel).toBeGreaterThan(0);
+    expect(weights.pace).toBeGreaterThan(0);
   });
 
   it("changes which skills improve with training focus without creating extra total growth", () => {
     const build = (focus: "assistant" | "primary" | "secondary") => {
       const club = testClub({ trainingFocus: focus });
-      const player = makePlayer({ position: 3 });
-      player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
-      player.overall = overallFromSkills(3, player.skills);
+      const player = makePlayer({ position: "DM" });
+      player.skills = { gol: 50, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 };
+      player.overall = overallFromSkills("DM", player.skills);
       player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
       player.age = 21;
       player.careerProfile = profile({ growthPotential: 1, peakAge: 30 });
@@ -248,7 +248,7 @@ describe("position-normalized development", () => {
 
   it("stops rather than redistributes when the career budget is exhausted", () => {
     const club = testClub();
-    const player = makePlayer({ position: 3 });
+    const player = makePlayer({ position: "DM" });
     player.age = 22;
     player.careerProfile = profile({ growthPotential: 1, peakAge: 30 });
     player.careerGrowthConsumed = careerGrowthBudget(player.careerProfile);
@@ -263,7 +263,7 @@ describe("position-normalized development", () => {
 
   it("never lets realized growth exceed the career growth budget", () => {
     const club = testClub();
-    const player = makePlayer({ position: 3 });
+    const player = makePlayer({ position: "DM" });
     player.age = 16;
     player.careerProfile = profile({ growthPotential: 0.2, peakAge: 30 });
     player.careerGrowthConsumed = 0;
@@ -279,7 +279,7 @@ describe("position-normalized development", () => {
 
   it("keeps OVR equal to overallFromSkills after every tick", () => {
     const club = testClub();
-    const player = makePlayer({ position: 2 });
+    const player = makePlayer({ position: "CB" });
     player.age = 19;
     player.careerProfile = profile({ growthPotential: 1, peakAge: 29 });
     player.careerGrowthConsumed = 0;
@@ -315,8 +315,8 @@ describe("applyDevelopment", () => {
 
   it("accumulates fractional progress and bumps integer skills only on threshold crossing", () => {
     const club = testClub();
-    const player = makePlayer({ position: 3 });
-    player.skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 50 };
+    const player = makePlayer({ position: "DM" });
+    player.skills = { gol: 50, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 };
     player.overall = overallFromSkills(player.position, player.skills);
     player.age = 18;
     player.careerProfile = profile({ growthPotential: 0.5, peakAge: 28 });
@@ -339,7 +339,7 @@ describe("applyDevelopment", () => {
 
   it("freezes development entirely for a dormant club's players", () => {
     const club = testClub({ competitionState: "DORMANT" });
-    const player = makePlayer({ position: 3 });
+    const player = makePlayer({ position: "DM" });
     player.age = 19;
     player.careerProfile = profile({ growthPotential: 1, peakAge: 29 });
     player.careerGrowthConsumed = 0;
@@ -364,8 +364,8 @@ calibrationDescribe("long-term career simulation", () => {
 
   function simulateCareer(seed: number, minutes: number[]): { peak: number; final: number; peakAge: number } {
     const club = testClub({ id: 1 });
-    const player = makePlayer({ position: 3 });
-    player.skills = { gol: 40, vel: 40, tec: 40, pas: 40, des: 40, arm: 40, fin: 40 };
+    const player = makePlayer({ position: "DM" });
+    player.skills = { gol: 40, pace: 40, tec: 40, pas: 40, des: 40, playmaking: 40, fin: 40 };
     player.overall = overallFromSkills(player.position, player.skills);
     player.skillAcc = [0, 0, 0, 0, 0, 0, 0];
     player.age = 16;
@@ -420,7 +420,7 @@ calibrationDescribe("long-term career simulation", () => {
     let matched = 0;
     for (let i = 0; i < n; i++) {
       const club = testClub({ id: 1 });
-      const player = makePlayer({ position: 3 });
+      const player = makePlayer({ position: "DM" });
       player.age = 16;
       player.careerProfile = generateCareerProfile(createRng(3_000 + i));
       player.careerGrowthConsumed = 0;

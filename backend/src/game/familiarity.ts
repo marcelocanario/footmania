@@ -15,7 +15,8 @@
 
 import { gameConfig } from "../config";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
-import { FORMATION_POSITIONS, PRESSING_NAMES } from "./constants";
+import { PRESSING_NAMES } from "./constants";
+import { formationById } from "./formations";
 import type { Club, LiveTactics, Tactics } from "./types";
 
 /** Neutral starting familiarity for setups never drilled (scale midpoint). */
@@ -126,8 +127,9 @@ export function setupKeyFromCanonical(setup: CanonicalSetup): string {
 /**
  * Similarity between two setups in [0,1]: weighted mean of style equality,
  * pressing closeness, direction equality and formation structural overlap
- * (multiset Jaccard over FORMATION_POSITIONS slot lists). Weights come from
- * config and are normalized so any non-negative combination is valid.
+ * (§4.4 multiset Jaccard over role:lane:line tokens from the formation
+ * catalog). Weights come from config and are normalized so any non-negative
+ * combination is valid.
  */
 export function setupSimilarity(a: CanonicalSetup, b: CanonicalSetup): number {
   const cfg = MS.tacticalFamiliarity.switchSimilarityWeights;
@@ -140,7 +142,7 @@ export function setupSimilarity(a: CanonicalSetup, b: CanonicalSetup): number {
   weighted += cfg.direction * (a.direction === b.direction ? 1 : 0);
   // Pressing is ordinal on the normalized 0..1 scale.
   weighted += cfg.pressing * (1 - Math.abs(a.pressing - b.pressing));
-  // Formation overlap: multiset Jaccard of the tacPos slots each formation uses.
+  // Formation overlap: multiset Jaccard of the slot role/lane/line tokens.
   weighted += cfg.formation * formationOverlap(a.formation, b.formation);
 
   return weighted / sum;
@@ -148,12 +150,15 @@ export function setupSimilarity(a: CanonicalSetup, b: CanonicalSetup): number {
 
 function formationOverlap(a: number, b: number): number {
   if (a === b) return 1;
-  const slotsA = FORMATION_POSITIONS[a] ?? FORMATION_POSITIONS[4];
-  const slotsB = FORMATION_POSITIONS[b] ?? FORMATION_POSITIONS[4];
-  const countA = new Map<number, number>();
-  for (const slot of slotsA) countA.set(slot, (countA.get(slot) ?? 0) + 1);
-  const countB = new Map<number, number>();
-  for (const slot of slotsB) countB.set(slot, (countB.get(slot) ?? 0) + 1);
+  const tokens = (id: number): string[] => {
+    const def = formationById(id);
+    if (!def) return [];
+    return def.slots.map((s) => `${s.role}:${s.lane}:${s.line}`);
+  };
+  const countA = new Map<string, number>();
+  for (const slot of tokens(a)) countA.set(slot, (countA.get(slot) ?? 0) + 1);
+  const countB = new Map<string, number>();
+  for (const slot of tokens(b)) countB.set(slot, (countB.get(slot) ?? 0) + 1);
   let intersection = 0;
   let union = 0;
   for (const slot of new Set([...countA.keys(), ...countB.keys()])) {

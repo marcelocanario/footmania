@@ -6,11 +6,11 @@ import {
   allocateSlots,
   generateSeniorPlayer,
   generateYouthPlayer,
-  SENIOR_POSITION_WEIGHTS,
+  seniorPositionWeights,
   type GeneratePlayerContext,
 } from "../src/game/playerGeneration";
 import {
-  ACADEMY_POSITION_WEIGHTS,
+  academyPositionWeights,
   generateInitialSeniorSquad,
   generateInitialAcademy,
   generateSeasonalAcademyIntake,
@@ -38,7 +38,7 @@ function seniorCtx(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlay
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3,
+    position: "DM",
     isYouth: false,
     currentDivision: 1,
     highestDivisionReached: 1,
@@ -56,7 +56,7 @@ function youthCtx(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlaye
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3,
+    position: "DM",
     age: 16,
     isYouth: true,
     currentDivision: 1,
@@ -169,7 +169,7 @@ calibrationDescribe("accelerated career simulation", () => {
 
 describe("academy intake lifecycle", () => {
   it("derives the retirement baseline from the full active-career lifetime", () => {
-    const lifetime = expectedActivePlayerLifetimeFromAcademyEntry(ACADEMY_POSITION_WEIGHTS);
+    const lifetime = expectedActivePlayerLifetimeFromAcademyEntry(academyPositionWeights());
     const rules = gameConfig.playerGenerationRules;
     // Lifetime spans the academy pipeline plus the standing senior career.
     expect(lifetime).toBeGreaterThan(rules.academyAutomaticPromotionAge - rules.academyMaxAge);
@@ -177,12 +177,12 @@ describe("academy intake lifecycle", () => {
   });
 
   it("uses the production retirement probabilities, including the goalkeeper grace", () => {
-    expect(retirementProbability(32, 4)).toBe(0);
-    expect(retirementProbability(33, 4)).toBe(0.1);
-    expect(retirementProbability(35, 4)).toBe(0.45);
+    expect(retirementProbability(32, "ST")).toBe(0);
+    expect(retirementProbability(33, "ST")).toBe(0.1);
+    expect(retirementProbability(35, "ST")).toBe(0.45);
     // Goalkeepers are treated as three years younger.
-    expect(retirementProbability(35, 0)).toBe(0.01);
-    expect(retirementProbability(49, 4)).toBe(1);
+    expect(retirementProbability(35, "GK")).toBe(0.01);
+    expect(retirementProbability(49, "ST")).toBe(1);
   });
 
   it("generates exactly the allocation the population plan resolved", () => {
@@ -314,12 +314,13 @@ describe("club creation idempotency (spec §46)", () => {
     const first = generateNewClubRoster(ctx);
     expect(first.seniors).toHaveLength(gameConfig.playerGenerationRules.initialSeniorSquadSize);
     expect(first.youth).toHaveLength(gameConfig.playerGenerationRules.initialAcademySize);
+    const groupOf = (pos: string) => (pos === "GK" ? 0 : pos === "LB" || pos === "RB" ? 1 : pos === "CB" ? 2 : pos === "DM" || pos === "AM" ? 3 : 4);
     const seniorCounts = [0, 0, 0, 0, 0];
     const youthCounts = [0, 0, 0, 0, 0];
-    for (const player of first.seniors) seniorCounts[player.position]++;
-    for (const player of first.youth) youthCounts[player.position]++;
-    expect(seniorCounts).toEqual(allocateSlots(SENIOR_POSITION_WEIGHTS, gameConfig.playerGenerationRules.initialSeniorSquadSize));
-    expect(youthCounts).toEqual(allocateSlots(ACADEMY_POSITION_WEIGHTS, gameConfig.playerGenerationRules.initialAcademySize));
+    for (const player of first.seniors) seniorCounts[groupOf(player.position)]++;
+    for (const player of first.youth) youthCounts[groupOf(player.position)]++;
+    expect(seniorCounts).toEqual(allocateSlots(seniorPositionWeights(), gameConfig.playerGenerationRules.initialSeniorSquadSize));
+    expect(youthCounts).toEqual(allocateSlots(academyPositionWeights(), gameConfig.playerGenerationRules.initialAcademySize));
     expect(seniorCounts.every((count) => count > 0)).toBe(true);
     expect(youthCounts.every((count) => count > 0)).toBe(true);
     expect(world.generationEvents).toContain("club-creation:61");
@@ -335,7 +336,7 @@ describe("club creation idempotency (spec §46)", () => {
       id: 1,
       clubId,
       country: "BRA",
-      position: 3 as const,
+      position: "DM" as const,
       isYouth: false as const,
       currentDivision: 2,
       highestDivisionReached: 2,

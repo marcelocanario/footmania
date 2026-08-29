@@ -36,6 +36,8 @@ import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 import { calculateBaseSalary, calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "../game/economy";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
+import { positionToCode, positionFromV2Code } from "../game/positions";
+import { formationById } from "../game/formations";
 import { ensureNamePools } from "./namePoolService";
 
 type Tx = Prisma.TransactionClient;
@@ -188,8 +190,8 @@ function sanitizeRecentMinutes(raw: string | null | undefined): number[] {
 }
 
 function normalizePlayer(player: Player, club: Club | undefined): void {
-  player.skills ??= { gol: 1, vel: 1, tec: 1, pas: 1, des: 1, arm: 1, fin: 1 };
-  for (const key of ["gol", "vel", "tec", "pas", "des", "arm", "fin"] as const) {
+  player.skills ??= { gol: 1, pace: 1, tec: 1, pas: 1, des: 1, playmaking: 1, fin: 1 };
+  for (const key of ["gol", "pace", "tec", "pas", "des", "playmaking", "fin"] as const) {
     const value = Number(player.skills?.[key] ?? 1);
     player.skills[key] = Number.isFinite(value) ? Math.max(1, Math.min(100, Math.round(value))) : 1;
   }
@@ -286,6 +288,9 @@ export async function ensureGlobalSave(prisma: PrismaClient): Promise<{ id: numb
       userId: system.id,
       name: "Global Multiplayer",
       isGlobal: true,
+      // §14.1: new worlds explicitly create the V2 position model; never rely
+      // on the database default.
+      positionModelVersion: 2,
       year: world.year,
       dayIndex: world.dayIndex,
       humanClubId: null,
@@ -302,6 +307,14 @@ type LoadedWorld = { save: { id: number; name: string; revision: number }; world
 async function loadGlobalWorldInternal(prisma: PrismaClient, cloneCached: boolean): Promise<LoadedWorld | null> {
   const save = await prisma.save.findFirst({ where: { isGlobal: true } });
   if (!save) return null;
+  // §14.1: normal server startup refuses to load a global Save below the V2
+  // position model. Read paths never perform a write migration; operators must
+  // run `npm run db:upgrade` (which runs scripts/migrate-natural-positions.ts).
+  if (save.positionModelVersion < 2) {
+    throw new Error(
+      `Global Save ${save.id} is at position-model v${save.positionModelVersion}; run \`npm run db:upgrade\` to migrate to the nine natural positions before starting the server.`,
+    );
+  }
   if (process.env.NODE_ENV !== "test") {
     const cached = worldCaches.get(prisma)?.get(save.id);
     if (cached?.revision === save.revision) {
@@ -986,8 +999,7 @@ function playerRow(p: Player, saveId: number) {
     nickname: p.nickname ?? null,
     country: p.country,
     age: p.age,
-    position: p.position,
-    side: p.side,
+    position: positionToCode(p.position as import("../game/positions").NaturalPosition),
     overall: p.overall,
     energy: p.energy,
     recentLoad: p.recentLoad ?? 0,
@@ -1016,7 +1028,6 @@ function playerRow(p: Player, saveId: number) {
     seasonAppearances: p.seasonAppearances ?? 0,
     yellows: p.yellows,
     reds: p.reds,
-    tacPos: p.tacPos,
      squadNumber: p.squadNumber ?? null,
      onSale: p.onSale,
      suspendedGames: p.suspendedGames,
@@ -1024,11 +1035,11 @@ function playerRow(p: Player, saveId: number) {
      yellowsTurnKey: p.yellowsTurnKey ?? null,
     loanId: p.loanId,
     skillGol: p.skills.gol,
-    skillVel: p.skills.vel,
+    skillPace: p.skills.pace,
     skillTec: p.skills.tec,
     skillPas: p.skills.pas,
     skillDes: p.skills.des,
-    skillArm: p.skills.arm,
+    skillPlaymaking: p.skills.playmaking,
     skillFin: p.skills.fin,
     skillAccJson: JSON.stringify(p.skillAcc),
     growthPotential: p.careerProfile.growthPotential,
@@ -1542,9 +1553,8 @@ async function rebuildWorld(
         nickname: (r as unknown as { nickname?: string | null }).nickname ?? null,
         country: r.country,
         age: r.age,
-        position: r.position as Player["position"],
-        side: r.side,
-        skills: { gol: r.skillGol, vel: r.skillVel, tec: r.skillTec, pas: r.skillPas, des: r.skillDes, arm: r.skillArm, fin: r.skillFin },
+        position: positionFromV2Code(r.position),
+        skills: { gol: (r as unknown as { skillGol: number }).skillGol, pace: (r as unknown as { skillPace: number }).skillPace, tec: (r as unknown as { skillTec: number }).skillTec, pas: (r as unknown as { skillPas: number }).skillPas, des: (r as unknown as { skillDes: number }).skillDes, playmaking: (r as unknown as { skillPlaymaking: number }).skillPlaymaking, fin: (r as unknown as { skillFin: number }).skillFin },
         overall: r.overall,
         energy: r.energy,
         salary: r.salary,
@@ -1575,7 +1585,6 @@ async function rebuildWorld(
         yellows: r.yellows,
         reds: r.reds,
         clubId: r.clubId,
-        tacPos: r.tacPos,
         squadNumber: (r as unknown as { squadNumber?: number | null }).squadNumber ?? null,
         onSale: r.onSale,
         suspendedGames: r.suspendedGames,
@@ -2047,6 +2056,35 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
   st.absoluteGameDay ??= world.mp.absoluteGameDay ?? world.dayIndex;
   st.roundsPerSeason ??= calendarValues().roundsPerSeason;
   st.matchSpacingDays ??= calendarValues().matchSpacingDays;
+  // §15.1: validate every loaded live slot index against the side's current
+  // formation; corrupt or stale entries are dropped rather than aborting the
+  // entire world load (a single bad LiveMatch must not brick startup).
+  st.homeSlotByPlayerId ??= {};
+  st.awaySlotByPlayerId ??= {};
+  const homeFormation = formationById(st.homeTactics.formation);
+  const awayFormation = formationById(st.awayTactics.formation);
+  const validSlot = (index: number | undefined, def: { slots: readonly unknown[] } | undefined): boolean =>
+    index !== undefined && Number.isInteger(index) && def !== undefined && index >= 0 && index < def.slots.length;
+  // Non-null after the ??= above; capture for narrowing.
+  const homeSlots = st.homeSlotByPlayerId!;
+  const awaySlots = st.awaySlotByPlayerId!;
+  const beforeHome = st.homeOn.length;
+  const beforeAway = st.awayOn.length;
+  st.homeOn = st.homeOn.filter((id) => {
+    if (validSlot(homeSlots[id], homeFormation)) return true;
+    console.warn(`[saveService] dropping corrupt live homeOn entry: player ${id} has no valid slot in formation ${st.homeTactics.formation}`);
+    delete homeSlots[id];
+    return false;
+  });
+  st.awayOn = st.awayOn.filter((id) => {
+    if (validSlot(awaySlots[id], awayFormation)) return true;
+    console.warn(`[saveService] dropping corrupt live awayOn entry: player ${id} has no valid slot in formation ${st.awayTactics.formation}`);
+    delete awaySlots[id];
+    return false;
+  });
+  if (st.homeOn.length !== beforeHome || st.awayOn.length !== beforeAway) {
+    console.warn(`[saveService] live match ${st.matchId}: filtered ${beforeHome - st.homeOn.length} home / ${beforeAway - st.awayOn.length} away on-pitch entries due to stale/corrupt slot indices`);
+  }
   const playerIds = new Set([...st.homeXI, ...st.awayXI, ...st.homeSubs, ...st.awaySubs, ...st.homeOn, ...st.awayOn]);
   for (const id of playerIds) {
     if (typeof st.playerEnergy[id] !== "number") {

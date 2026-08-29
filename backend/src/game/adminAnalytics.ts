@@ -1,12 +1,12 @@
 import type { Competition, Player, Position, World } from "./types";
 import { divisionsInSeason, tierOf, groupIndexOf } from "./multiplayer";
-import { totalDivisionsForGeneration, ACADEMY_POSITION_WEIGHTS } from "./clubGenerator";
-import { divisionMean, SENIOR_POSITION_WEIGHTS } from "./playerGeneration";
+import { totalDivisionsForGeneration, academyPositionWeights } from "./clubGenerator";
+import { divisionMean, seniorPositionWeights } from "./playerGeneration";
 import { getCommitmentTotals } from "./finance";
 import { isEphemeralAI } from "./club";
 import { seniorSurvivalWeights } from "./careerCurves";
 import { calculateBaseSalary } from "./economy";
-import { POSITION_NAMES } from "./constants";
+import { NATURAL_POSITION_ORDER, POSITION_GROUPS, groupRepresentative, positionGroup } from "./positions";
 import { gameConfig } from "../config";
 
 /**
@@ -57,10 +57,15 @@ export interface DivisionAnalyticsRow {
   /** Real (non-filler) clubs only; compare against fillerAvgOverall for drift. */
   humanAvgOverall: number | null;
 
-  // --- Position/role balance vs the senior generation template ------------
+  // --- Position/role balance vs the senior generation template (§13.6) ------
+  /** Count per NATURAL position (GK/LB/RB/CB/DM/AM/LW/RW/ST). */
   positionCounts: Record<string, number>;
-  /** real share - expected share (SENIOR_POSITION_WEIGHTS), in [-1, 1]. */
+  /** real share - hierarchical target share (broadWeight × withinGroupWeight). */
   positionShareDelta: Record<string, number>;
+  /** Count per derived BROAD group (GK/FB/CB/MF/FW). */
+  broadPositionCounts: Record<string, number>;
+  /** real share - senior broad-group target share, in [-1, 1]. */
+  broadPositionShareDelta: Record<string, number>;
 
   // --- Economic drift -------------------------------------------------------
   /** mean(actualSalary / calculateBaseSalary(overall, age)) - 1; null when empty. */
@@ -168,11 +173,14 @@ const AGE_BUCKETS: { label: string; min: number; max: number }[] = [
  * therefore measure world drift, not a disagreement between two models.
  */
 function equilibriumAgeShares(): { age: number; share: number }[] {
-  const weightSum = ACADEMY_POSITION_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
+  const academyWeights = academyPositionWeights();
+  const weightSum = academyWeights.reduce((sum, weight) => sum + weight, 0);
   const blended = new Map<number, number>();
-  for (let position = 0; position < ACADEMY_POSITION_WEIGHTS.length; position++) {
-    const share = ACADEMY_POSITION_WEIGHTS[position] / weightSum;
-    for (const [age, weight] of seniorSurvivalWeights(position as Position)) {
+  // §13.2: value/survival stays broad-group based, so each broad academy weight
+  // pairs with its group's representative natural position.
+  for (let index = 0; index < academyWeights.length; index++) {
+    const share = academyWeights[index] / weightSum;
+    for (const [age, weight] of seniorSurvivalWeights(groupRepresentative(POSITION_GROUPS[index]))) {
       blended.set(age, (blended.get(age) ?? 0) + share * weight);
     }
   }
@@ -197,11 +205,16 @@ function ageDistribution(world: World, realClubIds: Set<number>): AgeBucketRow[]
   });
 }
 
-function positionShares(players: Player[]): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const name of POSITION_NAMES) counts[name] = 0;
-  for (const p of players) counts[POSITION_NAMES[p.position]] = (counts[POSITION_NAMES[p.position]] ?? 0) + 1;
-  return counts;
+function positionShares(players: Player[]): { natural: Record<string, number>; broad: Record<string, number> } {
+  const natural: Record<string, number> = { GK: 0, LB: 0, RB: 0, CB: 0, DM: 0, AM: 0, LW: 0, RW: 0, ST: 0 };
+  const broad: Record<string, number> = { GK: 0, FB: 0, CB: 0, MF: 0, FW: 0 };
+  for (const p of players) {
+    const pos = p.position as string;
+    if (pos in natural) natural[pos]++;
+    const g = positionGroup(p.position);
+    broad[g]++;
+  }
+  return { natural, broad };
 }
 
 function salaryDriftIndex(players: Player[]): number | null {
@@ -216,7 +229,23 @@ function salaryDriftIndex(players: Player[]): number | null {
 export function divisionAnalytics(world: World): WorldAnalytics {
   const totalDivisions = totalDivisionsForGeneration(world);
   const rules = gameConfig.playerGenerationRules;
-  const senWeightSum = SENIOR_POSITION_WEIGHTS.reduce((sum, weight) => sum + weight, 0);
+  // §13.6 targets: the broad target is the senior group weight; the natural
+  // target is derived hierarchically as broadWeight × withinGroupWeight — never
+  // flattened independently.
+  const seniorWeights = seniorPositionWeights();
+  const senWeightSum = seniorWeights.reduce((sum, weight) => sum + weight, 0);
+  const broadTargetShare: Record<string, number> = {};
+  const naturalTargetShare: Record<string, number> = {};
+  {
+    const { seniorGroups, withinGroup } = gameConfig.playerGeneration.positionMix;
+    for (const group of POSITION_GROUPS) {
+      const groupShare = seniorGroups[group] / senWeightSum;
+      broadTargetShare[group] = groupShare;
+      for (const [role, share] of Object.entries(withinGroup[group])) {
+        naturalTargetShare[role] = groupShare * share;
+      }
+    }
+  }
   const rows: DivisionAnalyticsRow[] = [];
   let seniorsTotal = 0;
   let overallSum = 0;
@@ -257,13 +286,20 @@ export function divisionAnalytics(world: World): WorldAnalytics {
     const realOveralls = realSeniors.map((p) => p.overall).sort((a, b) => a - b);
     const clubsBelowFloor = realMembers.filter((club) => world.players.filter((p) => p.clubId === club.id && !p.isYouth).length < 20).length;
 
+    // §13.6: report BOTH taxonomies, as separate records — merging them into
+    // one flat map collides on the shared GK/CB keys and hides which target a
+    // delta was measured against.
     const positionCounts = positionShares(realSeniors);
-    const positionShareDelta: Record<string, number> = {};
-    for (let position = 0; position < POSITION_NAMES.length; position++) {
-      const name = POSITION_NAMES[position];
-      const realShare = realSeniors.length > 0 ? (positionCounts[name] ?? 0) / realSeniors.length : 0;
-      const expectedShare = SENIOR_POSITION_WEIGHTS[position] / senWeightSum;
-      positionShareDelta[name] = round4(realShare - expectedShare);
+    const total = realSeniors.length;
+    const broadShareDelta: Record<string, number> = {};
+    for (const group of POSITION_GROUPS) {
+      const realShare = total > 0 ? (positionCounts.broad[group] ?? 0) / total : 0;
+      broadShareDelta[group] = round4(realShare - broadTargetShare[group]);
+    }
+    const naturalShareDelta: Record<string, number> = {};
+    for (const role of NATURAL_POSITION_ORDER) {
+      const realShare = total > 0 ? (positionCounts.natural[role] ?? 0) / total : 0;
+      naturalShareDelta[role] = round4(realShare - (naturalTargetShare[role] ?? 0));
     }
 
     rows.push({
@@ -292,8 +328,10 @@ export function divisionAnalytics(world: World): WorldAnalytics {
       fillerAvgOverall: fillerSeniors.length > 0 ? round2(mean(fillerSeniors.map((p) => p.overall))) : null,
       humanAvgOverall: realSeniors.length > 0 ? round2(mean(realSeniors.map((p) => p.overall))) : null,
 
-      positionCounts,
-      positionShareDelta,
+      positionCounts: positionCounts.natural,
+      positionShareDelta: naturalShareDelta,
+      broadPositionCounts: positionCounts.broad,
+      broadPositionShareDelta: broadShareDelta,
 
       salaryDriftIndex: salaryDriftIndex(realSeniors),
     });

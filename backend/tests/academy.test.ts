@@ -24,7 +24,7 @@ function youth(world: World, clubId: number, age: number, id: number): Player {
     id,
     clubId,
     country: "BRA",
-    position: 3 as Position,
+    position: "DM" as Position,
     age,
     isYouth: true,
     currentDivision: 1,

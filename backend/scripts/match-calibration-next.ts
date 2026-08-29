@@ -9,7 +9,9 @@ import { createLiveMatchState, performLiveSub, simulateMatch, tickLiveMatch } fr
 import { generateSeniorPlayer, generateYouthPlayer, seniorRosterTemplate } from "../src/game/playerGeneration";
 import { overallFromSkills } from "../src/game/rating";
 import { createRng } from "../src/game/rng";
-import type { Club, Match, MatchSimulationDiagnostics, Player, Position, Tactics } from "../src/game/types";
+import type { Club, LiveMatchState, Match, MatchSimulationDiagnostics, Player, Tactics } from "../src/game/types";
+import { NATURAL_POSITIONS, positionGroup, type DeployedRole, type NaturalPosition } from "../src/game/positions";
+import { tryDeployedRoleForSlot } from "../src/game/matchSim";
 import { gameConfig } from "../src/config";
 import { MATCH_SIMULATOR_CONFIG } from "../src/matchSimulatorConfig";
 
@@ -94,7 +96,15 @@ const TARGET_PATH = join(ROOT, "..", "config", "match-calibration-targets.json")
 const CANDIDATE_JSON = join(ROOT, "..", "..", "plans", "match-calibration-candidate.json");
 const TARGETS = JSON.parse(readFileSync(TARGET_PATH, "utf8")) as Record<string, unknown>;
 const SEED = 0x51a7c0de;
-const POSITIONS: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 2, 3, 1, 4];
+// A standard generated 30-man squad at broad-group level (3 GK / 4 FB / 5 CB /
+// 10 MF / 8 FW), split into the nine natural positions.
+const POSITIONS: NaturalPosition[] = [
+  "GK", "GK", "GK",
+  "LB", "LB", "RB", "RB",
+  "CB", "CB", "CB", "CB", "CB",
+  "DM", "DM", "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM",
+  "LW", "LW", "RW", "RW", "ST", "ST", "ST", "ST",
+];
 const STYLES: Record<string, number> = { CONTROL: 0, PRESS: 1, COUNTER: 2 };
 const FAMILIARITY_LEVELS = [25, 50, 75, 90, 100];
 const LOSS_MINUTES = [15, 30, 45, 60, 75];
@@ -127,7 +137,6 @@ function club(id: number, selectedTactics: Tactics): Club {
     highestDivision: 1,
     cash: 1e8,
     stadiumName: "Ground",
-    stadiumCapacity: 40000,
     primaryColor: "#000",
     secondaryColor: "#fff",
     coachName: "Coach",
@@ -166,14 +175,17 @@ function cloneClubState(source: Club, id = source.id): Club {
 }
 
 function startingXi(squad: Player[]): Player[] {
-  const shape = [1, 2, 2, 4, 2];
+  // §13.4/§13.5 reporting shape: the fixed 4-3-3 natural-position XI.
+  const shape: [NaturalPosition, number][] = [
+    ["GK", 1], ["LB", 1], ["RB", 1], ["CB", 2], ["DM", 1], ["AM", 2], ["LW", 1], ["RW", 1], ["ST", 1],
+  ];
   const xi: Player[] = [];
-  for (let position = 0; position < shape.length; position++) {
+  for (const [position, count] of shape) {
     xi.push(
       ...squad
         .filter((player) => player.position === position)
         .sort((a, b) => b.overall - a.overall || a.id - b.id)
-        .slice(0, shape[position]),
+        .slice(0, count),
     );
   }
   return xi;
@@ -222,7 +234,7 @@ function buildGeneratedPopulation(seed: number): GeneratedPopulation {
           id: clubId * 1_000 + 100 + slot + 1,
           clubId,
           country: generatedClub.country,
-          position: (slot % 5) as Position,
+          position: NATURAL_POSITIONS[slot % NATURAL_POSITIONS.length],
           age: academyRules.academyMinAge + (slot % academyAgeSpan),
           isYouth: true,
           currentDivision: division,
@@ -234,8 +246,8 @@ function buildGeneratedPopulation(seed: number): GeneratedPopulation {
           slot,
         }),
       );
-      generatedClub.captainId = seniors.find((player) => player.position === 0)?.id ?? null;
-      generatedClub.penaltyTakerId = seniors.find((player) => player.position === 4)?.id ?? null;
+      generatedClub.captainId = seniors.find((player) => player.position === "GK")?.id ?? null;
+      generatedClub.penaltyTakerId = seniors.find((player) => player.position === "ST")?.id ?? null;
       players.push(...seniors, ...academy);
       clubs.push(generatedClub);
       xiMeans.set(clubId, mean(startingXi(seniors).map((player) => player.overall)));
@@ -278,16 +290,17 @@ function buildGeneratedPopulation(seed: number): GeneratedPopulation {
   return { players, clubsByDivision, xiMeans, summary };
 }
 
-function makePlayer(id: number, clubId: number, position: Position, strength: number, energy: number): Player {
-  const base = Math.max(1, Math.min(99, strength + (position === 1 ? 1 : position === 4 ? 2 : 0)));
+function makePlayer(id: number, clubId: number, position: NaturalPosition, strength: number, energy: number): Player {
+  const group = positionGroup(position);
+  const base = Math.max(1, Math.min(99, strength + (group === "FB" ? 1 : group === "FW" ? 2 : 0)));
   const skills = {
-    gol: Math.max(1, Math.min(99, base + (position === 0 ? 5 : -8))),
-    vel: base,
+    gol: Math.max(1, Math.min(99, base + (group === "GK" ? 5 : -8))),
+    pace: base,
     tec: base,
-    pas: base + (position === 3 ? 2 : 0),
-    des: base + (position <= 2 ? 3 : -2),
-    arm: base + (position === 2 ? 3 : 0),
-    fin: base + (position === 4 ? 5 : -3),
+    pas: base + (group === "MF" ? 2 : 0),
+    des: base + (group === "GK" || group === "FB" || group === "CB" ? 3 : -2),
+    playmaking: base + (group === "CB" ? 3 : 0),
+    fin: base + (group === "FW" ? 5 : -3),
   };
   return {
     id,
@@ -295,7 +308,6 @@ function makePlayer(id: number, clubId: number, position: Position, strength: nu
     country: "BRA",
     age: 25,
     position,
-    side: 0,
     skills,
     overall: overallFromSkills(position, skills),
     energy,
@@ -319,7 +331,6 @@ function makePlayer(id: number, clubId: number, position: Position, strength: nu
     yellows: 0,
     reds: 0,
     clubId,
-    tacPos: -1,
     onSale: false,
     suspendedGames: 0,
     loanId: null,
@@ -493,28 +504,38 @@ function full(
   return completedRun(result.match, players);
 }
 
-function calibrationRole(tacPos: number): "GK" | "CB" | "WIDE" | "CM" | "ATT" {
-  if (tacPos === 1) return "GK";
-  if (tacPos === 2 || tacPos === 9 || tacPos === 10 || tacPos === 17 || tacPos === 19 || tacPos === 21) return "WIDE";
-  if (tacPos === 18 || tacPos === 25) return "ATT";
-  if ((tacPos >= 3 && tacPos <= 8) || tacPos === 23) return "CB";
+/**
+ * Calibration REPORT bucket for a deployed role. These four bucket names
+ * ("CB"/"WIDE"/"CM"/"ATT") are scenario labels baked into the stored
+ * calibration targets — they are not deployed roles, and "CM" here means
+ * "central midfield band", not the removed CM role.
+ */
+function calibrationRole(role: DeployedRole): "GK" | "CB" | "WIDE" | "CM" | "ATT" {
+  if (role === "GK") return "GK";
+  if (role === "LB" || role === "RB" || role === "LM" || role === "RM" || role === "LW" || role === "RW") return "WIDE";
+  if (role === "ST") return "ATT";
+  if (role === "CB" || role === "SW") return "CB";
   return "CM";
 }
 
 function selectedLossIds(
   index: number,
-  homeOn: number[],
+  state: LiveMatchState,
   players: Player[],
   count: number,
   requestedRole: "AVERAGE" | "CB" | "WIDE" | "CM" | "ATT",
 ): number[] {
   if (count === 0) return [];
   const byId = new Map(players.map((player) => [player.id, player]));
-  const outfield = homeOn
+  // §9.1: the deployed role comes from the live slot map, never from the player.
+  const slotOf = (id: number) => state.homeSlotByPlayerId?.[id] ?? Number.MAX_SAFE_INTEGER;
+  const roleOf = (id: number) =>
+    tryDeployedRoleForSlot(state.homeSlotByPlayerId, state.homeTactics.formation, id)?.role ?? "DM";
+  const outfield = state.homeOn
     .map((id) => byId.get(id))
-    .filter((player): player is Player => Boolean(player) && calibrationRole(player.tacPos) !== "GK")
-    .sort((a, b) => a.tacPos - b.tacPos || a.id - b.id);
-  const pool = requestedRole === "AVERAGE" ? outfield : outfield.filter((player) => calibrationRole(player.tacPos) === requestedRole);
+    .filter((player): player is Player => Boolean(player) && calibrationRole(roleOf(player!.id)) !== "GK")
+    .sort((a, b) => slotOf(a.id) - slotOf(b.id) || a.id - b.id);
+  const pool = requestedRole === "AVERAGE" ? outfield : outfield.filter((player) => calibrationRole(roleOf(player.id)) === requestedRole);
   if (pool.length < count) throw new Error(`Cannot remove ${count} ${requestedRole} player(s); only ${pool.length} available`);
   const start = index % pool.length;
   return Array.from({ length: count }, (_, offset) => pool[(start + offset) % pool.length].id);
@@ -527,7 +548,10 @@ function segmentedAvailability(
   role: "AVERAGE" | "CB" | "WIDE" | "CM" | "ATT" = "AVERAGE",
   substitute = false,
 ): CalibrationRun {
-  const setup = pair(index, 55, 55);
+  // Loss controls must share the fixed identical-team/control setup used by
+  // the neutrality gate; AI tactic selection would otherwise be confounded
+  // with the measured effect of the missing player.
+  const setup = pair(index, 55, 55, tactics(0), tactics(0), 100, false, 50, 50, true, false);
   const players = clone(setup.players);
   const rng = createRng(setup.seed);
   const state = createLiveMatchState(rng, setup.home, setup.away, players, {
@@ -536,16 +560,34 @@ function segmentedAvailability(
     fixtureId: index,
     homeNeutral: true,
   });
-  tickLiveMatch(rng, setup.home, setup.away, players, state, minute, { ignoreHalfTime: true });
-  const losses = selectedLossIds(index, state.homeOn, players, substitute ? 1 : lossCount, role);
+  // Match calibration must use the same one-minute engine cadence as
+  // simulateMatch. A single large tick consumes a different possession/RNG
+  // path, so even a nominal zero-loss control would not be a paired no-op.
+  const advanceNominalMinutes = (count: number) => {
+    for (let elapsed = 0; elapsed < count && !state.ended; elapsed++) {
+      tickLiveMatch(rng, setup.home, setup.away, players, state, 1, { ignoreHalfTime: true });
+    }
+  };
+  advanceNominalMinutes(minute);
+  const losses = selectedLossIds(index, state, players, substitute ? 1 : lossCount, role);
   if (substitute) {
     performLiveSub(rng, setup.home, setup.away, players, state, 0, losses[0], state.homeSubs[0]);
   } else if (losses.length > 0) {
     const removed = new Set(losses);
     state.homeOn = state.homeOn.filter((id) => !removed.has(id));
     state.homeXI = state.homeXI.filter((id) => !removed.has(id));
+    // These scenarios represent a permanent departure with no replacement
+    // available. Clear the remaining bench after the departure so routine AI
+    // substitutions cannot silently turn a loss into a normal substitution.
+    state.homeSubs = [];
   }
-  tickLiveMatch(rng, setup.home, setup.away, players, state, 90 - minute, { ignoreHalfTime: true });
+  advanceNominalMinutes(90 - minute);
+  // Added time is frozen by the engine during the second half. Continue the
+  // same one-minute cadence until the match actually ends rather than
+  // truncating the calibration sample at nominal 90 minutes.
+  let guard = 0;
+  while (!state.ended && guard++ < 120) advanceNominalMinutes(1);
+  if (!state.ended) throw new Error(`Segmented calibration match ${index} did not finish`);
   const match: Match = {
     id: index,
     fixtureId: index,
@@ -653,6 +695,11 @@ function summarize(name: string, values: Sample[]): Summary {
 
 function run(name: string, index: number): CalibrationRun {
   if (name === "neutral-baseline") return full(index, 55, 55);
+  // Explicit neutral identical-team control. `identical-home-away` is a
+  // separate home-advantage control and intentionally runs at a non-neutral
+  // venue; this scenario is the production-generated counterpart of the
+  // equal-side familiarity neutrality gate.
+  if (name === "identical-neutral") return full(index, 55, 55, tactics(0), tactics(0), 100, true, false, 50, 50, true, false);
   if (name === "identical-home-away") return full(index, 55, 55, tactics(0), tactics(0), 100, false, false, 50, 50, true);
   if (name === "P10-vs-P50-neutral") return full(index, 42, 55);
   if (name === "P25-vs-P50-neutral") return full(index, 49, 55);
@@ -666,7 +713,20 @@ function run(name: string, index: number): CalibrationRun {
   if (tacticsMatch) {
     const homeStyle = STYLES[tacticsMatch[1]];
     const awayStyle = STYLES[tacticsMatch[2]];
-    return full(index, 55, 55, tactics(homeStyle, homeStyle === 1 ? 2 : 0), tactics(awayStyle, awayStyle === 1 ? 2 : 0));
+    return full(
+      index,
+      55,
+      55,
+      tactics(homeStyle, homeStyle === 1 ? 2 : 0),
+      tactics(awayStyle, awayStyle === 1 ? 2 : 0),
+      100,
+      true,
+      false,
+      50,
+      50,
+      true,
+      false,
+    );
   }
 
   const equalFamiliarity = /^familiarity-(CONTROL|PRESS|COUNTER)-equal-(\d+)$/.exec(name);
@@ -674,14 +734,14 @@ function run(name: string, index: number): CalibrationRun {
     const style = STYLES[equalFamiliarity[1]];
     const familiarity = Number(equalFamiliarity[2]);
     const selected = tactics(style, style === 1 ? 2 : 0);
-    return full(index, 55, 55, selected, selected, 100, true, false, familiarity, familiarity, false, false);
+    return full(index, 55, 55, selected, selected, 100, true, false, familiarity, familiarity, true, false);
   }
 
   const gapFamiliarity = /^familiarity-(CONTROL|PRESS|COUNTER)-home-(\d+)-away-(\d+)$/.exec(name);
   if (gapFamiliarity) {
     const style = STYLES[gapFamiliarity[1]];
     const selected = tactics(style, style === 1 ? 2 : 0);
-    return full(index, 55, 55, selected, selected, 100, true, false, Number(gapFamiliarity[2]), Number(gapFamiliarity[3]), false, false);
+    return full(index, 55, 55, selected, selected, 100, true, false, Number(gapFamiliarity[2]), Number(gapFamiliarity[3]), true, false);
   }
 
   if (name.startsWith("energy-")) return full(index, 55, 55, tactics(0), tactics(0), Number(name.slice(7)));
@@ -706,6 +766,7 @@ const CORE_SCENARIOS = [
   "P90-vs-P50-neutral",
   "P10-vs-P90-neutral",
   "P90-vs-P10-neutral",
+  "identical-neutral",
   "identical-home-away",
   ...Object.keys(STYLES).flatMap((home) => Object.keys(STYLES).map((away) => `tactics-${home}-vs-${away}`)),
   "energy-100",
@@ -767,10 +828,14 @@ function snapshot(): Record<string, unknown> {
     numericalDisadvantage: config.numericalDisadvantage,
     localDensity: {
       actionQualityCoefficient: config.actionQuality.localDensityCoefficient,
+      passActionQualityCoefficient: config.actionQuality.passLocalDensityCoefficient,
       shotCoefficient: config.shotModel.localDensityCoefficient,
     },
     foulMultiplier: config.probabilityModel.foulProbabilityCalibrationMultiplier,
+    cornerRateMultiplier: config.probabilityModel.cornerRateCalibrationMultiplier,
     shotOnTarget: config.shotModel.shotsOnTarget,
+    finisherVsGoalkeeperLogitCoefficient: config.shotModel.finisherVsGoalkeeperLogitCoefficient,
+    playmakingProgressionCoefficient: config.actionQuality.playmakingProgressionCoefficient,
     homeAdvantage: config.homeAdvantage,
     normalization: config.normalization,
     cards: config.cards,

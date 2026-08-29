@@ -1,0 +1,4 @@
+interface:
+  display_name: "Footmania Rebalance"
+  short_description: "Rebalance Footmania with controlled Monte Carlo"
+  default_prompt: "Use $footmania-rebalance all to audit, recalibrate, tune, and verify every Footmania balance domain."

@@ -2,7 +2,8 @@ import type { Player, PlayerCareerProfile, Position, RngState, SkillSet } from "
 import { createRng, nextDouble, nextInt, truncatedNormal } from "./rng";
 import { countriesWithNamePools, generateName } from "./names";
 import { DAYS_PER_YEAR } from "./constants";
-import { overallFromSkills, SKILL_KEYS, OVERALL_SCALE, type SkillKey } from "./rating";
+import { overallFromSkills, SKILL_KEYS, overallScaleFor, type SkillKey } from "./rating";
+import { positionGroup } from "./positions";
 import {
   academyContractDaysForAge,
   academyContractSeasonsForAge,
@@ -78,8 +79,8 @@ export {
   academyPeakMean,
   allocateSlots,
   initialClubQualityTargets,
-  SENIOR_POSITION_WEIGHTS,
-  ACADEMY_POSITION_WEIGHTS,
+  seniorPositionWeights,
+  academyPositionWeights,
   seniorRosterTemplate,
 } from "./generationModel";
 
@@ -124,73 +125,89 @@ function recipe(variant: SkillShapeRecipe["variant"], ...steps: SkillStep[]): Sk
  * stored on a player or exposed through an API; only the resulting skills live
  * beyond generation.
  */
-export const SKILL_SHAPE_RECIPES: Record<Position, readonly SkillShapeRecipe[]> = {
-  0: [
-    recipe(0, step("tec", 2, 5), step("tec", 0, 2)),
-    recipe(0, step("tec", 2, 5), step("gol", 0, 2)),
-    recipe(0, step("vel", 2, 5), step("tec", 0, 2)),
-    recipe(0, step("gol", 1, 3), step("vel", 0, 2)),
-    recipe(0, step("tec", 2, 5), step("gol", 0, 2)),
-    recipe(0, step("tec", 2, 5), step("vel", 0, 2)),
-  ],
-  1: [
-    recipe(1, step("pas", 2, 3), step("des", 3, 5)),
-    recipe(1, step("pas", 2, 3), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 5), step("pas", 3, 3)),
-    recipe(0, step("des", 3, 5), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 5), step("pas", 2, 3)),
-    recipe(0, step("des", 3, 5), step("fin", 3, 3), step("vel", 3, 3)),
-    recipe(1, step("pas", 2, 3), step("pas", 3, 3)),
-  ],
-  2: [
-    recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
-    recipe(0, step("des", 3, 3), step("des", 3, 2)),
-    recipe(0, step("des", 3, 3), step("arm", 3, 6)),
-    recipe(0, step("des", 3, 3), step("pas", 2, 3), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
-    recipe(0, step("des", 3, 3), step("arm", 3, 6)),
-    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("des", 3, 2)),
-    recipe(0, step("des", 3, 3), step("arm", 3, 3), step("fin", 3, 3)),
-    recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
-    recipe(0, step("arm", 3, 6), step("des", 3, 2)),
-  ],
-  3: [
-    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("pas", 3, 2)),
-    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("fin", 3, 3)),
-    recipe(1, step("fin", 3, 3), step("pas", 3, 2)),
-    recipe(1, step("pas", 3, 2), step("fin", 3, 3)),
-    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("tec", 3, 3)),
-    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("des", 3, 3)),
-    recipe(0, step("des", 3, 3), step("pas", 3, 2)),
-    recipe(0, step("des", 3, 3), step("fin", 2, 3), step("des", 2, 3)),
-    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("pas", 3, 2)),
-    recipe(1, step("fin", 3, 3), step("arm", 3, 5), step("pas", 3, 5)),
-    recipe(0, step("des", 3, 3), step("des", 3, 3)),
-    recipe(1, step("arm", 3, 5), step("pas", 3, 5), step("pas", 3, 2)),
-    recipe(1, step("tec", 3, 3), step("pas", 3, 2)),
-    recipe(0, step("des", 3, 3), step("fin", 3, 3)),
-    recipe(1, step("pas", 3, 2), step("vel", 16, 3)),
-    recipe(0, step("des", 3, 3), step("pas", 3, 2)),
-  ],
-  4: [
-    recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
-    recipe(2, step("vel", 16, 3), step("fin", 3, 3)),
-    recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
-    recipe(2, step("tec", 3, 3), step("fin", 3, 3)),
-    recipe(1, step("fin", 3, 3), step("vel", 16, 3)),
-    recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
-    recipe(1, step("fin", 3, 3), step("tec", 3, 3)),
-    recipe(1, step("fin", 2, 3), step("vel", 16, 3)),
-    recipe(2, step("tec", 3, 3), step("pas", 16, 2)),
-    recipe(1, step("fin", 3, 3), step("pas", 16, 2)),
-    recipe(1, step("fin", 3, 3), step("des", 3, 3), step("fin", 2)),
-    recipe(2, step("vel", 16, 3), step("tec", 3, 3)),
-  ],
+const GK_RECIPES = [
+  recipe(0, step("tec", 2, 5), step("tec", 0, 2)),
+  recipe(0, step("tec", 2, 5), step("gol", 0, 2)),
+  recipe(0, step("pace", 2, 5), step("tec", 0, 2)),
+  recipe(0, step("gol", 1, 3), step("pace", 0, 2)),
+  recipe(0, step("tec", 2, 5), step("gol", 0, 2)),
+  recipe(0, step("tec", 2, 5), step("pace", 0, 2)),
+] as const;
+const FB_RECIPES = [
+  recipe(1, step("pas", 2, 3), step("des", 3, 5)),
+  recipe(1, step("pas", 2, 3), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 5), step("pas", 3, 3)),
+  recipe(0, step("des", 3, 5), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 5), step("pas", 2, 3)),
+  recipe(0, step("des", 3, 5), step("fin", 3, 3), step("pace", 3, 3)),
+  recipe(1, step("pas", 2, 3), step("pas", 3, 3)),
+] as const;
+const CB_RECIPES = [
+  recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
+  recipe(0, step("des", 3, 3), step("des", 3, 2)),
+  recipe(0, step("des", 3, 3), step("playmaking", 3, 6)),
+  recipe(0, step("des", 3, 3), step("pas", 2, 3), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
+  recipe(0, step("des", 3, 3), step("playmaking", 3, 6)),
+  recipe(0, step("des", 3, 3), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("des", 3, 2)),
+  recipe(0, step("des", 3, 3), step("playmaking", 3, 3), step("fin", 3, 3)),
+  recipe(0, step("des", 3, 3), step("des", 3, 3), step("pas", 2, 3)),
+  recipe(0, step("playmaking", 3, 6), step("des", 3, 2)),
+] as const;
+const MF_RECIPES_ALL = [
+  recipe(1, step("playmaking", 3, 5), step("pas", 3, 5), step("pas", 3, 2)),
+  recipe(1, step("playmaking", 3, 5), step("pas", 3, 5), step("fin", 3, 3)),
+  recipe(1, step("fin", 3, 3), step("pas", 3, 2)),
+  recipe(1, step("pas", 3, 2), step("fin", 3, 3)),
+  recipe(1, step("playmaking", 3, 5), step("pas", 3, 5), step("tec", 3, 3)),
+  recipe(1, step("playmaking", 3, 5), step("pas", 3, 5), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("des", 3, 3)),
+  recipe(0, step("des", 3, 3), step("pas", 3, 2)),
+  recipe(0, step("des", 3, 3), step("fin", 2, 3), step("des", 2, 3)),
+  recipe(0, step("des", 3, 3), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("pas", 3, 2)),
+  recipe(1, step("fin", 3, 3), step("playmaking", 3, 5), step("pas", 3, 5)),
+  recipe(0, step("des", 3, 3), step("des", 3, 3)),
+  recipe(1, step("playmaking", 3, 5), step("pas", 3, 5), step("pas", 3, 2)),
+  recipe(1, step("tec", 3, 3), step("pas", 3, 2)),
+  recipe(0, step("des", 3, 3), step("fin", 3, 3)),
+  recipe(1, step("pas", 3, 2), step("pace", 16, 3)),
+  recipe(0, step("des", 3, 3), step("pas", 3, 2)),
+] as const;
+const FW_RECIPES_ALL = [
+  recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
+  recipe(2, step("pace", 16, 3), step("fin", 3, 3)),
+  recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
+  recipe(2, step("tec", 3, 3), step("fin", 3, 3)),
+  recipe(1, step("fin", 3, 3), step("pace", 16, 3)),
+  recipe(1, step("fin", 3, 3), step("fin", 2, 3)),
+  recipe(1, step("fin", 3, 3), step("tec", 3, 3)),
+  recipe(1, step("fin", 2, 3), step("pace", 16, 3)),
+  recipe(2, step("tec", 3, 3), step("pas", 16, 2)),
+  recipe(1, step("fin", 3, 3), step("pas", 16, 2)),
+  recipe(1, step("fin", 3, 3), step("des", 3, 3), step("fin", 2)),
+  recipe(2, step("pace", 16, 3), step("tec", 3, 3)),
+] as const;
+
+export const SKILL_SHAPE_RECIPES: Record<string, readonly SkillShapeRecipe[]> = {
+  GK: GK_RECIPES,
+  LB: FB_RECIPES,
+  RB: FB_RECIPES,
+  CB: CB_RECIPES,
+  DM: MF_RECIPES_ALL.filter((r) => r.variant === 0),
+  AM: MF_RECIPES_ALL.filter((r) => r.variant === 1),
+  LW: FW_RECIPES_ALL.filter((r) => r.variant === 2),
+  RW: FW_RECIPES_ALL.filter((r) => r.variant === 2),
+  ST: FW_RECIPES_ALL.filter((r) => r.variant === 1),
+  // Legacy numeric keys for migration/tests
+  "0": GK_RECIPES,
+  "1": FB_RECIPES,
+  "2": CB_RECIPES,
+  "3": MF_RECIPES_ALL,
+  "4": FW_RECIPES_ALL,
 };
 
 /** Fixed supporting-skill baseline retained from the existing skill model. */
@@ -201,65 +218,66 @@ function generateRawSkills(rng: RngState, position: Position, variant: 0 | 1 | 2
   const n2 = SUPPORTING_SKILL_BASE;
   const n4 = Math.round(n2 / 3);
   const n3 = 3;
-  let s: SkillSet = { gol: 1, vel: 1, tec: 1, pas: 1, des: 1, arm: 1, fin: 1 };
-  if (position === 0) {
+  let s: SkillSet = { gol: 1, pace: 1, tec: 1, pas: 1, des: 1, playmaking: 1, fin: 1 };
+  const posGroup = position === "GK" ? 0 : position === "LB" || position === "RB" ? 1 : position === "CB" ? 2 : position === "DM" || position === "AM" ? 3 : 4;
+  if (posGroup === 0) {
     s.gol = target + nextInt(rng, 2);
-    s.vel = n2 + nextInt(rng, 7);
+    s.pace = n2 + nextInt(rng, 7);
     s.tec = n2 + nextInt(rng, 4);
     s.pas = n2 + nextInt(rng, 4);
     s.des = n3 + nextInt(rng, 3);
-    s.arm = n3 + nextInt(rng, 3);
+    s.playmaking = n3 + nextInt(rng, 3);
     s.fin = n3 + nextInt(rng, 3);
-  } else if (position === 1) {
+  } else if (posGroup === 1) {
     s.gol = 1 + nextInt(rng, 4);
     if (variant === 0) {
       s.des = Math.round(target * 0.8) + nextInt(rng, 6);
       s.fin = n3 + nextInt(rng, 4);
       s.pas = n2 + nextInt(rng, 3);
       s.tec = n2 + nextInt(rng, 7);
-      s.arm = n3 + nextInt(rng, 5);
-      s.vel = n2 + n3 + nextInt(rng, 6);
+      s.playmaking = n3 + nextInt(rng, 5);
+      s.pace = n2 + n3 + nextInt(rng, 6);
     } else {
-      s.arm = Math.round(target * 0.5) + nextInt(rng, 5);
+      s.playmaking = Math.round(target * 0.5) + nextInt(rng, 5);
       s.fin = n2 + n3 + nextInt(rng, 4);
       s.pas = n2 + n4 + nextInt(rng, 3);
       s.tec = n2 + n4 + nextInt(rng, 7);
       s.des = n2 + nextInt(rng, 4);
-      s.vel = n2 + n3 + nextInt(rng, 4);
+      s.pace = n2 + n3 + nextInt(rng, 4);
     }
-  } else if (position === 2) {
+  } else if (posGroup === 2) {
     s.gol = 1 + nextInt(rng, 7);
     s.des = Math.round(target * 0.9) + nextInt(rng, 2);
-    s.vel = n2 + n3 + nextInt(rng, 4);
+    s.pace = n2 + n3 + nextInt(rng, 4);
     s.tec = n2 + n3 + nextInt(rng, 7);
     s.pas = n2 + n3 + nextInt(rng, 3);
-    s.arm = n3 + nextInt(rng, 6);
+    s.playmaking = n3 + nextInt(rng, 6);
     s.fin = n2 + nextInt(rng, 5);
-  } else if (position === 3) {
+  } else if (posGroup === 3) {
     s.gol = 1 + nextInt(rng, 4);
     if (variant === 0) {
       s.des = Math.round(target * 0.7) + nextInt(rng, 6);
       s.fin = n2 + nextInt(rng, 4);
       s.pas = n2 + nextInt(rng, 3);
       s.tec = n2 + nextInt(rng, 7);
-      s.arm = n2 + nextInt(rng, 5);
-      s.vel = n2 + n3 + nextInt(rng, 6);
+      s.playmaking = n2 + nextInt(rng, 5);
+      s.pace = n2 + n3 + nextInt(rng, 6);
     } else {
-      s.arm = target + nextInt(rng, 2);
+      s.playmaking = target + nextInt(rng, 2);
       s.fin = n2 + n4 + nextInt(rng, 4);
       s.pas = n2 + n3 + nextInt(rng, 3);
       s.tec = n2 + n4 + nextInt(rng, 7);
       s.des = n2 + nextInt(rng, 4);
-      s.vel = n2 + n4 + nextInt(rng, 4);
+      s.pace = n2 + n4 + nextInt(rng, 4);
     }
   } else {
     s.gol = 1 + nextInt(rng, 6);
     s.fin = Math.round(target * 0.8) + nextInt(rng, 2);
-    s.vel = n2 + n4 + nextInt(rng, 4);
+    s.pace = n2 + n4 + nextInt(rng, 4);
     s.tec = n2 + n4 + nextInt(rng, 7);
     s.pas = n2 + n3 + nextInt(rng, 3);
     s.des = n3 + nextInt(rng, 6);
-    s.arm = n2 + n3 + nextInt(rng, 5);
+    s.playmaking = n2 + n3 + nextInt(rng, 5);
   }
   for (const operation of recipe.steps) {
     s[operation.key] += operation.fixed + (operation.randomExclusive === undefined ? 0 : nextInt(rng, operation.randomExclusive));
@@ -276,6 +294,7 @@ function generateRawSkills(rng: RngState, position: Position, variant: 0 | 1 | 2
  */
 export function generateSkillsForTarget(rng: RngState, position: Position, target: number): { skills: SkillSet } {
   const recipes = SKILL_SHAPE_RECIPES[position];
+  if (!recipes || recipes.length === 0) throw new Error(`No skill-shape recipes for position ${position}`);
   let best: SkillSet | null = null;
   let bestError = Infinity;
   for (let attempt = 0; attempt < SKILL_GENERATION_MAX_RETRIES; attempt++) {
@@ -287,7 +306,7 @@ export function generateSkillsForTarget(rng: RngState, position: Position, targe
     for (let i = 0; i < 4; i++) {
       const error = actual - target;
       if (Math.abs(error) <= SKILL_TARGET_TOLERANCE_OVR) break;
-      const delta = Math.round(error / OVERALL_SCALE[position]);
+      const delta = Math.round(error / overallScaleFor(positionGroup(position)));
       if (delta === 0) break;
       for (const key of SKILL_KEYS) {
         skills[key] = Math.max(1, Math.min(100, skills[key] - delta));
@@ -438,8 +457,7 @@ function buildGeneratedPlayer(
     name: generateName(rng, country),
     country,
     age,
-    position: ctx.position,
-    side: nextInt(rng, 2),
+    position: ctx.position as import("./positions").NaturalPosition,
     skills,
     overall: actualOverall,
     energy: 100,
@@ -468,7 +486,6 @@ function buildGeneratedPlayer(
     yellows: 0,
     reds: 0,
     clubId: ctx.clubId,
-    tacPos: -1,
     onSale: false,
     suspendedGames: 0,
     turnYellows: 0,
@@ -983,5 +1000,11 @@ export function generateInitialAcademyPlayers(contexts: readonly GeneratePlayerC
 }
 
 export { academyContractSeasonsForAge };
+
+// ---------------------------------------------------------------------------
+// Hierarchical position allocation (§11)
+// ---------------------------------------------------------------------------
+
+export { allocateBroadGroupCounts, allocateSeededCounts } from "./allocation";
 
 export { gameConfig };

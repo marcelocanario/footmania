@@ -354,7 +354,7 @@ export function settleFreeAgentListing(
 
   // Apply the winning bidder's accepted contract terms and move ownership.
   player.clubId = winner.id;
-  player.tacPos = -1;
+  player.starter = false;
   player.starter = false;
   player.onSale = false;
   player.salary = contractSalary;
@@ -522,7 +522,7 @@ export function freeAgentListingView(world: World, listing: FreeAgentListing, my
     contractDemandsBySeason: p
       ? contractDemandOptions(p.overall, p.age, world.mp.seasonDayIndex ?? world.dayIndex)
       : {},
-    skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
+    skills: p?.skills ?? { gol: 0, pace: 0, tec: 0, pas: 0, des: 0, playmaking: 0, fin: 0 },
     value: listing.playerValueAtListing,
     openingPrice: listing.openingPrice,
     currentPrice: listing.currentPrice,

@@ -1,7 +1,9 @@
 import type { LiveBallAction, LiveMatchState, Player, World } from "../game/types";
 import { livePhase, tacticsCooldownMinutesRemaining } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
-import { EVENT_CODES, FORMATION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
+import { EVENT_CODES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
+import { positionGroup, positionName } from "../game/positions";
+import { formationById } from "../game/formations";
 import {
   canonicalFromLive,
   decayedStoredFamiliarity,
@@ -93,8 +95,11 @@ export interface LivePlayerView {
   name: string;
   displayName: string;
   nickname: string | null;
-  position: number;
-  tacPos: number;
+  naturalPosition: string;
+  positionGroup: string;
+  positionName: string;
+  slotIndex: number | null;
+  deployedRole: string | null;
   /** Squad shirt number shown on the pitch marker. */
   number: number | null;
   overall: number;
@@ -122,8 +127,8 @@ export interface LiveMissingPlayerView {
   /** Squad shirt number for the short-handed status. */
   number: number | null;
   kind: "INJURY" | "RED";
-  /** Tactical slot he last occupied. */
-  tacPos: number;
+  slotIndex: number | null;
+  deployedRole: string | null;
 }
 
 export interface LiveKitView {
@@ -225,6 +230,8 @@ export interface LiveStateView {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
+  homeFormationSlots: FormationSlotView[];
+  awayFormationSlots: FormationSlotView[];
   homeTactics: LiveTacticView;
   awayTactics: LiveTacticView;
   /** Live-match tactics lock: match-minutes remaining per side (0 = unlocked). */
@@ -246,6 +253,24 @@ export interface LiveStateView {
   /** Players absent from the pitch (red cards; unreplaced injuries). */
   missingPlayers: LiveMissingPlayerView[];
   ball: LiveBallView;
+}
+
+/** §15.3 slot shape shared by lineup, full live views and live deltas. */
+export interface FormationSlotView {
+  index: number;
+  key: string;
+  role: string;
+  lane: string;
+  line: string;
+  x: number;
+  y: number;
+  label: string;
+}
+
+function formationSlotViews(formationId: number): FormationSlotView[] {
+  return (formationById(formationId)?.slots ?? []).map((slot, index) => ({
+    index, key: slot.key, role: slot.role, lane: slot.lane, line: slot.line, x: slot.x, y: slot.y, label: slot.label,
+  }));
 }
 
 export interface LiveStateDeltaView {
@@ -276,6 +301,15 @@ export interface LiveStateDeltaView {
    *  between full-state pushes. */
   missingPlayers: LiveMissingPlayerView[];
   ball: LiveBallView;
+  /** §15.4: present ONLY when either side's formation changed since the prior
+   *  emitted state, so the pitch never renders stale slot geometry. Omitted
+   *  entirely on an unchanged delta. */
+  homeFormation?: string;
+  awayFormation?: string;
+  homeFormationId?: number;
+  awayFormationId?: number;
+  homeFormationSlots?: FormationSlotView[];
+  awayFormationSlots?: FormationSlotView[];
 }
 
 /**
@@ -298,13 +332,30 @@ function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Play
   const p = byId.get(id);
   if (!p) return null;
   const gameDay = world.mp.absoluteGameDay ?? world.dayIndex;
+  const naturalPos = p.position as unknown as import("../game/positions").NaturalPosition;
+  const grp = positionGroup(naturalPos);
+  const full = positionName(naturalPos);
+  // Resolve live slot assignment if present
+  const homeSlot = (st as unknown as { homeSlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[p.id];
+  const awaySlot = (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[p.id];
+  const slotIndex = homeSlot ?? awaySlot ?? null;
+  let deployedRole: string | null = null;
+  if (slotIndex !== null) {
+    const isHome = homeSlot !== undefined;
+    const formationId = isHome ? st.homeTactics.formation : st.awayTactics.formation;
+    const def = formationById(formationId);
+    if (def && def.slots[slotIndex]) deployedRole = def.slots[slotIndex].role;
+  }
   return {
     id: p.id,
     name: p.name,
     displayName: displayName(p),
     nickname: p.nickname ?? null,
-    position: p.position,
-    tacPos: p.tacPos,
+    naturalPosition: p.position as unknown as string,
+    positionGroup: grp,
+    positionName: full,
+    slotIndex,
+    deployedRole,
     number: p.squadNumber ?? null,
     overall: p.overall,
     energy: st.playerEnergy?.[p.id] ?? p.energy,
@@ -331,13 +382,29 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
   const pv = (id: number): LivePlayerView | null => {
     const p = byId.get(id);
     if (!p) return null;
+    const naturalPos2 = p.position as unknown as import("../game/positions").NaturalPosition;
+    const grp = positionGroup(naturalPos2);
+    const full = positionName(naturalPos2);
+    const homeSlot = (st as unknown as { homeSlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[p.id];
+    const awaySlot = (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[p.id];
+    const slotIndex = homeSlot ?? awaySlot ?? null;
+    let deployedRole: string | null = null;
+    if (slotIndex !== null) {
+      const isHome = homeSlot !== undefined;
+      const formationId = isHome ? st.homeTactics.formation : st.awayTactics.formation;
+      const def = formationById(formationId);
+      if (def && def.slots[slotIndex]) deployedRole = def.slots[slotIndex].role;
+    }
     return {
       id: p.id,
       name: p.name,
       displayName: displayName(p),
       nickname: p.nickname ?? null,
-      position: p.position,
-      tacPos: p.tacPos,
+      naturalPosition: p.position as unknown as string,
+      positionGroup: grp,
+      positionName: full,
+      slotIndex,
+      deployedRole,
       number: p.squadNumber ?? null,
       overall: p.overall,
        energy: st.playerEnergy?.[p.id] ?? p.energy,
@@ -417,10 +484,12 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     isParticipant,
     homeManager: home?.coachName ?? "",
     awayManager: away?.coachName ?? "",
-    homeFormation: FORMATION_NAMES[st.homeTactics.formation] ?? formationName(home),
-    awayFormation: FORMATION_NAMES[st.awayTactics.formation] ?? formationName(away),
+    homeFormation: formationById(st.homeTactics.formation)?.name ?? formationName(home),
+    awayFormation: formationById(st.awayTactics.formation)?.name ?? formationName(away),
     homeFormationId: st.homeTactics.formation ?? home?.tactics?.formation ?? 4,
     awayFormationId: st.awayTactics.formation ?? away?.tactics?.formation ?? 4,
+    homeFormationSlots: formationSlotViews(st.homeTactics.formation),
+    awayFormationSlots: formationSlotViews(st.awayTactics.formation),
     homeTactics: tacticSideView(st.homeTactics, home, world.mp.absoluteGameDay ?? world.dayIndex),
     awayTactics: tacticSideView(st.awayTactics, away, world.mp.absoluteGameDay ?? world.dayIndex),
     // Live-match tactics lock (match-minutes left per side) so clients can
@@ -448,8 +517,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
  * Players currently absent from the pitch: red-carded, or injured with no
  * substitution slot/candidate left (plan 9 §17 step 7). Injuries that were
  * auto-subbed emit a normal SUB event whose outId is the injured player, so
- * they drop out of this projection. Side comes from roster membership; tacPos
- * retains the last slot the player occupied.
+ * they drop out of this projection. Side comes from roster membership, and the
+ * view retains the last slot the player occupied.
  */
 function missingPlayersView(st: LiveMatchState, byId: Map<number, Player>): LiveMissingPlayerView[] {
   const subbedOut = new Set(st.events.filter((event) => event.type === EVENT_CODES.SUB).map((event) => event.playerId));
@@ -458,20 +527,29 @@ function missingPlayersView(st: LiveMatchState, byId: Map<number, Player>): Live
     if (subbedOut.has(playerId) || entries.has(playerId)) return;
     const p = byId.get(playerId);
     if (!p) return;
+    const slotIndex = (st as unknown as { homeSlotByPlayerId?: Record<number, number>; awaySlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[playerId] ?? (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[playerId] ?? null;
+    let deployedRole: string | null = null;
+    if (slotIndex !== null) {
+      const isHome = p.clubId === st.homeClubId;
+      const formationId = isHome ? st.homeTactics.formation : st.awayTactics.formation;
+      const def = formationById(formationId);
+      if (def && def.slots[slotIndex]) deployedRole = def.slots[slotIndex].role;
+    }
     entries.set(playerId, {
       side: p.clubId === st.homeClubId ? 0 : 1,
       playerId,
       name: displayName(p),
       number: p.squadNumber ?? null,
       kind,
-      tacPos: p.tacPos,
+      slotIndex,
+      deployedRole,
     });
   };
   for (const card of st.cards ?? []) {
     if (card.kind === "RED" || card.kind === "YELLOW_RED") add(card.playerId, "RED");
   }
   for (const injury of st.injuries ?? []) add(injury.playerId, "INJURY");
-  return Array.from(entries.values()).sort((a, b) => a.side - b.side || a.tacPos - b.tacPos || a.playerId - b.playerId);
+  return Array.from(entries.values()).sort((a, b) => a.side - b.side || (a.slotIndex ?? -1) - (b.slotIndex ?? -1) || a.playerId - b.playerId);
 }
 
 function tacticView(tactics: LiveMatchState["homeTactics"]): LiveTacticView {
@@ -512,7 +590,7 @@ function tacticSideView(
 
 function formationName(club: { tactics?: { formation: number } } | undefined): string {
   if (!club?.tactics) return "";
-  return FORMATION_NAMES[club.tactics.formation] ?? "";
+  return formationById(club.tactics.formation)?.name ?? "";
 }
 
 /** Possession projection shared by the full view and deltas. Falls back to a
@@ -569,7 +647,12 @@ function clockProgress(st: LiveMatchState): { progressPct: number; currentAddedT
 }
 
 /** Compact, viewer-neutral update used during server-driven live play. */
-export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart: number): LiveStateDeltaView {
+export function liveStateDeltaView(
+  world: World,
+  st: LiveMatchState,
+  eventStart: number,
+  priorFormations?: { home: number; away: number },
+): LiveStateDeltaView {
   // Same narrowing as liveStateView: only the two rostered clubs' players are
   // ever referenced (new events, cards, injuries).
   const byId = new Map(world.players.filter((p) => p.clubId === st.homeClubId || p.clubId === st.awayClubId).map((p) => [p.id, p]));
@@ -592,7 +675,23 @@ export function liveStateDeltaView(world: World, st: LiveMatchState, eventStart:
     .filter((p): p is LivePlayerView => !!p);
   const { progressPct, currentAddedTime } = clockProgress(st);
   const scores = liveRatingsView(world, st, byId);
+  // §15.4: carry the full formation identity + slot geometry whenever either
+  // side changed formation since the last state the client saw.
+  const formationChanged =
+    priorFormations !== undefined &&
+    (priorFormations.home !== st.homeTactics.formation || priorFormations.away !== st.awayTactics.formation);
+  const formationFields = formationChanged
+    ? {
+        homeFormation: formationById(st.homeTactics.formation)?.name ?? "",
+        awayFormation: formationById(st.awayTactics.formation)?.name ?? "",
+        homeFormationId: st.homeTactics.formation,
+        awayFormationId: st.awayTactics.formation,
+        homeFormationSlots: formationSlotViews(st.homeTactics.formation),
+        awayFormationSlots: formationSlotViews(st.awayTactics.formation),
+      }
+    : {};
   return {
+    ...formationFields,
     matchId: st.matchId,
     minute: st.minute,
     half: st.half,

@@ -6,6 +6,7 @@ import { createRng } from "../src/game/rng";
 import { balancedZ, coarseRole, ratingFromBalancedZ, buildRoleBenchmarks, RATING_NEUTRAL, MIN_RATED_MINUTES } from "../src/game/player-rating";
 import { computeMatchRatingRows, mvpFromRatings, primaryCoarseRole, liveRatingFromAccum } from "../src/game/matchRatings";
 import { createRatingObserver, type RatingDecisionInput } from "../src/game/ratingObserver";
+import { DEPLOYED_ROLES, naturalDefaultRole } from "../src/game/positions";
 import { simulateDivisionThroughRound } from "../src/game/multiplayer";
 import { playerMatchScoreView } from "../src/services/playerPerformance";
 import type { Competition, Match, Player, PlayerMatchRatingEntry } from "../src/game/types";
@@ -57,20 +58,33 @@ describe("rating math", () => {
     expect(balancedZ(1.2, { role: "GK", zRaws: [0.5], usable: false })).toBe(1.2);
   });
 
-  it("builds per-role median benchmarks from the population", () => {
+  // §17: benchmarks are keyed by the twelve DEPLOYED roles, not the five coarse
+  // groups — a shared MID row would make DM and AM indistinguishable to the
+  // rating observer, which is the whole point of the fine-role taxonomy.
+  it("builds a median benchmark for every deployed role, not just the coarse groups", () => {
     const players = clonePlayers([...goldenSquad(1, 1, 31111, 1000), ...goldenSquad(2, 4, 32222, 2000)]);
-    const roleOf = (p: Player) => (p.position === 0 ? "GK" : p.position === 1 || p.position === 2 ? "FB" : p.position === 3 ? "MID" : "FWD");
-    const benchmarks = buildRoleBenchmarks(players, roleOf);
-    expect(benchmarks.GK).toBeDefined();
-    expect(benchmarks.MID).toBeDefined();
-    expect(typeof benchmarks.GK.gk).toBe("number");
+    const benchmarks = buildRoleBenchmarks(players, (p) => naturalDefaultRole(p.position));
+    for (const role of DEPLOYED_ROLES) {
+      expect(benchmarks[role], `missing benchmark for ${role}`).toBeDefined();
+      expect(typeof benchmarks[role].goalkeeping).toBe("number");
+      expect(typeof benchmarks[role].technique).toBe("number");
+    }
+    // Coarse group names are NOT benchmark keys any more.
+    expect(benchmarks.MID).toBeUndefined();
+    expect(benchmarks.FWD).toBeUndefined();
+    // DM and AM sit in the same coarse group but must have distinct rows: the
+    // DM pool excludes the roles whose penalty exceeds Makeshift, and vice versa.
+    expect(benchmarks.DM).not.toEqual(benchmarks.AM);
+    expect(benchmarks.GK.goalkeeping).toBeGreaterThan(benchmarks.ST.goalkeeping);
   });
 
   it("treats control-failure as routine (no rating contribution)", () => {
     const accum = {} as Record<number, import("../src/game/ratingObserver").PlayerRatingAccum>;
     const player = {
-      id: 1, tacPos: 13, zTech: 1, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 1, position: "DM" as const, deployedRole: "DM" as const, slotIndex: 3,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 1, zPace: 0, zPhysical: 0, zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const side = {
       involved: [{ ps: player, weight: 1 }], localDensity: 1, supportRatio: 1,
@@ -83,9 +97,9 @@ describe("rating math", () => {
     };
     const observer = createRatingObserver({
       benchmarks: {
-        GK: {}, FB: {}, CB: {}, MID: { tech: 0 }, FWD: {},
+        GK: {}, FB: {}, CB: {}, MID: { technique: 0 }, FWD: {},
       } as import("../src/game/player-rating").RoleBenchmarks,
-      fineRoleOf: () => "CM",
+      fineRoleOf: () => "DM",
       base: accum,
     });
 
@@ -100,12 +114,18 @@ describe("rating math", () => {
   it("values outcomes from the participant's own team perspective", () => {
     const accum = {} as Record<number, import("../src/game/ratingObserver").PlayerRatingAccum>;
     const attacker = {
-      id: 1, tacPos: 13, zTech: 1, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 1, position: "DM" as const, deployedRole: "DM" as const, slotIndex: 3,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 1, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const defender = {
-      id: 2, tacPos: 3, zTech: 0, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 2, position: "CB" as const, deployedRole: "CB" as const, slotIndex: 2,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 0, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const attSide = {
       involved: [{ ps: attacker, weight: 1 }], localDensity: 1, supportRatio: 1,
@@ -144,12 +164,18 @@ describe("rating math", () => {
   it("keeps routine CONTINUE outcomes to center the outcome sample", () => {
     const accum = {} as Record<number, import("../src/game/ratingObserver").PlayerRatingAccum>;
     const attacker = {
-      id: 1, tacPos: 13, zTech: 1, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 1, position: "DM" as const, deployedRole: "DM" as const, slotIndex: 3,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 1, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const defender = {
-      id: 2, tacPos: 3, zTech: 0, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 2, position: "CB" as const, deployedRole: "CB" as const, slotIndex: 2,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 0, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const attSide = {
       involved: [{ ps: attacker, weight: 1 }], localDensity: 1, supportRatio: 1,
@@ -193,12 +219,18 @@ describe("rating math", () => {
   it("scores a goal positively for the shooter and negatively for the goalkeeper", () => {
     const accum = {} as Record<number, import("../src/game/ratingObserver").PlayerRatingAccum>;
     const shooter = {
-      id: 1, tacPos: 19, zTech: 0, zPace: 0, zPhysical: 0,
-      zFinishing: 1, zGk: 0, zDiscipline: 0,
+      id: 1, position: "ST" as const, deployedRole: "ST" as const, slotIndex: 9,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 0, zPace: 0, zPhysical: 0,
+      zFinishing: 1, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const gk = {
-      id: 2, tacPos: 1, zTech: 0, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 1, zDiscipline: 0,
+      id: 2, position: "GK" as const, deployedRole: "GK" as const, slotIndex: 0,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 0, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 1, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const attSide = {
       involved: [{ ps: shooter, weight: 1 }], localDensity: 1, supportRatio: 1,
@@ -218,7 +250,7 @@ describe("rating math", () => {
     };
     const observer = createRatingObserver({
       benchmarks: {
-        GK: { gk: 0 }, FB: {}, CB: {}, MID: {}, FWD: { finishing: 0 },
+        GK: { goalkeeping: 0 }, FB: {}, CB: {}, MID: {}, FWD: { finishing: 0 },
       } as import("../src/game/player-rating").RoleBenchmarks,
       fineRoleOf: (pid) => (pid === 1 ? "ST" : "GK"),
       base: accum,
@@ -234,12 +266,18 @@ describe("rating math", () => {
   it("scores a penalty save strongly positive for the goalkeeper", () => {
     const accum = {} as Record<number, import("../src/game/ratingObserver").PlayerRatingAccum>;
     const shooter = {
-      id: 1, tacPos: 19, zTech: 0, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 1, position: "ST" as const, deployedRole: "ST" as const, slotIndex: 9,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 0, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const gk = {
-      id: 2, tacPos: 1, zTech: 0, zPace: 0, zPhysical: 0,
-      zFinishing: 0, zGk: 0, zDiscipline: 0,
+      id: 2, position: "GK" as const, deployedRole: "GK" as const, slotIndex: 0,
+      skills: { gol: 20, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 50 },
+      overall: 60, age: 25, energy: 100, readiness: 1, onPitch: true,
+      zTech: 0, zPace: 0, zPhysical: 0,
+      zFinishing: 0, zGk: 0, zDefending: 0,
     } as import("../src/game/matchSim").LivePlayerState;
     const attSide = {
       involved: [{ ps: shooter, weight: 1 }], localDensity: 1, supportRatio: 1,
@@ -259,7 +297,7 @@ describe("rating math", () => {
     };
     const observer = createRatingObserver({
       benchmarks: {
-        GK: { gk: 0 }, FB: {}, CB: {}, MID: {}, FWD: { finishing: 0 },
+        GK: { goalkeeping: 0 }, FB: {}, CB: {}, MID: {}, FWD: { finishing: 0 },
       } as import("../src/game/player-rating").RoleBenchmarks,
       fineRoleOf: (pid) => (pid === 1 ? "ST" : "GK"),
       base: accum,
@@ -444,15 +482,16 @@ describe("rating finalization", () => {
     expect(st.ratingBenchmarksJson).toBeDefined();
 
     // A resumed tick (simulating a server reload) must reuse the SAME frozen
-    // snapshot, even if player tacPos data were to change.
+    // snapshot, even if player slot assignments were to change.
     const players2 = clonePlayers(players);
-    for (const p of players2) p.tacPos = -1;
+    for (const p of players2) p.starter = false;
     const obs2 = ratingObserverFor(st, players2);
     expect(obs2).not.toBeNull();
     expect(st.ratingBenchmarksJson).toBeDefined();
     const snap = JSON.parse(st.ratingBenchmarksJson!);
-    expect(typeof snap.MID.tech).toBe("number");
-    expect(typeof snap.GK.gk).toBe("number");
+    expect(typeof snap.DM.technique).toBe("number");
+    expect(typeof snap.AM.technique).toBe("number");
+    expect(typeof snap.GK.goalkeeping).toBe("number");
   });
 
   it("uses the durable match id and credits MVPs in instant division simulations", () => {

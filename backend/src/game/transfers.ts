@@ -32,7 +32,7 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
   player.clubId = null;
   resetPayrollPeriod(player, world.dayIndex);
   player.contractDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
-  player.tacPos = -1;
+  player.starter = false;
   player.starter = false;
   player.onSale = false;
   if (prepared?.ok) world.freeAgentListings.push(prepared.listing);

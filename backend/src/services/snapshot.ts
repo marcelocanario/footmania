@@ -3,7 +3,10 @@ import { EVENT_CODES, GOAL_SUBTYPES } from "../game/constants";
 import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
-import { FORMATION_NAMES, MOTD_NEWS_KIND, POSITION_NAMES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
+import { MOTD_NEWS_KIND, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
+import { formationById } from "../game/formations";
+import { positionGroup, positionName } from "../game/positions";
+import { formationOptions } from "../game/formations";
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 import { resolveClubKits } from "../game/kits";
@@ -89,6 +92,9 @@ export function playerView(
     (p.yellowsTurnKey ?? null) === nextFixtureTurnKey &&
     turnYellowLimit >= 1 &&
     (p.turnYellows ?? 0) >= turnYellowLimit - 1;
+  const naturalPos = p.position as unknown as import("../game/positions").NaturalPosition;
+  const group = positionGroup(naturalPos);
+  const fullName = positionName(naturalPos);
   return {
     id: p.id,
     name: p.name,
@@ -96,10 +102,9 @@ export function playerView(
     displayName: nick.length > 0 ? nick : p.name,
     age: p.age,
     country: p.country,
-    position: p.position,
-    positionName: POSITION_NAMES[p.position],
-    tacPos: p.tacPos,
-    tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
+    naturalPosition: p.position,
+    positionGroup: group,
+    positionName: fullName,
     squadNumber: p.squadNumber ?? null,
     overall: p.overall,
     skills: p.skills,
@@ -293,15 +298,20 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
       const p = playerById.get(a.playerId);
       const listingBids = bidsByListing.get(a.id) ?? [];
       const myBid = clubId !== null ? listingBids.find((b) => b.clubId === clubId) : undefined;
+      const natPos = p?.position as unknown as import("../game/positions").NaturalPosition | undefined;
+      const grp = natPos ? positionGroup(natPos) : undefined;
+      const full = natPos ? positionName(natPos) : "";
       return {
         id: a.id,
         playerId: a.playerId,
         playerName: p?.name ?? "",
         overall: p?.overall ?? 0,
-        position: p?.position ?? 0,
+        naturalPosition: p?.position ?? null,
+        positionGroup: grp ?? null,
+        positionName: full,
         age: p?.age ?? 0,
         salary: p?.salary ?? 0,
-        skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
+        skills: p?.skills ?? { gol: 0, pace: 0, tec: 0, pas: 0, des: 0, playmaking: 0, fin: 0 },
         value: p?.value ?? 0,
         openingPrice: a.openingPrice,
         currentPrice: a.currentPrice,
@@ -403,7 +413,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
                   style: club.tactics.style,
                   pressing: club.tactics.pressing,
                   direction: club.tactics.direction,
-                  formationName: FORMATION_NAMES[club.tactics.formation] ?? "",
+                  formationName: formationById(club.tactics.formation)?.name ?? "",
                   styleName: STYLE_NAMES[club.tactics.style] ?? "",
                   pressingName: PRESSING_NAMES[club.tactics.pressing] ?? "",
                   directionName: DIRECTION_NAMES[club.tactics.direction] ?? "",
@@ -445,6 +455,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
           kickoffAt: nextFixture.kickoffAt ?? null,
         }
       : null,
+    formationOptions: formationOptions(),
     competitions,
     squad: squadAll,
     juniors,

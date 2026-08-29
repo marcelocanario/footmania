@@ -151,18 +151,25 @@ describe("live match over REST", () => {
     const s = live.json().state;
     const onPitch = s.humanSide === 0 ? s.homeOn : s.awayOn;
     const bench = s.humanSide === 0 ? s.homeBench : s.awayBench;
+    // §9.5 makes goalkeeping slots exclusive, so an outfield swap must name an
+    // outfield bench player explicitly — the bench is archetype-ordered and
+    // starts with the reserve keeper.
+    const benchOutfielder = bench.find((p: { naturalPosition: string }) => p.naturalPosition !== "GK");
+    const pitchOutfielder = onPitch.find((p: { deployedRole: string | null }) => p.deployedRole !== "GK");
+    expect(benchOutfielder).toBeDefined();
+    expect(pitchOutfielder).toBeDefined();
     const bad = await app.inject({
       method: "POST",
       url: `/api/matches/${matchId}/sub`,
       headers: { cookie },
-      payload: { outId: bench[0].id, inId: onPitch[0].id },
+      payload: { outId: benchOutfielder.id, inId: onPitch[0].id },
     });
     expect(bad.statusCode).toBe(400);
     const good = await app.inject({
       method: "POST",
       url: `/api/matches/${matchId}/sub`,
       headers: { cookie },
-      payload: { outId: onPitch[1].id, inId: bench[0].id },
+      payload: { outId: pitchOutfielder.id, inId: benchOutfielder.id },
     });
     expect(good.statusCode).toBe(200);
     expect(good.json().state.usedSubs[s.humanSide]).toBe(1);
@@ -213,12 +220,16 @@ describe("live match over REST", () => {
     expect(bench.length).toBeGreaterThan(0);
     const starters = onPitch.map((p: { id: number }) => p.id);
     const subs = bench.map((p: { id: number }) => p.id);
+    // Slot 1 of a 4-4-2 is LB, so the incoming player must be an outfielder:
+    // §9.3 rejects a natural goalkeeper anywhere but slot 0.
+    const benchIndex = bench.findIndex((p: { naturalPosition: string }) => p.naturalPosition !== "GK");
+    expect(benchIndex).toBeGreaterThanOrEqual(0);
     const swappedOut = starters[1];
-    const swappedIn = subs[0];
+    const swappedIn = subs[benchIndex];
     const newStarters = starters.slice();
     newStarters[1] = swappedIn;
     const newSubs = subs.slice();
-    newSubs[0] = swappedOut;
+    newSubs[benchIndex] = swappedOut;
     const lineupRes = await app.inject({
       method: "POST",
       url: `/api/matches/${matchId}/lineup`,

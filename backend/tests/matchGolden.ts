@@ -53,7 +53,7 @@ function context(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlayer
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3,
+    position: "DM",
     isYouth: false,
     currentDivision: 1,
     highestDivisionReached: 1,
@@ -94,7 +94,7 @@ export function goldenClub(id: number, tactics: Tactics): Club {
   };
 }
 
-const positions: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 2, 3, 1, 4];
+const positions: Position[] = ["GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "RB", "CB", "CB", "CB", "CB", "CB", "CB", "DM", "DM", "DM", "AM", "AM", "LW", "LW", "RW", "RW", "ST", "ST", "CB", "AM", "LB", "ST"];
 
 export function goldenSquad(clubId: number, division: number, seed: number, offset: number): Player[] {
   return positions.map((position, slot) => generateSeniorPlayer(context({

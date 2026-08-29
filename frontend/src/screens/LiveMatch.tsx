@@ -6,8 +6,7 @@ import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
-import { eventKey, hasPitchCue, tacticalRoleLabel } from "../components/matchPitchUtils";
-import { positionTitle } from "../components/PlayerName";
+import { eventKey, hasPitchCue } from "../components/matchPitchUtils";
 import { enqueueKickoffWhistle, enqueueMatchEventSounds, preloadMatchSounds, setSoundsMuted, stopMatchSounds } from "../components/matchSounds";
 import { ClubNameLink } from "../components/ClubNameLink";
 import { MatchHistory } from "../components/MatchHistory";
@@ -30,10 +29,8 @@ const PHASE_LABEL: Record<string, string> = {
 
 /** Natural (squad) position label: what position the player actually plays
  *  (their base position), used for the bench list in the substitution panel. */
-const NATURAL_POSITION_LABELS = ["GK", "FB", "CB", "MF", "FW"];
-
 function naturalPosition(player: LivePlayer): string {
-  return NATURAL_POSITION_LABELS[player.position] ?? "PLAYER";
+  return player.naturalPosition ?? "PLAYER";
 }
 
 function matchContextLabel(state: LiveState): string {
@@ -126,12 +123,12 @@ export function LiveMatch() {
   // pitch cares about changed.
   const home = useMemo(() => {
     if (!state) return null;
-    return { clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId };
-  }, [state?.homeClubId, state?.home, state?.homeKit, state?.homeGkKit, state?.homeOn, state?.homeFormationId]);
+    return { clubId: state.homeClubId, name: state.home, kit: state.homeKit, gkKit: state.homeGkKit, players: state.homeOn, formationId: state.homeFormationId, formationName: state.homeFormation, formationSlots: (state as unknown as { homeFormationSlots?: Array<{ x: number; y: number }> }).homeFormationSlots };
+  }, [state?.homeClubId, state?.home, state?.homeKit, state?.homeGkKit, state?.homeOn, state?.homeFormationId, (state as unknown as { homeFormationSlots?: unknown })?.homeFormationSlots]);
   const away = useMemo(() => {
     if (!state) return null;
-    return { clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId };
-  }, [state?.awayClubId, state?.away, state?.awayKit, state?.awayGkKit, state?.awayOn, state?.awayFormationId]);
+    return { clubId: state.awayClubId, name: state.away, kit: state.awayKit, gkKit: state.awayGkKit, players: state.awayOn, formationId: state.awayFormationId, formationName: state.awayFormation, formationSlots: (state as unknown as { awayFormationSlots?: Array<{ x: number; y: number }> }).awayFormationSlots };
+  }, [state?.awayClubId, state?.away, state?.awayKit, state?.awayGkKit, state?.awayOn, state?.awayFormationId, (state as unknown as { awayFormationSlots?: unknown })?.awayFormationSlots]);
 
   const liveTactics = state ? (state.humanSide === 0 ? state.homeTactics : state.awayTactics) : null;
   // Live-match tactics lock (server-enforced): match-minutes left until this
@@ -768,7 +765,7 @@ export function LiveMatch() {
                       className={`sub-row${subOut?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubOut(p)}
                     >
-                      <span className="pos-tag" title={positionTitle(p.position)}>{tacticalRoleLabel(p.tacPos)}</span>
+                      <span className="pos-tag" title={p.positionName ?? p.naturalPosition}>{p.deployedRole ?? p.naturalPosition}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>
@@ -788,7 +785,7 @@ export function LiveMatch() {
                       onClick={() => setSubIn(p)}
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
-                      <span className="pos-tag" title={positionTitle(p.position)}>{naturalPosition(p)}</span>
+                      <span className="pos-tag" title={p.positionName ?? p.naturalPosition}>{naturalPosition(p)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>

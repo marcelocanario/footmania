@@ -1224,11 +1224,19 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   color: var(--text-2);
 }
 
+/* §16.1: one class per natural position. Mirrored pairs (LB/RB, LW/RW) share a
+   colour but keep distinct classes so they can diverge without touching call
+   sites. GK gold, full-backs green, CB darker green, DM blue-green, AM blue,
+   wingers red-purple, ST red. */
 .pos-GK { background: rgba(240, 180, 41, 0.18); color: var(--gold-2); }
-.pos-FB { background: rgba(35, 165, 90, 0.22); color: var(--grass-2); }
+.pos-LB,
+.pos-RB { background: rgba(35, 165, 90, 0.22); color: var(--grass-2); }
 .pos-CB { background: rgba(35, 165, 90, 0.14); color: var(--grass-2); }
-.pos-MF { background: rgba(77, 163, 255, 0.16); color: #8cc2ff; }
-.pos-FW { background: rgba(229, 72, 77, 0.18); color: var(--red-2); }
+.pos-DM { background: rgba(77, 200, 180, 0.18); color: #7dd8c6; }
+.pos-AM { background: rgba(77, 163, 255, 0.16); color: #8cc2ff; }
+.pos-LW,
+.pos-RW { background: rgba(165, 77, 255, 0.18); color: #c49bff; }
+.pos-ST { background: rgba(229, 72, 77, 0.18); color: var(--red-2); }
 
 .player-name {
   display: inline-flex;

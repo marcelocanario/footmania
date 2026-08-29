@@ -89,7 +89,7 @@ describe("structural population flows", () => {
   it("adds no correction for academy promotion", () => {
     const world = worldWithClubs(1);
     const youth = generateYouthPlayer({
-      id: 500, clubId: 1, country: "BRA", position: 3 as Position, age: 19, isYouth: true,
+      id: 500, clubId: 1, country: "BRA", position: "DM" as Position, age: 19, isYouth: true,
       currentDivision: 1, highestDivisionReached: 1, totalDivisions: 1, seasonId: 1,
       generationType: "initial-academy", seed: 1, slot: 0,
     });
@@ -180,7 +180,7 @@ describe("youth dismissal compensation", () => {
     const world = worldWithClubs(4, 2);
     world.mp.seasonId = 5;
     const youth = generateYouthPlayer({
-      id: 900, clubId: 1, country: "BRA", position: 3 as Position, age: 17, isYouth: true,
+      id: 900, clubId: 1, country: "BRA", position: "DM" as Position, age: 17, isYouth: true,
       currentDivision: 1, highestDivisionReached: 1, totalDivisions: 1, seasonId: 1,
       generationType: "initial-academy", seed: 5, slot: 0,
     });
@@ -374,7 +374,7 @@ describe("dormant club freeze", () => {
   it("gives a dormant club no academy intake, promotion, or replacement players", () => {
     const dormant = makeClub({ id: 2, ownerUserId: 2, isHuman: true, competitionState: "DORMANT" });
     const youth = generateYouthPlayer({
-      id: 700, clubId: dormant.id, country: "BRA", position: 3 as Position, age: 19, isYouth: true,
+      id: 700, clubId: dormant.id, country: "BRA", position: "DM" as Position, age: 19, isYouth: true,
       currentDivision: 1, highestDivisionReached: 1, totalDivisions: 1, seasonId: 1,
       generationType: "initial-academy", seed: 9, slot: 0,
     });

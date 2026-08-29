@@ -7,7 +7,7 @@ import {
   reconstructCurrentTarget,
   retirementProbability,
 } from "./careerCurves";
-import { SENIOR_POSITION_WEIGHTS, qualitySigma, topDivisionMean } from "./generationModel";
+import { seniorPositionWeights, qualitySigma, topDivisionMean } from "./generationModel";
 import type { Position } from "./types";
 
 export { scaleReferenceSeasonFlow, seasonFlowScale } from "../config";
@@ -176,15 +176,25 @@ function genericSurvival(currentAge: number, futureAge: number): number {
   const cached = survivalCache.get(key);
   if (cached !== undefined) return cached;
   let total = 0;
-  for (let position = 0; position < SENIOR_POSITION_WEIGHTS.length; position++) {
+  // §13.2: generic player-value survival continues averaging the five senior
+  // broad-group weights (GK/FB/CB/MF/FW), never the nine child roles.
+  const GROUP_POSITIONS: import("./positions").NaturalPosition[][] = [
+    ["GK"],
+    ["LB", "RB"],
+    ["CB"],
+    ["DM", "AM"],
+    ["LW", "RW", "ST"],
+  ];
+  const groupWeights = seniorPositionWeights();
+  for (let position = 0; position < groupWeights.length; position++) {
     let survival = 1;
     // The current season always survives; every later season applies the
     // retirement probability at the age reached at that rollover, matching
     // processSeasonEndContracts.
     for (let year = currentAge + 1; year <= futureAge; year++) {
-      survival *= 1 - retirementProbability(year, position as Position);
+      survival *= 1 - retirementProbability(year, GROUP_POSITIONS[position][0]);
     }
-    total += SENIOR_POSITION_WEIGHTS[position] * survival;
+    total += groupWeights[position] * survival;
   }
   survivalCache.set(key, total);
   return total;

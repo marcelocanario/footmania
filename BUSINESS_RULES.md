@@ -202,27 +202,137 @@ nationalities on its own.
 ### 3.1 Attributes & overall rating
 
 Every player has seven underlying skills, each rated 1 to 100: goalkeeping, pace,
-technique, passing, defending, aerial ability, and finishing. Players are generated
-for one of five roles: goalkeeper, full-back, center-back, midfielder, or forward.
+technique, passing, defending, playmaking, and finishing. Players are generated
+for one of nine natural positions — GK, LB, RB, CB, DM, AM, LW, RW, ST — which
+map to five derived broad groups (GK, FB, CB, MF, FW) used for OVR, retirement
+risk, and market-value survival. The deployed role a player actually plays on
+match day comes from the formation slot, never from the player's natural
+position alone (see §4).
 
 A player's single "overall" rating is a weighted average of their seven skills, with
-the weighting different for each role — a goalkeeper's overall is dominated by
+the weighting different for each broad group — a goalkeeper's overall is dominated by
 goalkeeping ability (about 80% of the weight), a forward's by finishing (about 46%),
 and so on — then scaled back up onto the familiar 1–100 range, since a player's skills
 outside their main role sit at a low baseline that would otherwise drag the raw
-average down.
+average down. OVR is deliberately broad-group based: LB/RB share the FB formula,
+DM/AM share MF, and LW/RW/ST share FW, so migration and player value stay neutral.
 
-A separate, more detailed rating is used behind the scenes to judge how well a player
-fits a *specific* tactical slot on the pitch (e.g. a center-back asked to play
-right-back) — this is distinct from their general overall rating and factors in
-exactly how suited their natural position is to the role they've been asked to play.
+A separate, more detailed "tactical rating" is used to judge how well a player
+fits a *specific* deployed role on the pitch (e.g. a center-back asked to play
+right-back). Playing out of position subtracts a fixed raw-skill penalty (the
+compatibility matrix in `match-simulator.jsonc`) from every consumed skill,
+monotonically lowering the effective rating — it never improves a weak player.
+The public suitability labels are Natural (0), Comfortable (1–4), Makeshift
+(5–8), Poor (9–12), Emergency (13–18), and Ineligible (GK exclusivity only).
 
 When a club sets a training focus for a player, the game slightly emphasizes one
-extra skill during development: their single most important skill for their role,
-their second-most-important skill, or — if the focus is meant to shore up a weakness —
-whichever relevant skill they're currently weakest in.
+extra skill during development: their single most important skill for their
+natural role, their second-most-important skill, or — if the focus is meant to
+shore up a weakness — whichever relevant skill they're currently weakest in.
 
-### 3.2 How new players are generated
+Training is role-specific even though public OVR is not: the base training
+distribution is the player's natural-position tactical weights, so a DM and an AM
+develop differently while an equal career budget still buys the same OVR movement
+for either.
+
+#### What each skill means
+
+The seven skills are not interchangeable flavour; each one has a distinct causal
+pathway in the match engine, and nothing else feeds those pathways.
+
+| Skill | Meaning | Match pathway |
+| --- | --- | --- |
+| Goalkeeping | Shot stopping and goalkeeper execution | Save probability |
+| Pace | Running, recovery and carrying speed | Action quality and defensive resistance |
+| Technique | Control, touch, dribbling, technical execution | Action quality |
+| Passing | Accuracy of passes, crosses and clearances | *Execution* of a pass/cross/clearance |
+| Defending | Tackling, marking, interception, defensive control | Defensive resistance, and foul/card control |
+| Playmaking | Vision; ability to progress possession into more dangerous zones | *Only* forward destination quality |
+| Finishing | Shot selection and execution once a chance exists | Shot conversion |
+
+Two distinctions matter and are enforced in code:
+
+- **Passing vs Playmaking.** Passing decides whether the pass comes off.
+  Playmaking decides how far forward the ball is trying to go, and contributes
+  nothing to a retained, lateral or backward destination. Playmaking never
+  touches pass retention or shot conversion.
+- **Defending controls fouls.** Higher defending can never raise foul or card
+  probability — it is controlled defensive technique, not aggression.
+
+There is no persisted Physical skill. Where the engine needs a generic physical
+signal (fatigue, recovery, injury susceptibility, pressing quality) it uses a
+runtime-only **athleticism** composite — an equal blend of Pace and Defending.
+It is never shown, never stored, and Playmaking never enters it.
+
+A lasting injury setback spends its budget on Pace, Defending and Technique
+(Goalkeeping instead of Technique for goalkeepers). Playmaking is never reduced
+by a physical setback.
+
+### 3.2 Deployed roles, formations and playing out of position
+
+A player's natural position is his permanent identity. The role he actually plays
+is a property of the **formation slot** he occupies, and there are twelve of them:
+GK, LB, RB, CB, SW, DM, AM, LM, RM, LW, RW, ST. `SW` is a deployed role only —
+it is the central defender of every three-centre-back line, and no player is ever
+generated as one.
+
+The thirteen formations are fixed:
+
+| ID | Name | Shape from back to front |
+| ---: | --- | --- |
+| 0 | 5-4-1 | LB CB SW CB RB · LM DM AM RM · ST |
+| 1 | 5-4-1 Wide | LB CB SW CB RB · DM DM · LM RM · ST |
+| 2 | 5-3-2 | LB CB SW CB RB · DM AM AM · ST ST |
+| 3 | 4-5-1 | LB CB CB RB · LM DM AM DM RM · ST |
+| 4 | 4-4-2 | LB CB CB RB · LM DM AM RM · ST ST |
+| 5 | 4-4-2 Diamond | LB CB CB RB · DM · AM AM · AM · ST ST |
+| 6 | 4-4-2 Attacking | LB CB CB RB · LW AM AM RW · ST ST |
+| 7 | 4-3-3 | LB CB CB RB · DM AM AM · LW ST RW |
+| 8 | 4-3-3 Holding | LB CB CB RB · DM DM · AM · LW ST RW |
+| 9 | 3-5-2 | CB SW CB · LM DM AM DM RM · ST ST |
+| 10 | 3-4-3 | CB SW CB · LM DM AM RM · LW ST RW |
+| 11 | 4-2-3-1 | LB CB CB RB · DM DM · LW AM RW · ST |
+| 12 | 4-2-3-1 Wide | LB CB CB RB · DM DM · LM AM RM · ST |
+
+Only goalkeeping is structurally restricted: the GK slot accepts natural
+goalkeepers and nobody else, and a natural goalkeeper can never take an outfield
+slot. Every other pairing is legal for a manager, with its penalty and label shown
+before the lineup is saved. Left and right are distinct for squad construction and
+suitability — an LB at RB costs 4 points, at LW 8 — but this version does not yet
+simulate separate left/right match zones; both flanks feed the same wide zone.
+
+The manager never sees an unexplained number: every API and UI control uses named
+positions and roles, never a numeric index.
+
+### 3.3 How squads are shaped
+
+Squad composition is decided broad-group first, then split into natural roles.
+
+- **Broad groups** use deterministic largest-remainder allocation for the initial
+  senior squad, filler rosters and the club-creation academy, so the shipped
+  30-player squad is always exactly 3 GK / 4 FB / 5 CB / 10 MF / 8 FW and the
+  11-player academy is always 1 / 3 / 3 / 2 / 2.
+- **Natural roles inside a group** — and the broad groups of tiny seasonal
+  academy intakes — use seeded systematic rounding from a local seeded stream,
+  never the world RNG. Repeated one- and two-player intakes therefore converge on
+  the configured shares instead of always favouring the first-declared group.
+
+A standard 30-player squad is 3 GK, 2 LB, 2 RB, 5 CB, 5 DM, 5 AM, and a
+seeded LW/RW/ST split of 3/2/3, 2/3/3 or 2/2/4. No single academy is promised
+every role.
+
+### 3.4 Migration from the five-position model
+
+Existing worlds were migrated from the old GK/FB/CB/MF/FW model in one atomic,
+retry-safe step that refuses to run while any live match exists. Migration changed
+position identity only. Every player kept his exact skills, OVR, value, salary,
+release clause, career budgets, age, contract, statistics, ownership and loans —
+the OVR formula is broad-group based precisely so splitting FB into LB/RB cannot
+hand anyone a windfall. Dormant clubs kept their frozen numeric state unchanged.
+Active auctions, listings and loans were unaffected, and no historical match
+rating, award or Best XI snapshot was rewritten.
+
+### 3.5 How new players are generated
 
 Every new player, whether joining a human club, an AI club, replacing someone, or
 arriving through the youth academy, is generated through the same underlying process.
@@ -256,7 +366,7 @@ improvement still ahead of him, while the 28-year-old is at or just past his bes
   his ability on the day he arrives. A strong academy therefore produces better
   **prospects**, not ready-made first-team stars.
 - **Academy recruits are always 16 to 19 years old.** No intake path ever produces a
-  20-year-old academy player, because everyone is promoted by then (§3.7).
+  20-year-old academy player, because everyone is promoted by then (§3.10).
 - **Senior ages** are drawn from a survivorship curve: the realistic chance that a
   player who entered the senior population at the promotion age is *still in the game*
   at each later age, accounting for both retirement and players who quietly drop out
@@ -312,7 +422,7 @@ player value still comes exclusively from visible OVR, age and remaining contrac
 so calibration may compare composition against the target but generation cannot
 invent value or make equal public players worth different amounts.
 
-### 3.3 Growing older: development, growth, and decline
+### 3.6 Growing older: development, growth, and decline
 
 A player's whole career is described by five hidden numbers, fixed once at generation
 and never changed:
@@ -371,7 +481,7 @@ mid-30s, common by the late 30s, and near-certain deep into a player's 40s.
 Goalkeepers get an effective three-year grace period compared to outfield players,
 reflecting how much longer keepers typically play.
 
-### 3.4 What a player is worth (transfer value)
+### 3.7 What a player is worth (transfer value)
 
 A player's market value is driven purely by three things — their overall ability,
 their age, and how much of their contract remains — with nothing else (form, position,
@@ -432,7 +542,7 @@ A player's **release clause** — the fixed price at which any club can buy them
 unilaterally — is set to half of their remaining nominal wages for the rest of their
 contract.
 
-### 3.5 What a player is paid (salary)
+### 3.8 What a player is paid (salary)
 
 Salary follows the same shape as value — it grows steeply with overall ability and is
 adjusted by an age curve that peaks in the mid-20s — with a guaranteed floor so no
@@ -452,7 +562,7 @@ low release clause — that is an intentional mobility mechanism for a promoted
 homegrown player whose club doesn't value him enough to put him on professional terms,
 and it is never quietly swapped for a professional-sized clause.
 
-### 3.6 Contracts and renewals
+### 3.9 Contracts and renewals
 
 **Every** newly negotiated professional contract in the game goes through one shared
 calculation — a club renewal, the renewal of a promoted academy player's retained
@@ -496,7 +606,7 @@ Once signed, a salary is fixed. Daily development never silently re-prices a con
 the player's current ability is consulted again only when the *next* contract is
 negotiated.
 
-### 3.7 The youth academy
+### 3.10 The youth academy
 
 Academy players are always aged 16 to 19. An academy contract's length is **derived**,
 not configured: it always runs to the age-21 boundary, so a 16-year-old gets five
@@ -524,15 +634,15 @@ so a bid placed before the overflow arose still can't sneak through afterwards.
 
 Once promoted, a player is an ordinary senior in every respect. A renewal may be
 offered only *after* promotion, and it uses exactly the same shared salary calculation
-and validation as any other senior renewal (§3.6). If his retained contract reaches
+and validation as any other senior renewal (§3.9). If his retained contract reaches
 age 21 unrenewed, it expires through the ordinary senior route and he becomes a free
 agent — there is no separate academy expiry path and no age-21 youth state, because
 everybody was already promoted by 20.
 
 A manager can also **dismiss** a youth player. That never entitles the dismissing club
-to a replacement of its own — but it doesn't permanently shrink the world either. See §3.8.
+to a replacement of its own — but it doesn't permanently shrink the world either. See §3.11.
 
-### 3.8 Keeping the player population stable
+### 3.11 Keeping the player population stable
 
 The game actively manages the total number of persistent players so the world neither
 quietly drains away nor inflates over time.
@@ -919,7 +1029,7 @@ deadline extends by another 30 minutes — with no limit on how many times this 
 happen, so a genuine bidding war can run as long as it needs to.
 
 **The contract the winner signs** is calculated from the player's ability and age as
-frozen at listing time, and honours the no-pay-cut floor (§3.6): a player under
+frozen at listing time, and honours the no-pay-cut floor (§3.9): a player under
 contract will not accept less per season to change clubs, so the buying club must at
 least match what he already earns. A bidder's term and salary are both locked in the
 moment their first bid lands, so nobody ever finds out what they committed to only at
@@ -948,7 +1058,7 @@ shortest one on offer.
 Unlike a transfer, a free-agent contract carries **no** no-pay-cut floor: an expired
 salary doesn't follow a player into free agency, so a player who turned down a renewal
 may quite legitimately end up asking for less once his contract has actually run out
-(§3.6).
+(§3.9).
 
 Unlike an open auction, money paid to sign a free agent doesn't go to any club — it's
 paid directly out to the wider game economy, since there's no selling club on the
@@ -1005,7 +1115,7 @@ itself* is currently in the lead, never what any other club has bid.
 
 The **Division 1 season budget is the anchor of the entire money economy**. It is a
 single configured figure, and both seasonal allocations and every player's market value
-(§3.4) are derived from it, so prices and incomes can never drift apart. It is
+(§3.7) are derived from it, so prices and incomes can never drift apart. It is
 configuration only: there is no database copy and no admin override, so the same
 configuration always reproduces the same economy — and a configuration rollout can't be
 silently overridden by a stale saved value. Previously the Division 1 budget was itself
@@ -1018,7 +1128,7 @@ tier below it gets a progressively smaller one, shrinking exponentially as you g
 the pyramid but never falling below 30% of Division 1's figure (both that floor and
 the rate of shrinkage are tunable). Actual allocations are clamped at Division 1 and
 never extrapolate above it; the same curve *is* extended past that point, but only as
-the pricing scale for players better than a typical top-division player (§3.4). There's
+the pricing scale for players better than a typical top-division player (§3.7). There's
 deliberately **no other source of guaranteed income** — no gate receipts, no ticket
 sales, no sponsorship — the seasonal budget plus whatever a club earns on the transfer
 market is its entire income.
@@ -1100,7 +1210,7 @@ rescaled this way, since those are one-time prices rather than an ongoing flow.
 
 The season budget is not rescaled either: it is configured directly as the amount a
 Division 1 club receives per season, whatever the season's length. Since player prices
-are derived from that same figure (§3.4), transfer values and the budgets that pay for
+are derived from that same figure (§3.7), transfer values and the budgets that pay for
 them always move together, and neither is quietly rescaled out from under the other.
 
 ### 7.6 Where money leaves the economy
@@ -1129,7 +1239,7 @@ Every single day, regardless of whether it's a match day: clubs that have gone q
 for too long get flagged as potentially abandoned (§10.2); every player's energy
 recovers a little and any current injury countdown ticks down; on non-match days
 specifically, there's a small chance of a training injury; and every player's
-development or decline for the day is applied (§3.3).
+development or decline for the day is applied (§3.6).
 
 On top of that, once a week: full wages are settled for every club (triggering a
 financial rescue if needed, §7.4), and any player whose contract has fully run out
@@ -1172,11 +1282,11 @@ its own if anything gets interrupted partway through:
    contract by a season, roll the dice on retirement for players 33 and over, and
    formally release anyone whose contract has now fully expired. Expected retirements
    are measured before the dice are rolled so the difference can be replenished
-   exactly (§3.8). Dormant clubs are skipped completely — their players don't age,
+   exactly (§3.11). Dormant clubs are skipped completely — their players don't age,
    retire, or lose contract time.
 7. **Youth academy intake**: promote every academy player who has reached the
-   automatic promotion age (§3.7), resolve the exact global intake total and its
-   per-club allocation (§3.8), generate each club's share, and top up any club whose
+   automatic promotion age (§3.10), resolve the exact global intake total and its
+   per-club allocation (§3.11), generate each club's share, and top up any club whose
    senior squad has fallen below a healthy minimum size. Those top-ups are recorded so
    they reduce the *next* season's intake rather than the one just settled.
 8. **Open the new season for joining**.
@@ -1601,7 +1711,7 @@ settings with no real effect today:
   nothing currently uses it** — when an AI club's home country is chosen, it's picked
   with equal likelihood from the featured list, not weighted by this rating at all.
 - **The separate "potential ceiling" a player used to carry is gone.** Improvement is
-  now bounded by a single career budget (§3.3) rather than by a second, separately
+  now bounded by a single career budget (§3.6) rather than by a second, separately
   growing ceiling. Nothing in the game grows a player's capacity a second time, and
   nothing exposes a potential figure.
 - **The old hidden "growth tier" and per-player development-rate multiplier are also

@@ -96,7 +96,7 @@ export const NULL_OBSERVER: RatingObserver = {
 export interface PlayerRatingAccum {
   playerId: number;
   clubId: number;
-  /** seconds in each fine role (tacPosRole key). */
+  /** Seconds spent in each fine deployed role, keyed by DeployedRole. */
   roleSeconds: Record<string, number>;
   /** Σ c (excess contribution) and Σ v (variance) per category. */
   rawImpact: number;

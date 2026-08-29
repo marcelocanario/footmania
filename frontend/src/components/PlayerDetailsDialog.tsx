@@ -8,7 +8,7 @@ import { ClubNameLink } from "./ClubNameLink";
 import { PlayerSkillsRadar } from "./PlayerSkillsRadar";
 import { PlayerTrendSparkline } from "./PlayerTrendSparkline";
 import { PlayerScoresBarChart } from "./PlayerScoresBarChart";
-import { POSITION_CLASS, POSITION_LETTER, positionTitle } from "./PlayerName";
+import { positionClass, positionLetter } from "../positions";
 import { money } from "../format";
 
 /** Refresh the card while it is open so a goal scored mid-match (or the
@@ -104,7 +104,7 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span className={`pos-tag ${POSITION_CLASS[player.position] ?? ""}`} title={positionTitle(player.position)}>{POSITION_LETTER[player.position] ?? "?"}</span>
+                  <span className={`pos-tag ${positionClass(player.naturalPosition)}`} title={player.positionName}>{positionLetter(player.naturalPosition)}</span>
                   <span style={{ fontWeight: 800, fontSize: "1.1rem" }}>{player.displayName ?? player.name}</span>
                   {player.nickname && <span className="flag-chip" style={{ borderColor: "var(--gold-2)", color: "var(--gold-2)" }}>“{player.nickname}”</span>}
                   {player.onSale && <span className="flag-chip fc-accent" title="Listed on the transfer market">Listed</span>}
@@ -117,7 +117,7 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                     : player.clubName ?? "Free agent"}
                 </div>
                 <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 2 }}>
-                  <span title={player.country} aria-label={`Country: ${player.country}`}>{country ? `${country} ` : ""}{player.country}</span> · {player.age} yrs · <span title={positionTitle(player.position)}>{player.positionName}</span>
+                  <span title={player.country} aria-label={`Country: ${player.country}`}>{country ? `${country} ` : ""}{player.country}</span> · {player.age} yrs · <span title={player.positionName}>{player.naturalPosition}</span>
                 </div>
               </div>
               <strong style={{ fontSize: "1.5rem", fontFamily: "var(--font-display)", color: "var(--grass-2)" }}>{player.overall}</strong>

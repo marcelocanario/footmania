@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import { generateWorld } from "../src/game/worldgen";
 import { initSeason } from "../src/game/multiplayer";
 import { applyDevelopment, overallFromSkills } from "../src/game/player";
-import { OVERALL_WEIGHTS, trainingWeights, weightTotal } from "../src/game/rating";
+import { allOverallGroups, trainingWeights, weightTotal } from "../src/game/rating";
 
 describe("skill-based overall and training", () => {
   it("keeps every overall weight set normalized", () => {
-    for (const weights of Object.values(OVERALL_WEIGHTS)) {
+    for (const { weights } of Object.values(allOverallGroups())) {
       expect(weightTotal(weights)).toBeCloseTo(1, 10);
     }
   });
 
   it("makes goalkeeper overall sensitive to gol and outfield overall mostly independent of gol", () => {
-    const base = { gol: 10, vel: 70, tec: 70, pas: 70, des: 70, arm: 70, fin: 70 };
+    const base = { gol: 10, pace: 70, tec: 70, pas: 70, des: 70, playmaking: 70, fin: 70 };
     const strongGoalkeeper = { ...base, gol: 95 };
     const strongOutfielder = { ...base, gol: 95 };
-    expect(overallFromSkills(0, strongGoalkeeper) - overallFromSkills(0, base)).toBeGreaterThan(60);
-    expect(overallFromSkills(4, strongOutfielder) - overallFromSkills(4, base)).toBeLessThan(2);
+    expect(overallFromSkills("GK", strongGoalkeeper) - overallFromSkills("GK", base)).toBeGreaterThan(60);
+    expect(overallFromSkills("ST", strongOutfielder) - overallFromSkills("ST", base)).toBeLessThan(2);
   });
 
   it("derives generated overall from the generated skills", () => {
@@ -30,13 +30,13 @@ describe("skill-based overall and training", () => {
   });
 
   it("uses deterministic primary, secondary, and weakest-area assistant focus", () => {
-    const skills = { gol: 50, vel: 50, tec: 50, pas: 50, des: 50, arm: 50, fin: 1 };
-    const primary = trainingWeights(4, "primary");
-    const secondary = trainingWeights(4, "secondary");
-    const assistant = trainingWeights(4, "assistant", skills);
-    expect(primary.fin).toBeGreaterThan(primary.vel);
-    expect(secondary.vel).toBeGreaterThan(secondary.tec);
-    expect(assistant.fin).toBeGreaterThan(assistant.vel);
+    const skills = { gol: 50, pace: 50, tec: 50, pas: 50, des: 50, playmaking: 50, fin: 1 };
+    const primary = trainingWeights("ST", "primary");
+    const secondary = trainingWeights("ST", "secondary");
+    const assistant = trainingWeights("ST", "assistant", skills);
+    expect(primary.fin).toBeGreaterThan(primary.pace);
+    expect(secondary.pace).toBeGreaterThan(secondary.tec);
+    expect(assistant.fin).toBeGreaterThan(assistant.pace);
     expect(weightTotal(assistant)).toBeCloseTo(1, 10);
   });
 
@@ -45,7 +45,7 @@ describe("skill-based overall and training", () => {
     initSeason(world, { year: 2026, month: 1 }, 1);
     const club = world.clubs[0];
     const player = world.players.find((candidate) => candidate.clubId === club.id && !candidate.isYouth)!;
-    player.skills = { gol: 10, vel: 10, tec: 10, pas: 10, des: 10, arm: 10, fin: 10 };
+    player.skills = { gol: 10, pace: 10, tec: 10, pas: 10, des: 10, playmaking: 10, fin: 10 };
     player.overall = overallFromSkills(player.position, player.skills);
     player.age = 20;
     player.starter = true;

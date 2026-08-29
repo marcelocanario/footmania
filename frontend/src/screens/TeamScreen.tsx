@@ -9,7 +9,6 @@ import { groupLabel } from "../components/competition/shared";
 import { ClubCrest } from "../components/ClubCrest";
 import { FootballKit } from "../components/kit/FootballKit";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
-import { positionTitle } from "../components/PlayerName";
 import { StandingsTable } from "../components/competition/StandingsTable";
 import { MatchResultDialog } from "../components/competition/MatchResultDialog";
 import { ClubNameLink } from "../components/ClubNameLink";
@@ -213,7 +212,7 @@ export function TeamScreen() {
               const playerFlag = countryFlag(p.country);
               return (
                 <button key={p.id} type="button" className={`team-player-row${p.onLoan ? " team-player-loan-in" : ""}`} onClick={() => setPlayerTarget({ id: p.id, name: p.name })}>
-                  <span className="rank-pill" title={positionTitle(p.position)}>{p.positionName}</span>
+                  <span className="rank-pill" title={p.positionName}>{p.naturalPosition}</span>
                   <b className={p.onLoan ? "loan-in-name" : undefined}>{p.name}{p.nickname ? <> "{p.nickname}"</> : null}</b>
                   {p.isYouth && <span className="chip" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>YTH</span>}
                   {p.onLoan && <span className="flag-chip fc-loan" title={`On loan from ${p.loanFromName ?? "another club"}`}>LOAN</span>}

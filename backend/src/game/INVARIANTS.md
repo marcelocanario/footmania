@@ -277,3 +277,29 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     (`placeNewClub`), which the joining club plus seven fresh filler AI fill.
     A season that ends with zero humans re-enters the same waiting state.
 
+41. **Natural position has exactly one authority.** `Player.position` (the nine
+    natural positions) is the only persisted position identity. Broad group is
+    always derived, never stored; a deployed role belongs only to a
+    formation/live slot and is never persisted on the player. No `side` or
+    `tacPos` field may be reintroduced, and no numeric position may appear in
+    a public API.
+
+42. **Out-of-position deployment is a single monotonic raw-skill penalty.**
+    Playing a natural position in a deployed role applies the configured
+    compatibility penalty exactly once: `effectiveRaw = clamp(raw - penalty, 1,
+    100)` for every consumed skill; `usableZ = robustZ(effectiveRaw) * readiness`
+    (no fit multiplier). The penalty never changes OVR, value, salary, or
+    intrinsic development, and it can never improve a player.
+
+43. **OVR is derived from persisted visible skills through the natural
+    position's broad group.** OVR is never stored as an independent authority
+    and never changes when a player's natural position migrates within its
+    broad group. The position-model migration is atomic, retry-safe, refuses
+    active live matches, and changes no numeric player/economic state.
+
+44. **Passing and Playmaking have distinct causal pathways.** Passing is
+    action-execution quality; Playmaking affects only forward destination
+    quality in the match engine. Playmaking never enters athleticism, fatigue,
+    recovery, injury, or lasting-setback calculations, and no AI config or
+    profile field may treat it as physical.
+

@@ -108,8 +108,7 @@ export function actionQualityWithOverride(side: FrozenSide, zone: MatchZone, act
   if (local.length === 0) return 0;
   let sum = 0;
   for (const [attrKey, w] of Object.entries(weights)) {
-    const canonical = SKILL_MAP[attrKey as keyof typeof SKILL_MAP];
-    if (!canonical) continue;
+    const canonical = attrKey;
     const benchZ = benchmarks[canonical] ?? 0;
     let vsum = 0;
     let wsum = 0;
@@ -132,8 +131,7 @@ export function defensiveResistanceWithOverride(side: FrozenSide, zone: MatchZon
   if (local.length === 0) return 0;
   let sum = 0;
   for (const [attrKey, w] of Object.entries(weights)) {
-    const canonical = SKILL_MAP[attrKey as keyof typeof SKILL_MAP];
-    if (!canonical) continue;
+    const canonical = attrKey;
     const benchZ = benchmarks[canonical] ?? 0;
     let vsum = 0;
     let wsum = 0;
@@ -148,20 +146,16 @@ export function defensiveResistanceWithOverride(side: FrozenSide, zone: MatchZon
   return sum * side.localDensity;
 }
 
-/** SKILL_MAP canonical keys (mirrors matchSim.ts). */
-const SKILL_MAP = {
-  tec: "tech",
-  vel: "pace",
-  physical: "physical",
-  fin: "finishing",
-  gol: "gk",
-  des: "discipline",
-  pas: "tech",
-  arm: "tech",
-} as const;
-
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
+}
+
+/** §5.6 defendingControl: shared config-backed discipline-risk normalization. */
+function defendingRisk(zDefending: number): number {
+  const cfg = (MS as unknown as { defendingControl?: { riskMidpoint: number; zRiskScale: number } })?.defendingControl;
+  const midpoint = cfg?.riskMidpoint ?? 0.5;
+  const scale = cfg?.zRiskScale ?? 0.08;
+  return clamp(midpoint - scale * zDefending, 0, 1);
 }
 
 function logit(p: number): number {
@@ -202,7 +196,7 @@ export function controlFailureProbabilities(ctx: FrozenContext): { pFail: number
   const row = MS.probabilityModel.state[`${ctx.phase}.${ctx.zone}`];
   const cf = row?.controlFailureProbability ?? 0.01;
   const mis = row?.controlFailureTypeProbabilities?.MISCONTROL ?? 0.5;
-  const zBallSecurity = weightedUsableZ(att, "tech");
+  const zBallSecurity = weightedUsableZ(att, "technique");
   const zOppPress = pressSignalFrozen(def, ctx.zone, executionFactorFor(ctx, ctx.possessionSide === 0 ? "away" : "home"));
   const logitP = logit(cf) - INFLUENCE_SCALES.teamScale * zBallSecurity + INFLUENCE_SCALES.tacticsScale * zOppPress;
   const pFail = logistic(logitP);
@@ -236,10 +230,9 @@ export function outcomeProbabilities(ctx: FrozenContext, action: string): Record
   const u = (baseLogP: number, zTeam: number, zT: number, cu: number) => baseLogP + teamScale * zTeam + tacticsScale * zT + cu;
   const continueU = u(Math.log(base.continue), zExec, -zPress, 0);
   const turnoverU = u(Math.log(base.turnover), -zExec, zPress, 0);
-  // foulContextShift
-  const disciplineZ = weightedUsableZ(def, "discipline");
-  const discipline = clamp(0.5 - disciplineZ * 0.08, 0, 1);
-  const disciplineRisk = 1 - discipline;
+  // foulContextShift (§5.6)
+  const defendingZ = weightedUsableZ(def, "defending");
+  const disciplineRisk = defendingRisk(defendingZ);
   const fatigueRisk = 1 - def.readinessMean;
   const lowOrganisation = 1 - def.organisation;
   const foulShift =
@@ -319,9 +312,9 @@ function shotQualityLogitShift(homeNeutral: boolean, sideIsHome: boolean): numbe
 }
 
 /** Card probabilities for a foul (plan §36-38): yellow/red given the fouler's
- *  discipline/readiness and the state threat. */
+ *  defending/readiness and the state threat (§5.6). */
 export function cardProbabilities(input: {
-  zDiscipline: number;
+  zDefending: number;
   readiness: number;
   pressIntensity: number;
   stateValue: number;
@@ -330,7 +323,7 @@ export function cardProbabilities(input: {
   const foulMean = MS.validation.reference["MATCH.totalFouls"]?.mean ?? 30;
   const pYellowBase = MS.cards.yellowTargetPerMatch / foulMean;
   const pRedBase = MS.cards.redTargetPerMatch / foulMean;
-  const disciplineRisk = 1 - clamp(input.zDiscipline * 0.08 + 0.5, 0, 1);
+  const disciplineRisk = defendingRisk(input.zDefending);
   const fatigueRisk = 1 - input.readiness;
   const highThreat = clamp(input.stateValue / 0.3, 0, 1);
   const shift =

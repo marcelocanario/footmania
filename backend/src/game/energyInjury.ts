@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import type { Player, Position, RngState } from "./types";
+import type { Player, Position, RngState, SkillSet } from "./types";
 import { beta, nextDouble, normal } from "./rng";
 import { overallFromSkills } from "./rating";
 import { calculatePlayerValue, calculateReleaseClause, remainingSeasons } from "./economy";
@@ -11,7 +11,7 @@ import { calendarValues } from "../services/seasonCalendar";
 import { bumpSkillsVersion } from "./skillsVersion";
 
 const modelSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   energy: z.object({
     referenceFullMatchLoss: z.number(), roleLoad: z.record(z.string(), z.number()), pressLogRange: z.number(), physicalFatigueLogRange: z.number(),
     ageFatigueStartAge: z.number(), ageFatigueCoefficient: z.number(), ageFatigueExponent: z.number(), lowEnergyAccelerationCoefficient: z.number(), lowEnergyAccelerationExponent: z.number(),
@@ -54,14 +54,23 @@ export const ENERGY_INJURY_MODEL = loadModel();
 
 export function clamp(value: number, min: number, max: number): number { return Math.max(min, Math.min(max, value)); }
 
-export function physicalSkill(player: Pick<Player, "skills">): number {
-  return clamp((player.skills.vel + (player.skills.des + player.skills.arm) / 2) / 2, 0, 100);
+export function athleticism(skills: Pick<SkillSet, "pace" | "des">): number {
+  // §5.2: single helper, weights are the only configurable athleticism
+  // authority (game.config.jsonc playerPositions.athleticismWeights).
+  const w = (gameConfig as unknown as { playerPositions?: { athleticismWeights?: { pace?: number; des?: number } } })?.playerPositions?.athleticismWeights;
+  const paceW = Number.isFinite(w?.pace) ? (w!.pace as number) : 0.5;
+  const desW = Number.isFinite(w?.des) ? (w!.des as number) : 0.5;
+  return clamp(skills.pace * paceW + skills.des * desW, 0, 100);
 }
 
-export function roleForPosition(position: Position | number): "GK" | "DEF" | "MID" | "ATT" {
-  if (position === 0) return "GK";
-  if (position === 1 || position === 2) return "DEF";
-  if (position === 3) return "MID";
+export function physicalSkill(player: Pick<Player, "skills">): number {
+  return athleticism(player.skills);
+}
+
+export function roleForPosition(position: string): "GK" | "DEF" | "MID" | "ATT" {
+  if (position === "GK") return "GK";
+  if (position === "LB" || position === "RB" || position === "CB" || position === "SW") return "DEF";
+  if (position === "DM" || position === "AM" || position === "LM" || position === "RM") return "MID";
   return "ATT";
 }
 
@@ -90,7 +99,7 @@ export function readiness(energy: number): number {
   return 1 - ENERGY_INJURY_MODEL.energy.readinessMaxPenalty * Math.pow(1 - clamp(energy, 0, 100) / 100, ENERGY_INJURY_MODEL.energy.readinessExponent);
 }
 
-export interface EnergyMatchInput { energy: number; age: number; physicalSkill: number; position: Position | number; pressing: number; involvement: number; minutes: number; }
+export interface EnergyMatchInput { energy: number; age: number; physicalSkill: number; position: string; pressing: number; involvement: number; minutes: number; }
 
 export function energyLoss(input: EnergyMatchInput): number {
   const e = clamp(input.energy, 0, 100);
@@ -200,12 +209,12 @@ export function applyLastingSetback(rng: RngState, player: Player, equivalentRea
   if (nextDouble(rng) >= lastingSetbackProbability(equivalentRealDays)) return false;
   const s = ENERGY_INJURY_MODEL.lastingSetback;
   const budget = s.magnitudeBase + s.magnitudeScale * (1 - Math.exp(-equivalentRealDays / s.magnitudeSeverityScaleDays)) * beta(rng, s.magnitudeBetaAlpha, s.magnitudeBetaBeta);
-  const weights = player.position === 0 ? s.goalkeeperWeights : s.outfieldWeights;
+  const isGk = player.position === "GK";
+  const weights = isGk ? s.goalkeeperWeights : s.outfieldWeights;
   const before = player.overall;
   const skillLoss: Partial<Record<string, number>> = {
-    vel: stochasticRound(rng, budget * (weights.pace ?? 0)),
-    des: stochasticRound(rng, budget * (weights.physical ?? 0) * 0.5),
-    arm: stochasticRound(rng, budget * (weights.physical ?? 0) * 0.5),
+    pace: stochasticRound(rng, budget * (weights.pace ?? 0)),
+    des: stochasticRound(rng, budget * (weights.defending ?? 0)),
     tec: stochasticRound(rng, budget * (weights.technical ?? 0)),
     gol: stochasticRound(rng, budget * (weights.goalkeeping ?? 0)),
   };

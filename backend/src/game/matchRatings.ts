@@ -31,18 +31,18 @@ export interface MatchRatingRow extends PlayerMatchRatingEntry {}
  *  (plan §10.1), mapped to its coarse group. Ties break to the earlier role
  *  (insertion order = appearance order). */
 export function primaryCoarseRole(accum: PlayerRatingAccum): CoarseRole {
-  let bestRole = "CM";
+  // Strictly-greater wins, so equal seconds keep the earlier-seen role
+  // (insertion order = appearance order). An empty accumulator has no fine
+  // role at all and falls back to the neutral central-midfield group.
+  let bestRole: string | null = null;
   let bestSeconds = -1;
   for (const [role, secs] of Object.entries(accum.roleSeconds)) {
-    if (secs > bestSeconds || (secs === bestSeconds && bestRole === "CM" && role !== "CM")) {
-      // Strictly greater wins; equal seconds keeps the earlier-seen role.
-      if (secs > bestSeconds) {
-        bestRole = role;
-        bestSeconds = secs;
-      }
+    if (secs > bestSeconds) {
+      bestRole = role;
+      bestSeconds = secs;
     }
   }
-  return coarseRole(bestRole);
+  return bestRole === null ? "MID" : coarseRole(bestRole);
 }
 
 /** Compute the rating rows for a finalized match. Deterministic. */

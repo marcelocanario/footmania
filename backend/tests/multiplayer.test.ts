@@ -767,7 +767,7 @@ describe("provisional practice matches", () => {
       careerGoals: player.careerGoals,
       seasonAssists: player.seasonAssists,
       careerAssists: player.careerAssists,
-      tacPos: player.tacPos,
+      position: player.position,
     }));
     const rngBefore = { ...world.rng };
 
@@ -782,7 +782,7 @@ describe("provisional practice matches", () => {
       careerGoals: player.careerGoals,
       seasonAssists: player.seasonAssists,
       careerAssists: player.careerAssists,
-      tacPos: player.tacPos,
+      position: player.position,
     }))).toEqual(before);
     expect(world.rng).toEqual(rngBefore);
   });

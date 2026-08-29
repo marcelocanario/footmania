@@ -17,6 +17,7 @@ export default defineConfig({
       "tests/worldControls.integration.test.ts",
       "tests/authGoogle.integration.test.ts",
       "tests/accountDeletion.integration.test.ts",
+      "tests/lineupApi.integration.test.ts",
     ],
     environment: "node",
     testTimeout: 90000,

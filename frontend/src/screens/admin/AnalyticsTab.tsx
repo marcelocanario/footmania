@@ -2,15 +2,13 @@ import { BarChart3 } from "lucide-react";
 import { api, type AdminAnalytics, type AdminAnalyticsDivision, type AdminAnalyticsPopulationFlow } from "../../api/client";
 import { AdminCard, useAdminFetch, type TabProps } from "./adminShared";
 import { groupLabel } from "../../components/competition/shared";
-import { POSITION_FULL_NAMES } from "../../components/PlayerName";
-
 const POSITION_ORDER = ["GK", "FB", "CB", "MF", "FW"];
 const POSITION_FULL: Record<string, string> = {
-  GK: POSITION_FULL_NAMES[0],
-  FB: POSITION_FULL_NAMES[1],
-  CB: POSITION_FULL_NAMES[2],
-  MF: POSITION_FULL_NAMES[3],
-  FW: POSITION_FULL_NAMES[4],
+  GK: "Goalkeeper",
+  FB: "Full-back",
+  CB: "Center-back",
+  MF: "Midfielder",
+  FW: "Forward",
 };
 
 /**

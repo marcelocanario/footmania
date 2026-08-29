@@ -8,6 +8,9 @@ import { gameConfig, MP_CONFIG } from "../config";
 import { tacticalSkillRating } from "./rating";
 import { INITIAL_FAMILIARITY, tacticalExecution, tacticalExecutionContrast } from "./familiarity";
 import { remainingPlayerWorkloadMultiplier } from "./numericalDisadvantage";
+import type { DeployedRole, NaturalPosition } from "./positions";
+import { adjustedTacticalRating as adjustedRoleRating, effectiveSkillsOrFloor } from "./outOfPosition";
+import { formationById } from "./formations";
 
 // ---------------------------------------------------------------------------
 // Possession-state match engine (plans/6. match-simulator-overhaul.md).
@@ -28,12 +31,13 @@ export type RestartType = "THROW_IN" | "FREE_KICK" | "GOAL_KICK" | "CORNER" | "K
 
 export interface LivePlayerState {
   id: number;
-  skills: { gol: number; vel: number; tec: number; pas: number; des: number; arm: number; fin: number };
+  skills: { gol: number; pace: number; tec: number; pas: number; des: number; playmaking: number; fin: number };
   overall: number;
   age: number;
-  position: number;
-  tacPos: number;
-  fit: number;
+  position: NaturalPosition;
+  /** Deployed role resolved from the side's formation + live slot map (§9.1). */
+  deployedRole: DeployedRole;
+  slotIndex: number;
   energy: number;
   readiness: number;
   zTech: number;
@@ -41,7 +45,9 @@ export interface LivePlayerState {
   zPhysical: number;
   zFinishing: number;
   zGk: number;
-  zDiscipline: number;
+  zDefending: number;
+  zPassing: number;
+  zPlaymaking: number;
   onPitch: boolean;
 }
 
@@ -53,36 +59,45 @@ export const FAILURE_ACTIONS: FailureAction[] = ["MISCONTROL", "DISPOSSESSED"];
 const LONG_RANK: Record<MatchZone, number> = { DEF_WIDE: 0, DEF_CENTRAL: 0, MID_WIDE: 1, MID_CENTRAL: 1, ATT_WIDE: 2, ATT_CENTRAL: 2, BOX: 3 };
 
 // ---------------------------------------------------------------------------
-// Canonical mapping: existing Player.skills -> engine canonical attributes.
-// One adapter; the engine never reads raw skill fields directly.
+// Canonical attributes (§5.3): one adapter; the engine never reads raw skill
+// fields directly. `athleticism` is the runtime-only composite from §5.2.
 // ---------------------------------------------------------------------------
 
-const SKILL_MAP = {
-  technical: "tech" as const,
-  pace: "pace" as const,
-  physical: "physical" as const,
-  finishing: "finishing" as const,
-  gk: "gk" as const,
-  discipline: "discipline" as const,
-};
+export type CanonicalAttr = "goalkeeping" | "pace" | "technique" | "passing" | "defending" | "playmaking" | "athleticism" | "finishing";
 
-function physicalOf(skills: { des: number; arm: number }): number {
-  return (skills.des + skills.arm) / 2;
+export function athleticismOf(skills: { pace: number; des: number }): number {
+  const w = (gameConfig as unknown as { playerPositions?: { athleticismWeights?: Record<string, number> } })?.playerPositions?.athleticismWeights;
+  const paceW = w?.pace ?? 0.5;
+  const desW = w?.des ?? 0.5;
+  return skills.pace * paceW + skills.des * desW;
 }
 
-/** Position compatibility matrix (natural position 0..4 -> assigned tacPos). */
-const COMPATIBILITY: Record<number, Record<number, number>> = {
-  0: { 1: 1.0, 2: 0.0, 3: 0.0, 9: 0.0, 10: 0.0, 17: 0.0, 13: 0.0, 19: 0.0, 21: 0.0, 18: 0.0, 25: 0.0, 23: 0.0 },
-  1: { 1: 0.2, 2: 1.0, 9: 1.0, 3: 0.75, 23: 0.7, 10: 0.6, 17: 0.6, 13: 0.5, 19: 0.5, 21: 0.5, 18: 0.4, 25: 0.4 },
-  2: { 1: 0.15, 2: 0.7, 9: 0.7, 3: 1.0, 23: 0.95, 10: 0.45, 17: 0.45, 13: 0.6, 19: 0.4, 21: 0.4, 18: 0.5, 25: 0.5 },
-  3: { 1: 0.1, 2: 0.55, 9: 0.55, 3: 0.55, 23: 0.55, 10: 0.95, 17: 0.95, 13: 1.0, 19: 0.8, 21: 0.8, 18: 0.8, 25: 0.75 },
-  4: { 1: 0.05, 2: 0.4, 9: 0.4, 3: 0.35, 23: 0.35, 10: 0.7, 17: 0.7, 13: 0.65, 19: 0.95, 21: 0.95, 18: 1.0, 25: 1.0 },
-};
+/** Canonical attribute value from a raw skill set. */
+export function canonicalFromSkills(skills: LivePlayerState["skills"], attr: CanonicalAttr): number {
+  switch (attr) {
+    case "goalkeeping": return skills.gol;
+    case "pace": return skills.pace;
+    case "technique": return skills.tec;
+    case "passing": return skills.pas;
+    case "defending": return skills.des;
+    case "playmaking": return skills.playmaking;
+    case "athleticism": return athleticismOf(skills);
+    case "finishing": return skills.fin;
+  }
+}
 
-export function positionFit(naturalPosition: number, tacPos: number): number {
-  const row = COMPATIBILITY[naturalPosition];
-  if (!row) return 0;
-  return row[tacPos] ?? 0.5;
+// §7 authority: outOfPosition.ts. The engine uses the ...OrFloor variant so a
+// corrupt live slot map degrades to skill-1 rather than playing at full
+// strength; selection code must use the null-returning variant instead.
+export { rolePenalty } from "./outOfPosition";
+
+/**
+ * Effective raw skills after the role penalty (§7.1): clamp(raw - penalty, 1, 100),
+ * applied exactly once to every consumed skill. Population centers remain based
+ * on unpenalized raw skills.
+ */
+export function adjustedSkillsForRole(p: Player, role: DeployedRole): LivePlayerState["skills"] {
+  return effectiveSkillsOrFloor(p.skills, p.position, role);
 }
 
 // ---------------------------------------------------------------------------
@@ -96,15 +111,17 @@ export interface AttributeCenters {
 
 export function computeAttributeCenters(players: Player[]): AttributeCenters {
   const out: AttributeCenters = { median: {}, sigma: {} };
-  const source: Record<string, (p: Player) => number> = {
-    tec: (p) => p.skills.tec,
-    vel: (p) => p.skills.vel,
-    physical: (p) => physicalOf(p.skills),
-    fin: (p) => p.skills.fin,
-    gol: (p) => p.skills.gol,
-    des: (p) => p.skills.des,
+  const source: Record<CanonicalAttr, (p: Player) => number> = {
+    goalkeeping: (p) => p.skills.gol,
+    pace: (p) => p.skills.pace,
+    technique: (p) => p.skills.tec,
+    passing: (p) => p.skills.pas,
+    defending: (p) => p.skills.des,
+    playmaking: (p) => p.skills.playmaking,
+    athleticism: (p) => athleticismOf(p.skills),
+    finishing: (p) => p.skills.fin,
   };
-  for (const key of Object.keys(source)) {
+  for (const key of Object.keys(source) as CanonicalAttr[]) {
     const values = players.map(source[key]).sort((a, b) => a - b);
     const n = values.length;
     const median = n === 0 ? 50 : n % 2 === 1 ? values[(n - 1) / 2] : (values[n / 2 - 1] + values[n / 2]) / 2;
@@ -185,22 +202,8 @@ function weightedMean(values: number[], weights: number[]): number {
 // Role mapping + formation geometry
 // ---------------------------------------------------------------------------
 
-export function tacPosRole(tacPos: number): string {
-  if (tacPos === 1) return "GK";
-  if (tacPos === 2) return "LB";
-  if (tacPos === 9) return "RB";
-  if (tacPos === 23) return "SW";
-  if (tacPos === 19) return "LW";
-  if (tacPos === 21) return "RW";
-  if (tacPos === 10) return "LM";
-  if (tacPos === 17) return "RM";
-  if (tacPos === 18 || tacPos === 25) return "ST";
-  if (tacPos >= 3 && tacPos <= 8) return "CB";
-  return "CM";
-}
-
 /** Zone involvement weight for a player: their formation-support weight for the zone. */
-function involvement(role: string, zone: MatchZone): number {
+function involvement(role: DeployedRole, zone: MatchZone): number {
   return MS.formationSupport[role]?.[zone] ?? 0;
 }
 
@@ -244,12 +247,12 @@ interface Side {
   organisationRecoveryTime: number;
   /** Cached baseline organisation (recomputed when support/readiness change). */
   cachedBaselineOrganisation: number;
-  /** Bumped whenever `on` gains/loses a player or a player's tacPos changes
-   *  (substitution, injury auto-sub); invalidates involvedCache below. */
+  /** Bumped whenever `on` gains/loses a player or a player's slot assignment
+   *  changes (substitution, injury auto-sub); invalidates involvedCache below. */
   rosterVersion: number;
   /** Per-zone memo of involvedPlayers(side, zone): membership/weights depend
-   *  only on tacPos + zone, not the per-step-changing readiness values on the
-   *  same `ps` references, so it's safe to reuse until rosterVersion moves. */
+   *  only on deployed role + zone, not the per-step-changing readiness values on
+   *  the same `ps` references, so it's safe to reuse until rosterVersion moves. */
   involvedCache: Partial<Record<MatchZone, { version: number; result: { ps: LivePlayerState; weight: number }[] }>>;
 }
 
@@ -346,7 +349,7 @@ function ratingContext(eng: Engine, action?: string): RatingDecisionInput {
       readinessMean: readiness,
       organisation: s.organisation,
       tactics: { style: s.tactics.style, pressing: s.tactics.pressing, direction: s.tactics.direction, familiarity: s.tactics.familiarity },
-      gk: s.on.find((ps) => ps.tacPos === 1),
+      gk: s.on.find((ps) => ps.deployedRole === "GK"),
       ...(action ? { actionQuality: actionQualityFor(s, eng.zone, action), defensiveResistance: defensiveResistanceFor(s, eng.zone, action) } : {}),
     };
   };
@@ -384,7 +387,7 @@ function observeRatingSeconds(eng: Engine, seconds: number): void {
   const perPlayer: Record<number, { seconds: number; fineRole: string }> = {};
   for (const side of [eng.home, eng.away]) {
     for (const ps of side.on) {
-      perPlayer[ps.id] = { seconds, fineRole: tacPosRole(ps.tacPos) };
+      perPlayer[ps.id] = { seconds, fineRole: ps.deployedRole };
     }
   }
   eng.ratingObserver.onSeconds(perPlayer);
@@ -421,51 +424,104 @@ function zoneLane(zone: MatchZone, lane: Lane): MatchZone {
 // Player-side setup
 // ---------------------------------------------------------------------------
 
-function buildPlayerState(p: Player, centers: AttributeCenters, energy = p.energy): LivePlayerState {
-  const fit = positionFit(p.position, p.tacPos);
+/**
+ * Resolve a player's deployed role from the side's current formation plus his
+ * live slot index (§8/§9.1). Never inspects natural position for zone support.
+ *
+ * Returns `null` for a missing or out-of-range slot. §15.1 requires corrupt live
+ * state to be rejected, not defaulted: the previous `ST` fallback silently
+ * fielded an unmapped player as a striker (the out-of-position penalty for
+ * outfielder→ST is finite, so nothing downstream noticed).
+ */
+export function tryDeployedRoleForSlot(
+  slotMap: Record<number, number> | undefined,
+  formationId: number,
+  playerId: number,
+): { role: DeployedRole; slotIndex: number } | null {
+  const slotIndex = slotMap?.[playerId];
+  if (slotIndex === undefined) return null;
+  const slot = formationById(formationId)?.slots[slotIndex];
+  if (!slot) return null;
+  return { role: slot.role, slotIndex };
+}
+
+/**
+ * Strict form of {@link tryDeployedRoleForSlot} for engine paths that have
+ * already established the player is on the pitch. Throws on corrupt state so a
+ * broken slot map surfaces as a match error instead of a silent role swap.
+ */
+export function deployedRoleForSlot(
+  slotMap: Record<number, number> | undefined,
+  formationId: number,
+  playerId: number,
+): { role: DeployedRole; slotIndex: number } {
+  const resolved = tryDeployedRoleForSlot(slotMap, formationId, playerId);
+  if (!resolved) {
+    const raw = slotMap?.[playerId];
+    throw new Error(
+      `Corrupt live slot map: player ${playerId} maps to slot ${raw ?? "<missing>"} in formation ${formationId}`,
+    );
+  }
+  return resolved;
+}
+
+function buildPlayerState(p: Player, centers: AttributeCenters, role: DeployedRole, slotIndex: number, energy = p.energy): LivePlayerState {
   const readiness = readinessFactor(energy);
-  const z = (key: string, value: number) => robustZ(value, centers.median[key], centers.sigma[key]);
+  // §7.1: effective raw skill = clamp(raw - rolePenalty, 1, 100), applied
+  // exactly once; usableZ = robustZ(effectiveRaw) * readiness (no fit factor).
+  const effective = adjustedSkillsForRole(p, role);
+  const z = (attr: CanonicalAttr, value: number) => robustZ(value, centers.median[attr], centers.sigma[attr]);
   return {
     id: p.id,
     skills: { ...p.skills },
     overall: p.overall,
     age: p.age,
-    position: p.position,
-    tacPos: p.tacPos,
-    fit,
+    position: p.position as NaturalPosition,
+    deployedRole: role,
+    slotIndex,
     energy,
     readiness,
-    zTech: z("tec", p.skills.tec) * fit * readiness,
-    zPace: z("vel", p.skills.vel) * fit * readiness,
-    zPhysical: z("physical", physicalOf(p.skills)) * fit * readiness,
-    zFinishing: z("fin", p.skills.fin) * fit * readiness,
-    zGk: z("gol", p.skills.gol) * fit * readiness,
-    zDiscipline: z("des", p.skills.des) * fit * readiness,
+    zTech: z("technique", effective.tec) * readiness,
+    zPace: z("pace", effective.pace) * readiness,
+    // §5.3: eight distinct canonical attributes; passing/playmaking each have
+    // their own median/sigma and stored Z, not an average of tech/pace.
+    zPhysical: z("athleticism", athleticismOf(effective)) * readiness,
+    zFinishing: z("finishing", effective.fin) * readiness,
+    zGk: z("goalkeeping", effective.gol) * readiness,
+    zDefending: z("defending", effective.des) * readiness,
+    zPassing: z("passing", effective.pas) * readiness,
+    zPlaymaking: z("playmaking", effective.playmaking) * readiness,
     onPitch: true,
   };
 }
 
 function refreshReadiness(ps: LivePlayerState, centers: AttributeCenters): void {
-  const fit = positionFit(ps.position, ps.tacPos);
-  ps.fit = fit;
   ps.readiness = readinessFactor(ps.energy);
-  const z = (key: string, value: number) => robustZ(value, centers.median[key], centers.sigma[key]);
-  ps.zTech = z("tec", ps.skills.tec) * fit * ps.readiness;
-  ps.zPace = z("vel", ps.skills.vel) * fit * ps.readiness;
-  ps.zPhysical = z("physical", physicalOf(ps.skills)) * fit * ps.readiness;
-  ps.zFinishing = z("fin", ps.skills.fin) * fit * ps.readiness;
-  ps.zGk = z("gol", ps.skills.gol) * fit * ps.readiness;
-  ps.zDiscipline = z("des", ps.skills.des) * fit * ps.readiness;
+  const effective = adjustedSkillsForRole(
+    { position: ps.position, skills: ps.skills } as Player,
+    ps.deployedRole,
+  );
+  const z = (attr: CanonicalAttr, value: number) => robustZ(value, centers.median[attr], centers.sigma[attr]);
+  ps.zTech = z("technique", effective.tec) * ps.readiness;
+  ps.zPace = z("pace", effective.pace) * ps.readiness;
+  ps.zPhysical = z("athleticism", athleticismOf(effective)) * ps.readiness;
+  ps.zFinishing = z("finishing", effective.fin) * ps.readiness;
+  ps.zGk = z("goalkeeping", effective.gol) * ps.readiness;
+  ps.zDefending = z("defending", effective.des) * ps.readiness;
+  ps.zPassing = z("passing", effective.pas) * ps.readiness;
+  ps.zPlaymaking = z("playmaking", effective.playmaking) * ps.readiness;
 }
 
-function playerUsableZ(ps: LivePlayerState, key: "tech" | "pace" | "physical" | "finishing" | "gk" | "discipline"): number {
-  switch (key) {
-    case "tech": return ps.zTech;
+function playerUsableZ(ps: LivePlayerState, attr: CanonicalAttr): number {
+  switch (attr) {
+    case "technique": return ps.zTech;
     case "pace": return ps.zPace;
-    case "physical": return ps.zPhysical;
+    case "athleticism": return ps.zPhysical;
     case "finishing": return ps.zFinishing;
-    case "gk": return ps.zGk;
-    case "discipline": return ps.zDiscipline;
+    case "goalkeeping": return ps.zGk;
+    case "defending": return ps.zDefending;
+    case "passing": return ps.zPassing;
+    case "playmaking": return ps.zPlaymaking;
   }
 }
 
@@ -475,7 +531,7 @@ function involvedPlayers(side: Side, zone: MatchZone): { ps: LivePlayerState; we
   if (cached && cached.version === side.rosterVersion) return cached.result;
   const out: { ps: LivePlayerState; weight: number }[] = [];
   for (const ps of side.on) {
-    const w = involvement(tacPosRole(ps.tacPos), zone);
+    const w = involvement(ps.deployedRole, zone);
     if (w > 0) out.push({ ps, weight: w });
   }
   side.involvedCache[zone] = { version: side.rosterVersion, result: out };
@@ -490,13 +546,13 @@ function involvedPlayers(side: Side, zone: MatchZone): { ps: LivePlayerState; we
  */
 function presentationPlayerId(side: Side, zone: MatchZone, excludeId: number | null = null, allowGoalkeeper = false): number | null {
   const local = involvedPlayers(side, zone)
-    .filter(({ ps }) => allowGoalkeeper || ps.tacPos !== 1)
-    .sort((a, b) => b.weight - a.weight || a.ps.tacPos - b.ps.tacPos || a.ps.id - b.ps.id);
+    .filter(({ ps }) => allowGoalkeeper || ps.deployedRole !== "GK")
+    .sort((a, b) => b.weight - a.weight || (a.ps.slotIndex - b.ps.slotIndex) || a.ps.id - b.ps.id);
   const pool = local.length > 0
     ? local
     : side.on
-      .filter((ps) => allowGoalkeeper || ps.tacPos !== 1)
-      .sort((a, b) => a.tacPos - b.tacPos || a.id - b.id)
+      .filter((ps) => allowGoalkeeper || ps.deployedRole !== "GK")
+      .sort((a, b) => a.slotIndex - b.slotIndex || a.id - b.id)
       .map((ps) => ({ ps, weight: 0 }));
   const chosen = pool.find(({ ps }) => ps.id !== excludeId) ?? pool[0];
   return chosen?.ps.id ?? null;
@@ -521,10 +577,10 @@ function localDensity(side: Side, zone: MatchZone): number {
 }
 
 /** Weighted mean usable attribute over local involvement (§9 ball security). */
-function localQuality(side: Side, zone: MatchZone, key: "tech" | "pace" | "physical" | "finishing" | "gk" | "discipline"): number {
+function localQuality(side: Side, zone: MatchZone, attr: CanonicalAttr): number {
   const local = involvedPlayers(side, zone);
   if (local.length === 0) return 0;
-  const values = local.map((l) => playerUsableZ(l.ps, key));
+  const values = local.map((l) => playerUsableZ(l.ps, attr));
   const weights = local.map((l) => l.weight);
   return weightedMean(values, weights);
 }
@@ -537,8 +593,7 @@ function actionQualityFor(side: Side, zone: MatchZone, action: string): number {
   const local = involvedPlayers(side, zone);
   if (local.length === 0) return 0;
   for (const [attrKey, w] of Object.entries(weights)) {
-    const canonical = SKILL_MAP[attrKey as keyof typeof SKILL_MAP];
-    if (!canonical) continue;
+    const canonical = attrKey as CanonicalAttr;
     const values = local.map((l) => playerUsableZ(l.ps, canonical));
     const ws = local.map((l) => l.weight);
     sum += w * weightedMean(values, ws);
@@ -556,8 +611,7 @@ function defensiveResistanceFor(side: Side, zone: MatchZone, action: string): nu
   const local = involvedPlayers(side, zone);
   if (local.length === 0) return 0;
   for (const [attrKey, w] of Object.entries(weights)) {
-    const canonical = SKILL_MAP[attrKey as keyof typeof SKILL_MAP];
-    if (!canonical) continue;
+    const canonical = attrKey as CanonicalAttr;
     const values = local.map((l) => playerUsableZ(l.ps, canonical));
     const ws = local.map((l) => l.weight);
     sum += w * weightedMean(values, ws);
@@ -577,12 +631,27 @@ function computeSupport(side: Side): void {
     side.coverage[zone] = 0;
   }
   for (const ps of side.on) {
-    const role = tacPosRole(ps.tacPos);
-    const kernel = MS.formationSupport[role] ?? {};
+    const kernel = MS.formationSupport[ps.deployedRole] ?? {};
     for (const [zone, w] of Object.entries(kernel)) {
       const z = zone as MatchZone;
       side.support[z] += w;
       side.coverage[z] += w * (0.55 + 0.45 * ps.readiness);
+    }
+  }
+  // A dismissal/injury reduces the side's available support, but the raw
+  // deficit would assume an instant, perfectly uncoordinated collapse. Keep
+  // the empirical effect configurable while retaining the actual readiness
+  // gap (and the separate capped workload pathway) for the remaining players.
+  const cfg = MS.numericalDisadvantage;
+  if (side.on.length < cfg.referencePlayers) {
+    const scale = cfg.formationLossEffectScale;
+    for (const zone of ZONES) {
+      const expected = side.expectedSupport[zone] ?? 0;
+      if (expected <= 0) continue;
+      const rawSupport = side.support[zone];
+      const rawCoverage = side.coverage[zone];
+      side.support[zone] = expected + (rawSupport - expected) * scale;
+      side.coverage[zone] = side.support[zone] + (rawCoverage - rawSupport);
     }
   }
   side.cachedBaselineOrganisation = baselineOrganisation(side);
@@ -590,24 +659,12 @@ function computeSupport(side: Side): void {
 
 function expectedSupport(formation: number): Record<MatchZone, number> {
   const out: Record<MatchZone, number> = { DEF_WIDE: 0, DEF_CENTRAL: 0, MID_WIDE: 0, MID_CENTRAL: 0, ATT_WIDE: 0, ATT_CENTRAL: 0, BOX: 0 };
-  const FORMATION_POSITIONS: number[][] = [
-    [1, 20, 11, 13, 14, 16, 2, 9, 6, 4, 8],
-    [1, 20, 11, 13, 14, 16, 2, 9, 6, 4, 8],
-    [1, 22, 24, 12, 14, 16, 2, 9, 6, 4, 8],
-    [1, 23, 11, 13, 15, 2, 9, 6, 8, 10, 17],
-    [1, 22, 24, 11, 13, 14, 16, 2, 9, 3, 5],
-    [1, 19, 21, 11, 12, 13, 15, 2, 9, 6, 8],
-    [1, 22, 24, 12, 14, 15, 16, 2, 9, 6, 8],
-    [1, 22, 23, 24, 12, 14, 16, 2, 9, 6, 8],
-    [1, 19, 20, 21, 11, 13, 15, 2, 9, 6, 8],
-    [1, 22, 24, 11, 13, 15, 4, 6, 8, 10, 17],
-    [1, 18, 25, 23, 11, 13, 4, 6, 8, 10, 17],
-    [1, 23, 14, 16, 15, 13, 11, 2, 9, 6, 8],
-    [1, 20, 10, 17, 15, 13, 11, 2, 9, 6, 8],
-  ];
-  const roles = (FORMATION_POSITIONS[formation] ?? FORMATION_POSITIONS[4]).map(tacPosRole);
-  for (const role of roles) {
-    const kernel = MS.formationSupport[role] ?? {};
+  // §4.1/§8: the formation catalog is the single authority; expectedSupport
+  // reads the same kernels as live support. No duplicate formation array.
+  const def = formationById(formation) ?? formationById(4);
+  if (!def) return out;
+  for (const slot of def.slots) {
+    const kernel = MS.formationSupport[slot.role] ?? {};
     for (const [zone, w] of Object.entries(kernel)) {
       out[zone as MatchZone] += w;
     }
@@ -854,7 +911,7 @@ function controlFailureStep(eng: Engine): FailureAction | null {
   const att = eng.possessionSide;
   const def = opp(eng, att);
   const { controlFailureProbability, miscontrol, dispossessed } = failureBaseline(eng);
-  const zBallSecurity = localQuality(sideOf(eng, att), eng.zone, "tech");
+  const zBallSecurity = localQuality(sideOf(eng, att), eng.zone, "technique");
   const zOppPress = pressSignal(eng, def, eng.zone);
   const logitP = logit(controlFailureProbability) - INFLUENCE_SCALES.teamScale * zBallSecurity + INFLUENCE_SCALES.tacticsScale * zOppPress;
   const pFail = logistic(logitP);
@@ -976,16 +1033,23 @@ let _placeholderZone: MatchZone = "MID_CENTRAL";
 // Outcomes (§12)
 // ---------------------------------------------------------------------------
 
+/** §5.6 defendingControl: shared config-backed discipline-risk normalization.
+ *  Higher defending must never increase foul/card probability. */
+function defendingRisk(zDefending: number): number {
+  const cfg = (MS as unknown as { defendingControl?: { riskMidpoint: number; zRiskScale: number } })?.defendingControl;
+  const midpoint = cfg?.riskMidpoint ?? 0.5;
+  const scale = cfg?.zRiskScale ?? 0.08;
+  return clamp(midpoint - scale * zDefending, 0, 1);
+}
+
 function foulContextShift(eng: Engine, defSide: Side): number {
   const local = involvedPlayers(defSide, eng.zone);
   const localReadiness = local.length > 0
     ? weightedMean(local.map((l) => l.ps.readiness), local.map((l) => l.weight))
     : 1;
-  // Discipline risk: 1 - meanDiscipline. localQuality is a Z in [-3,3]; map it
-  // to a 0..1 discipline score around 0.5.
-  const disciplineZ = localQuality(defSide, eng.zone, "discipline");
-  const discipline = clamp(0.5 - disciplineZ * 0.08, 0, 1);
-  const disciplineRisk = 1 - discipline;
+  // Discipline risk from the zone-level defending Z (§5.6).
+  const defendingZ = localQuality(defSide, eng.zone, "defending");
+  const disciplineRisk = defendingRisk(defendingZ);
   const fatigueRisk = 1 - localReadiness;
   const lowOrganisation = 1 - defSide.organisation;
   const pressIntensity = defSide.tactics.pressing;
@@ -1067,6 +1131,11 @@ function destinationUtility(eng: Engine, action: string, next: MatchZone): numbe
   // Direction preference (lane handled separately, but include for wide/centre routing).
   const dir = directionSignal(eng, destinationLaneFor(eng, next)) * executionFactor;
   const zTacticsTotal = combineTactics(eng, [...components, dir]);
+  // §5.5 Playmaking pathway: forward destination quality only. Retained,
+  // lateral and backward destinations receive zero playmaking signal.
+  const forwardFraction = Math.max(0, progressDelta) / 3;
+  const creationQuality = localQuality(side, eng.zone, "playmaking");
+  const zTeamProgression = MS.actionQuality.playmakingProgressionCoefficient * forwardFraction * creationQuality;
   // Home advantage creation: apply to attacking PROGRESSION utility (§29) so
   // the home team reaches advanced/box zones slightly more often.
   let cu = 0;
@@ -1076,7 +1145,7 @@ function destinationUtility(eng: Engine, action: string, next: MatchZone): numbe
       cu = Math.log(creationMultiplier(eng));
     }
   }
-  return utility(eng, baseLogP, 0, zTacticsTotal, cu);
+  return utility(eng, baseLogP, zTeamProgression, zTacticsTotal, cu);
 }
 
 function destinationLaneFor(eng: Engine, next: MatchZone): Lane {
@@ -1210,18 +1279,46 @@ function finishBallAction(record: LiveBallAction, patch: Partial<LiveBallAction>
 
 function shooterSelection(eng: Engine, side: Side): LivePlayerState {
   const zone = eng.zone;
-  const candidates = involvedPlayers(side, zone).filter((l) => l.ps.tacPos !== 1);
-  if (candidates.length === 0) return side.on.find((ps) => ps.tacPos !== 1) ?? side.on[0];
+  const candidates = involvedPlayers(side, zone).filter((l) => l.ps.deployedRole !== "GK");
+  const fallback = side.on.find((ps) => ps.deployedRole !== "GK") ?? side.on[0];
+  if (candidates.length === 0) return fallback ?? syntheticOutfielder(side);
   const weights = candidates.map((l) => {
-    const role = tacPosRole(l.ps.tacPos);
-    const roleWeight = MS.shotModel.shooterRoleWeights[role] ?? 0.2;
+    // Config validation guarantees a row for every deployed role, so an
+    // absent weight is a bug, not a case to paper over with a default.
+    const roleWeight = MS.shotModel.shooterRoleWeights[l.ps.deployedRole];
     const finishingZ = l.ps.zFinishing;
     const finishingFactor = Math.max(MS.shotModel.shooterFinishingFloor, finishingZ + MS.shotModel.shooterFinishingOffset);
     return Math.max(MS.shotModel.shooterMinimumWeight, l.weight * finishingFactor * roleWeight);
   });
   const labels = candidates.map((l) => String(l.ps.id));
   const chosen = weightedPick(eng.rng, labels, weights);
-  return candidates.find((l) => String(l.ps.id) === chosen)?.ps ?? candidates[0].ps;
+  return candidates.find((l) => String(l.ps.id) === chosen)?.ps ?? fallback ?? syntheticOutfielder(side);
+}
+
+/** Degenerate-state outfielder (whole side dismissed): neutral shot taker. */
+function syntheticOutfielder(side: Side): LivePlayerState {
+  const any = side.on[0];
+  const base = {
+    id: any?.id ?? -1,
+    skills: any?.skills ?? { gol: 1, pace: 1, tec: 1, pas: 1, des: 1, playmaking: 1, fin: 1 },
+    overall: any?.overall ?? 1,
+    age: any?.age ?? 30,
+    position: any?.position ?? ("ST" as const),
+    deployedRole: "ST" as const,
+    slotIndex: any?.slotIndex ?? 0,
+    energy: any?.energy ?? 50,
+    readiness: any?.readiness ?? 1,
+    zTech: any?.zTech ?? 0,
+    zPace: any?.zPace ?? 0,
+    zPhysical: any?.zPhysical ?? 0,
+    zFinishing: any?.zFinishing ?? 0,
+    zGk: any?.zGk ?? 0,
+    zDefending: any?.zDefending ?? 0,
+    zPassing: (any as unknown as { zPassing?: number })?.zPassing ?? 0,
+    zPlaymaking: (any as unknown as { zPlaymaking?: number })?.zPlaymaking ?? 0,
+    onPitch: true,
+  };
+  return base;
 }
 
 function shotLocationForZone(eng: Engine, zone: MatchZone): { x: number; y: number } {
@@ -1354,7 +1451,7 @@ function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
   // The goalkeeper defends the conversion draw directly (plan §28): find the
   // GK on the pitch, not a zone-local quality (the GK's zone involvement is
   // only DEF_CENTRAL and shots occur in ATT/BOX zones).
-  const gk = def.on.find((ps) => ps.tacPos === 1);
+  const gk = def.on.find((ps) => ps.deployedRole === "GK");
   const zGk = gk ? gk.zGk : 0;
   const shotSkillSignal = clamp((zFinish - zGk) / Math.SQRT2, -MS.normalization.contestZClamp, MS.normalization.contestZClamp);
   const densitySignal = localDensity(side, eng.zone) - shotDefenseDensity(def, eng.zone);
@@ -1446,7 +1543,8 @@ function cardRates(): { pYellow: number; pRed: number } {
 }
 
 function cardLogitShift(eng: Engine, fouler: LivePlayerState, def: Side): number {
-  const disciplineRisk = 1 - Math.max(0, Math.min(1, fouler.zDiscipline * 0.08 + 0.5));
+  // §5.6: the fouler's defending Z controls card risk; higher defending reduces it.
+  const disciplineRisk = defendingRisk(fouler.zDefending);
   const fatigueRisk = 1 - fouler.readiness;
   const pressIntensity = def.tactics.pressing;
   const maxStateV = 0.3;
@@ -1477,9 +1575,18 @@ const epvTable: Record<string, number> & { __computed?: boolean } = {};
 
 function selectFouler(eng: Engine, def: Side): LivePlayerState {
   const local = involvedPlayers(def, eng.zone);
-  const pool = local.length > 0 ? local : def.on.map((ps) => ({ ps, weight: 1 }));
+  const pool = (local.length > 0 ? local : def.on.map((ps) => ({ ps, weight: 1 }))).filter((l) => l.ps);
+  if (pool.length === 0) {
+    // No on-pitch defender can be named (e.g. every defender dismissed): fall
+    // back to the first player of the defending side's XI still on record.
+    const any = eng.onPitchBySide[def.idx][0];
+    if (any) return { id: any.id, skills: any.skills, overall: any.overall, age: any.age, position: any.position, deployedRole: "CB", slotIndex: 0, energy: any.energy, readiness: 1, zTech: 0, zPace: 0, zPhysical: 0, zFinishing: 0, zGk: 0, zDefending: 0, zPassing: 0, zPlaymaking: 0, onPitch: true } as LivePlayerState;
+    return def.on[0] ?? {
+      id: -1, skills: { gol: 1, pace: 1, tec: 1, pas: 1, des: 1, playmaking: 1, fin: 1 }, overall: 1, age: 30, position: "CB", deployedRole: "CB", slotIndex: 0, energy: 50, readiness: 1, zTech: 0, zPace: 0, zPhysical: 0, zFinishing: 0, zGk: 0, zDefending: 0, zPassing: 0, zPlaymaking: 0, onPitch: true,
+    } as LivePlayerState;
+  }
   const weights = pool.map((l) => {
-    const press = l.ps.tacPos !== 1 ? l.weight * (0.4 + 0.6 * (1 - l.ps.readiness)) : 0;
+    const press = l.ps.deployedRole !== "GK" ? l.weight * (0.4 + 0.6 * (1 - l.ps.readiness)) : 0;
     return Math.max(0.01, press);
   });
   const labels = pool.map((l) => String(l.ps.id));
@@ -1536,24 +1643,39 @@ function resolveCards(eng: Engine, fouler: LivePlayerState, def: Side, minute: n
 function removeFromPitch(eng: Engine, side: Side, playerId: number): void {
   side.on = side.on.filter((ps) => ps.id !== playerId);
   eng.onPitchBySide[side.idx] = eng.onPitchBySide[side.idx].filter((p) => p.id !== playerId);
+  // §9.1: red cards/injuries remove the player's live slot-map entry.
+  const slotMap = side.idx === 0 ? eng.st.homeSlotByPlayerId : eng.st.awaySlotByPlayerId;
+  if (slotMap) delete slotMap[playerId];
   side.rosterVersion++;
   computeSupport(side);
 }
 
 /**
- * Bench player who replaces a player removed by a match injury. Goalkeepers can
- * only be replaced by goalkeepers; an outfield player prefers the same natural
- * position and otherwise falls back to the best remaining outfielder.
- * Deterministic (overall desc, then lower id): no RNG draw, so instant and
- * streamed runs — and restarts — always agree. Exported for tests.
+ * Bench player who replaces a player removed by a match injury. §9.5: an
+ * incoming GK is required only when replacing the GK slot; a GK can never
+ * enter an outfield slot. Outfield picks rank by adjusted pair score for the
+ * outgoing role (no exact-natural-position preference ahead of score).
+ * Deterministic (adjusted rating desc, then lower id): no RNG draw, so instant
+ * and streamed runs — and restarts — always agree. Exported for tests.
  */
-export function pickInjuryReplacement(bench: Player[], outPosition: number): Player | null {
+export function pickInjuryReplacement(
+  bench: Player[],
+  outRole: DeployedRole,
+  energyOf: (p: Player) => number = (p) => p.energy,
+): Player | null {
   const eligible = bench.filter((p) => p.injuryDays === 0 && p.suspendedGames === 0);
-  const rank = (a: Player, b: Player) => b.overall - a.overall || a.id - b.id;
-  if (outPosition === 0) return eligible.filter((p) => p.position === 0).sort(rank)[0] ?? null;
-  const samePosition = eligible.filter((p) => p.position === outPosition).sort(rank)[0];
-  if (samePosition) return samePosition;
-  return eligible.filter((p) => p.position !== 0).sort(rank)[0] ?? null;
+  // §9.2 pair score: adjusted role rating × readiness. Energy belongs in the
+  // ranking — a fresher bench player can legitimately beat a marginally better
+  // but exhausted one, and the AI tactical sub already scores this way.
+  const score = (p: Player): number | null => {
+    const rating = adjustedRoleRating(p.skills, p.position, outRole);
+    return rating === null ? null : rating * readiness(clamp(energyOf(p), 0, 100));
+  };
+  const scored = eligible
+    .map((p) => ({ p, s: score(p) }))
+    .filter((entry): entry is { p: Player; s: number } => entry.s !== null);
+  scored.sort((a, b) => (Math.abs(b.s - a.s) > 1e-9 ? b.s - a.s : b.p.overall - a.p.overall || a.p.id - b.p.id));
+  return scored[0]?.p ?? null;
 }
 
 /**
@@ -1564,9 +1686,16 @@ export function pickInjuryReplacement(bench: Player[], outPosition: number): Pla
  * commit reads. The replacement inherits the outgoing player's tactical slot.
  */
 function applyEngineSub(eng: Engine, side: Side, outPs: LivePlayerState, incoming: Player, minute: number): void {
-  // The replacement occupies the outgoing player's tactical slot.
-  incoming.tacPos = outPs.tacPos;
-  const ps = buildPlayerState(incoming, eng.centers, eng.st.playerEnergy[incoming.id] ?? incoming.energy);
+  // §9.5: every incoming player inherits the exact outgoing slot index, so the
+  // deployed role is preserved without storing role state on the Player.
+  const slotMap = side.idx === 0 ? eng.st.homeSlotByPlayerId : eng.st.awaySlotByPlayerId;
+  const slotIndex = outPs.slotIndex;
+  if (slotMap && slotIndex >= 0) {
+    slotMap[incoming.id] = slotIndex;
+    delete slotMap[outPs.id];
+  }
+  const { role } = deployedRoleForSlot(slotMap, side.tactics.formation, incoming.id);
+  const ps = buildPlayerState(incoming, eng.centers, role, slotIndex, eng.st.playerEnergy[incoming.id] ?? incoming.energy);
   // Take the outgoing player off the pitch (mirrors removeFromPitch's list
   // bookkeeping; support is recomputed once below).
   side.on = side.on.filter((candidate) => candidate.id !== outPs.id);
@@ -1611,7 +1740,7 @@ function applyEngineSub(eng: Engine, side: Side, outPs: LivePlayerState, incomin
 function applyInjuryAutoSub(eng: Engine, side: Side, outPs: LivePlayerState, minute: number): void {
   if (!gameConfig.injuries.autoSubstitute) return;
   if ((eng.st.usedSubs[side.idx] ?? 0) >= MP_CONFIG.maxSubsPerSide) return;
-  const incoming = pickInjuryReplacement(side.bench, outPs.position);
+  const incoming = pickInjuryReplacement(side.bench, outPs.deployedRole, (p) => eng.st.playerEnergy?.[p.id] ?? p.energy);
   if (!incoming) return;
   applyEngineSub(eng, side, outPs, incoming, minute);
 }
@@ -1639,20 +1768,19 @@ function aiCardOrInjuryRisk(eng: Engine, ps: LivePlayerState): number {
 
 /**
  * Bench candidate maximizing the §40 replacement value against the outgoing
- * player's tactical slot:
- *   effectiveSkill·w + energy·w + positionFit·w
+ * player's deployed role:
+ *   effectiveSkill·w + energy·w (adjusted role rating, no separate fit term)
  * Goalkeepers are never eligible: tactical subs always replace an outfielder
  * (the need scan skips GKs), mirroring pickInjuryReplacement's GK invariant.
  * Deterministic (value desc, then lower id): no RNG draw, so instant and
  * streamed runs — and restarts — always agree. Exported for tests.
  */
-export function pickAiReplacement(bench: Player[], outTacPos: number, energyOf: (id: number) => number): Player | null {
-  const weights = MS.substitutionAi.replacementWeights;
-  const eligible = bench.filter((p) => p.position !== 0 && p.injuryDays === 0 && p.suspendedGames === 0);
+export function pickAiReplacement(bench: Player[], outRole: DeployedRole, energyOf: (id: number) => number): Player | null {
+  const weights = MS.substitutionAi.replacementWeights as { effectiveSkill: number; energy: number };
+  const eligible = bench.filter((p) => (p.position as string) !== "GK" && p.injuryDays === 0 && p.suspendedGames === 0);
   const value = (p: Player): number =>
-    weights.effectiveSkill * (tacticalSkillRating(p.skills, outTacPos) / 100) +
-    weights.energy * (clamp(energyOf(p.id), 0, 100) / 100) +
-    weights.fit * positionFit(p.position, outTacPos);
+    weights.effectiveSkill * (tacticalSkillRating(adjustedSkillsForRole(p, outRole), outRole) / 100) +
+    weights.energy * (clamp(energyOf(p.id), 0, 100) / 100);
   let best: Player | null = null;
   let bestValue = -Infinity;
   for (const p of eligible) {
@@ -1688,7 +1816,7 @@ function tryAiSubstitution(eng: Engine, side: Side, minute: number): boolean {
   let bestNeed = -Infinity;
   for (const ps of side.on) {
     // Goalkeepers are never removed tactically; fresh subs need pitch time.
-    if (ps.position === 0) continue;
+    if (ps.deployedRole === "GK") continue;
     if ((eng.playerMinutes[ps.id] ?? 0) < cfg.minOnPitchMinutes) continue;
     const need = aiSubNeed(eng, side, ps);
     if (need > bestNeed || (need === bestNeed && bestPs !== null && ps.id < bestPs.id)) {
@@ -1698,7 +1826,7 @@ function tryAiSubstitution(eng: Engine, side: Side, minute: number): boolean {
   }
   if (!bestPs || bestNeed < cfg.minNeedToSub) return false;
   const energyOf = (id: number): number => eng.st.playerEnergy[id] ?? side.bench.find((p) => p.id === id)?.energy ?? 0;
-  const incoming = pickAiReplacement(side.bench, bestPs.tacPos, energyOf);
+  const incoming = pickAiReplacement(side.bench, bestPs.deployedRole, energyOf);
   if (!incoming) return false;
   applyEngineSub(eng, side, bestPs, incoming, minute);
   return true;
@@ -1780,10 +1908,10 @@ function fatigueEnergyLoss(eng: Engine, side: Side, dtSeconds: number): void {
   const minutes = dtSeconds / 60;
   const workloadMultiplier = remainingPlayerWorkloadMultiplier(side.on.length);
   for (const ps of side.on) {
-    const involvementWeight = involvement(tacPosRole(ps.tacPos), eng.zone);
+    const involvementWeight = involvement(ps.deployedRole, eng.zone);
     const press = side.tactics.pressing * 100;
-    ps.energy = Math.max(0, ps.energy - workloadMultiplier * energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: physicalSkill({ skills: ps.skills }), position: ps.position, pressing: press, involvement: involvementWeight, minutes }));
-    eng.playerMatchLoad[ps.id] = (eng.playerMatchLoad[ps.id] ?? 0) + workloadMultiplier * loadIncrement({ position: ps.position, pressing: press, involvement: involvementWeight, minutes });
+    ps.energy = Math.max(0, ps.energy - workloadMultiplier * energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: physicalSkill({ skills: ps.skills }), position: ps.deployedRole, pressing: press, involvement: involvementWeight, minutes }));
+    eng.playerMatchLoad[ps.id] = (eng.playerMatchLoad[ps.id] ?? 0) + workloadMultiplier * loadIncrement({ position: ps.deployedRole, pressing: press, involvement: involvementWeight, minutes });
     refreshReadiness(ps, eng.centers);
   }
   // Formation support/coverage feeds tactical and organisation signals, so it
@@ -1808,7 +1936,7 @@ function baselineOrganisation(side: Side): number {
 }
 
 function committedForward(side: Side): number {
-  return side.on.filter((ps) => ps.tacPos >= 18).length;
+  return side.on.filter((ps) => ["ST", "LW", "RW", "AM"].includes(ps.deployedRole)).length;
 }
 
 function disruptionAfterTurnover(eng: Engine, def: Side): { disruption: number; recoveryTime: number } {
@@ -2106,7 +2234,7 @@ function stepPossession(eng: Engine): void {
     resolveInjuryHazard(eng, "SHOT", displayMinute, displayAddedTime);
     const def = opp(eng, attSide);
     const result = resolveShot(eng, sideOf(eng, attSide), def);
-    const shotGk = def.on.find((ps) => ps.tacPos === 1) ?? null;
+    const shotGk = def.on.find((ps) => ps.deployedRole === "GK") ?? null;
     ballAction.fromPlayerId = result.shooter?.id ?? ballAction.fromPlayerId;
     ballAction.targetPlayerId = result.saved ? shotGk?.id ?? null : null;
     stats.shots++;
@@ -2344,7 +2472,9 @@ function stepPossession(eng: Engine): void {
     const zone = eng.zone;
     const restartRow = MS.probabilityModel.restartTypeByZone[zone];
     const labels = Object.keys(restartRow);
-    const weights = labels.map((l) => restartRow[l]);
+    const weights = labels.map((l) => l === "CORNER"
+      ? restartRow[l] * MS.probabilityModel.cornerRateCalibrationMultiplier
+      : restartRow[l]);
     const restart = weightedPick(eng.rng, labels, weights) as RestartType;
     let restartCarrierId: number | null = null;
     if (restart === "CORNER") {
@@ -2442,15 +2572,14 @@ function pushFullTimeWhistle(eng: Engine): void {
  * repeated corners rotate plausible takers within a match.
  */
 function cornerTakerId(eng: Engine, attSide: 0 | 1, cornerOrdinal: number): number | null {
-  const outfield = sideOf(eng, attSide).on.filter((ps) => ps.tacPos !== 1);
+  const outfield = sideOf(eng, attSide).on.filter((ps) => ps.deployedRole !== "GK");
   if (outfield.length === 0) return null;
-  const preferred = outfield.filter((ps) => ["LW", "RW", "LM", "RM", "ST"].includes(tacPosRole(ps.tacPos)));
+  const preferred = outfield.filter((ps) => ["LW", "RW", "LM", "RM", "ST"].includes(ps.deployedRole));
   const pool = preferred.length > 0 ? preferred : outfield;
   return pool[(cornerOrdinal - 1) % pool.length].id;
 }
 
 function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalftime?: boolean }): void {
-  // console.log(`[runMatch start] clock ${eng.clockSeconds} target ${targetClockSeconds} firstAdded ${eng.st.firstHalfAddedMinutes} secondAdded ${eng.st.secondHalfAddedMinutes} period ${eng.period} pause ${opts?.pauseAtHalftime}`);
   let guard = 0;
   while (!eng.ended && guard++ < 500000) {
     // Freeze stoppage as soon as we reach the raw boundary so the added window is known before stepping into it.
@@ -2460,8 +2589,6 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
       if (eng.period === 1) {
         pushHalfTimeWhistle(eng);
         if (opts?.pauseAtHalftime) {
-          // Pause at halftime (first half + its added time) — do not flip period yet.
-          // console.log(`[runMatch pause] clock ${eng.clockSeconds} boundary ${boundary}`);
           break;
         }
         // Switch possession to the coin-toss loser for the second half kickoff (winner chose first half).
@@ -2487,9 +2614,6 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
     // their next loop; checking the target first would defer a half/full-time
     // transition and consume a different subsequent RNG path.
     if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
-    // If we have an explicit target and the next step would overshoot it, let stepPossession
-    // handle the clock increment and then the next loop will break on the target check above.
-    if (targetClockSeconds !== undefined && eng.clockSeconds >= targetClockSeconds) break;
     evaluateAiSubstitutions(eng);
     stepPossession(eng);
   }
@@ -2506,7 +2630,7 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
 }
 
 function doShootout(eng: Engine): void {
-  const takers: LivePlayerState[][] = [eng.home.on.filter((ps) => ps.tacPos !== 1), eng.away.on.filter((ps) => ps.tacPos !== 1)];
+  const takers: LivePlayerState[][] = [eng.home.on.filter((ps) => ps.deployedRole !== "GK"), eng.away.on.filter((ps) => ps.deployedRole !== "GK")];
   const scores = [0, 0];
   const doKick = (side: 0 | 1, kick: number) => {
     const list = takers[side];
@@ -2558,10 +2682,22 @@ function buildEngine(
   const awayXI = resolve(st.awayOn);
   const quality = qualityCompensation(players, new Set([home.id, away.id]), [...st.homeXI, ...st.awayXI]);
 
+  // §9.1: resolve each on-pitch player's deployed role from the side's current
+  // formation plus his live slot map entry; never inspect natural position for
+  // zone support.
+  const homeSideState = (p: Player) => {
+    const { role, slotIndex } = deployedRoleForSlot(st.homeSlotByPlayerId, st.homeTactics.formation, p.id);
+    return buildPlayerState(p, centers, role, slotIndex, st.playerEnergy[p.id] ?? p.energy);
+  };
+  const awaySideState = (p: Player) => {
+    const { role, slotIndex } = deployedRoleForSlot(st.awaySlotByPlayerId, st.awayTactics.formation, p.id);
+    return buildPlayerState(p, centers, role, slotIndex, st.playerEnergy[p.id] ?? p.energy);
+  };
+
   const homeSide: Side = {
     idx: 0,
     club: home,
-    on: homeXI.map((p) => buildPlayerState(p, centers, st.playerEnergy[p.id] ?? p.energy)),
+    on: homeXI.map(homeSideState),
     bench: resolve(st.homeSubs),
     tactics: st.homeTactics,
     support: { DEF_WIDE: 0, DEF_CENTRAL: 0, MID_WIDE: 0, MID_CENTRAL: 0, ATT_WIDE: 0, ATT_CENTRAL: 0, BOX: 0 },
@@ -2579,7 +2715,7 @@ function buildEngine(
   const awaySide: Side = {
     idx: 1,
     club: away,
-    on: awayXI.map((p) => buildPlayerState(p, centers, st.playerEnergy[p.id] ?? p.energy)),
+    on: awayXI.map(awaySideState),
     bench: resolve(st.awaySubs),
     tactics: st.awayTactics,
     support: { DEF_WIDE: 0, DEF_CENTRAL: 0, MID_WIDE: 0, MID_CENTRAL: 0, ATT_WIDE: 0, ATT_CENTRAL: 0, BOX: 0 },
@@ -2740,6 +2876,17 @@ export function simulatePossessionMatch(
   ratingObserver?: RatingObserver
 ): void {
   const eng = buildEngine(rng, home, away, players, st, centers, ratingObserver);
+  // Instant/streamed equivalence (§22.2): an unchunked run must flip the period
+  // at the SAME clock the streamed path does. A single runMatch call with no
+  // target keeps processing first-half actions past the boundary before the
+  // loop-top check flips the period, which the chunked path never does.
+  // Chunk the instant run at the first-half boundary so both paths agree.
+  const firstBoundary = MS.timing.firstHalfEndSeconds + (st.firstHalfAddedMinutes ?? 0) * 60;
+  const chunkAtFirstHalf = targetSeconds === undefined && !eng.ended && eng.period === 1 && eng.clockSeconds < firstBoundary;
+  if (chunkAtFirstHalf) {
+    runMatch(eng, firstBoundary);
+    // If the boundary was reached, the next call continues in period 2.
+  }
   runMatch(eng, targetSeconds);
   writeBack(eng, st, diagnosticsOut);
 }

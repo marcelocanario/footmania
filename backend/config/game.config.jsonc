@@ -306,7 +306,53 @@
     // decay curve; production player values still use calculatePlayerValue.
     // The $40M anchor is calibrated to the natural center of the constrained
     // cohort while leaving the global player-pricing model unchanged.
-    "initialClubPlayerValueTargetTopDivision": 40000000
+    "initialClubPlayerValueTargetTopDivision": 40000000,
+    // Broad and natural position mix. Used hierarchically: broad groups via
+    // deterministic largest-remainder (initial senior/filler/academy) or seeded
+    // systematic rounding (seasonal academy); child roles always via seeded
+    // systematic rounding. No position-mix literal may remain in game modules.
+    "positionMix": {
+      "seniorGroups": { "GK": 0.10, "FB": 0.14, "CB": 0.18, "MF": 0.32, "FW": 0.26 },
+      "academyGroups": { "GK": 0.10, "FB": 0.28, "CB": 0.26, "MF": 0.22, "FW": 0.14 },
+      "withinGroup": {
+        "GK": { "GK": 1.0 },
+        "FB": { "LB": 0.5, "RB": 0.5 },
+        "CB": { "CB": 1.0 },
+        "MF": { "DM": 0.5, "AM": 0.5 },
+        "FW": { "LW": 0.2857142857142857, "RW": 0.2857142857142857, "ST": 0.4285714285714286 }
+      }
+    }
+  },
+
+  // --- Derived OVR and tactical rating ---
+  // Broad-group OVR scales/weights (section 6.1) and deployed-role tactical
+  // weights (section 6.2). OVR remains broad-group based; tactical rating is
+  // deployed-role based. Training focus bonus is the single tunable for
+  // primary/secondary/assistant.
+  "playerPositions": {
+    "overallByGroup": {
+      "GK": { "scale": 1.15, "weights": { "gol": 0.80, "pace": 0.08, "tec": 0.06, "pas": 0.04, "des": 0.01, "playmaking": 0.01 } },
+      "FB": { "scale": 1.25, "weights": { "des": 0.45, "pace": 0.16, "pas": 0.16, "tec": 0.12, "playmaking": 0.07, "fin": 0.03, "gol": 0.01 } },
+      "CB": { "scale": 1.17, "weights": { "des": 0.56, "playmaking": 0.12, "pas": 0.12, "pace": 0.08, "tec": 0.07, "fin": 0.04, "gol": 0.01 } },
+      "MF": { "scale": 1.30, "weights": { "pas": 0.25, "playmaking": 0.25, "tec": 0.20, "pace": 0.12, "des": 0.10, "fin": 0.07, "gol": 0.01 } },
+      "FW": { "scale": 1.20, "weights": { "fin": 0.46, "pace": 0.20, "tec": 0.15, "playmaking": 0.08, "pas": 0.07, "des": 0.03, "gol": 0.01 } }
+    },
+    "tacticalRatingByRole": {
+      "GK": { "gol": 0.60, "tec": 0.15, "pace": 0.15, "pas": 0.10 },
+      "LB": { "des": 0.40, "pas": 0.30, "pace": 0.10, "tec": 0.10, "playmaking": 0.05, "fin": 0.05 },
+      "RB": { "des": 0.40, "pas": 0.30, "pace": 0.10, "tec": 0.10, "playmaking": 0.05, "fin": 0.05 },
+      "CB": { "des": 0.50, "pace": 0.25, "tec": 0.10, "pas": 0.10, "playmaking": 0.05 },
+      "SW": { "des": 0.45, "pas": 0.20, "pace": 0.15, "tec": 0.10, "playmaking": 0.10 },
+      "DM": { "des": 0.40, "pas": 0.20, "pace": 0.15, "tec": 0.10, "playmaking": 0.10, "fin": 0.05 },
+      "AM": { "playmaking": 0.40, "pas": 0.25, "tec": 0.10, "pace": 0.10, "fin": 0.10, "des": 0.05 },
+      "LM": { "pace": 0.25, "pas": 0.25, "playmaking": 0.20, "tec": 0.15, "fin": 0.10, "des": 0.05 },
+      "RM": { "pace": 0.25, "pas": 0.25, "playmaking": 0.20, "tec": 0.15, "fin": 0.10, "des": 0.05 },
+      "LW": { "fin": 0.40, "pace": 0.25, "tec": 0.25, "pas": 0.05, "playmaking": 0.05 },
+      "RW": { "fin": 0.40, "pace": 0.25, "tec": 0.25, "pas": 0.05, "playmaking": 0.05 },
+      "ST": { "fin": 0.40, "pace": 0.25, "tec": 0.15, "pas": 0.15, "playmaking": 0.05 }
+    },
+    "athleticismWeights": { "pace": 0.50, "des": 0.50 },
+    "trainingFocusBonus": 0.20
   },
 
   // --- Career growth and decline ---
@@ -430,7 +476,9 @@
   },
 
   "injuries": {
-    "matchTargetPerMatch": 0.9,
+    // Lower calibrated action volume reduces the realized injury hazard; this
+    // target keeps the production match rate inside the 0.5–0.8 band.
+    "matchTargetPerMatch": 1.1,
     "trainingTargetPerClubSeason": 1.5,
     "severityScale": 1.0,
     // Auto-replace a player removed by a match injury with the best

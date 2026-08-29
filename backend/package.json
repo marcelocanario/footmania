@@ -15,7 +15,7 @@
     "calibrate:match": "tsx scripts/match-calibration-next.ts",
     "regenerate:match-golden": "tsx scripts/regenerate-match-golden.mts",
     "db:generate": "prisma generate",
-    "db:upgrade": "prisma migrate deploy && tsx scripts/migrate-contract-market.ts",
+    "db:upgrade": "prisma migrate deploy && tsx scripts/migrate-natural-positions.ts && tsx scripts/migrate-contract-market.ts",
     "db:push": "prisma db push",
     "db:migrate-contract-market": "tsx scripts/migrate-contract-market.ts",
     "db:reset": "prisma migrate reset",

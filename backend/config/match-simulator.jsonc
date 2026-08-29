@@ -3073,7 +3073,10 @@
             "probability": 0.09721512028602669
           }
         ],
-        "foulProbabilityCalibrationMultiplier": 1.1
+        "foulProbabilityCalibrationMultiplier": 2,
+        // Keep the empirical restart table fixed; this coefficient calibrates
+        // the aggregate corner rate after the natural-position transition.
+        "cornerRateCalibrationMultiplier": 1.4
       },
       "phaseWindows": {
         "setPieceMaxAgeSeconds": 8,
@@ -3081,7 +3084,7 @@
         "shotSetPieceMaxAgeSeconds": 15
       },
       "timing": {
-        "tempoScale": 0.84,
+        "tempoScale": 0.62,
         "regulationSeconds": 5400,
         "firstHalfEndSeconds": 2700,
         "deadBallSecondsPerRestart": 25.84916263374729,
@@ -4036,21 +4039,26 @@
             "GLOBAL": 0.10846041897932704
           }
         },
-        "finisherVsGoalkeeperLogitCoefficient": 0.35,
-        // Calibrated with the pass-specific density effect so a one-player
-        // loss shifts xG without double-counting the same formation deficit.
-        "localDensityCoefficient": 14,
+        "finisherVsGoalkeeperLogitCoefficient": 0.65,
+        // Natural-position loss calibration for shot/transition execution;
+        // pass execution uses its separate action-quality coefficient.
+        "localDensityCoefficient": 4,
+        // Relative likelihood of each DEPLOYED role taking the shot (§8). Keys
+        // must be exactly the twelve deployed roles — validation rejects a
+        // missing role, so an unlisted AM can no longer fall through to a
+        // hard-coded default at the call site.
         "shooterRoleWeights": {
-          "ST": 1,
-          "LW": 0.8,
-          "RW": 0.8,
+          "ST": 1.00,
+          "LW": 0.80,
+          "RW": 0.80,
+          "AM": 0.70,
           "LM": 0.55,
           "RM": 0.55,
-          "CM": 0.55,
-          "LB": 0.2,
-          "RB": 0.2,
-          "CB": 0.2,
-          "SW": 0.2,
+          "DM": 0.25,
+          "LB": 0.20,
+          "RB": 0.20,
+          "CB": 0.20,
+          "SW": 0.15,
           "GK": 0.01
         },
         "shotsOnTarget": {
@@ -4153,69 +4161,73 @@
         "qualityCompensation": {
           "referenceOverall": 71,
           "highOverall": 80,
-          "highQualityPassIntentScale": 0.85,
-          "highQualityTempoScale": 0.78
+          "highQualityPassIntentScale": 1.30,
+          "highQualityTempoScale": 0.52
         }
       },
       "actionQuality": {
         "localDensityCoefficient": 0.6,
-        // Passing is more sensitive to a missing support player than the
-        // general action outcome; keep this separate from shot quality.
-        "passLocalDensityCoefficient": 5.5,
+        // Natural-position loss calibration separates pass execution from
+        // shot/transition execution; both effects remain zone-local.
+        "passLocalDensityCoefficient": 1.5,
+        // Playmaking is a forward-destination signal only. Keep its strength
+        // explicit so calibration can tune the new position pathway without
+        // changing the empirical action or shot tables.
+        "playmakingProgressionCoefficient": 1,
         "attributeWeights": {
           "PASS": {
-            "technical": 1
+            "passing": 0.70,
+            "technique": 0.30
           },
           "CROSS": {
-            "technical": 0.7,
-            "pace": 0.3
+            "passing": 0.55,
+            "technique": 0.25,
+            "pace": 0.20
           },
           "CARRY": {
-            "technical": 0.65,
-            "pace": 0.35
+            "technique": 0.60,
+            "pace": 0.40
           },
           "DRIBBLE": {
-            "technical": 0.5,
-            "pace": 0.3,
-            "physical": 0.2
+            "technique": 0.50,
+            "pace": 0.40,
+            "defending": 0.10
           },
           "CLEARANCE": {
-            "technical": 0.4,
-            "physical": 0.6
+            "defending": 0.65,
+            "passing": 0.25,
+            "pace": 0.10
           },
           "SHOT": {
-            "technical": 0.25,
-            "finishing": 0.75
+            "finishing": 0.75,
+            "technique": 0.25
           }
         },
         "defensiveResistanceWeights": {
           "PASS": {
-            "technical": 0.55,
-            "pace": 0.25,
-            "physical": 0.2
+            "defending": 0.675,
+            "pace": 0.325
           },
           "CROSS": {
-            "technical": 0.4,
-            "pace": 0.35,
-            "physical": 0.25
+            "defending": 0.675,
+            "pace": 0.325
           },
           "CARRY": {
-            "technical": 0.4,
-            "pace": 0.35,
-            "physical": 0.25
+            "defending": 0.60,
+            "pace": 0.40
           },
           "DRIBBLE": {
-            "technical": 0.35,
-            "pace": 0.3,
-            "physical": 0.35
+            "defending": 0.60,
+            "pace": 0.40
           },
           "CLEARANCE": {
-            "physical": 0.65,
-            "pace": 0.35
+            "technique": 0.30,
+            "pace": 0.525,
+            "defending": 0.175
           },
           "SHOT": {
-            "technical": 0.4,
-            "physical": 0.6
+            "defending": 0.80,
+            "pace": 0.20
           }
         }
       },
@@ -4225,27 +4237,40 @@
         // work performed by each remaining player when a side is short-handed.
         "referencePlayers": 11,
         "remainingPlayerWorkloadExponent": 0.5,
-        "maxRemainingPlayerWorkloadMultiplier": 1.2
+        "maxRemainingPlayerWorkloadMultiplier": 1.2,
+        // Calibrated structural-loss attenuation. Readiness/workload still
+        // models the full remaining-player burden; this only avoids treating
+        // every missing support point as an immediate tactical collapse.
+        "formationLossEffectScale": 1
       },
       "formationSupport": {
         "GK": {
-          "DEF_CENTRAL": 1
+          "DEF_CENTRAL": 1.00
         },
         "LB": {
-          "DEF_WIDE": 0.8,
-          "MID_WIDE": 0.2
+          "DEF_WIDE": 0.80,
+          "MID_WIDE": 0.20
         },
         "RB": {
-          "DEF_WIDE": 0.8,
-          "MID_WIDE": 0.2
+          "DEF_WIDE": 0.80,
+          "MID_WIDE": 0.20
         },
         "CB": {
           "DEF_CENTRAL": 0.85,
           "MID_CENTRAL": 0.15
         },
         "SW": {
-          "DEF_CENTRAL": 0.85,
-          "MID_CENTRAL": 0.15
+          "DEF_CENTRAL": 0.90,
+          "MID_CENTRAL": 0.10
+        },
+        "DM": {
+          "DEF_CENTRAL": 0.30,
+          "MID_CENTRAL": 0.70
+        },
+        "AM": {
+          "MID_CENTRAL": 0.35,
+          "ATT_CENTRAL": 0.50,
+          "BOX": 0.15
         },
         "LM": {
           "MID_WIDE": 0.75,
@@ -4255,22 +4280,17 @@
           "MID_WIDE": 0.75,
           "ATT_WIDE": 0.25
         },
-        "CM": {
-          "MID_CENTRAL": 0.8,
-          "DEF_CENTRAL": 0.1,
-          "ATT_CENTRAL": 0.1
-        },
         "LW": {
-          "ATT_WIDE": 0.75,
-          "MID_WIDE": 0.25
+          "MID_WIDE": 0.25,
+          "ATT_WIDE": 0.75
         },
         "RW": {
-          "ATT_WIDE": 0.75,
-          "MID_WIDE": 0.25
+          "MID_WIDE": 0.25,
+          "ATT_WIDE": 0.75
         },
         "ST": {
-          "ATT_CENTRAL": 0.7,
-          "BOX": 0.3
+          "ATT_CENTRAL": 0.70,
+          "BOX": 0.30
         }
       },
       "tacticalFamiliarity": {
@@ -4306,9 +4326,9 @@
         }
       },
       "tacticalActionMix": {
-        // Baseline neutral pass intent. Quality compensation applies the
-        // generated-population correction without changing the legacy fixture.
-        "passIntentScale": 1,
+        // Calibrated neutral pass intent. Quality compensation interpolates
+        // generated populations toward their high-quality reference setting.
+        "passIntentScale": 3,
         "nonNeutralCorrectionScale": 0.75,
         "asymmetricActionUtility": {
           "PASS": -0.35,
@@ -4367,9 +4387,8 @@
           "cardOrInjuryRisk": 0.15
         },
         "replacementWeights": {
-          "effectiveSkill": 0.65,
-          "energy": 0.25,
-          "fit": 0.1
+          "effectiveSkill": 0.72,
+          "energy": 0.28
         },
         "earliestMatchMinute": 50,
         "latestMatchMinute": 88,
@@ -4392,14 +4411,40 @@
         "profileSize": 16,
         "controlTechnicalWeight": 0.5,
         "controlPassingWeight": 0.5,
+        "controlPlaymakingShare": 0.50,
         "pressDefendingWeight": 0.5,
-        "pressPhysicalWeight": 0.5,
+        "pressAthleticismWeight": 0.5,
         "counterPaceWeight": 0.6,
         "counterFinishingWeight": 0.4,
-        "pressingVeryHeavyPhysicalMin": 64,
-        "pressingHeavyPhysicalMin": 56,
+        "pressingVeryHeavyAthleticismMin": 64,
+        "pressingHeavyAthleticismMin": 56,
         "pressingEnergyReserveMin": 78,
-        "wideDirectionAdvantageMin": 4
+        "wideDirectionAdvantageMin": 4,
+        "futureCostWeight": 0.45
+      },
+      "defendingControl": {
+        "riskMidpoint": 0.5,
+        "zRiskScale": 0.08
+      },
+      "outOfPosition": {
+        "skillPenaltyByNaturalAndRole": {
+          "GK": { "GK": 0, "LB": null, "RB": null, "CB": null, "SW": null, "DM": null, "AM": null, "LM": null, "RM": null, "LW": null, "RW": null, "ST": null },
+          "LB": { "GK": null, "LB": 0, "RB": 4, "CB": 6, "SW": 8, "DM": 6, "AM": 14, "LM": 4, "RM": 10, "LW": 8, "RW": 12, "ST": 18 },
+          "RB": { "GK": null, "LB": 4, "RB": 0, "CB": 6, "SW": 8, "DM": 6, "AM": 14, "LM": 10, "RM": 4, "LW": 12, "RW": 8, "ST": 18 },
+          "CB": { "GK": null, "LB": 6, "RB": 6, "CB": 0, "SW": 2, "DM": 4, "AM": 10, "LM": 10, "RM": 10, "LW": 14, "RW": 14, "ST": 12 },
+          "DM": { "GK": null, "LB": 8, "RB": 8, "CB": 4, "SW": 6, "DM": 0, "AM": 6, "LM": 6, "RM": 6, "LW": 10, "RW": 10, "ST": 10 },
+          "AM": { "GK": null, "LB": 14, "RB": 14, "CB": 12, "SW": 14, "DM": 6, "AM": 0, "LM": 4, "RM": 4, "LW": 3, "RW": 3, "ST": 4 },
+          "LW": { "GK": null, "LB": 10, "RB": 16, "CB": 16, "SW": 18, "DM": 12, "AM": 4, "LM": 2, "RM": 10, "LW": 0, "RW": 6, "ST": 5 },
+          "RW": { "GK": null, "LB": 16, "RB": 10, "CB": 16, "SW": 18, "DM": 12, "AM": 4, "LM": 10, "RM": 2, "LW": 6, "RW": 0, "ST": 5 },
+          "ST": { "GK": null, "LB": 18, "RB": 18, "CB": 14, "SW": 16, "DM": 12, "AM": 5, "LM": 10, "RM": 10, "LW": 5, "RW": 5, "ST": 0 }
+        },
+        "suitabilityBands": [
+          { "maxPenalty": 0, "label": "Natural" },
+          { "maxPenalty": 4, "label": "Comfortable" },
+          { "maxPenalty": 8, "label": "Makeshift" },
+          { "maxPenalty": 12, "label": "Poor" },
+          { "maxPenalty": 18, "label": "Emergency" }
+        ]
       },
       "epv": {
         "convergenceTolerance": 1e-8,

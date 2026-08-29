@@ -1,21 +1,26 @@
-import type { Club, Player, Position, World } from "./types";
+import type { Club, Player, World } from "./types";
 import { shuffle } from "./rng";
 import {
-  ACADEMY_POSITION_WEIGHTS,
+  academyPositionWeights,
+  allocateBroadGroupCounts,
+  allocateSeededCounts,
   generateInitialAcademyPlayers,
   generateInitialSeniorPlayers,
   generateYouthPlayer,
-  seniorRosterTemplate,
   playerRng,
   type GeneratePlayerContext,
   type GenerationType,
 } from "./playerGeneration";
 import { gameConfig } from "../config";
+import { adjustedTacticalRating } from "./outOfPosition";
+import type { DeployedRole } from "./positions";
 import { SENIOR_SQUAD_LIMIT } from "./constants";
 import { assignInitialSquadNumbers } from "./squadNumbers";
 import { bumpSkillsVersion } from "./skillsVersion";
+import type { NaturalPosition, PositionGroup } from "./positions";
+import { positionGroup } from "./positions";
 
-export { ACADEMY_POSITION_WEIGHTS };
+export { academyPositionWeights };
 
 /**
  * Squad-level generation orchestration (plans/4. player-generation.md §70-§73).
@@ -61,49 +66,88 @@ function nextId(world: World): number {
 }
 
 /**
- * Deterministic youth academy position allocator (spec §71 step 15). Broad
- * position weights for academy squads keep every academy able to field a
- * balanced youth pool while preserving the subposition logic inside each group.
+ * Hierarchical position template (§11.3). Broad groups via
+ * `allocateBroadGroupCounts` (initial/filler) or `allocateSeededCounts`
+ * (seasonal academy); natural roles always via `allocateSeededCounts` with the
+ * exact split seed key. Concatenates in canonical natural-position display
+ * order. Initial senior/filler templates are not newly shuffled; academy
+ * templates use their one existing deterministic shuffle.
  */
-const ACADEMY_POSITION_GROUPS: Position[] = [0, 1, 2, 3, 4];
-
-function largestRemainder(weights: readonly number[], total: number): number[] {
-  const weightSum = weights.reduce((a, b) => a + b, 0);
-  const exact = weights.map((w) => (w / weightSum) * total);
-  const allocated = exact.map((x) => Math.floor(x));
-  let remaining = total - allocated.reduce((a, b) => a + b, 0);
-  const fractions = exact.map((x, i) => x - allocated[i]);
-  const order = fractions.map((f, i) => i).sort((a, b) => fractions[b] - fractions[a]);
-  for (let i = 0; i < remaining; i++) {
-    allocated[order[i % order.length]] += 1;
+function positionTemplate(
+  world: World,
+  clubId: number,
+  generationType: string,
+  total: number,
+  seasonId: number | null,
+  groups: Record<PositionGroup, number>,
+  withinGroup: Record<PositionGroup, Record<NaturalPosition, number>>,
+  useSeededBroad: boolean,
+): NaturalPosition[] {
+  const groupOrder: PositionGroup[] = ["GK", "FB", "CB", "MF", "FW"];
+  const displayOrder: NaturalPosition[] = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"];
+  const broad = useSeededBroad
+    ? allocateSeededCounts(total, groups as Record<string, number>, `${world.seed}|${clubId}|${generationType}|${seasonId ?? "none"}|broad`)
+    : allocateBroadGroupCounts(total, groups as Record<string, number>);
+  const template: NaturalPosition[] = [];
+  for (const group of groupOrder) {
+    const count = broad[group];
+    const split = allocateSeededCounts(count, withinGroup[group] as Record<string, number>, `${world.seed}|${clubId}|${generationType}|${seasonId ?? "none"}|split|${group}`);
+    for (const role of displayOrder) {
+      for (let i = 0; i < (split[role] ?? 0); i++) template.push(role);
+    }
   }
-  return allocated;
+  if (!useSeededBroad) {
+    // Initial senior/filler templates are not newly shuffled; initial academy
+    // keeps its one existing deterministic academy-template shuffle.
+    if (generationType === "initial-academy") {
+      const rng = playerRng(world.seed, clubId, generationType, 999_001, seasonId);
+      return shuffle(rng, template);
+    }
+  }
+  return template;
+}
+
+function positionMix(): {
+  seniorGroups: Record<PositionGroup, number>;
+  academyGroups: Record<PositionGroup, number>;
+  withinGroup: Record<PositionGroup, Record<NaturalPosition, number>>;
+} {
+  const mix = (gameConfig as unknown as { playerGeneration?: { positionMix?: { seniorGroups?: Record<string, number>; academyGroups?: Record<string, number>; withinGroup?: Record<string, Record<string, number>> } } })?.playerGeneration?.positionMix;
+  return {
+    seniorGroups: (mix?.seniorGroups as Record<PositionGroup, number>) ?? { GK: 0.1, FB: 0.14, CB: 0.18, MF: 0.32, FW: 0.26 },
+    academyGroups: (mix?.academyGroups as Record<PositionGroup, number>) ?? { GK: 0.1, FB: 0.28, CB: 0.26, MF: 0.22, FW: 0.14 },
+    withinGroup: (mix?.withinGroup as Record<PositionGroup, Record<NaturalPosition, number>>) ?? {
+      GK: { GK: 1 },
+      FB: { LB: 0.5, RB: 0.5 },
+      CB: { CB: 1 },
+      MF: { DM: 0.5, AM: 0.5 },
+      FW: { LW: 1 / 3, RW: 1 / 3, ST: 1 / 3 },
+    },
+  };
 }
 
 /**
  * Build a deterministic position template for an academy cohort of `total`
- * youth. The template is stable for a given (clubId, generationType, count) so
- * a retry reproduces the same positions.
+ * youth (§11.1/§11.3). The template is stable for a given
+ * (clubId, generationType, count, seasonId) so a retry reproduces the same
+ * positions.
  */
-export function academyPositionTemplate(world: World, clubId: number, generationType: string, total: number, seasonId: number | null = null): Position[] {
-  const counts = largestRemainder(ACADEMY_POSITION_WEIGHTS, total);
-  const template: Position[] = [];
-  for (let i = 0; i < counts.length; i++) {
-    for (let j = 0; j < counts[i]; j++) template.push(ACADEMY_POSITION_GROUPS[i]);
-  }
-  const rng = playerRng(world.seed, clubId, generationType, 999_001, seasonId);
-  return shuffle(rng, template);
+export function academyPositionTemplate(world: World, clubId: number, generationType: string, total: number, seasonId: number | null = null): NaturalPosition[] {
+  const mix = positionMix();
+  const seeded = generationType === "seasonal-academy";
+  return positionTemplate(world, clubId, generationType, total, seasonId, mix.academyGroups, mix.withinGroup, seeded);
 }
 
 /**
  * Generate a senior squad (spec §70). Position slots follow the canonical
- * five-position 10/14/18/32/26 template; captain = best GK, penalty taker =
- * best FW. Human clubs use the configured initial size; filler AI passes the
- * senior limit.
+ * broad 10/14/18/32/26 template split into the nine natural positions (§11.3);
+ * captain = best GK, penalty taker = best ST (else best adjusted ST among
+ * outfielders, else GK).
  */
 export function generateInitialSeniorSquad(ctx: GenerationContext, size: number = gameConfig.playerGenerationRules.initialSeniorSquadSize): Player[] {
   const { world, club } = ctx;
-  const template = seniorRosterTemplate(size);
+  const mix = positionMix();
+  const template = positionTemplate(world, club.id, "initial-senior", size, ctx.seasonId, mix.seniorGroups, mix.withinGroup, false);
   // Allocate player IDs in template/slot order BEFORE generation so the batch
   // path keeps the same idempotent ID sequence as the per-player path.
   const ids = template.map(() => nextId(world));
@@ -126,17 +170,28 @@ export function generateInitialSeniorSquad(ctx: GenerationContext, size: number 
   const created = generateInitialSeniorPlayers(contexts);
   for (const player of created) world.players.push(player);
   bumpSkillsVersion();
-  const gks = created.filter((p) => p.position === 0).sort((a, b) => b.overall - a.overall);
+  const gks = created.filter((p) => p.position === "GK").sort((a, b) => b.overall - a.overall);
   if (gks.length > 0) club.captainId = gks[0].id;
-  club.penaltyTakerId = created.filter((p) => p.position === 4).sort((a, b) => b.overall - a.overall)[0]?.id ?? gks[0]?.id ?? null;
+  // §13.3: penalty taker = best adjusted ST rating among natural STs; if no ST,
+  // best adjusted ST rating among all outfielders; if no outfielder, GK.
+  const sts = created.filter((p) => p.position === "ST");
+  const stScore = (p: Player): number => tacticalRatingForRole(p, "ST");
+  const bestSt = sts.length > 0 ? sts.sort((a, b) => stScore(b) - stScore(a) || a.id - b.id)[0] : undefined;
+  const bestOutfield = created.filter((p) => p.position !== "GK").sort((a, b) => stScore(b) - stScore(a) || a.id - b.id)[0];
+  club.penaltyTakerId = bestSt?.id ?? bestOutfield?.id ?? gks[0]?.id ?? null;
   return created;
 }
 
+/** §7.1 adjusted role rating; ineligible pairings score below every legal one. */
+function tacticalRatingForRole(p: Player, role: DeployedRole): number {
+  return adjustedTacticalRating(p.skills, p.position, role) ?? -1;
+}
+
 /**
- * Generate the initial 8-youth academy cohort (spec §72). Ages are assigned as
- * evenly as possible across 16..19 (2 per age) and shuffled deterministically.
+ * Generate the initial academy cohort (spec §72). Ages are assigned as evenly
+ * as possible across academyMinAge..academyMaxAge and shuffled deterministically.
  * The batch conditions future personal peaks; current OVR still comes from each
- * prospect's age and full career path.
+ * prospect's age and full career path. Positions use the hierarchical template.
  */
 export function generateInitialAcademy(ctx: GenerationContext): Player[] {
   const { world, club } = ctx;
@@ -266,3 +321,4 @@ export function generateFillerRoster(ctx: GenerationContext): Player[] {
 }
 
 export type { GenerationType };
+export { positionGroup };

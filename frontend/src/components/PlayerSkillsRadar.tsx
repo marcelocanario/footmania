@@ -3,11 +3,11 @@ import type { SkillSet } from "../api/client";
 
 export const SKILL_LABELS: [keyof SkillSet, string][] = [
   ["gol", "Goalkeeping"],
-  ["vel", "Speed"],
+  ["pace", "Pace"],
   ["tec", "Technique"],
   ["pas", "Passing"],
   ["des", "Defending"],
-  ["arm", "Playmaking"],
+  ["playmaking", "Playmaking"],
   ["fin", "Finishing"],
 ];
 
@@ -26,7 +26,11 @@ function pointAt(index: number, radius: number): { x: number; y: number } {
 
 function pointsFor(skills: SkillSet, radius: number): string {
   return SKILL_LABELS.map(([key], index) => {
-    const point = pointAt(index, radius * Math.max(0, Math.min(100, skills[key])) / 100);
+    const raw = (skills as unknown as Record<string, number | undefined>)[key];
+    // Fallback for legacy saves that still have vel/arm
+    const fallbackKey = key === "pace" ? "vel" : key === "playmaking" ? "arm" : undefined;
+    const val = raw ?? (fallbackKey ? (skills as unknown as Record<string, number | undefined>)[fallbackKey] : undefined) ?? 0;
+    const point = pointAt(index, radius * Math.max(0, Math.min(100, val)) / 100);
     return `${point.x},${point.y}`;
   }).join(" ");
 }
@@ -54,7 +58,7 @@ export function PlayerSkillsRadar({ skills, compact = false }: { skills: SkillSe
         {RINGS.map((scale) => (
           <polygon
             key={scale}
-            points={pointsFor({ gol: 100, vel: 100, tec: 100, pas: 100, des: 100, arm: 100, fin: 100 }, RADIUS * scale)}
+            points={pointsFor({ gol: 100, pace: 100, tec: 100, pas: 100, des: 100, playmaking: 100, fin: 100 }, RADIUS * scale)}
             className={scale === 1 ? "skills-radar-ring outer" : "skills-radar-ring"}
           />
         ))}
@@ -79,12 +83,17 @@ export function PlayerSkillsRadar({ skills, compact = false }: { skills: SkillSe
       </svg>
 
       <div className="skills-radar-legend">
-        {SKILL_LABELS.map(([key, label]) => (
-          <div className="skills-radar-stat" key={key}>
-            <span>{label}</span>
-            <strong>{skills[key]}</strong>
-          </div>
-        ))}
+        {SKILL_LABELS.map(([key, label]) => {
+          const raw = (skills as unknown as Record<string, number | undefined>)[key];
+          const fallbackKey = key === "pace" ? "vel" : key === "playmaking" ? "arm" : undefined;
+          const val = raw ?? (fallbackKey ? (skills as unknown as Record<string, number | undefined>)[fallbackKey] : undefined) ?? 0;
+          return (
+            <div className="skills-radar-stat" key={key}>
+              <span>{label}</span>
+              <strong>{val}</strong>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

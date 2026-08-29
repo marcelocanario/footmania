@@ -674,7 +674,7 @@ export function settleTransferAuction(
   winner.ledger.expense.push({ code: 1, amount: finalPrice, day: world.dayIndex, label: `Transfer fee: ${player.name}` });
 
   player.clubId = winner.id;
-  player.tacPos = -1;
+  player.starter = false;
   player.starter = false;
   player.onSale = false;
   player.salary = contractSalary;
@@ -1023,7 +1023,7 @@ export function transferAuctionView(
     position: p?.position ?? 0,
     age: p?.age ?? 0,
     salary: p?.salary ?? 0,
-    skills: p?.skills ?? { gol: 0, vel: 0, tec: 0, pas: 0, des: 0, arm: 0, fin: 0 },
+    skills: p?.skills ?? { gol: 0, pace: 0, tec: 0, pas: 0, des: 0, playmaking: 0, fin: 0 },
     value: p?.value ?? 0,
     openingPrice: listing.openingPrice,
     currentPrice: listing.currentPrice,

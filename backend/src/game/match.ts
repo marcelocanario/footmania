@@ -1,7 +1,8 @@
-import type { Club, LiveMatchState, LiveTactics, Match, MatchEvent, MatchStats, Player, RngState, World } from "./types";
+import type { Club, LiveMatchState, LiveTactics, Match, MatchEvent, MatchSimulationDiagnostics, MatchStats, Player, RngState, World } from "./types";
 import { nextInt } from "./rng";
-import { chooseAiTactics, lineupForMatch } from "./club";
-import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, GOAL_SUBTYPES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
+import { assignOnPitchToSlots, chooseAiTactics, currentScore, lineupForMatch } from "./club";
+import { formationById } from "./formations";
+import { DEVELOPMENT, DIRECTION_NAMES, EVENT_CODES, GOAL_SUBTYPES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
 import { leagueTurnKey } from "./calendar";
 
 import {
@@ -27,7 +28,8 @@ import { currentSkillsVersion } from "./skillsVersion";
 import { NEWS_SUBJECTS, publishNews } from "./news";
 import { buildRoleBenchmarks, type RoleBenchmarks } from "./player-rating";
 import { createRatingObserver, type RatingObserver } from "./ratingObserver";
-import { tacPosRole } from "./matchSim";
+import { tryDeployedRoleForSlot } from "./matchSim";
+import { naturalDefaultRole } from "./positions";
 
 // ---------------------------------------------------------------------------
 // Public match-engine facade (plans/6. match-simulator-overhaul.md).
@@ -51,7 +53,6 @@ export interface MatchSetup {
   awayXI: Player[];
   homeSubs: Player[];
   awaySubs: Player[];
-  positions: number[];
 }
 
 export interface LiveTacticsUpdate {
@@ -146,7 +147,7 @@ export function applyLiveFormationChange(
 ): string | null {
   if (st.ended) return "Match already finished";
   if (!isPregame(st) && !isHalftime(st)) return "Formation can only be changed before kickoff or at half-time";
-  if (!Number.isInteger(formation) || formation < 0 || formation >= FORMATION_NAMES.length) return "Invalid formation";
+  if (!Number.isInteger(formation) || !formationById(formation)) return "Invalid formation";
   const tactics = side === 0 ? st.homeTactics : st.awayTactics;
   const previous = { ...tactics };
   const candidate = { ...previous, formation };
@@ -163,7 +164,7 @@ export function setupMatch(home: Club, away: Club, allPlayers: Player[], options
   const awayXI = al ? al.starters : empty.starters;
   const homeSubs = hl ? hl.subs : [];
   const awaySubs = al ? al.subs : [];
-  return { home, away, homeXI, awayXI, homeSubs, awaySubs, positions: (hl ?? al)?.positions ?? [] };
+  return { home, away, homeXI, awayXI, homeSubs, awaySubs };
 }
 
 function emptyTeamStats() {
@@ -228,6 +229,12 @@ export function createLiveMatchState(
   const setup = setupMatch(home, away, allPlayers, { homeFutureFixtures: opts.homeFutureFixtures, awayFutureFixtures: opts.awayFutureFixtures });
   const homeXI = setup.homeXI.length === 11 ? setup.homeXI : setup.homeSubs.slice(0, 11).concat(setup.homeXI).slice(0, 11);
   const awayXI = setup.awayXI.length === 11 ? setup.awayXI : setup.awaySubs.slice(0, 11).concat(setup.awayXI).slice(0, 11);
+  // §9.1: build the live slot maps from the lineup starter order (starter i
+  // maps to formation.slots[i]).
+  const homeSlotByPlayerId: Record<number, number> = {};
+  const awaySlotByPlayerId: Record<number, number> = {};
+  homeXI.forEach((p, i) => { homeSlotByPlayerId[p.id] = i; });
+  awayXI.forEach((p, i) => { awaySlotByPlayerId[p.id] = i; });
   const squad = [...homeXI, ...awayXI, ...setup.homeSubs, ...setup.awaySubs];
   const playerMinutes: Record<number, number> = {};
   const playerEnergy: Record<number, number> = {};
@@ -283,6 +290,8 @@ export function createLiveMatchState(
     awaySubs: setup.awaySubs.map((p) => p.id),
     homeOn: homeXI.map((p) => p.id),
     awayOn: awayXI.map((p) => p.id),
+    homeSlotByPlayerId,
+    awaySlotByPlayerId,
     usedSubs: [0, 0],
     subbedIn: [[], []],
     scores: [0, 0],
@@ -367,24 +376,20 @@ export interface LiveTickResult {
 export function ratingObserverFor(st: LiveMatchState, allPlayers: Player[]): RatingObserver | null {
   if (!allPlayers || allPlayers.length === 0) return null;
   const byId = new Map(allPlayers.map((p) => [p.id, p]));
-  // Roles are derived from the LIVE lineup (st.homeOn/st.awayOn) because the
-  // engine assigns tactical positions during setupMatch; the Player rows still
-  // carry tacPos -1 before kickoff. Fall back to the natural-position role for
-  // players not on the pitch (bench, or legacy states without an XI).
-  const liveTacPos = new Map<number, number>();
-  for (const ids of [st.homeOn, st.awayOn]) {
-    for (const id of ids) {
-      const p = byId.get(id);
-      if (p && p.tacPos >= 0) liveTacPos.set(id, p.tacPos);
-    }
-  }
+  // Roles are derived from the LIVE slot maps (st.homeSlotByPlayerId /
+  // st.awaySlotByPlayerId) because the engine resolves deployed roles from the
+  // formation + live assignment; Player rows never store deployed state.
   const deployedRoleOf = (p: Player): string => {
-    const tac = liveTacPos.get(p.id) ?? (p.tacPos >= 0 ? p.tacPos : -1);
-    return tac >= 0 ? tacPosRole(tac) : tacPosRole(p.position === 0 ? 1 : 4);
+    const home = tryDeployedRoleForSlot(st.homeSlotByPlayerId, st.homeTactics.formation, p.id);
+    if (home) return home.role;
+    const away = tryDeployedRoleForSlot(st.awaySlotByPlayerId, st.awayTactics.formation, p.id);
+    if (away) return away.role;
+    // Benched (or otherwise unmapped): benchmarks use the natural default role.
+    return naturalDefaultRole(p.position as import("./positions").NaturalPosition);
   };
   // Freeze the same-role benchmarks at kickoff and persist the snapshot on the
   // live state. Streamed ticks and server reloads reuse the SAME snapshot so
-  // ratings cannot drift when player data or tacPos assignments change
+  // ratings cannot drift when player data or slot assignments change
   // mid-match.
   let benchmarks = st.ratingBenchmarksJson ? (() => {
     try {
@@ -402,7 +407,7 @@ export function ratingObserverFor(st: LiveMatchState, allPlayers: Player[]): Rat
     benchmarks,
     fineRoleOf: (playerId) => {
       const p = byId.get(playerId);
-      return p ? deployedRoleOf(p) : "CM";
+      return p ? deployedRoleOf(p) : "ST";
     },
     base: st.ratingAccum,
   });
@@ -567,7 +572,43 @@ export function simulateMatch(
     controlledBallSeconds: [0, 0] as [number, number],
   } : undefined;
   const ratingObserver = ratingObserverFor(st, allPlayers);
-  simulatePossessionMatch(rng, home, away, allPlayers, st, centers, undefined, simulationDiagnostics, ratingObserver ?? undefined);
+  // §22.2 instant/streamed equivalence: an instant simulation must consume the
+  // SAME engine boundary cadence as a streamed match, otherwise added-time
+  // freezing and the per-minute RNG progression diverge. Drive the instant run
+  // through the identical cumulative-target progression tickLiveMatch uses.
+  st.targetMatchClockSeconds = 0;
+  let guard = 0;
+  const diagAccum: MatchSimulationDiagnostics | undefined = simulationDiagnostics
+    ? { actionCounts: {}, phaseResidenceSeconds: {}, restartCounts: {}, possessionStarts: 0, deadBallSeconds: 0, controlledBallSeconds: [0, 0] }
+    : undefined;
+  while (!st.ended && guard++ < 120) {
+    st.targetMatchClockSeconds = (st.targetMatchClockSeconds ?? 0) + 60;
+    // controlledBallSeconds is initialized cumulatively from the live state on
+    // each engine rebuild, so capture the pre-chunk values to compute deltas.
+    const prevControlled = st.controlledBallSeconds ? [...st.controlledBallSeconds] : [0, 0];
+    const chunkDiag: MatchSimulationDiagnostics | undefined = diagAccum
+      ? { actionCounts: {}, phaseResidenceSeconds: {}, restartCounts: {}, possessionStarts: 0, deadBallSeconds: 0, controlledBallSeconds: [0, 0] }
+      : undefined;
+    simulatePossessionMatch(rng, home, away, allPlayers, st, centers, st.targetMatchClockSeconds, chunkDiag, ratingObserver ?? undefined);
+    if (chunkDiag && diagAccum) {
+      for (const [k, v] of Object.entries(chunkDiag.actionCounts)) diagAccum.actionCounts[k] = (diagAccum.actionCounts[k] ?? 0) + v;
+      for (const [k, v] of Object.entries(chunkDiag.phaseResidenceSeconds)) diagAccum.phaseResidenceSeconds[k] = (diagAccum.phaseResidenceSeconds[k] ?? 0) + v;
+      for (const [k, v] of Object.entries(chunkDiag.restartCounts)) diagAccum.restartCounts[k] = (diagAccum.restartCounts[k] ?? 0) + v;
+      diagAccum.possessionStarts += chunkDiag.possessionStarts;
+      diagAccum.deadBallSeconds += chunkDiag.deadBallSeconds;
+      const postControlled = st.controlledBallSeconds ?? [0, 0];
+      diagAccum.controlledBallSeconds[0] += postControlled[0] - prevControlled[0];
+      diagAccum.controlledBallSeconds[1] += postControlled[1] - prevControlled[1];
+    }
+  }
+  if (simulationDiagnostics && diagAccum) {
+    simulationDiagnostics.actionCounts = diagAccum.actionCounts;
+    simulationDiagnostics.phaseResidenceSeconds = diagAccum.phaseResidenceSeconds;
+    simulationDiagnostics.restartCounts = diagAccum.restartCounts;
+    simulationDiagnostics.possessionStarts = diagAccum.possessionStarts;
+    simulationDiagnostics.deadBallSeconds = diagAccum.deadBallSeconds;
+    simulationDiagnostics.controlledBallSeconds = diagAccum.controlledBallSeconds;
+  }
   applyLiveMatchEnergy(st, allPlayers);
   const match = buildMatchFromState(st, home, away, allPlayers);
   if (simulationDiagnostics) match.simulationDiagnostics = simulationDiagnostics;
@@ -661,13 +702,29 @@ export function performLiveSub(
   if (!out) return { event: null, error: "Player not on the pitch" };
   if (!inPlayer) return { event: null, error: "Player not on the bench" };
   if (st.usedSubs[side] >= MP_CONFIG.maxSubsPerSide) return { event: null, error: "No substitutions left" };
-  if (out.tacPos === 1 && inPlayer.position !== 0) return { event: null, error: "Replace the goalkeeper with another goalkeeper" };
+  // §9.5: an incoming GK is required only when replacing the GK slot; a GK
+  // can never enter an outfield slot.
+  const slotMap = side === 0 ? st.homeSlotByPlayerId : st.awaySlotByPlayerId;
+  const tactics = side === 0 ? st.homeTactics : st.awayTactics;
+  const resolvedOut = tactics ? tryDeployedRoleForSlot(slotMap, tactics.formation, outId) : null;
+  const slotIndex = resolvedOut?.slotIndex;
+  const outRole = resolvedOut?.role ?? naturalDefaultRole(out.position as import("./positions").NaturalPosition);
+  if (outRole === "GK" && (inPlayer.position as string) !== "GK") {
+    return { event: null, error: "Replace the goalkeeper with another goalkeeper" };
+  }
+  if (outRole !== "GK" && (inPlayer.position as string) === "GK") {
+    return { event: null, error: "A goalkeeper cannot enter an outfield slot" };
+  }
   // Apply the substitution to the live state; the engine picks it up on next tick.
   const idx = on.indexOf(outId);
   if (idx < 0) return { event: null, error: "Player not on the pitch" };
   const bIdx = bench.indexOf(inId);
   if (bIdx < 0) return { event: null, error: "Player not on the bench" };
-  inPlayer.tacPos = out.tacPos;
+  // §9.1: every incoming player inherits the exact outgoing slot index.
+  if (slotMap && slotIndex !== undefined) {
+    slotMap[inId] = slotIndex;
+    delete slotMap[outId];
+  }
   on[idx] = inId;
   bench.splice(bIdx, 1);
   st.usedSubs[side]++;
@@ -713,10 +770,12 @@ export function rebuildLiveHumanLineup(
       st.homeXI = xiIds;
       st.homeOn = xiIds.slice();
       st.homeSubs = subIds;
+      st.homeSlotByPlayerId = Object.fromEntries(setup.starters.map((p, i) => [p.id, i]));
     } else {
       st.awayXI = xiIds;
       st.awayOn = xiIds.slice();
       st.awaySubs = subIds;
+      st.awaySlotByPlayerId = Object.fromEntries(setup.starters.map((p, i) => [p.id, i]));
     }
     return;
   }
@@ -729,29 +788,39 @@ export function rebuildLiveHumanLineup(
       .map((event) => event.playerId as number),
   );
   const onIds = home ? st.homeOn : st.awayOn;
+  const byId = new Map(allPlayers.map((p) => [p.id, p]));
+  const stillPlaying = (id: number): Player | null => {
+    const player = byId.get(id);
+    return player && player.injuryDays === 0 && !sentOffIds.has(id) ? player : null;
+  };
+  // §9.1: a formation change never substitutes anyone. Re-slot exactly the
+  // players already on the pitch with the same assignment DP the lineup builder
+  // uses, allowing slots to remain empty when the side is short. Sequentially
+  // filling slots from `homeOn` order (the previous behaviour) ignored role
+  // compatibility entirely: one dismissal shifted every player one slot along,
+  // and a dismissed goalkeeper handed the GK slot to an outfielder.
+  const onPitch = onIds.map(stillPlaying).filter((p): p is Player => !!p);
+  const formationId = humanClub.tactics.formation;
+  const assign = assignOnPitchToSlots(onPitch, formationId, (p, role) => currentScore(p, role));
+  const newSlotByPlayerId: Record<number, number> = {};
   const newOn: number[] = [];
   const used = new Set<number>();
-  const eligibleXiIds = xiIds.filter((id) => {
-    const player = allPlayers.find((candidate) => candidate.id === id);
-    return player && player.injuryDays === 0 && !sentOffIds.has(id);
-  });
-  for (const slot of setup.positions) {
-    const current = onIds.find((id) => {
-      const player = allPlayers.find((candidate) => candidate.id === id);
-      return player && !used.has(id) && player.injuryDays === 0 && !sentOffIds.has(id);
-    });
-    const chosen = current ?? eligibleXiIds.find((id) => !used.has(id));
-    if (chosen === undefined) continue;
-    const player = allPlayers.find((candidate) => candidate.id === chosen);
-    if (player) player.tacPos = slot;
-    newOn.push(chosen);
-    used.add(chosen);
-  }
-  for (const id of eligibleXiIds) {
-    if (newOn.length >= 11) break;
-    if (!used.has(id)) {
+  if (assign) {
+    for (let slotIndex = 0; slotIndex < assign.length; slotIndex++) {
+      const id = assign[slotIndex];
+      if (id === null) continue;
+      newSlotByPlayerId[id] = slotIndex;
       newOn.push(id);
       used.add(id);
+    }
+  }
+  // A player on the pitch whom no slot can legally hold (only possible for a
+  // natural GK once the GK slot is taken) stays on the pitch unslotted rather
+  // than being silently removed; he is picked up by the next rebuild.
+  for (const player of onPitch) {
+    if (!used.has(player.id)) {
+      newOn.push(player.id);
+      used.add(player.id);
     }
   }
   const remaining = setup.subs.filter((player) => !used.has(player.id) && !sentOffIds.has(player.id)).map((player) => player.id);
@@ -767,6 +836,7 @@ export function rebuildLiveHumanLineup(
     st.homeXI = newOn.slice();
     st.homeOn = newOn.slice();
     st.homeSubs = remaining;
+    st.homeSlotByPlayerId = newSlotByPlayerId;
     const previous = st.homeTactics;
     const next = {
       formation: humanClub.tactics.formation,
@@ -780,6 +850,7 @@ export function rebuildLiveHumanLineup(
     st.awayXI = newOn.slice();
     st.awayOn = newOn.slice();
     st.awaySubs = remaining;
+    st.awaySlotByPlayerId = newSlotByPlayerId;
     const previous = st.awayTactics;
     const next = {
       formation: humanClub.tactics.formation,

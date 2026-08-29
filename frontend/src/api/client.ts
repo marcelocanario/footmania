@@ -19,12 +19,15 @@ export interface CountryOption {
 
 export interface SkillSet {
   gol: number;
-  vel: number;
+  pace: number;
   tec: number;
   pas: number;
   des: number;
-  arm: number;
+  playmaking: number;
   fin: number;
+  /** @deprecated legacy keys */
+  vel?: number;
+  arm?: number;
 }
 
 /** Kit Lab: one jersey design (mirrors backend game/kits.ts). */
@@ -50,10 +53,14 @@ export interface PlayerView {
   displayName?: string;
   age: number;
   country: string;
-  position: number;
+  naturalPosition: string;
+  positionGroup: string;
   positionName: string;
-  tacPos: number;
-  tacPosName: string;
+  slotIndex?: number | null;
+  deployedRole?: string | null;
+  rolePenalty?: number | null;
+  suitabilityLabel?: string | null;
+  adjustedTacticalRating?: number | null;
   /** Squad shirt number; null for legacy players not yet assigned. */
   squadNumber?: number | null;
   overall: number;
@@ -568,6 +575,7 @@ export interface Snapshot {
   } | null;
   club: ClubView | null;
   nextFixture: { id: number; home: string; away: string; homeClubId: number; awayClubId: number; dayLabel: string; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
+  formationOptions: Array<{ id: number; name: string }>;
   competitions: { id: number; kind: string; name: string; stage: string; round: number; tier: number | null; groupIndex: number | null; position: number; winnerId: number | null }[];
   squad: PlayerView[];
   juniors: PlayerView[];
@@ -655,9 +663,9 @@ export interface TeamPlayerRow {
   id: number;
   name: string;
   nickname: string | null;
-  position: number;
+  naturalPosition: string;
+  positionGroup: string;
   positionName: string;
-  tacPosName: string;
   overall: number;
   age: number;
   country: string;
@@ -779,7 +787,9 @@ export interface AuctionView {
   playerId: number;
   playerName: string;
   overall: number;
-  position: number;
+  naturalPosition: string;
+  positionGroup: string;
+  positionName: string;
   age: number;
   salary: number;
   skills: SkillSet;
@@ -808,7 +818,9 @@ export interface FreeAgentView {
   playerId: number;
   playerName: string;
   overall: number;
-  position: number;
+  naturalPosition: string;
+  positionGroup: string;
+  positionName: string;
   age: number;
   salary: number;
   contractDays: number;
@@ -834,8 +846,11 @@ export interface LivePlayer {
   name: string;
   displayName?: string;
   nickname?: string | null;
-  position: number;
-  tacPos: number;
+  naturalPosition: string;
+  positionGroup: string;
+  positionName: string;
+  slotIndex: number | null;
+  deployedRole: string | null;
   /** Squad shirt number shown on the pitch marker. */
   number?: number | null;
   overall: number;
@@ -892,8 +907,8 @@ export interface LiveMissingPlayer {
   name: string;
   number?: number | null;
   kind: "INJURY" | "RED";
-  /** Tactical slot he last occupied. */
-  tacPos: number;
+  slotIndex: number | null;
+  deployedRole: string | null;
 }
 
 export interface TeamMatchStats {
@@ -1025,6 +1040,8 @@ export interface LiveState {
   awayFormation: string;
   homeFormationId: number;
   awayFormationId: number;
+  homeFormationSlots?: Array<{ index: number; key: string; role: string; lane: string; line: string; x: number; y: number; label: string }>;
+  awayFormationSlots?: Array<{ index: number; key: string; role: string; lane: string; line: string; x: number; y: number; label: string }>;
   homeTactics: LiveTacticsView;
   awayTactics: LiveTacticsView;
   /** Live-match tactics lock: match-minutes remaining per side (0 = unlocked). */
@@ -1077,23 +1094,34 @@ export interface LiveStateDelta {
 export interface LineupPlayer {
   id: number;
   name: string;
-  position: number;
+  naturalPosition: string;
+  positionGroup: string;
+  positionName: string;
   overall: number;
   energy: number;
   injuryDays: number;
   suspended: boolean;
+  slotIndex?: number | null;
+  deployedRole?: string | null;
+  rolePenalty?: number | null;
+  suitabilityLabel?: string | null;
+  adjustedTacticalRating?: number | null;
   /** Squad shirt number shown on the lineup board jersey marker. */
   number?: number | null;
 }
 
 export interface LineupView {
   formation: number;
+  formationName?: string;
+  /** §15.3: the formation's authoritative slot metadata, in slot order. */
+  slots: Array<{ index: number; key: string; role: string; lane: string; line: string; x: number; y: number; label: string }>;
   starters: (LineupPlayer | null)[];
   subs: (LineupPlayer | null)[];
   penaltyTakerId: number | null;
   freeKickTakerId: number | null;
-  slots: number[];
-  squad: { id: number; name: string; position: number; overall: number; energy: number; tacPosName: string; injuryDays: number; suspended: boolean; number?: number | null }[];
+  squad: { id: number; name: string; naturalPosition: string; positionGroup: string; positionName: string; overall: number; energy: number; slotIndex?: number | null; deployedRole?: string | null; injuryDays: number; suspended: boolean; number?: number | null }[];
+  slotPreviews?: Array<{ slotIndex: number; deployedRole: string; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }>;
+  previewPlayerId?: number | null;
 }
 
 export interface MatchEvents {
@@ -1395,10 +1423,11 @@ export const api = {
     request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/halftime/ready`, { method: "POST" }),
   liveWsUrl: (matchId: number) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws`,
-  getLineup: (auto?: boolean, formation?: number) => {
+  getLineup: (auto?: boolean, formation?: number, previewPlayerId?: number) => {
     const params = new URLSearchParams();
     if (auto) params.set("auto", "1");
     if (formation !== undefined) params.set("formation", String(formation));
+    if (previewPlayerId !== undefined) params.set("previewPlayerId", String(previewPlayerId));
     const query = params.toString();
     return request<LineupView>(`/api/club/lineup${query ? `?${query}` : ""}`);
   },

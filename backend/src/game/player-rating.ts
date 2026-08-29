@@ -1,7 +1,9 @@
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
 import type { Player, Match } from "./types";
 import type { LivePlayerState, MatchZone } from "./matchSim";
-import { computeAttributeCenters, robustZ, positionFit, type AttributeCenters } from "./matchSim";
+import { computeAttributeCenters, robustZ, athleticismOf, adjustedSkillsForRole, type AttributeCenters, type CanonicalAttr } from "./matchSim";
+import { DEPLOYED_ROLES, naturalDefaultRole } from "./positions";
+import { bandUpperBound, rolePenalty } from "./outOfPosition";
 import { actionQualityWithOverride, defensiveResistanceWithOverride, shotOutcomeProbabilities, weightedUsableZ, weightedUsableZWithOverride, type FrozenSide, type FrozenContext } from "./probabilityEval";
 import { tacticalExecutionContrast } from "./familiarity";
 import type { PlayerRatingAccum, RatingDecisionInput, EngineSideView } from "./ratingObserver";
@@ -27,87 +29,99 @@ export const MIN_RATED_MINUTES = 10;
 /** Role taxonomy for benchmarks/calibration (plan §6 coarse grouping). */
 export type CoarseRole = "GK" | "FB" | "CB" | "MID" | "FWD";
 
-/** Fine tacPosRole -> coarse role (plan §6 mapping). */
+/** Fine deployed role -> coarse role (plan §6 mapping). */
 export function coarseRole(fineRole: string): CoarseRole {
   switch (fineRole) {
     case "GK": return "GK";
     case "LB": case "RB": return "FB";
     case "CB": case "SW": return "CB";
-    case "LM": case "RM": case "CM": return "MID";
+    case "LM": case "RM": case "DM": case "AM": return "MID";
     case "LW": case "RW": case "ST": return "FWD";
     default: return "MID";
   }
 }
 
-/** Benchmark set: per (coarseRole, attributeKey) median usable-Z over the
- *  world's active senior players whose deployed (coarse) role matches. */
-export type RoleBenchmarks = Record<CoarseRole, Record<string, number>>;
+/**
+ * Benchmark set: per (DEPLOYED role, attributeKey) median usable-Z (§17).
+ *
+ * Keyed by the twelve fine deployed roles, not the five coarse groups: the
+ * rating observer must be able to tell a DM from an AM, which a shared MID
+ * benchmark makes impossible. Coarse roles remain the calibration taxonomy
+ * (see `coarseRole`), so persisted calibration rows are untouched.
+ */
+export type RoleBenchmarks = Record<string, Record<string, number>>;
+
+const BENCHMARK_ATTRS: CanonicalAttr[] = [
+  "technique", "pace", "athleticism", "finishing", "goalkeeping", "defending", "passing", "playmaking",
+];
+
+function medianOf(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const n = sorted.length;
+  return n % 2 === 1 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
+}
 
 /**
- * Build the same-role median usable-Z benchmarks (plan §6.1). The benchmark is
- * the median USABLE-Z (robustZ(attribute, centers) * positionFit * readiness)
- * across the world's active senior players in that coarse role — the SAME
- * space the engine's probability expressions consume. Using raw skill values
- * (0–100) here would blow up the counterfactual and saturate ratings.
+ * Build the same-role median usable-Z benchmarks (§17).
+ *
+ * For EACH deployed role independently:
+ *   1. pool every active senior player whose compatibility penalty for THAT
+ *      role is non-null and no greater than the configured Makeshift bound;
+ *   2. take his full-energy effective canonical Z after that role's penalty;
+ *   3. median per canonical attribute;
+ *   4. empty fine pool -> every player in the role's coarse group with non-null
+ *      compatibility for the role;
+ *   5. still empty -> zero Z.
+ *
+ * Note the pool is defined by *eligibility for the role*, not by who happens to
+ * be deployed there — otherwise a role nobody currently plays has no benchmark.
  */
 export function buildRoleBenchmarks(players: Player[], deployedRoleOf: (p: Player) => string): RoleBenchmarks {
+  void deployedRoleOf; // benchmarks are role-intrinsic, not lineup-dependent
   const centers = computeAttributeCenters(players);
-  const keys = ["tech", "pace", "physical", "finishing", "gk", "discipline"] as const;
-  const groups: Record<CoarseRole, Player[]> = { GK: [], FB: [], CB: [], MID: [], FWD: [] };
-  for (const p of players) {
-    if (p.isYouth) continue;
-    groups[coarseRole(deployedRoleOf(p))].push(p);
-  }
-  const out = {} as RoleBenchmarks;
-  for (const role of Object.keys(groups) as CoarseRole[]) {
-    const pool = groups[role];
+  const makeshiftBound = bandUpperBound("Makeshift");
+  const seniors = players.filter((p) => !p.isYouth);
+  const out: RoleBenchmarks = {};
+  for (const role of DEPLOYED_ROLES) {
+    const eligibleForRole = seniors.filter((p) => rolePenalty(p.position, role) !== null);
+    const primary = eligibleForRole.filter((p) => (rolePenalty(p.position, role) as number) <= makeshiftBound);
+    // Step 4 fallback: same coarse group, compatibility non-null.
+    const pool = primary.length > 0
+      ? primary
+      : eligibleForRole.filter((p) => coarseRole(naturalDefaultRole(p.position)) === coarseRole(role));
     out[role] = {};
-    for (const key of keys) {
-      const values = pool
-        .map((p) => usableZOf(p, key, centers))
-        .sort((a, b) => a - b);
-      const n = values.length;
-      const median = n === 0 ? 0 : n % 2 === 1 ? values[(n - 1) / 2] : (values[n / 2 - 1] + values[n / 2]) / 2;
-      out[role][key] = median;
+    for (const key of BENCHMARK_ATTRS) {
+      out[role][key] = medianOf(pool.map((p) => usableZOf(p, key, centers, role)));
     }
   }
   return out;
 }
 
-/** Usable-Z for a player attribute in the engine's space (robustZ * fit *
- *  readiness at full energy). Mirrors matchSim.buildPlayerState. The centers
- *  use the engine's short attribute keys (tec/vel/fin/gol/des). */
-function usableZOf(p: Player, key: string, centers: AttributeCenters): number {
-  const fit = positionFit(p.position, p.tacPos);
-  const shortKey = SHORT_KEY[key] ?? key;
-  const z = robustZ(attributeOf(p, key), centers.median[shortKey], centers.sigma[shortKey]);
+/** Usable-Z for a player attribute in the engine's space (robustZ(effectiveRaw)
+ *  at full readiness; no fit factor — §7.1). Mirrors matchSim.buildPlayerState.
+ *  The centers use the canonical attribute keys. */
+function usableZOf(p: Player, key: CanonicalAttr, centers: AttributeCenters, deployedRole: string): number {
+  const effective = adjustedSkillsForRole(p, deployedRole as import("./positions").DeployedRole);
+  const value = canonicalValueOf(effective, key);
+  const z = robustZ(value, centers.median[key], centers.sigma[key]);
   // Benchmarks assume a fully ready (energy 100) player; readiness ~ 1.
-  return z * fit;
+  return z;
 }
 
-const SHORT_KEY: Record<string, string> = {
-  tech: "tec",
-  pace: "vel",
-  physical: "physical",
-  finishing: "fin",
-  gk: "gol",
-  discipline: "des",
+const CANONICAL_OF: Record<CanonicalAttr, (s: Player["skills"]) => number> = {
+  goalkeeping: (s) => s.gol,
+  pace: (s) => s.pace,
+  technique: (s) => s.tec,
+  passing: (s) => s.pas,
+  defending: (s) => s.des,
+  playmaking: (s) => s.playmaking,
+  athleticism: (s) => athleticismOf(s),
+  finishing: (s) => s.fin,
 };
 
-function attributeOf(p: Player, key: string): number {
-  switch (key) {
-    case "tech": return p.skills.tec;
-    case "pace": return p.skills.vel;
-    case "physical": return physicalOf(p.skills);
-    case "finishing": return p.skills.fin;
-    case "gk": return p.skills.gol;
-    case "discipline": return p.skills.des;
-    default: return 50;
-  }
-}
-
-function physicalOf(s: Player["skills"]): number {
-  return Math.round((s.vel + s.des) / 2);
+function canonicalValueOf(skills: Player["skills"], key: CanonicalAttr): number {
+  return CANONICAL_OF[key](skills);
 }
 
 /**
@@ -208,8 +222,8 @@ export function observeDecision(
     if (!onAtt && !onDef) continue;
     const isAttacker = onAtt;
     const side = onAtt ? att : def;
-    const role = coarseRole(fineRoleOf(pid));
-    const bench = benchmarks[role] ?? {};
+    // §17: the observer uses the player's EXACT deployed-role benchmark.
+    const bench = benchmarks[fineRoleOf(pid)] ?? {};
     const q = recomputeWithOverride(ctx, kind, isAttacker, pid, bench, probabilities, typeof probabilities.action === "string" ? probabilities.action : "PASS");
     const numQ = Object.fromEntries(Object.entries(q).filter(([, v]) => typeof v === "number" && Number.isFinite(v))) as Record<string, number>;
     // Next-zone decisions carry no direct rating contribution: the destination
@@ -274,12 +288,14 @@ function toFrozenSide(side: EngineSideView, zone: MatchZone): FrozenSide {
       playerId: l.ps.id,
       weight: l.weight,
       usableZ: {
-        tech: l.ps.zTech,
+        technique: l.ps.zTech,
         pace: l.ps.zPace,
-        physical: l.ps.zPhysical,
+        athleticism: l.ps.zPhysical,
         finishing: l.ps.zFinishing,
-        gk: l.ps.zGk,
-        discipline: l.ps.zDiscipline,
+        goalkeeping: l.ps.zGk,
+        defending: l.ps.zDefending,
+        passing: (l.ps as unknown as { zPassing?: number }).zPassing ?? 0,
+        playmaking: (l.ps as unknown as { zPlaymaking?: number }).zPlaymaking ?? 0,
       },
     })),
     localDensity: side.localDensity,
@@ -311,8 +327,8 @@ function recomputeWithOverride(
     // only. Anchor on the engine's actual probability, then apply the exact
     // logit change from substituting this one player.
     const pFailActual = typeof actual.FAIL === "number" ? actual.FAIL : 0;
-    const zActual = weightedUsableZ(attFrozen, "tech");
-    const zSub = weightedUsableZWithOverride(attFrozen, "tech", playerId, bench.tech ?? 0);
+    const zActual = weightedUsableZ(attFrozen, "technique");
+    const zSub = weightedUsableZWithOverride(attFrozen, "technique", playerId, bench.technique ?? 0);
     const pFailSub = logisticOf(
       logitOf(clamp(pFailActual, 1e-6, 1 - 1e-6))
       - INFLUENCE_SCALES.teamScale * (zSub - zActual),
@@ -367,7 +383,7 @@ function recomputeWithOverride(
     // Actual shooter/GK terms (captured in the shot metadata) and substituted.
     const zFinishActual = typeof actual.zFinish === "number" ? actual.zFinish : 0;
     const zGkActual = typeof actual.zGk === "number" ? actual.zGk : 0;
-    const benchZ = bench[isAttacker ? "finishing" : "gk"] ?? 0;
+    const benchZ = bench[isAttacker ? "finishing" : "goalkeeping"] ?? 0;
     const zFinishSub = isAttacker ? benchZ : zFinishActual;
     const zGkSub = isAttacker ? zGkActual : benchZ;
     // Anchor on the engine's actual pGoal: invert to logit, apply the exact

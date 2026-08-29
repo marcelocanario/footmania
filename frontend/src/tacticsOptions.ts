@@ -1,7 +1,10 @@
 /**
- * Shared tactic option lists for dropdowns. Labels mirror
- * backend/src/game/constants.ts (FORMATION_NAMES / STYLE_NAMES /
- * PRESSING_NAMES / DIRECTION_NAMES); keep them in sync when tactics change.
+ * Shared tactic option lists for dropdowns. Style/pressing/direction labels
+ * mirror backend/src/game/constants.ts; keep them in sync when tactics change.
+ *
+ * Formations are NOT listed here: the backend catalog owns formation ids,
+ * names and geometry (§15.3/§16.1). Consume `snapshot.formationOptions`,
+ * `LineupView.slots` or the live view's formation slots.
  */
 export interface TacticOption {
   label: string;
@@ -10,21 +13,15 @@ export interface TacticOption {
   desc?: string;
 }
 
-export const FORMATIONS: TacticOption[] = [
-  { label: "5-4-1", value: 0 },
-  { label: "5-4-1 · Wide", value: 1 },
-  { label: "5-3-2", value: 2 },
-  { label: "4-5-1", value: 3 },
-  { label: "4-4-2", value: 4 },
-  { label: "4-4-2 · Diamond", value: 5 },
-  { label: "4-4-2 · Attacking", value: 6 },
-  { label: "4-3-3", value: 7 },
-  { label: "4-3-3 · Holding", value: 8 },
-  { label: "3-5-2", value: 9 },
-  { label: "3-4-3", value: 10 },
-  { label: "4-2-3-1", value: 11 },
-  { label: "4-2-3-1 · Wide", value: 12 },
-];
+/**
+ * §16.1: the backend formation catalog is the ONLY formation authority. The
+ * snapshot supplies `formationOptions`; before it loads there is nothing to
+ * show, and an empty list is the honest answer — a local fallback table would
+ * silently disagree with the server's geometry.
+ */
+export function formationsFromSnapshot(options?: Array<{ id: number; name: string }>): TacticOption[] {
+  return (options ?? []).map((o) => ({ label: o.name, value: o.id }));
+}
 
 export const STYLES: TacticOption[] = [
   { label: "Balanced", value: 0, desc: "No strong lean either way: safe, lower-risk actions with balanced execution." },
@@ -43,8 +40,9 @@ export const DIRECTIONS: TacticOption[] = [
   { label: "Down the wings", value: 1, desc: "Focus attacks down the flanks, stretching the opponent's shape." },
 ];
 
-export function formationLabel(value: number): string {
-  return FORMATIONS.find((f) => f.value === value)?.label ?? `Formation ${value}`;
+/** Formation label from the snapshot catalog; the id itself is the fallback. */
+export function formationLabelFromOptions(value: number, options?: Array<{ id: number; name: string }>): string {
+  return options?.find((o) => o.id === value)?.name ?? `Formation ${value}`;
 }
 
 /** Option meaning "leave this tactic aspect unchanged" in automation rules. */

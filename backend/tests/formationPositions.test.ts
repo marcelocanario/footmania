@@ -1,27 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { tacPosToBasePosition } from "../src/game/club";
-import { FORMATION_NAMES, FORMATION_POSITIONS, POSITION_NAMES, TACTICAL_POSITION_NAMES } from "../src/game/constants";
+import { FORMATIONS } from "../src/game/formations";
 
-describe("formation tactical positions", () => {
+describe("formation catalog", () => {
   it("keeps every displayed slot label aligned with lineup position selection", () => {
-    for (let tacPos = 1; tacPos <= 25; tacPos++) {
-      expect(TACTICAL_POSITION_NAMES[tacPos]).toBe(POSITION_NAMES[tacPosToBasePosition(tacPos)]);
+    for (const formation of FORMATIONS) {
+      for (const slot of formation.slots) {
+        expect(slot.label).toBe(slot.role);
+      }
     }
   });
 
   it("uses three center-backs for the 3-5-2 back line", () => {
-    const backLine = FORMATION_POSITIONS[9].slice(6, 9);
-
-    expect(backLine).toEqual([4, 6, 8]);
-    expect(backLine.map((tacPos) => TACTICAL_POSITION_NAMES[tacPos])).toEqual(["CB", "CB", "CB"]);
+    const backLine = FORMATIONS[9].slots.slice(1, 4);
+    expect(backLine.map((slot) => slot.role)).toEqual(["CB", "SW", "CB"]);
   });
 
-  it("keeps every named formation at eleven unique tactical slots with one goalkeeper", () => {
-    expect(FORMATION_POSITIONS).toHaveLength(FORMATION_NAMES.length);
-    for (const formation of FORMATION_POSITIONS) {
-      expect(formation).toHaveLength(11);
-      expect(new Set(formation).size).toBe(11);
-      expect(formation.filter((tacPos) => tacPos === 1)).toHaveLength(1);
+  it("keeps every named formation at eleven unique slots with one goalkeeper", () => {
+    expect(FORMATIONS).toHaveLength(13);
+    for (const formation of FORMATIONS) {
+      expect(formation.slots).toHaveLength(11);
+      expect(new Set(formation.slots.map((s) => s.key)).size).toBe(11);
+      expect(formation.slots.filter((s) => s.role === "GK")).toHaveLength(1);
     }
+  });
+
+  it("assigns exact y-derived lanes: the diamond AM1/AM2/AM3 are LEFT/RIGHT/CENTRE", () => {
+    const diamond = FORMATIONS[5];
+    const ams = diamond.slots.filter((s) => s.role === "AM");
+    expect(ams.map((s) => s.lane)).toEqual(["LEFT", "RIGHT", "CENTRE"]);
+  });
+
+  it("covers all twelve deployed roles across the catalog", () => {
+    const roles = new Set(FORMATIONS.flatMap((f) => f.slots.map((s) => s.role)));
+    expect(roles.size).toBe(12);
   });
 });

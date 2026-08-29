@@ -211,6 +211,53 @@ const gameConfigSchema = z
       // D1 acceptance anchor for seniors + initial academy. Lower divisions
       // derive their target from the authoritative tier-budget decay curve.
       initialClubPlayerValueTargetTopDivision: z.number().int().positive(),
+      // Hierarchical position mix (§11.1): exact key sets, positive finite
+      // weights, and each normalized sum within 1e-9.
+      positionMix: z.object({
+        seniorGroups: z.record(z.string(), z.number().positive()).refine((obj) => {
+          const keys = Object.keys(obj);
+          return keys.length === 5 && ["GK", "FB", "CB", "MF", "FW"].every((k) => keys.includes(k));
+        }, { message: "seniorGroups must have exactly GK/FB/CB/MF/FW" }),
+        academyGroups: z.record(z.string(), z.number().positive()).refine((obj) => {
+          const keys = Object.keys(obj);
+          return keys.length === 5 && ["GK", "FB", "CB", "MF", "FW"].every((k) => keys.includes(k));
+        }, { message: "academyGroups must have exactly GK/FB/CB/MF/FW" }),
+        withinGroup: z.record(z.string(), z.record(z.string(), z.number().positive())).superRefine((groups, ctx) => {
+          const expected: Record<string, string[]> = {
+            GK: ["GK"],
+            FB: ["LB", "RB"],
+            CB: ["CB"],
+            MF: ["DM", "AM"],
+            FW: ["LW", "RW", "ST"],
+          };
+          for (const group of Object.keys(expected)) {
+            const row = groups[group];
+            if (!row) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: `withinGroup missing group ${group}`, path: ["withinGroup", group] });
+              continue;
+            }
+            const keys = Object.keys(row);
+            const want = expected[group];
+            if (keys.length !== want.length || !want.every((k) => keys.includes(k))) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: `withinGroup.${group} must contain exactly ${want.join("/")}`, path: ["withinGroup", group] });
+            }
+            const sum = want.reduce((s, k) => s + (row[k] ?? 0), 0);
+            if (Math.abs(sum - 1) > 1e-9) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: `withinGroup.${group} sums to ${sum}`, path: ["withinGroup", group] });
+            }
+            for (const key of keys) {
+              if (!want.includes(key)) {
+                ctx.addIssue({ code: z.ZodIssueCode.custom, message: `withinGroup.${group} has unknown natural position ${key}`, path: ["withinGroup", group] });
+              }
+            }
+          }
+          for (const key of Object.keys(groups)) {
+            if (!(key in expected)) {
+              ctx.addIssue({ code: z.ZodIssueCode.custom, message: `withinGroup has unknown broad group ${key}`, path: ["withinGroup", key] });
+            }
+          }
+        }),
+      }),
     }),
     playerCareer: z.object({
       maximumCareerGrowthOverall: z.number().min(0).max(99),
@@ -305,6 +352,54 @@ const gameConfigSchema = z
       // to be eligible for an individual award or the Best XI.
       minAppearanceFraction: z.number().min(0).max(1).default(0.4),
     }).default({ minAppearanceFraction: 0.4 }),
+    // Position model config (§18.1): broad OVR weights/scales, deployed-role
+    // tactical weights, athleticism weights and the training focus bonus.
+    playerPositions: z.object({
+      overallByGroup: z.record(z.string(), z.object({
+        scale: z.number().gt(0),
+        weights: z.record(z.string(), z.number().min(0)),
+      })).superRefine((groups, ctx) => {
+        const want = ["GK", "FB", "CB", "MF", "FW"];
+        const keys = Object.keys(groups);
+        if (keys.length !== want.length || !want.every((k) => keys.includes(k))) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "overallByGroup must have exactly GK/FB/CB/MF/FW" });
+        }
+        const skillKeys = ["gol", "pace", "tec", "pas", "des", "playmaking", "fin"];
+        for (const [group, row] of Object.entries(groups)) {
+          const wkeys = Object.keys(row.weights);
+          for (const k of wkeys) {
+            if (!skillKeys.includes(k)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `overallByGroup.${group}.weights has unknown skill key ${k}` });
+          }
+          const sum = skillKeys.reduce((s, k) => s + (row.weights[k] ?? 0), 0);
+          if (Math.abs(sum - 1) > 1e-9) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `overallByGroup.${group}.weights sums to ${sum}` });
+        }
+      }),
+      tacticalRatingByRole: z.record(z.string(), z.record(z.string(), z.number().min(0))).superRefine((rows, ctx) => {
+        const want = ["GK", "LB", "RB", "CB", "SW", "DM", "AM", "LM", "RM", "LW", "RW", "ST"];
+        const keys = Object.keys(rows);
+        if (keys.length !== want.length || !want.every((k) => keys.includes(k))) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "tacticalRatingByRole must have exactly the twelve deployed roles" });
+        }
+        const skillKeys = ["gol", "pace", "tec", "pas", "des", "playmaking", "fin"];
+        for (const [role, row] of Object.entries(rows)) {
+          const sum = Object.values(row).reduce((s, v) => s + v, 0);
+          if (Math.abs(sum - 1) > 1e-9) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `tacticalRatingByRole.${role} sums to ${sum}` });
+          for (const k of Object.keys(row)) {
+            if (!skillKeys.includes(k)) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `tacticalRatingByRole.${role} has unknown skill key ${k}` });
+          }
+        }
+      }),
+      athleticismWeights: z.record(z.string(), z.number().min(0)).superRefine((weights, ctx) => {
+        const keys = Object.keys(weights);
+        if (keys.length !== 2 || !keys.includes("pace") || !keys.includes("des")) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "athleticismWeights must have exactly pace and des" });
+        }
+        if (Math.abs((weights.pace ?? 0) + (weights.des ?? 0) - 1) > 1e-9) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "athleticismWeights must sum to 1" });
+        }
+      }),
+      trainingFocusBonus: z.number().min(0),
+    }),
   })
   .superRefine((cfg, ctx) => {
     if (cfg.playerGenerationRules.academyMinAge > cfg.playerGenerationRules.academyMaxAge) {
@@ -898,6 +993,17 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
     initialClubTargetMeanOffsetOverall: 1.0,
     initialClubTargetBandHalfWidthOverall: 8.0,
     initialClubPlayerValueTargetTopDivision: 40_000_000,
+    positionMix: {
+      seniorGroups: { GK: 0.10, FB: 0.14, CB: 0.18, MF: 0.32, FW: 0.26 },
+      academyGroups: { GK: 0.10, FB: 0.28, CB: 0.26, MF: 0.22, FW: 0.14 },
+      withinGroup: {
+        GK: { GK: 1.0 },
+        FB: { LB: 0.5, RB: 0.5 },
+        CB: { CB: 1.0 },
+        MF: { DM: 0.5, AM: 0.5 },
+        FW: { LW: 2 / 7, RW: 2 / 7, ST: 3 / 7 },
+      },
+    },
   },
   playerCareer: {
     maximumCareerGrowthOverall: 30,
@@ -940,6 +1046,31 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
   injuries: { matchTargetPerMatch: 0.35, trainingTargetPerClubSeason: 1.5, severityScale: 1, autoSubstitute: true },
   motd: { maxLength: 280 },
   awards: { minAppearanceFraction: 0.4 },
+  playerPositions: {
+    overallByGroup: {
+      GK: { scale: 1.15, weights: { gol: 0.80, pace: 0.08, tec: 0.06, pas: 0.04, des: 0.01, playmaking: 0.01 } },
+      FB: { scale: 1.25, weights: { des: 0.45, pace: 0.16, pas: 0.16, tec: 0.12, playmaking: 0.07, fin: 0.03, gol: 0.01 } },
+      CB: { scale: 1.17, weights: { des: 0.56, playmaking: 0.12, pas: 0.12, pace: 0.08, tec: 0.07, fin: 0.04, gol: 0.01 } },
+      MF: { scale: 1.30, weights: { pas: 0.25, playmaking: 0.25, tec: 0.20, pace: 0.12, des: 0.10, fin: 0.07, gol: 0.01 } },
+      FW: { scale: 1.20, weights: { fin: 0.46, pace: 0.20, tec: 0.15, playmaking: 0.08, pas: 0.07, des: 0.03, gol: 0.01 } },
+    },
+    tacticalRatingByRole: {
+      GK: { gol: 0.60, tec: 0.15, pace: 0.15, pas: 0.10 },
+      LB: { des: 0.40, pas: 0.30, pace: 0.10, tec: 0.10, playmaking: 0.05, fin: 0.05 },
+      RB: { des: 0.40, pas: 0.30, pace: 0.10, tec: 0.10, playmaking: 0.05, fin: 0.05 },
+      CB: { des: 0.50, pace: 0.25, tec: 0.10, pas: 0.10, playmaking: 0.05 },
+      SW: { des: 0.45, pas: 0.20, pace: 0.15, tec: 0.10, playmaking: 0.10 },
+      DM: { des: 0.40, pas: 0.20, pace: 0.15, tec: 0.10, playmaking: 0.10, fin: 0.05 },
+      AM: { playmaking: 0.40, pas: 0.25, tec: 0.10, pace: 0.10, fin: 0.10, des: 0.05 },
+      LM: { pace: 0.25, pas: 0.25, playmaking: 0.20, tec: 0.15, fin: 0.10, des: 0.05 },
+      RM: { pace: 0.25, pas: 0.25, playmaking: 0.20, tec: 0.15, fin: 0.10, des: 0.05 },
+      LW: { fin: 0.40, pace: 0.25, tec: 0.25, pas: 0.05, playmaking: 0.05 },
+      RW: { fin: 0.40, pace: 0.25, tec: 0.25, pas: 0.05, playmaking: 0.05 },
+      ST: { fin: 0.40, pace: 0.25, tec: 0.15, pas: 0.15, playmaking: 0.05 },
+    },
+    athleticismWeights: { pace: 0.5, des: 0.5 },
+    trainingFocusBonus: 0.20,
+  },
   ...deriveCalendarFields({
     league: { teams: 8, turns: 2, startDay: 1, restDaysBetweenMatches: 1 },
     interseasonAfterMatchDays: 2,

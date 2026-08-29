@@ -6,8 +6,8 @@ import { ChevronDown, Zap } from "lucide-react";
 import { api, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { strings } from "../strings";
-import { POSITION_FULL_NAMES } from "./PlayerName";
-import { DIRECTIONS, FORMATIONS, PRESSING, STYLES, formationLabel, withUnchanged, type TacticOption } from "../tacticsOptions";
+import { positionLetter } from "../positions";
+import { DIRECTIONS, PRESSING, STYLES, formationsFromSnapshot, withUnchanged, type TacticOption } from "../tacticsOptions";
 
 /**
  * Match automation editor, scoped to the currently chosen tactic (formation).
@@ -65,7 +65,6 @@ const ACTION_OPTS: { label: string; value: ActionKind }[] = [
 
 const MINUTE_OPTS = Array.from({ length: 90 }, (_, i) => ({ label: `${i + 1}'`, value: i + 1 }));
 
-const UNCHANGED_FORMATION = withUnchanged(FORMATIONS);
 const UNCHANGED_STYLE = withUnchanged(STYLES);
 const UNCHANGED_PRESSING = withUnchanged(PRESSING);
 const UNCHANGED_DIRECTION = withUnchanged(DIRECTIONS);
@@ -78,6 +77,11 @@ function automationItemTemplate(option: TacticOption | { label: string; value: n
       {"desc" in option && option.desc && <div style={{ fontSize: "0.8rem", opacity: 0.85, marginTop: 2, lineHeight: 1.4 }}>{option.desc}</div>}
     </div>
   );
+}
+
+/** Formation label from the backend-owned catalog; the id itself is the fallback. */
+function labelOf(formations: TacticOption[], id: number): string {
+  return formations.find((f) => f.value === id)?.label ?? `Formation ${id}`;
 }
 
 function uid() {
@@ -108,16 +112,23 @@ function StepLabel({ children }: { children: string }) {
 function RuleRow({
   rule,
   squad,
+  formations,
   onChange,
   onRemove,
 }: {
   rule: Rule;
   squad: PlayerView[];
+  /** Backend-owned formation catalog (§16.1); the frontend keeps no copy. */
+  formations: TacticOption[];
   onChange: (next: Rule) => void;
   onRemove: () => void;
 }) {
   const playerOptions = useMemo(
-    () => squad.map((pl) => ({ label: `${pl.displayName ?? pl.name} · ${POSITION_FULL_NAMES[pl.position] ?? pl.positionName} · ${pl.overall}`, value: pl.id })),
+    () => squad.map((pl) => {
+      const nat = (pl as unknown as { naturalPosition?: string }).naturalPosition;
+      const posLabel = (pl as unknown as { positionName?: string }).positionName ?? (nat ? positionLetter(nat) : pl.positionName);
+      return { label: `${pl.displayName ?? pl.name} · ${posLabel} · ${pl.overall}`, value: pl.id };
+    }),
     [squad]
   );
   const issue = ruleIssue(rule);
@@ -203,7 +214,7 @@ function RuleRow({
             <Dropdown
               value={rule.action.formation ?? null}
               onChange={(e) => patchAction(e.value === null ? { formation: undefined } : { formation: e.value })}
-              options={[...UNCHANGED_FORMATION]}
+              options={[...withUnchanged(formations)]}
               placeholder="Formation"
               style={{ minWidth: 160, flex: 1 }}
               aria-label="New formation"
@@ -251,6 +262,7 @@ function RuleRow({
 function PresetBlock({
   preset,
   squad,
+  formations,
   maxRules,
   onChange,
   onRemove,
@@ -258,6 +270,7 @@ function PresetBlock({
 }: {
   preset: Preset;
   squad: PlayerView[];
+  formations: TacticOption[];
   maxRules: number;
   onChange: (next: Preset) => void;
   onRemove: () => void;
@@ -277,7 +290,7 @@ function PresetBlock({
           <input type="checkbox" checked={preset.enabled} onChange={(e) => onChange({ ...preset, enabled: e.target.checked })} /> Enabled
         </label>
         <span className={`chip${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": "This rule set only fires when the team starts a match in this formation" } : { title: "This rule set only fires when the team starts a match in this formation" })}>
-          {formationLabel(preset.formationId)}
+          {labelOf(formations, preset.formationId)}
         </span>
         <button className="btn ghost danger sm" onClick={onRemove}>
           Delete rule set
@@ -290,6 +303,7 @@ function PresetBlock({
 
       {preset.rules.map((rule) => (
         <RuleRow
+          formations={formations}
           key={rule.id}
           rule={rule}
           squad={squad}
@@ -324,6 +338,10 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
   const [loaded, setLoaded] = useState(false);
   const [justSaved, setJustSaved] = useState(false);
   const [openOthers, setOpenOthers] = useState<Record<string, boolean>>({});
+  // §16.1: formation options come from the authenticated snapshot, never a
+  // local table.
+  const formations = useMemo(() => formationsFromSnapshot(snap?.formationOptions), [snap?.formationOptions]);
+  const formationName = (id: number) => labelOf(formations, id);
 
   useEffect(() => {
     void api
@@ -355,7 +373,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
   };
 
   const addForCurrent = () => {
-    mutate((prev) => [...prev, { id: uid(), name: `${formationLabel(formation)} automation`, formationId: formation, enabled: true, rules: [] }]);
+    mutate((prev) => [...prev, { id: uid(), name: `${formationName(formation)} automation`, formationId: formation, enabled: true, rules: [] }]);
   };
 
   const save = async () => {
@@ -413,7 +431,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
       </div>
 
       <div style={{ margin: "10px 0 14px", fontSize: "0.9rem" }}>
-        These rules apply when your team kicks off in <b>{formationLabel(formation)}</b>.
+        These rules apply when your team kicks off in <b>{formationName(formation)}</b>.
         {savedFormation !== undefined && savedFormation !== formation && (
           <span style={{ color: "var(--gold-2)", fontSize: "0.82rem" }}> Not saved yet — save your lineup above to activate it.</span>
         )}
@@ -424,6 +442,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
           <PresetBlock
             preset={current}
             squad={squad}
+            formations={formations}
             maxRules={MAX_RULES_PER_PRESET}
             onChange={(next) => mutate((prev) => prev.map((p) => (p.id === current.id ? next : p)))}
             onRemove={() => mutate((prev) => prev.filter((p) => p.id !== current.id))}
@@ -432,16 +451,16 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
         </div>
       ) : (
         <div className="empty-state" style={{ padding: 18 }}>
-          No automation for {formationLabel(formation)} yet.
+          No automation for {formationName(formation)} yet.
           {quotaBlocked ? (
             <div style={{ marginTop: 8, color: "var(--text-3)" }}>
-              You already have a rule set for {blockingOther ? formationLabel(blockingOther.formationId) : "another tactic"}. Regular managers
+              You already have a rule set for {blockingOther ? formationName(blockingOther.formationId) : "another tactic"}. Regular managers
               keep one rule set; <b>Pro</b> unlocks one per tactic.
             </div>
           ) : (
             <div style={{ marginTop: 10 }}>
               <button className="btn gold" onClick={addForCurrent}>
-                <Zap size={14} /> Create automation for {formationLabel(formation)}
+                <Zap size={14} /> Create automation for {formationName(formation)}
               </button>
             </div>
           )}
@@ -460,7 +479,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
               >
                 <span>
                   <ChevronDown size={13} style={{ transform: openOthers[p.id] ? "none" : "rotate(-90deg)", transition: "transform .15s", verticalAlign: "-2px", marginRight: 6 }} />
-                  {formationLabel(p.formationId)} · {p.name || "Unnamed"} · {p.rules.length} rule{p.rules.length === 1 ? "" : "s"} ·{" "}
+                  {formationName(p.formationId)} · {p.name || "Unnamed"} · {p.rules.length} rule{p.rules.length === 1 ? "" : "s"} ·{" "}
                   {p.enabled ? "on" : "off"}
                 </span>
                 <span style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>{openOthers[p.id] ? "collapse" : "edit"}</span>
@@ -470,6 +489,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
                   <PresetBlock
                     preset={p}
                     squad={squad}
+                    formations={formations}
                     maxRules={MAX_RULES_PER_PRESET}
                     onChange={(next) => mutate((prev) => prev.map((x) => (x.id === p.id ? next : x)))}
                     onRemove={() => mutate((prev) => prev.filter((x) => x.id !== p.id))}

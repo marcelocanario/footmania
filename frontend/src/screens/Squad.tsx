@@ -11,7 +11,8 @@ import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { strings } from "../strings";
-import { PlayerName, POSITION_CLASS, positionTitle } from "../components/PlayerName";
+import { PlayerName } from "../components/PlayerName";
+import { DISPLAY_ORDER, positionClass, positionLetter } from "../positions";
 import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { PlayerTrendSparkline } from "../components/PlayerTrendSparkline";
@@ -42,7 +43,7 @@ type SquadHistoryData = {
   currentSeasonAvg?: number | null;
 };
 
-const POSITION_OPTIONS = ["GK", "FB", "CB", "MF", "FW"].map((label, value) => ({ label, value }));
+const POSITION_OPTIONS = DISPLAY_ORDER.map((label) => ({ label, value: label }));
 
 function energyColor(value: number): string {
   const pct = Math.max(0, Math.min(100, value));
@@ -64,8 +65,7 @@ function conditionIcon(condition: string) {
 // parameter (plus other module-level helpers/components), so a fresh closure
 // per render (and per row) buys nothing and only adds allocation churn.
 function positionBody(p: PlayerView) {
-  const positionTooltip = positionTitle(p.position);
-  return <span className={`pos-tag ${POSITION_CLASS[p.position] ?? ""} squad-tooltip-trigger`} data-pr-tooltip={positionTooltip}>{p.positionName}</span>;
+  return <span className={`pos-tag ${positionClass(p.naturalPosition)} squad-tooltip-trigger`} data-pr-tooltip={p.positionName}>{positionLetter(p.naturalPosition)}</span>;
 }
 
 /** Dropdown menu item for tactic options: label plus optional one-line description. */
@@ -233,7 +233,7 @@ export function Squad() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [filter, setFilter] = useState("");
-  const [positionFilter, setPositionFilter] = useState<number[]>([]);
+  const [positionFilter, setPositionFilter] = useState<string[]>([]);
   const [sellTarget, setSellTarget] = useState<PlayerView | null>(null);
   const [countryNames, setCountryNames] = useState<Record<string, string>>({});
   const tooltipRef = useRef<Tooltip>(null);
@@ -311,7 +311,7 @@ export function Squad() {
     const query = filter.trim().toLowerCase();
     return tableRows.filter((player) => {
       const nameMatches = !query || (player.displayName ?? player.name).toLowerCase().includes(query);
-      const positionMatches = positionFilter.length === 0 || positionFilter.includes(player.position);
+      const positionMatches = positionFilter.length === 0 || positionFilter.includes(player.naturalPosition);
       return nameMatches && positionMatches;
     });
   }, [tableRows, filter, positionFilter]);
@@ -703,7 +703,7 @@ export function Squad() {
                     <MultiSelect
                       value={positionFilter}
                       options={POSITION_OPTIONS}
-                      onChange={(e) => setPositionFilter(e.value as number[])}
+                      onChange={(e) => setPositionFilter(e.value as string[])}
                       optionLabel="label"
                       optionValue="value"
                       placeholder="All positions"
@@ -741,7 +741,7 @@ export function Squad() {
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
                   {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>Real name: {selectedPlayer.name}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
-                    <span className="squad-tooltip-trigger" data-pr-tooltip={positionTitle(selectedPlayer.position)}>{selectedPlayer.positionName}</span> · {selectedPlayer.age} yrs ·{" "}
+                    <span className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.positionName}>{selectedPlayer.naturalPosition}</span> · {selectedPlayer.age} yrs ·{" "}
                     <span className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
                       {selectedCountryFlag && <span aria-hidden="true">{selectedCountryFlag} </span>}
                       {selectedCountryName}

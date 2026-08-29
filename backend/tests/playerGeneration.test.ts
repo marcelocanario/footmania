@@ -18,7 +18,7 @@ import {
   pairInitialSeniorBlueprints,
   qualitySigma,
   seniorPeakMean,
-  SENIOR_POSITION_WEIGHTS,
+  seniorPositionWeights,
   seniorRosterTemplate,
   topDivisionMean,
   OVR_MAX,
@@ -53,7 +53,7 @@ function seniorCtx(overrides: Partial<Parameters<typeof generateSeniorPlayer>[0]
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3 as Position,
+    position: "DM" as Position,
     isYouth: false,
     currentDivision: 1,
     highestDivisionReached: 1,
@@ -71,7 +71,7 @@ function youthCtx(overrides: Partial<Parameters<typeof generateYouthPlayer>[0]> 
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3 as Position,
+    position: "DM" as Position,
     age: 16,
     isYouth: true,
     currentDivision: 1,
@@ -271,9 +271,10 @@ describe("career budgets", () => {
 
 describe("skill generation toward a target (spec §39)", () => {
   it("hits target OVR within tolerance for every position", () => {
-    for (const position of [0, 1, 2, 3, 4] as Position[]) {
+    const positions: Position[] = ["GK", "LB", "CB", "DM", "ST"];
+    for (const position of positions) {
       for (const target of [50, 65, 75, 85]) {
-        const rng = createRng(position * 100 + target);
+        const rng = createRng(positions.indexOf(position) * 100 + target);
         const { skills } = generateSkillsForTarget(rng, position, target);
         const actual = overallFromSkills(position, skills);
         expect(Math.abs(actual - target), `pos=${position} target=${target} actual=${actual}`).toBeLessThanOrEqual(SKILL_TARGET_TOLERANCE_OVR);
@@ -285,8 +286,8 @@ describe("skill generation toward a target (spec §39)", () => {
     // The function is bounded by construction; just assert it returns a valid
     // skill set even for an extreme target.
     const rng = createRng(1);
-    const { skills } = generateSkillsForTarget(rng, 4, 100);
-    expect(overallFromSkills(4, skills)).toBeGreaterThan(80);
+    const { skills } = generateSkillsForTarget(rng, "ST", 100);
+    expect(overallFromSkills("ST", skills)).toBeGreaterThan(80);
   });
 });
 
@@ -360,10 +361,10 @@ calibrationDescribe("senior generation (spec §70)", () => {
     const counts = new Map<number, number>();
     const n = 20_000;
     for (let i = 0; i < n; i++) {
-      const player = generateSeniorPlayer(seniorCtx({ position: 3, slot: i }));
+      const player = generateSeniorPlayer(seniorCtx({ position: "DM", slot: i }));
       counts.set(player.age, (counts.get(player.age) ?? 0) + 1);
     }
-    const weights = seniorSurvivalWeights(3);
+    const weights = seniorSurvivalWeights("DM");
     const total = [...weights.values()].reduce((sum, weight) => sum + weight, 0);
     // Ages 16-19 belong to the academy and no intake path produces an age-20
     // youth, so the senior population starts exactly at the promotion age.
@@ -549,7 +550,7 @@ calibrationDescribe("youth generation (spec §71)", () => {
       const player = generateYouthPlayer(youthCtx({
         id: i + 1,
         clubId: club.id,
-        position: (i % 5) as Position,
+        position: (["GK", "LB", "CB", "DM", "ST"][i % 5]) as Position,
         age: 16 + (i % 4),
         seed: 10_000 + i,
         slot: i,
@@ -571,23 +572,25 @@ calibrationDescribe("youth generation (spec §71)", () => {
 });
 
 describe("senior roster template (spec §17)", () => {
-  it("allocates all five positions for a balanced 28-player roster", () => {
+  it("allocates all five broad positions for a balanced 28-player roster", () => {
     const template = seniorRosterTemplate(28);
     expect(template).toHaveLength(28);
-    const counts = [0, 0, 0, 0, 0];
-    for (const pos of template) counts[pos]++;
-    expect(counts).toEqual([3, 4, 5, 9, 7]);
+    const group = (pos: string) => (pos === "GK" ? "GK" : pos === "LB" || pos === "RB" ? "FB" : pos === "CB" ? "CB" : pos === "DM" || pos === "AM" ? "MF" : "FW");
+    const counts: Record<string, number> = { GK: 0, FB: 0, CB: 0, MF: 0, FW: 0 };
+    for (const pos of template) counts[group(pos)]++;
+    expect(counts).toEqual({ GK: 3, FB: 4, CB: 5, MF: 9, FW: 7 });
   });
 
-  it("keeps every position within one player of its target share", () => {
+  it("keeps every broad position within one player of its target share", () => {
+    const groupOf = (pos: string) => (pos === "GK" ? 0 : pos === "LB" || pos === "RB" ? 1 : pos === "CB" ? 2 : pos === "DM" || pos === "AM" ? 3 : 4);
     for (const size of [11, 20, 28, 30, 35]) {
       const template = seniorRosterTemplate(size);
       expect(template).toHaveLength(size);
       const counts = [0, 0, 0, 0, 0];
-      for (const position of template) counts[position]++;
+      for (const position of template) counts[groupOf(position)]++;
       expect(counts.every((count) => count > 0)).toBe(true);
       for (let position = 0; position < counts.length; position++) {
-        expect(Math.abs(counts[position] - SENIOR_POSITION_WEIGHTS[position] * size)).toBeLessThanOrEqual(1);
+        expect(Math.abs(counts[position] - seniorPositionWeights()[position] * size)).toBeLessThanOrEqual(1);
       }
     }
   });

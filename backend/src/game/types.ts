@@ -1,15 +1,18 @@
 import type { RngState } from "./rng";
 export type { RngState };
 
-export type Position = 0 | 1 | 2 | 3 | 4;
+import type { NaturalPosition } from "./positions";
+export type Position = NaturalPosition;
+export type { NaturalPosition } from "./positions";
+export type { PositionGroup, RatingRole, DeployedRole } from "./positions";
 
 export interface SkillSet {
   gol: number;
-  vel: number;
+  pace: number;
   tec: number;
   pas: number;
   des: number;
-  arm: number;
+  playmaking: number;
   fin: number;
 }
 
@@ -38,8 +41,7 @@ export interface Player {
   nickname?: string | null;
   country: string;
   age: number;
-  position: Position;
-  side: number;
+  position: NaturalPosition;
   skills: SkillSet;
   overall: number;
   energy: number;
@@ -84,7 +86,6 @@ export interface Player {
   yellows: number;
   reds: number;
   clubId: number | null;
-  tacPos: number;
   /** Squad shirt number; unique within a club. Null = not yet assigned. */
   squadNumber?: number | null;
   onSale: boolean;
@@ -552,6 +553,9 @@ export interface LiveMatchState {
    *  Drives the liveMatch.tacticsCooldownMatchMinutes lock; null = not yet
    *  changed this match, so the first change is always free. */
   tacticsChangedAtMinute?: [number | null, number | null];
+  /** Deployed slot index per on-pitch player, resolved from formation + live map. */
+  homeSlotByPlayerId?: Record<number, number>;
+  awaySlotByPlayerId?: Record<number, number>;
 
   // -------------------------------------------------------------------------
   // Possession-state engine runtime (plans/6. match-simulator-overhaul.md §2).
@@ -641,7 +645,7 @@ export interface LiveMatchState {
   ratingAccum?: Record<number, import("./ratingObserver").PlayerRatingAccum>;
   /** Frozen same-role rating benchmarks (plan §6.1) captured at kickoff.
    *  Persisted so streamed ticks and server reloads reuse the SAME benchmark
-   *  snapshot instead of rebuilding it from mutable player/tacPos data. */
+   *  snapshot instead of rebuilding it from mutable player/slot data. */
   ratingBenchmarksJson?: string;
 }
 

@@ -2,6 +2,7 @@ import type { PlayerCareerProfile, Position, RngState } from "./types";
 import { nextDouble, truncatedNormal } from "./rng";
 import { DEVELOPMENT } from "./constants";
 import { gameConfig } from "../config";
+import { POSITION_GROUPS, groupRepresentative } from "./positions";
 
 /**
  * Career-shaped growth/decline authority.
@@ -270,7 +271,9 @@ export function reconstructCurrentTarget(
 
 function retirementRollThreshold(age: number, position: Position): number {
   if (age <= 32) return 100;
-  const retirementAge = position === 0 ? age - 3 : age;
+  // §13.2: only a natural GK receives the existing three-year retirement grace;
+  // all eight outfield positions use the outfield curve.
+  const retirementAge = position === "GK" ? age - 3 : age;
   if (retirementAge < 32) return 100;
   if (retirementAge === 32) return 99;
   if (retirementAge <= 34) return 90;
@@ -359,8 +362,11 @@ export function expectedActivePlayerLifetimeFromAcademyEntry(positionWeights: re
   const academySeasons = rules.academyAutomaticPromotionAge - meanIntakeAge;
   const weightSum = positionWeights.reduce((sum, weight) => sum + weight, 0);
   if (weightSum <= 0) return academySeasons;
+  // `positionWeights` is indexed by BROAD GROUP (GK/FB/CB/MF/FW), so each weight
+  // must pair with that group's representative natural position — indexing the
+  // nine-position array with a five-element index mismatched them.
   const seniorSeasons = positionWeights.reduce(
-    (sum, weight, position) => sum + weight * expectedActiveSeniorSeasons(position as Position),
+    (sum, weight, index) => sum + weight * expectedActiveSeniorSeasons(groupRepresentative(POSITION_GROUPS[index])),
     0,
   ) / weightSum;
   return academySeasons + seniorSeasons;

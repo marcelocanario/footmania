@@ -17,22 +17,22 @@ describe("energy and injury model", () => {
   it("matches the neutral 90-minute reference loss", () => {
     // Position 3 is the MID role (roleForPosition), which the reference loss
     // and roleLoad are calibrated on.
-    expect(energyLoss({ energy: 100, age: 26, physicalSkill: 50, position: 3, pressing: 50, involvement: 0.5, minutes: 90 })).toBeCloseTo(18, 10);
+    expect(energyLoss({ energy: 100, age: 26, physicalSkill: 50, position: "DM", pressing: 50, involvement: 0.5, minutes: 90 })).toBeCloseTo(18, 10);
   });
 
   it("preserves role and pressing ordering", () => {
     const base = { energy: 100, age: 26, physicalSkill: 50, pressing: 50, involvement: 0.5, minutes: 90 } as const;
-    const gk = energyLoss({ ...base, position: 0 });
-    const def = energyLoss({ ...base, position: 1 });
-    const cb = energyLoss({ ...base, position: 2 });
-    const mid = energyLoss({ ...base, position: 3 });
-    const att = energyLoss({ ...base, position: 4 });
+    const gk = energyLoss({ ...base, position: "GK" });
+    const def = energyLoss({ ...base, position: "LB" });
+    const cb = energyLoss({ ...base, position: "CB" });
+    const mid = energyLoss({ ...base, position: "DM" });
+    const att = energyLoss({ ...base, position: "ST" });
     expect(gk).toBeLessThan(def);
     expect(cb).toBeCloseTo(def, 10);
     expect(def).toBeLessThan(att);
     expect(att).toBeLessThan(mid);
-    expect(energyLoss({ ...base, position: 2, pressing: 0 })).toBeLessThan(energyLoss({ ...base, position: 2, pressing: 50 }));
-    expect(energyLoss({ ...base, position: 2, pressing: 50 })).toBeLessThan(energyLoss({ ...base, position: 2, pressing: 100 }));
+    expect(energyLoss({ ...base, position: "CB", pressing: 0 })).toBeLessThan(energyLoss({ ...base, position: "CB", pressing: 50 }));
+    expect(energyLoss({ ...base, position: "CB", pressing: 50 })).toBeLessThan(energyLoss({ ...base, position: "CB", pressing: 100 }));
   });
 
   it("uses continuous readiness and monotonic risk multipliers", () => {
@@ -77,7 +77,7 @@ describe("energy and injury model", () => {
 
   it("recovers fully across the inter-season gap without a reset (plan §30.7)", () => {
     const calendar = calendarValues();
-    const player: any = { age: 26, skills: { vel: 50, des: 50, arm: 50 } };
+    const player: any = { age: 26, skills: { pace: 50, des: 50, playmaking: 50 } };
     let energy = 62;
     let load = 3;
     for (let day = 0; day < calendar.interseasonDays; day++) {
@@ -104,7 +104,7 @@ describe("energy and injury model", () => {
  * is the MID role (roleForPosition), which the reference loss is calibrated on. */
 function rotation(age: number, slots: number, restSlot?: number): { starts: number[] } {
   const spacing = calendarValues().matchSpacingDays;
-  const player: any = { age, skills: { vel: 50, des: 50, arm: 50 } };
+  const player: any = { age, skills: { pace: 50, des: 50, playmaking: 50 } };
   let energy = 100;
   let load = 0;
   const starts: number[] = [];
@@ -115,8 +115,8 @@ function rotation(age: number, slots: number, restSlot?: number): { starts: numb
     const isMatchDay = (day - 1) % spacing === spacing - 1;
     if (isMatchDay && slot !== restSlot) {
       starts.push(Math.round(energy));
-      energy = Math.max(0, energy - energyLoss({ energy, age, physicalSkill: 50, position: 3, pressing: 50, involvement: 0.5, minutes: 90 }));
-      load = Math.min(6, load + loadIncrement({ position: 3, pressing: 50, involvement: 0.5, minutes: 90 }));
+      energy = Math.max(0, energy - energyLoss({ energy, age, physicalSkill: 50, position: "DM", pressing: 50, involvement: 0.5, minutes: 90 }));
+      load = Math.min(6, load + loadIncrement({ position: "DM", pressing: 50, involvement: 0.5, minutes: 90 }));
     }
   }
   return { starts };

@@ -1,67 +1,73 @@
-import type { Position, SkillSet } from "./types";
+import type { SkillSet } from "./types";
+import type { NaturalPosition, PositionGroup, DeployedRole } from "./positions";
+import { naturalDefaultRole, positionGroup } from "./positions";
+import { gameConfig } from "../config";
 
 export type SkillKey = keyof SkillSet;
 export type WeightedSkills = Partial<Record<SkillKey, number>>;
 
-export const OVERALL_WEIGHTS: Record<Position, Readonly<WeightedSkills>> = {
-  0: { gol: 0.80, vel: 0.08, tec: 0.06, pas: 0.04, des: 0.01, arm: 0.01 },
-  1: { des: 0.45, vel: 0.16, pas: 0.16, tec: 0.12, arm: 0.07, fin: 0.03, gol: 0.01 },
-  2: { des: 0.56, arm: 0.12, pas: 0.12, vel: 0.08, tec: 0.07, fin: 0.04, gol: 0.01 },
-  3: { pas: 0.25, arm: 0.25, tec: 0.20, vel: 0.12, des: 0.10, fin: 0.07, gol: 0.01 },
-  4: { fin: 0.46, vel: 0.20, tec: 0.15, arm: 0.08, pas: 0.07, des: 0.03, gol: 0.01 },
-};
+export interface OverallGroupRow {
+  scale: number;
+  weights: Readonly<WeightedSkills>;
+}
 
-export const TACTICAL_RATING_WEIGHTS: Record<number, Readonly<WeightedSkills>> = {
-  1: { gol: 0.6, tec: 0.15, vel: 0.15, pas: 0.1 },
-  2: { des: 0.4, vel: 0.1, tec: 0.1, pas: 0.3, arm: 0.05, fin: 0.05 },
-  3: { des: 0.5, tec: 0.1, vel: 0.25, pas: 0.1, arm: 0.05 },
-  4: { des: 0.5, tec: 0.1, vel: 0.25, pas: 0.1, arm: 0.05 },
-  5: { des: 0.5, tec: 0.1, vel: 0.25, pas: 0.1, arm: 0.05 },
-  6: { des: 0.5, tec: 0.1, vel: 0.25, pas: 0.1, arm: 0.05 },
-  7: { des: 0.5, tec: 0.1, vel: 0.25, pas: 0.1, arm: 0.05 },
-  8: { des: 0.5, tec: 0.1, vel: 0.25, pas: 0.1, arm: 0.05 },
-  9: { des: 0.4, vel: 0.1, tec: 0.1, pas: 0.3, arm: 0.05, fin: 0.05 },
-  10: { des: 0.05, vel: 0.25, tec: 0.15, pas: 0.25, arm: 0.2, fin: 0.1 },
-  11: { des: 0.4, vel: 0.15, tec: 0.1, pas: 0.2, arm: 0.1, fin: 0.05 },
-  12: { des: 0.4, vel: 0.15, tec: 0.1, pas: 0.2, arm: 0.1, fin: 0.05 },
-  13: { des: 0.4, vel: 0.15, tec: 0.1, pas: 0.2, arm: 0.1, fin: 0.05 },
-  14: { des: 0.05, vel: 0.1, tec: 0.1, pas: 0.25, arm: 0.4, fin: 0.1 },
-  15: { des: 0.05, vel: 0.1, tec: 0.1, pas: 0.25, arm: 0.4, fin: 0.1 },
-  16: { des: 0.05, vel: 0.1, tec: 0.1, pas: 0.25, arm: 0.4, fin: 0.1 },
-  17: { des: 0.05, vel: 0.25, tec: 0.15, pas: 0.25, arm: 0.2, fin: 0.1 },
-  18: { vel: 0.25, tec: 0.15, pas: 0.15, arm: 0.05, fin: 0.4 },
-  19: { vel: 0.25, tec: 0.25, pas: 0.05, arm: 0.05, fin: 0.4 },
-  20: { vel: 0.25, tec: 0.25, pas: 0.05, arm: 0.05, fin: 0.4 },
-  21: { vel: 0.25, tec: 0.25, pas: 0.05, arm: 0.05, fin: 0.4 },
-  22: { vel: 0.25, tec: 0.25, pas: 0.05, arm: 0.05, fin: 0.4 },
-  23: { vel: 0.25, tec: 0.25, pas: 0.05, arm: 0.05, fin: 0.4 },
-  24: { vel: 0.25, tec: 0.25, pas: 0.05, arm: 0.05, fin: 0.4 },
-  25: { vel: 0.25, tec: 0.15, pas: 0.15, arm: 0.05, fin: 0.4 },
-};
+/**
+ * Broad-group OVR rows (§6.1) and deployed-role tactical rows (§6.2) are owned
+ * exclusively by `game.config.jsonc` under `playerPositions`. The schema makes
+ * both required and validates key sets, skill keys and row sums, so there is no
+ * in-code fallback table to drift out of sync with the config.
+ */
+function overallByGroup(): Record<PositionGroup, OverallGroupRow> {
+  return gameConfig.playerPositions.overallByGroup as Record<PositionGroup, OverallGroupRow>;
+}
 
-export const SKILL_KEYS: SkillKey[] = ["gol", "vel", "tec", "pas", "des", "arm", "fin"];
+function tacticalByRole(): Record<DeployedRole, Readonly<WeightedSkills>> {
+  return gameConfig.playerPositions.tacticalRatingByRole as Record<DeployedRole, Readonly<WeightedSkills>>;
+}
 
-// Calibration: the position's key attributes are generated near the target
-// overall, but supporting attributes use the fixed existing skill-model baseline and sit
-// well below it, which compresses a plain weighted mean. These factors
-// lift the aggregate back onto the same 1-100 scale the rest of the game
-// (economy, transfers, thresholds) was tuned for. Sampled over full worlds.
-export const OVERALL_SCALE: Record<Position, number> = { 0: 1.15, 1: 1.25, 2: 1.17, 3: 1.3, 4: 1.2 };
+/** Broad-group OVR weights, read live from config. */
+export function overallWeightsFor(group: PositionGroup): Readonly<WeightedSkills> {
+  return overallByGroup()[group].weights;
+}
+
+/** Broad-group OVR scale, read live from config. */
+export function overallScaleFor(group: PositionGroup): number {
+  return overallByGroup()[group].scale;
+}
+
+/** Deployed-role tactical weights, read live from config. */
+export function tacticalWeightsFor(role: DeployedRole): Readonly<WeightedSkills> {
+  return tacticalByRole()[role];
+}
+
+/** All five broad groups with their OVR rows, for iteration in tests/tools. */
+export function allOverallGroups(): Record<PositionGroup, OverallGroupRow> {
+  return overallByGroup();
+}
+
+export const SKILL_KEYS: SkillKey[] = ["gol", "pace", "tec", "pas", "des", "playmaking", "fin"];
 
 export function weightTotal(weights: WeightedSkills): number {
   return Object.values(weights).reduce((sum, weight) => sum + (weight ?? 0), 0);
 }
 
-export function overallFromSkills(position: Position, skills: SkillSet): number {
-  const weighted = Object.entries(OVERALL_WEIGHTS[position]).reduce(
+/** OVR from persisted visible skills through the natural position's broad group (§6.1). */
+export function overallFromSkills(position: NaturalPosition, skills: SkillSet): number {
+  const { weights, scale } = overallByGroup()[positionGroup(position)];
+  const weighted = Object.entries(weights).reduce(
     (sum, [key, weight]) => sum + skills[key as SkillKey] * (weight ?? 0),
     0,
   );
-  return Math.max(1, Math.min(100, Math.round(weighted * OVERALL_SCALE[position])));
+  return Math.max(1, Math.min(100, Math.round(weighted * scale)));
 }
 
-export function tacticalSkillRating(skills: SkillSet, tacPos: number): number {
-  const weights = TACTICAL_RATING_WEIGHTS[tacPos];
+/**
+ * Deployed-role tactical rating (§6.2). Each weighted term is rounded before
+ * summing — this is the historical arithmetic and must not be changed to one
+ * final rounded weighted mean.
+ */
+export function tacticalSkillRating(skills: SkillSet, role: DeployedRole): number {
+  const weights = tacticalByRole()[role];
   if (!weights) return 0;
   return Object.entries(weights).reduce(
     (sum, [key, weight]) => sum + Math.round(skills[key as SkillKey] * (weight ?? 0)),
@@ -69,16 +75,30 @@ export function tacticalSkillRating(skills: SkillSet, tacPos: number): number {
   );
 }
 
-export function trainingWeights(position: Position, focus: "assistant" | "primary" | "secondary", skills?: SkillSet): Record<SkillKey, number> {
-  const base = { ...OVERALL_WEIGHTS[position] } as Record<SkillKey, number>;
+/**
+ * Natural-position training profile (§6.3): the natural position maps to its
+ * matching deployed-role tactical weights as the base distribution. Primary /
+ * secondary add the configured focus bonus to the largest / second-largest
+ * base weight; assistant adds it to the weakest currently-valued skill among
+ * skills with a positive base weight. Normalize after the focus addition and
+ * redistribute bounded skills exactly as before.
+ */
+export function trainingWeights(
+  position: NaturalPosition,
+  focus: "assistant" | "primary" | "secondary",
+  skills?: SkillSet,
+): Record<SkillKey, number> {
+  const base = { ...tacticalByRole()[naturalDefaultRole(position)] } as Record<SkillKey, number>;
   const relevant = SKILL_KEYS.filter((key) => (base[key] ?? 0) > 0);
   let target: SkillKey | undefined;
   if (focus === "primary") target = relevant.sort((a, b) => base[b] - base[a])[0];
   if (focus === "secondary") target = relevant.sort((a, b) => base[b] - base[a])[1] ?? relevant[0];
   if (focus === "assistant") {
-    target = relevant.sort((a, b) => (skills ? skills[a] - skills[b] : base[a] - base[b]) || base[a] - base[b] || a.localeCompare(b))[0];
+    target = relevant.sort(
+      (a, b) => (skills ? skills[a] - skills[b] : base[a] - base[b]) || base[a] - base[b] || a.localeCompare(b),
+    )[0];
   }
-  if (target) base[target] += 0.20;
+  if (target) base[target] = (base[target] ?? 0) + gameConfig.playerPositions.trainingFocusBonus;
   const total = weightTotal(base);
   return Object.fromEntries(SKILL_KEYS.map((key) => [key, (base[key] ?? 0) / total])) as Record<SkillKey, number>;
 }

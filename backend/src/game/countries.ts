@@ -17,7 +17,7 @@ export const COUNTRIES: CountryDef[] = [
   { code: "AIA", name: "Anguilla", strength: 12, featured: false },
   { code: "ATG", name: "Antigua and Barbuda", strength: 13, featured: false },
   { code: "ARG", name: "Argentina", strength: 20, featured: true },
-  { code: "ARM", name: "Armenia", strength: 14, featured: false },
+  { code: "playmaking", name: "Armenia", strength: 14, featured: false },
   { code: "ARU", name: "Aruba", strength: 12, featured: false },
   { code: "AUS", name: "Australia", strength: 17, featured: true },
   { code: "AUT", name: "Austria", strength: 17, featured: true },

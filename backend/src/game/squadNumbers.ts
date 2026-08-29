@@ -18,7 +18,7 @@ const RANDOM_POOL_MAX = 40;
 export function assignInitialSquadNumbers(rng: World["rng"], players: Player[]): void {
   const used = new Set<number>();
   const assigned = new Set<number>();
-  const gks = players.filter((p) => p.position === 0).sort((a, b) => b.overall - a.overall);
+  const gks = players.filter((p) => p.position === "GK").sort((a, b) => b.overall - a.overall);
   // Goalkeeper rule: #1 for the top GK, #12 for the second.
   if (gks[0]) {
     gks[0].squadNumber = 1;
@@ -48,7 +48,7 @@ export function ensureClubSquadNumbers(world: World, clubId: number): void {
   const missing = squad.filter((p) => typeof p.squadNumber !== "number");
   // Prefer the goalkeeper numbers for goalkeepers joining without a number.
   for (const p of missing) {
-    if (p.position === 0 && !used.has(1)) {
+    if (p.position === "GK" && !used.has(1)) {
       p.squadNumber = 1;
       used.add(1);
       continue;

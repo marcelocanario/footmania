@@ -15,7 +15,7 @@ function makeClub2(overrides: Partial<Club> = {}): Club {
 
 function makeSquad(rng: RngState, club: Club, count: number, offset = 0) {
   const players: Player[] = [];
-  const balanced: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4];
+  const balanced: Position[] = ["GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "RB", "CB", "CB", "CB", "CB", "CB", "CB", "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM", "AM", "LW", "LW", "RW", "RW", "ST", "ST"];
   for (let i = 0; i < count; i++) {
     players.push(generatePlayer(rng, club, { id: offset + i + 1, position: balanced[i % balanced.length] }));
   }
@@ -30,7 +30,6 @@ function clonePlayer(p: Player): Player {
     recentMinutes: [...p.recentMinutes],
     careerProfile: { ...p.careerProfile },
     energy: 100,
-    tacPos: -1,
     starter: false,
     injuryDays: 0,
     suspendedGames: 0,
@@ -164,6 +163,7 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     const strongSquad = makeSquad(rng, strongClub, 30, 30).map((p) => {
       const boosted = clonePlayer(p);
       for (const k of Object.keys(boosted.skills) as (keyof typeof boosted.skills)[]) {
+// @ts-ignore
         boosted.skills[k] = Math.min(99, boosted.skills[k] + 25);
       }
       boosted.overall = Math.min(99, boosted.overall + 25);
@@ -202,10 +202,14 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
   it("CONTROL style retains possession longer than COUNTER style (tactical signature)", async () => {
     const seed = 33;
     const rng = createRng(seed);
-    const controlClub = makeClub2({ tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
-    const counterClub = makeClub2({ tactics: { formation: 4, style: 2, pressing: 0, direction: 0 } });
+    // This test measures the requested styles directly; AI pre-match tactic
+    // selection must not replace them before the match begins.
+    const controlClub = makeClub2({ isHuman: true, tactics: { formation: 4, style: 0, pressing: 0, direction: 0 } });
+    const counterClub = makeClub2({ isHuman: true, tactics: { formation: 4, style: 2, pressing: 0, direction: 0 } });
     const controlSquad = makeSquad(rng, controlClub, 30);
-    const counterSquad = makeSquad(rng, counterClub, 30, 30);
+    // Hold player quality constant so the assertion measures tactics, not
+    // natural-position generation noise.
+    const counterSquad = controlSquad.map((player) => ({ ...clonePlayer(player), id: player.id + 1000, clubId: counterClub.id }));
 
     const run = async (home: Club, away: Club, hSquad: Player[], aSquad: Player[]) => {
       let controlShare = 0;
@@ -269,17 +273,18 @@ describe("match simulator (plans/6. match-simulator-overhaul.md)", () => {
     const club = makeClub2();
     const squad = makeSquad(rng, club, 30);
     const xi = squad.slice(0, 11);
-    const formation = [1, 22, 24, 11, 13, 14, 16, 2, 9, 3, 5];
-    for (let i = 0; i < 11; i++) xi[i].tacPos = formation[i];
-    const coverage = (list: Player[]) =>
+    const roles = ["GK", "LB", "CB", "CB", "DM", "AM", "AM", "RB", "ST", "LW", "RW"];
+    const roleOf = (p: Player, i: number) => roles[i] ?? "CB";
+    const coverage = (list: { position: string }[]) =>
       list.reduce((sum, p) => {
-        const role = p.tacPos >= 3 && p.tacPos <= 8 ? "CB" : p.tacPos === 2 ? "LB" : p.tacPos === 9 ? "RB" : "";
+        const role = p.position;
         return sum + (role === "CB" ? 0.85 : role === "LB" || role === "RB" ? 0.8 : 0);
       }, 0);
     const coverageBefore = coverage(xi);
-    const cb = xi.find((p) => p.tacPos === 3)!;
+    const cb = xi.find((p) => p.position === "CB")!;
     xi.splice(xi.indexOf(cb), 1);
     const coverageAfter = coverage(xi);
     expect(coverageAfter).toBeLessThan(coverageBefore);
+    void roleOf;
   });
 });

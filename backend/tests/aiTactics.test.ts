@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { aiBestXI, chooseAiTactics } from "../src/game/club";
-import { FORMATION_POSITIONS } from "../src/game/constants";
+
 import { generatePlayer } from "../src/game/player";
 import { createRng, type RngState } from "../src/game/rng";
 import type { Club, Player, Position, SkillSet } from "../src/game/types";
@@ -33,7 +33,7 @@ function makeClub(isHuman = false): Club {
   };
 }
 
-const POSITIONS: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4];
+const POSITIONS: Position[] = ["GK", "GK", "GK", "LB", "LB", "LB", "RB", "RB", "CB", "CB", "CB", "CB", "DM", "DM", "DM", "AM", "AM", "AM", "ST", "ST", "ST"];
 
 function makeSquad(rng: RngState, club: Club, count: number): Player[] {
   const players: Player[] = [];
@@ -76,23 +76,23 @@ describe("chooseAiTactics", () => {
     const defensive = makeClub(false);
     const attacking = makeClub(false);
     // Defensive club: elite FB/CB pool, mediocre everything else.
-    const defSquad: Player[] = [skilled(defensive, 90, 0, { gol: 70 })];
+    const defSquad: Player[] = [skilled(defensive, 90, "GK", { gol: 70 })];
     for (let i = 0; i < 10; i++) {
-      defSquad.push(skilled(defensive, i + 1, i % 2 === 0 ? 1 : 2, { des: 85, arm: 80, pas: 60, vel: 60, tec: 55, fin: 40 }));
+      defSquad.push(skilled(defensive, i + 1, i % 2 === 0 ? "LB" : "CB", { des: 85, playmaking: 80, pas: 60, pace: 60, tec: 55, fin: 40 }));
     }
     for (let i = 10; i < 20; i++) {
-      defSquad.push(skilled(defensive, i + 1, POSITIONS[i % POSITIONS.length], { des: 45, arm: 45, pas: 45, vel: 45, tec: 45, fin: 45 }));
+      defSquad.push(skilled(defensive, i + 1, POSITIONS[i % POSITIONS.length], { des: 45, playmaking: 45, pas: 45, pace: 45, tec: 45, fin: 45 }));
     }
     // Attacking club: elite FW/AM pool with a thin, weak back line.
-    const attSquad: Player[] = [skilled(attacking, 190, 0, { gol: 70 })];
+    const attSquad: Player[] = [skilled(attacking, 190, "GK", { gol: 70 })];
     for (let i = 0; i < 6; i++) {
-      attSquad.push(skilled(attacking, 100 + i, 4, { fin: 88, vel: 85, tec: 75, des: 40, arm: 45, pas: 60 }));
+      attSquad.push(skilled(attacking, 100 + i, "ST", { fin: 88, pace: 85, tec: 75, des: 40, playmaking: 45, pas: 60 }));
     }
     for (let i = 6; i < 12; i++) {
-      attSquad.push(skilled(attacking, 100 + i, 3, { pas: 82, tec: 82, arm: 70, des: 50, vel: 55, fin: 55 }));
+      attSquad.push(skilled(attacking, 100 + i, "AM", { pas: 82, tec: 82, playmaking: 70, des: 50, pace: 55, fin: 55 }));
     }
     for (let i = 12; i < 20; i++) {
-      attSquad.push(skilled(attacking, 100 + i, i % 2 === 0 ? 1 : 2, { des: 48, arm: 48, pas: 48, vel: 48, tec: 48, fin: 48 }));
+      attSquad.push(skilled(attacking, 100 + i, i % 2 === 0 ? "LB" : "CB", { des: 48, playmaking: 48, pas: 48, pace: 48, tec: 48, fin: 48 }));
     }
 
     const defensiveAvailable = defSquad.filter((p) => p.clubId === defensive.id);
@@ -102,12 +102,12 @@ describe("chooseAiTactics", () => {
     expect(defXI).not.toBeNull();
     expect(attXI).not.toBeNull();
     const defendersInXI = (xi: NonNullable<typeof defXI>) =>
-      xi.slots.filter((slot) => slot.player.position === 1 || slot.player.position === 2).length;
+      xi.slots.filter((slot) => slot.player.position === "LB" || slot.player.position === "RB" || slot.player.position === "CB").length;
     expect(defendersInXI(defXI!)).toBeGreaterThan(defendersInXI(attXI!));
     // The formation chosen by chooseAiTactics is exactly aiBestXI's argmax.
     chooseAiTactics(defensive, defSquad);
     expect(defensive.tactics.formation).toBe(defXI!.formation);
-    expect(FORMATION_POSITIONS[defensive.tactics.formation].length).toBe(11);
+    expect(defXI!.slots.length).toBe(11);
   });
 
   it("maps the attribute profile onto style: pace/finishing counters, passing controls, defending presses", () => {
@@ -115,15 +115,15 @@ describe("chooseAiTactics", () => {
     const control = makeClub(false);
     const press = makeClub(false);
     const fill = (club: Club, position: Position, skills: Partial<SkillSet>) => {
-      const squad: Player[] = [skilled(club, 900 + club.id, 0, { gol: 65 })];
+      const squad: Player[] = [skilled(club, 900 + club.id, "GK", { gol: 65 })];
       for (let i = 1; i < 17; i++) {
         squad.push(skilled(club, 900 + club.id * 100 + i, position, skills));
       }
       return squad;
     };
-    const counterSquad = fill(counter, 4, { vel: 90, fin: 88, tec: 45, pas: 42, des: 42, arm: 44 });
-    const controlSquad = fill(control, 3, { tec: 92, pas: 90, vel: 45, fin: 44, des: 46, arm: 46 });
-    const pressSquad = fill(press, 2, { des: 92, arm: 90, tec: 45, pas: 44, vel: 50, fin: 42 });
+    const counterSquad = fill(counter, "ST", { pace: 90, fin: 88, tec: 45, pas: 42, des: 42, playmaking: 44 });
+    const controlSquad = fill(control, "AM", { tec: 92, pas: 90, pace: 45, fin: 44, des: 46, playmaking: 46 });
+    const pressSquad = fill(press, "CB", { des: 92, playmaking: 90, tec: 45, pas: 44, pace: 50, fin: 42 });
     chooseAiTactics(counter, counterSquad);
     chooseAiTactics(control, controlSquad);
     chooseAiTactics(press, pressSquad);
@@ -135,10 +135,10 @@ describe("chooseAiTactics", () => {
   it("scales pressing intensity with physical quality and energy reserve", () => {
     const heavy = makeClub(false);
     const light = makeClub(false);
-    const build = (club: Club, des: number, arm: number) => {
-      const squad: Player[] = [skilled(club, 800 + club.id, 0, { gol: 65 })];
+    const build = (club: Club, des: number, playmaking: number) => {
+      const squad: Player[] = [skilled(club, 800 + club.id, "GK", { gol: 65 })];
       for (let i = 1; i < 17; i++) {
-        squad.push(skilled(club, 800 + club.id * 100 + i, 2, { des, arm, vel: 60, tec: 60, pas: 60, fin: 50 }));
+        squad.push(skilled(club, 800 + club.id * 100 + i, "CB", { des, playmaking, pace: 60, tec: 60, pas: 60, fin: 50 }));
       }
       return squad;
     };
@@ -154,13 +154,13 @@ describe("chooseAiTactics", () => {
   it("plays down the wings when the chosen XI is clearly stronger there", () => {
     const rng = createRng(61);
     const wide = makeClub(false);
-    const squad: Player[] = [skilled(wide, 500, 0, { gol: 65 })];
+    const squad: Player[] = [skilled(wide, 500, "GK", { gol: 65 })];
     // Elite wide-quality fullbacks/wingers, weak central players.
     for (let i = 1; i <= 6; i++) {
-      squad.push(skilled(wide, 500 + i, 1, { vel: 92, tec: 88, des: 78, pas: 78, arm: 60, fin: 60 }));
+      squad.push(skilled(wide, 500 + i, "LB", { pace: 92, tec: 88, des: 78, pas: 78, playmaking: 60, fin: 60 }));
     }
     for (let i = 7; i <= 16; i++) {
-      squad.push(skilled(wide, 500 + i, i % 2 === 0 ? 2 : 3, { vel: 40, tec: 42, des: 44, pas: 44, arm: 44, fin: 40 }));
+      squad.push(skilled(wide, 500 + i, i % 2 === 0 ? "CB" : "AM", { pace: 40, tec: 42, des: 44, pas: 44, playmaking: 44, fin: 40 }));
     }
     chooseAiTactics(wide, squad);
     expect(wide.tactics.direction).toBe(1); // WIDE
@@ -168,14 +168,14 @@ describe("chooseAiTactics", () => {
 
   it("only considers available players: injured/suspended contributors do not shape the profile", () => {
     const club = makeClub(false);
-    const squad: Player[] = [skilled(club, 300, 0, { gol: 65 })];
+    const squad: Player[] = [skilled(club, 300, "GK", { gol: 65 })];
     // Ten elite defenders — but all of them suspended.
     for (let i = 1; i <= 10; i++) {
-      squad.push(skilled(club, 300 + i, 2, { des: 95, arm: 95, pas: 40, vel: 40, tec: 40, fin: 40 }, { suspendedGames: 1 }));
+      squad.push(skilled(club, 300 + i, "CB", { des: 95, playmaking: 95, pas: 40, pace: 40, tec: 40, fin: 40 }, { suspendedGames: 1 }));
     }
     // Available squad is full of attackers.
     for (let i = 11; i <= 20; i++) {
-      squad.push(skilled(club, 300 + i, 4, { fin: 90, vel: 88, tec: 70, des: 35, arm: 40, pas: 45 }));
+      squad.push(skilled(club, 300 + i, "ST", { fin: 90, pace: 88, tec: 70, des: 35, playmaking: 40, pas: 45 }));
     }
     chooseAiTactics(club, squad);
     const xiWithoutDefenders = aiBestXI(
@@ -191,7 +191,7 @@ describe("chooseAiTactics", () => {
     for (const p of squad) p.suspendedGames = 0;
     chooseAiTactics(club, squad);
     const xiWithDefenders = aiBestXI(squad.filter((p) => p.clubId === club.id), { pressing: 50, futureFixtures: true });
-    const cbCount = (xi: NonNullable<typeof xiWithDefenders>) => xi.slots.filter((slot) => slot.player.position === 2).length;
+    const cbCount = (xi: NonNullable<typeof xiWithDefenders>) => xi.slots.filter((slot) => slot.player.position === "CB" || slot.player.position === "LB" || slot.player.position === "RB").length;
     expect(xiWithDefenders).not.toBeNull();
     expect(cbCount(xiWithDefenders!)).toBeGreaterThan(cbCount(xiWithoutDefenders!));
   });

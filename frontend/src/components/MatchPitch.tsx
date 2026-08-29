@@ -2,7 +2,6 @@ import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSPr
 import type { KitDesign, LiveBall, LiveEvent, LiveMissingPlayer, LivePlayer } from "../api/client";
 import { FootballKit } from "./kit/FootballKit";
 import { ClubNameLink } from "./ClubNameLink";
-import { POSITION_FULL_NAMES } from "./PlayerName";
 import {
   BALL_CENTER_POINT,
   bendSignFor,
@@ -15,7 +14,7 @@ import {
   placeLiveBall,
   resolveColumnCollisions,
   shotHasOwnCue,
-  teamPitchPoints,
+  teamPitchPointsFromSlots,
   turnoverIntent,
   type IntentLine,
   type MoveStyle,
@@ -23,16 +22,19 @@ import {
   type PitchPoint,
   type PitchSide,
 } from "./matchPitchUtils";
-import { formationLabel } from "../tacticsOptions";
 
 interface PitchTeam {
   clubId: number;
   name: string;
   kit: KitDesign;
-  /** Kit Lab GK design; the tacPos===1 marker wears it (LiveState.homeGkKit/awayGkKit). */
+  /** Kit Lab GK design; the deployedRole==="GK" marker wears it (LiveState.homeGkKit/awayGkKit). */
   gkKit: KitDesign;
   players: LivePlayer[];
   formationId: number;
+  /** Formation name from the live view — the backend catalog is the only
+   *  formation-name authority (§16.1); the frontend keeps no second table. */
+  formationName: string;
+  formationSlots?: Array<{ x: number; y: number }>;
 }
 
 export interface MatchPitchProps {
@@ -155,13 +157,14 @@ const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighte
     "--kit": kit.primary,
     "--kit-2": kit.secondary,
   } as CSSProperties;
+  const posLabel = player.positionName ?? player.naturalPosition ?? "PLAYER";
   return (
     <button
       type="button"
       className={`pitch-player${highlighted ? " pitch-player-highlight" : ""}${player.injuryDays > 0 ? " pitch-player-injured" : ""}`}
       style={style}
       aria-label={player.number != null ? `${player.number} ${player.name}` : player.name}
-      title={player.number != null ? `${player.number} · ${player.name} · ${POSITION_FULL_NAMES[player.position] ?? ""}` : `${player.name} · ${POSITION_FULL_NAMES[player.position] ?? ""}`}
+      title={player.number != null ? `${player.number} · ${player.name} · ${posLabel}` : `${player.name} · ${posLabel}`}
       onClick={() => onPlayerClick?.(player.id, player.name)}
     >
       <span className="pitch-player-kit" aria-hidden="true">
@@ -256,11 +259,11 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   // both teams' markers on top of each other — resolveColumnCollisions nudges
   // any such pair apart, so it needs both sides' points at once.
   const { homePoints, awayPoints } = useMemo(() => {
-    const home_ = teamPitchPoints(homePitchPlayers, "home", home.formationId);
-    const away_ = teamPitchPoints(awayPitchPlayers, "away", away.formationId);
+    const home_ = teamPitchPointsFromSlots(homePitchPlayers, "home", home.formationSlots) ?? new Map();
+    const away_ = teamPitchPointsFromSlots(awayPitchPlayers, "away", away.formationSlots) ?? new Map();
     resolveColumnCollisions(home_, away_);
     return { homePoints: home_, awayPoints: away_ };
-  }, [homePitchPlayers, home.formationId, awayPitchPlayers, away.formationId]);
+  }, [homePitchPlayers, home.formationSlots, awayPitchPlayers, away.formationSlots]);
   // Keep the short-handed status in the team header without drawing a marker
   // for a player who has left the pitch.
   const homeMissing = useMemo(() => missing.filter((entry) => entry.side === 0), [missing]);
@@ -710,11 +713,11 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
         <div className="match-pitch-teams">
           <span className="match-pitch-team">
             <FootballKit {...home.kit} size={34} flat />
-            <span><b><ClubNameLink clubId={home.clubId} name={home.name} showCrest={false} /></b><small>{formationLabel(home.formationId)}{shortSuffix(homeMissing)}</small></span>
+            <span><b><ClubNameLink clubId={home.clubId} name={home.name} showCrest={false} /></b><small>{home.formationName}{shortSuffix(homeMissing)}</small></span>
           </span>
           <span className="match-pitch-team">
             <FootballKit {...away.kit} size={34} flat />
-            <span><b><ClubNameLink clubId={away.clubId} name={away.name} showCrest={false} /></b><small>{formationLabel(away.formationId)}{shortSuffix(awayMissing)}</small></span>
+            <span><b><ClubNameLink clubId={away.clubId} name={away.name} showCrest={false} /></b><small>{away.formationName}{shortSuffix(awayMissing)}</small></span>
           </span>
         </div>
       </div>
@@ -788,8 +791,8 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
         )}
         {cueActive && cue && <CueOverlay cue={cue} active={cueActive} reducedMotion={motionReduced} />}
         <div className="pitch-players">
-          {homePitchPlayers.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.tacPos === 1 ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
-          {awayPitchPlayers.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.tacPos === 1 ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
+          {homePitchPlayers.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.deployedRole === "GK" ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
+          {awayPitchPlayers.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.deployedRole === "GK" ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
         </div>
         {cue && activeEvent && BANNER_KINDS.has(cue.kind) && <div className="pitch-event-banner"><b>{EVENT_COPY[cue.kind]}</b><span>{cue.event.player || cue.event.player2}</span></div>}
       </div>

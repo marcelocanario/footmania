@@ -1,14 +1,14 @@
 import type { Club, Player, RngState } from "./types";
-import { nextInt, shuffle } from "./rng";
-import { tacticalSkillRating } from "./rating";
-import { energyLoss, loadIncrement, physicalSkill, readiness, recoverEnergy } from "./energyInjury";
+import { nextInt } from "./rng";
+import { tacticalSkillRating, overallFromSkills } from "./rating";
+import { athleticism, energyLoss, loadIncrement, physicalSkill, readiness, recoverEnergy } from "./energyInjury";
 import { gameConfig } from "../config";
 import { MATCH_SIMULATOR_CONFIG } from "../matchSimulatorConfig";
-import {
-  BENCH_ORDER,
-  FORMATION_POSITIONS,
-  SENIOR_SQUAD_LIMIT,
-} from "./constants";
+import { SENIOR_SQUAD_LIMIT } from "./constants";
+import type { DeployedRole } from "./positions";
+import { positionGroup } from "./positions";
+import { adjustedSkills, adjustedTacticalRating as adjustedRoleRating, isEligible } from "./outOfPosition";
+import { FORMATIONS, formationById } from "./formations";
 
 export function tacticsForClub(rng: RngState): Club["tactics"] {
   const roll = nextInt(rng, 100);
@@ -38,71 +38,320 @@ export function eligible(players: Player[]): Player[] {
   return players.filter((p) => !p.clubId || p.injuryDays === 0);
 }
 
-/** AI selection context: rotation projection inputs (plan 9 §21). */
-interface AiSelectionOptions {
-  /** Team pressing on the engine's 0–100 scale. */
-  pressing: number;
-  /** Whether another league fixture follows in the current season (§21.4). */
-  futureFixtures: boolean;
+// §7 lives in outOfPosition.ts — the single authority for penalties, labels and
+// adjusted skills. These thin re-exports keep existing call sites readable.
+export { rolePenalty as penaltyFor, suitabilityLabel } from "./outOfPosition";
+
+/** Adjusted raw skills after the role penalty (§7.1); null when ineligible. */
+export function adjustedSkillsForRole(p: Player, role: DeployedRole): Player["skills"] | null {
+  return adjustedSkills(p.skills, p.position, role);
 }
 
-const DEFAULT_AI_SELECTION: AiSelectionOptions = { pressing: 50, futureFixtures: true };
+/** Adjusted deployed-role tactical rating (§7.1): never exceeds the unpenalized rating. */
+export function adjustedTacticalRating(p: Player, role: DeployedRole): number | null {
+  return adjustedRoleRating(p.skills, p.position, role);
+}
 
-export function pickForTacPos(players: Player[], tacPos: number, excluded: Set<number>, sideVariant: boolean, aiOptions: AiSelectionOptions = DEFAULT_AI_SELECTION): Player | null {
-  const position = tacPosToBasePosition(tacPos);
-  const candidates = players.filter(
-    (p) => p.injuryDays === 0 && p.suspendedGames === 0 && p.position === position && !excluded.has(p.id) && !(tacPos === 1 && p.position !== 0)
-  );
-  if (candidates.length === 0) return null;
-  const useFutureCost = aiOptions.futureFixtures;
-  if (sideVariant) {
-    const bySide = candidates.filter((p) => p.tacPos >= 0);
-    const pool = bySide.length > 0 ? bySide : candidates;
-    const sorted = [...pool].sort((a, b) => {
-      const tacticalDifference = selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions);
-      if (tacticalDifference !== 0) return tacticalDifference;
-      if (a.overall !== b.overall) return b.overall - a.overall;
-      return b.energy - a.energy;
-    });
-    return sorted[0];
+/** Current adjusted rating × readiness (§9.2). */
+export function currentScore(p: Player, role: DeployedRole): number | null {
+  const rating = adjustedTacticalRating(p, role);
+  if (rating === null) return null;
+  return rating * readiness(p.energy);
+}
+
+// ---------------------------------------------------------------------------
+// Globally optimal XI assignment (§9.2)
+//
+// Deterministic DP over the 11 formation slots keyed by an 11-bit assigned-slot
+// mask. Candidates are sorted by player ID. For each player: skip or assign to
+// one empty compatible slot. Tie-break: larger total score (epsilon 1e-9), then
+// lexicographically smaller player-ID array in slot order.
+// ---------------------------------------------------------------------------
+
+interface PairScore {
+  score: number;
+  ids: number[];
+}
+
+export interface AssignedSlot {
+  role: DeployedRole;
+  player: Player;
+}
+
+export interface BestXiResult {
+  formation: number;
+  slots: AssignedSlot[];
+  totalScore: number;
+}
+
+/**
+ * Core assignment DP (§9.2), shared by the full-XI and partial variants.
+ *
+ * State is `(playerIndex, slotMask)` exactly as the plan prescribes: players are
+ * iterated once and each is either skipped or placed in one empty compatible
+ * slot, so a player can never be used twice by construction. (Keying the state
+ * on the mask alone and filtering against one stored representative set is NOT
+ * the same DP and is not provably optimal.)
+ *
+ * Assignments live in one flat Int32Array — `assign[mask * 11 + slot]` — with
+ * -1 for "empty", so a state transition copies 11 int32s instead of allocating
+ * a JS array. That matters: this runs once per formation per AI club per match.
+ *
+ * Returns per-mask scores and assignments; the callers pick which mask to read.
+ */
+const NO_PLAYER = -1;
+
+/** Popcount of every 11-bit mask, and those masks bucketed by it. Built once. */
+const POPCOUNT11 = new Uint8Array(1 << 11);
+const MASKS_BY_POPCOUNT: number[][] = (() => {
+  const buckets: number[][] = Array.from({ length: 12 }, () => []);
+  for (let mask = 0; mask < 1 << 11; mask++) {
+    let n = 0;
+    for (let i = 0; i < 11; i++) if ((mask & (1 << i)) !== 0) n++;
+    POPCOUNT11[mask] = n;
+    buckets[n].push(mask);
   }
-  const sorted = [...candidates].sort((a, b) => {
-    const tacticalDifference = selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions);
-    return tacticalDifference || b.overall - a.overall || b.energy - a.energy;
-  });
-  return sorted[0];
+  return buckets;
+})();
+
+interface AssignmentDp {
+  score: Float64Array;
+  assign: Int32Array;
+  reachable: Uint8Array;
+  roles: DeployedRole[];
+  byId: Map<number, Player>;
 }
 
-function selectionValue(player: Player, tacPos: number, aiOptions: AiSelectionOptions): number {
-  return aiOptions.futureFixtures ? aiSelectionValue(player, tacPos, aiOptions.pressing) : tacticalSkillRating(player.skills, tacPos);
+function runAssignmentDp<T extends { id: number }>(
+  available: T[],
+  roles: readonly DeployedRole[],
+  scoreOf: (p: T, role: DeployedRole) => number | null,
+): (Omit<AssignmentDp, "byId" | "roles"> & { byId: Map<number, T>; roles: readonly DeployedRole[] }) | null {
+  if (roles.length !== 11) return null;
+  const size = 1 << 11;
+
+  // Deterministic candidate order by id: the DP is exhaustive, so ordering
+  // affects only tie-break determinism.
+  const candidates = [...available].sort((a, b) => a.id - b.id);
+  const byId = new Map<number, T>();
+  // Per-candidate slot scores, computed once.
+  const slotScoresOf = new Map<number, Float64Array>();
+  const usable: T[] = [];
+  for (const p of candidates) {
+    const scores = new Float64Array(11);
+    let any = false;
+    for (let slot = 0; slot < 11; slot++) {
+      const s = scoreOf(p, roles[slot]);
+      scores[slot] = s ?? -Infinity;
+      if (s !== null) any = true;
+    }
+    if (!any) continue;
+    slotScoresOf.set(p.id, scores);
+    usable.push(p);
+    byId.set(p.id, p);
+  }
+
+  const score = new Float64Array(size).fill(-Infinity);
+  const reachable = new Uint8Array(size);
+  const assign = new Int32Array(size * 11).fill(NO_PLAYER);
+  score[0] = 0;
+  reachable[0] = 1;
+  const candidate = new Int32Array(11);
+
+  // In-place 0/1 relaxation. A transition always moves a state from popcount k
+  // to k+1, so visiting popcount layers in DESCENDING order guarantees a state
+  // updated by this player is never read as a source for the same player —
+  // exactly the "each item used at most once" property, without copying the
+  // whole DP layer per player (which dominated the cost of the 13-formation
+  // AI search).
+  for (const p of usable) {
+    const scores = slotScoresOf.get(p.id)!;
+    for (let k = 10; k >= 0; k--) {
+      for (const mask of MASKS_BY_POPCOUNT[k]) {
+        if (!reachable[mask]) continue;
+        const base = score[mask];
+        const rowStart = mask * 11;
+        for (let slot = 0; slot < 11; slot++) {
+          if ((mask & (1 << slot)) !== 0) continue;
+          const s = scores[slot];
+          if (s === -Infinity) continue;
+          const newMask = mask | (1 << slot);
+          const newScore = base + s;
+          const target = newMask * 11;
+          if (!reachable[newMask] || newScore > score[newMask] + 1e-9) {
+            score[newMask] = newScore;
+            reachable[newMask] = 1;
+            assign.copyWithin(target, rowStart, rowStart + 11);
+            assign[target + slot] = p.id;
+          } else if (Math.abs(newScore - score[newMask]) <= 1e-9) {
+            // §9.2 tie-break: lexicographically smaller player-ID array in slot
+            // order, with an empty slot sorting after every real id.
+            for (let i = 0; i < 11; i++) candidate[i] = assign[rowStart + i];
+            candidate[slot] = p.id;
+            if (lexAssignSmallerFlat(candidate, 0, assign, target)) {
+              assign.copyWithin(target, rowStart, rowStart + 11);
+              assign[target + slot] = p.id;
+            }
+          }
+        }
+      }
+    }
+  }
+  return { score, assign, reachable, roles, byId };
 }
 
-export function tacPosToBasePosition(tacPos: number): number {
-  if (tacPos === 0 || tacPos === 1) return 0;
-  if (tacPos === 2 || tacPos === 9 || tacPos === 10 || tacPos === 17) return 1;
-  if (tacPos >= 3 && tacPos <= 8) return 2;
-  if (tacPos >= 11 && tacPos <= 16) return 3;
-  return 4;
+/** Lexicographic compare of two flat 11-slot assignment rows; -1 sorts last. */
+function lexAssignSmallerFlat(a: Int32Array, aOff: number, b: Int32Array, bOff: number): boolean {
+  for (let i = 0; i < 11; i++) {
+    const av = a[aOff + i] === NO_PLAYER ? Number.MAX_SAFE_INTEGER : a[aOff + i];
+    const bv = b[bOff + i] === NO_PLAYER ? Number.MAX_SAFE_INTEGER : b[bOff + i];
+    if (av !== bv) return av < bv;
+  }
+  return false;
+}
+
+export function assignBestXI(
+  available: Player[],
+  formationId: number,
+  scoreOf: (p: Player, role: DeployedRole) => number | null,
+): { slots: AssignedSlot[]; totalScore: number } | null {
+  const def = formationById(formationId);
+  if (!def) return null;
+  const dp = runAssignmentDp(available, def.slots.map((slot) => slot.role), scoreOf);
+  if (!dp) return null;
+  const full = (1 << 11) - 1;
+  if (!dp.reachable[full]) return null;
+  const base = full * 11;
+  const slots: AssignedSlot[] = [];
+  const seen = new Set<number>();
+  for (let slot = 0; slot < 11; slot++) {
+    const pid = dp.assign[base + slot];
+    const player = pid === NO_PLAYER ? undefined : dp.byId.get(pid);
+    if (!player || seen.has(pid)) return null;
+    seen.add(pid);
+    slots.push({ role: dp.roles[slot], player });
+  }
+  return { slots, totalScore: dp.score[full] };
+}
+
+/**
+ * Partial assignment of a fixed set of players to a formation's slots (§9.1).
+ *
+ * Used when a side changes formation mid-match: the players already on the
+ * pitch must be re-slotted WITHOUT substituting anyone, and a slot may stay
+ * empty when the side is short (a dismissed or unreplaced injured GK therefore
+ * leaves the GK slot empty rather than handing it to an outfielder).
+ *
+ * Candidate results compare by: more assigned players, then larger total score,
+ * then the §9.2 lexicographic player-ID tie-break in slot order.
+ *
+ * Returns `playerIdBySlot[slotIndex] = id | null`.
+ */
+export function assignOnPitchToSlots<T extends { id: number }>(
+  onPitch: T[],
+  formationId: number,
+  scoreOf: (p: T, role: DeployedRole) => number | null,
+): (number | null)[] | null {
+  const def = formationById(formationId);
+  if (!def) return null;
+  const dp = runAssignmentDp(onPitch, def.slots.map((slot) => slot.role), scoreOf);
+  if (!dp) return null;
+  const size = 1 << 11;
+  let bestMask = -1;
+  let bestCount = -1;
+  for (let mask = 0; mask < size; mask++) {
+    if (!dp.reachable[mask]) continue;
+    const count = POPCOUNT11[mask];
+    if (bestMask === -1 || count > bestCount) {
+      bestMask = mask;
+      bestCount = count;
+      continue;
+    }
+    if (count < bestCount) continue;
+    const diff = dp.score[mask] - dp.score[bestMask];
+    if (diff > 1e-9) { bestMask = mask; continue; }
+    if (diff < -1e-9) continue;
+    if (lexAssignSmallerFlat(dp.assign, mask * 11, dp.assign, bestMask * 11)) bestMask = mask;
+  }
+  if (bestMask === -1) return null;
+  const base = bestMask * 11;
+  return Array.from({ length: 11 }, (_, slot) =>
+    dp.assign[base + slot] === NO_PLAYER ? null : dp.assign[base + slot]);
+}
+
+/**
+ * Assign a FIXED set of players to a formation's slots, maximizing total score
+ * (§14.4). Same DP as {@link assignOnPitchToSlots}; the distinct name documents
+ * that the caller has already decided who plays and only the slot order is open.
+ */
+export const assignFixedSetToSlots = assignOnPitchToSlots;
+
+
+/** Human auto-fill / preview pair score (§9.2): adjusted rating × readiness. */
+const humanScoreOf = (p: Player, role: DeployedRole): number | null => currentScore(p, role);
+
+/** AI pair score (§9.2): currentScore - futureCostWeight × futureCost. */
+export function aiSelectionValue(player: Player, role: DeployedRole, pressing = 50): number {
+  const rating = adjustedTacticalRating(player, role);
+  if (rating === null) return -Infinity;
+  const base = rating;
+  const current = base * readiness(player.energy);
+  const spacing = gameConfig.matchSpacingDays;
+  const project = (played: boolean): number => {
+    let energy = player.energy;
+    let load = player.recentLoad ?? 0;
+    if (played) {
+      energy = Math.max(0, energy - energyLoss({ energy, age: player.age, physicalSkill: physicalSkill(player), position: roleToEnergyRole(role), pressing, involvement: 0.5, minutes: 90 }));
+      load = Math.min(6, load + loadIncrement({ position: roleToEnergyRole(role), pressing, involvement: 0.5, minutes: 90 }));
+    }
+    for (let day = 0; day < spacing; day++) {
+      load *= Math.pow(2, -1 / spacing);
+      energy = recoverEnergy({ ...player, energy, recentLoad: load }, load, spacing);
+    }
+    return energy;
+  };
+  const playedNext = project(true);
+  const restedNext = project(false);
+  const futureCost = base * (readiness(restedNext) - readiness(playedNext));
+  const cfg = MATCH_SIMULATOR_CONFIG.aiPregameTactics as unknown as { futureCostWeight?: number };
+  const weight = cfg.futureCostWeight ?? 0.45;
+  return current - weight * futureCost;
+}
+
+function aiScoreOf(pressing: number) {
+  // The value depends only on (player, role) — never on the formation or slot —
+  // and each call runs two multi-day energy projections, so memoize across the
+  // thirteen formations aiBestXI evaluates.
+  const cache = new Map<string, number | null>();
+  return (p: Player, role: DeployedRole): number | null => {
+    const key = `${p.id}:${role}`;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const v = aiSelectionValue(p, role, pressing);
+    const out = Number.isFinite(v) ? v : null;
+    cache.set(key, out);
+    return out;
+  };
+}
+
+/** §13.1 energy/load role from a deployed role (GK/DEF/MID/ATT). */
+function roleToEnergyRole(role: DeployedRole): "GK" | "DEF" | "MID" | "ATT" {
+  if (role === "GK") return "GK";
+  if (role === "LB" || role === "RB" || role === "CB" || role === "SW") return "DEF";
+  if (role === "DM" || role === "AM" || role === "LM" || role === "RM") return "MID";
+  return "ATT";
 }
 
 export interface Lineup {
   starters: Player[];
   subs: Player[];
   formation: number;
-  positions: number[];
 }
 
-/**
- * Preview the lineup kickoff would field. NOTE: like every lineup builder in
- * this module (buildLineup, lineupForMatch), this mutates squad players'
- * `starter`/`tacPos` bookkeeping while resolving the sanitized saved lineup —
- * it is not a pure read.
- */
+/** Preview the lineup kickoff would field (sanitized saved lineup, else auto). */
 export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
   const saved = club.savedLineup;
   if (saved && saved.starters.length === 11) {
-    // Preview the same sanitized lineup kickoff would use, so unavailable
-    // entries are shown as their cascaded replacements.
     const sanitized = sanitizeSavedLineup(club, allPlayers, saved);
     if (sanitized) return sanitized;
   }
@@ -112,7 +361,6 @@ export function peekLineup(club: Club, allPlayers: Player[]): Lineup | null {
     starters: lineup.starters,
     subs: lineup.subs,
     formation: lineup.formation,
-    positions: lineup.positions,
   };
 }
 
@@ -127,42 +375,102 @@ export function buildLineup(club: Club, allPlayers: Player[], options: { futureF
     if (player.clubId === club.id) player.starter = false;
   }
   const available = roster.filter((p) => p.injuryDays === 0 && p.suspendedGames === 0);
-  const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
-  const excluded = new Set<number>();
-  const starters: Player[] = [];
-  // AI rotation pressure uses the team's actual pressing and whether another
-  // league fixture follows this season; humans pick their own lineups.
-  const aiOptions: AiSelectionOptions | null = club.isHuman
-    ? null
-    : {
-        pressing: enginePressingScale(club.tactics.pressing),
-        futureFixtures: options.futureFixtures ?? true,
-      };
-  for (const tacPos of formation) {
-    // A randomly assigned formation can ask for more players in a position
-    // than a generated squad has. Fill the tactical slot from the best
-    // remaining eligible player rather than returning an empty match lineup.
-    const p = pickForTacPos(available, tacPos, excluded, true, aiOptions ?? undefined) ?? pickFallbackForTacPos(available, tacPos, excluded, aiOptions ?? undefined);
-    if (p) {
-      p.tacPos = tacPos;
-      p.starter = true;
-      excluded.add(p.id);
-      starters.push(p);
+  const formation = club.tactics.formation;
+  const scoreOf = club.isHuman
+    ? humanScoreOf
+    : aiScoreOf(enginePressingScale(club.tactics.pressing));
+  const assigned = assignBestXI(available, formation, scoreOf);
+  if (!assigned) return null;
+  const starters = assigned.slots.map((s) => s.player);
+  const excluded = new Set(starters.map((p) => p.id));
+  starters.forEach((p) => { p.starter = true; });
+  const subs = buildBench(available, excluded, scoreOf);
+  return { starters, subs, formation };
+}
+
+/**
+ * Bench construction (§9.4): partial DP against the archetype order
+ * GK, LB, RB, CB, DM, AM, LW, RW, ST, LM, RM. A state may skip an archetype.
+ * Compare final states by: more archetypes filled; lexicographically larger
+ * 11-bit filled-archetype mask read GK→RM (earlier archetype wins at equal
+ * counts); larger total current score; lexicographically smaller player-ID
+ * array in archetype order (Number.MAX_SAFE_INTEGER for unfilled).
+ * Append any still-unfilled places by adjusted best-role rating desc, energy
+ * desc, overall desc, player ID asc.
+ */
+const BENCH_ARCHETYPES: DeployedRole[] = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST", "LM", "RM"];
+
+function buildBench(available: Player[], excluded: Set<number>, scoreOf: (p: Player, role: DeployedRole) => number | null): Player[] {
+  const pool = available.filter((p) => !excluded.has(p.id));
+  const dp = runAssignmentDp(pool, BENCH_ARCHETYPES, scoreOf);
+  const bench: Player[] = [];
+  const used = new Set<number>();
+  if (dp) {
+    // Compare final states by the §9.4 tuple: more archetypes filled, then the
+    // lexicographically larger archetype mask read GK->RM (so an earlier
+    // archetype wins at equal counts), then total score, then the smaller
+    // player-ID array in archetype order.
+    let bestMask = -1;
+    for (let mask = 0; mask < 1 << 11; mask++) {
+      if (!dp.reachable[mask]) continue;
+      if (bestMask === -1) { bestMask = mask; continue; }
+      const count = POPCOUNT11[mask];
+      const bestCount = POPCOUNT11[bestMask];
+      if (count !== bestCount) { if (count > bestCount) bestMask = mask; continue; }
+      // BENCH_ARCHETYPES[0] = GK is bit 0 (least significant), the opposite of
+      // lexicographic significance, so compare the bit-reversed masks.
+      const rev = reverseMask11(mask);
+      const bestRev = reverseMask11(bestMask);
+      if (rev !== bestRev) { if (rev > bestRev) bestMask = mask; continue; }
+      const diff = dp.score[mask] - dp.score[bestMask];
+      if (Math.abs(diff) > 1e-9) { if (diff > 0) bestMask = mask; continue; }
+      if (lexAssignSmallerFlat(dp.assign, mask * 11, dp.assign, bestMask * 11)) bestMask = mask;
+    }
+    if (bestMask !== -1) {
+      const base = bestMask * 11;
+      for (let arch = 0; arch < 11; arch++) {
+        const id = dp.assign[base + arch];
+        if (id === NO_PLAYER) continue;
+        const player = dp.byId.get(id);
+        if (!player) continue;
+        bench.push(player);
+        used.add(id);
+      }
     }
   }
-  const subs: Player[] = [];
-  const benchPool = available.filter((p) => !excluded.has(p.id)).sort((a, b) => b.overall - a.overall);
-  for (const slot of BENCH_ORDER) {
-    const p = pickForTacPos(benchPool, slot, excluded, true, aiOptions ?? undefined);
-    if (p) {
-      p.tacPos = slot;
-      p.starter = false;
-      excluded.add(p.id);
-      subs.push(p);
+  // §9.4: append any still-unfilled bench places by adjusted best-role rating
+  // desc, energy desc, overall desc, player ID asc.
+  const bestRoleOf = (p: Player): number => {
+    let best = -1;
+    for (const role of BENCH_ARCHETYPES) {
+      const rating = adjustedTacticalRating(p, role);
+      if (rating !== null && rating > best) best = rating;
     }
+    return best;
+  };
+  const leftovers = pool
+    .filter((p) => !used.has(p.id))
+    .map((p) => ({ p, rating: bestRoleOf(p) }))
+    .sort((a, b) =>
+      b.rating - a.rating ||
+      b.p.energy - a.p.energy ||
+      b.p.overall - a.p.overall ||
+      a.p.id - b.p.id);
+  for (const { p } of leftovers) {
+    if (bench.length >= 11) break;
+    bench.push(p);
+    used.add(p.id);
   }
-  if (starters.length < 11) return null;
-  return { starters, subs, formation: club.tactics.formation, positions: formation };
+  bench.forEach((p) => { p.starter = false; });
+  return bench;
+}
+
+function reverseMask11(mask: number): number {
+  let rev = 0;
+  for (let i = 0; i < 11; i++) {
+    if ((mask & (1 << i)) !== 0) rev |= 1 << (10 - i);
+  }
+  return rev;
 }
 
 /**
@@ -173,52 +481,22 @@ function enginePressingScale(pressing: number): number {
   return Math.max(0, Math.min(2, pressing)) / 2 * 100;
 }
 
-/** Current effectiveness minus the deterministic next-match cost of overplaying. */
-export function aiSelectionValue(player: Player, tacPos: number, pressing = 50): number {
-  const base = tacticalSkillRating(player.skills, tacPos);
-  const current = base * readiness(player.energy);
-  const spacing = gameConfig.matchSpacingDays;
-  const project = (played: boolean): number => {
-    let energy = player.energy;
-    let load = player.recentLoad ?? 0;
-    if (played) {
-      energy = Math.max(0, energy - energyLoss({ energy, age: player.age, physicalSkill: physicalSkill(player), position: player.position, pressing, involvement: 0.5, minutes: 90 }));
-      load = Math.min(6, load + loadIncrement({ position: player.position, pressing, involvement: 0.5, minutes: 90 }));
-    }
-    for (let day = 0; day < spacing; day++) {
-      load *= Math.pow(2, -1 / spacing);
-      energy = recoverEnergy({ ...player, energy, recentLoad: load }, load, spacing);
-    }
-    return energy;
-  };
-  const playedNext = project(true);
-  const restedNext = project(false);
-  // Fixed Version 1 decision-horizon coefficient from plan 9 §21.4.
-  const futureCost = base * (readiness(restedNext) - readiness(playedNext));
-  return current - 0.45 * futureCost;
-}
-
-function pickFallbackForTacPos(players: Player[], tacPos: number, excluded: Set<number>, aiOptions: AiSelectionOptions = DEFAULT_AI_SELECTION): Player | null {
-  return players
-    .filter((p) => p.injuryDays === 0 && p.suspendedGames === 0 && !excluded.has(p.id))
-    .sort((a, b) => selectionValue(b, tacPos, aiOptions) - selectionValue(a, tacPos, aiOptions) || b.overall - a.overall || b.energy - a.energy)[0] ?? null;
-}
-
 // ---------------------------------------------------------------------------
 // Pre-match AI tactic selection (own squad only — no opponent scouting, no
 // hidden data). Deterministic: the same roster state always produces the same
 // tactics, so a restart or retry cannot reroll a different setup.
 // ---------------------------------------------------------------------------
 
-/** Tactical slots played out wide (fullbacks, wing midfielders, wingers). */
-const WIDE_TAC_POS = new Set([2, 9, 10, 17, 19, 21]);
+/** Deployed roles played out wide (fullbacks, wide midfielders, wingers). */
+const WIDE_ROLES = new Set<DeployedRole>(["LB", "RB", "LM", "RM", "LW", "RW"]);
 
 interface AiTacticsProfile {
   pace: number;
-  technical: number;
+  technique: number;
   passing: number;
   defending: number;
-  physical: number;
+  playmaking: number;
+  athleticism: number;
   finishing: number;
   energy: number;
 }
@@ -228,60 +506,38 @@ function squadProfile(available: Player[], size: number): AiTacticsProfile {
   const core = [...available].sort((a, b) => b.overall - a.overall || a.id - b.id).slice(0, size);
   const mean = (pick: (p: Player) => number): number => core.reduce((sum, p) => sum + pick(p), 0) / core.length;
   return {
-    pace: mean((p) => p.skills.vel),
-    technical: mean((p) => p.skills.tec),
+    pace: mean((p) => p.skills.pace),
+    technique: mean((p) => p.skills.tec),
     passing: mean((p) => p.skills.pas),
     defending: mean((p) => p.skills.des),
-    physical: mean((p) => (p.skills.des + p.skills.arm) / 2),
+    playmaking: mean((p) => p.skills.playmaking),
+    athleticism: mean((p) => athleticism(p.skills)),
     finishing: mean((p) => p.skills.fin),
     energy: mean((p) => p.energy),
   };
 }
 
-/** Greedy best-XI slot assignment for one formation variant; null when the
- *  squad cannot fill all eleven slots. Pure: mutates nothing. */
-function greedySlots(
-  available: Player[],
-  formation: number[],
-  aiOptions: AiSelectionOptions
-): { tacPos: number; player: Player }[] | null {
-  const excluded = new Set<number>();
-  const slots: { tacPos: number; player: Player }[] = [];
-  for (const tacPos of formation) {
-    const p = pickForTacPos(available, tacPos, excluded, true, aiOptions) ?? pickFallbackForTacPos(available, tacPos, excluded, aiOptions);
-    if (!p) return null;
-    excluded.add(p.id);
-    slots.push({ tacPos, player: p });
-  }
-  return slots;
-}
-
 /**
- * Greedy best-XI over all formation variants for a set of available players:
- * the variant whose eleven slots maximize total `selectionValue` (the same
- * metric `buildLineup` optimizes, so tactic choice and rotation decisions can
- * never disagree). Ties keep the lowest formation index. Pure: mutates nothing.
- * Exported for tests and AI-tactic consumers.
+ * Best-XI over all formation variants for a set of available players: the
+ * variant whose eleven slots maximize total pair score (§10). Ties keep the
+ * lowest formation index. Pure: mutates nothing. Exported for tests and
+ * AI-tactic consumers.
  */
 export function aiBestXI(
   available: Player[],
-  aiOptions: AiSelectionOptions
-): { formation: number; slots: { tacPos: number; player: Player }[] } | null {
-  let bestFormation = -1;
-  let bestSlots: { tacPos: number; player: Player }[] | null = null;
-  let bestTotal = -Infinity;
-  for (let f = 0; f < FORMATION_POSITIONS.length; f++) {
-    const slots = greedySlots(available, FORMATION_POSITIONS[f], aiOptions);
-    if (!slots) continue;
-    const total = slots.reduce((sum, s) => sum + selectionValue(s.player, s.tacPos, aiOptions), 0);
-    if (total > bestTotal) {
-      bestTotal = total;
-      bestFormation = f;
-      bestSlots = slots;
+  aiOptions: { pressing: number; futureFixtures: boolean }
+): { formation: number; slots: AssignedSlot[]; totalScore: number } | null {
+  void aiOptions.futureFixtures;
+  let best: BestXiResult | null = null;
+  const scoreOf = aiScoreOf(aiOptions.pressing);
+  for (const { id: f } of FORMATIONS) {
+    const assigned = assignBestXI(available, f, scoreOf);
+    if (!assigned) continue;
+    if (!best || assigned.totalScore > best.totalScore + 1e-9 || (Math.abs(assigned.totalScore - best.totalScore) <= 1e-9 && f < best.formation)) {
+      best = { formation: f, slots: assigned.slots, totalScore: assigned.totalScore };
     }
   }
-  if (!bestSlots || bestFormation < 0) return null;
-  return { formation: bestFormation, slots: bestSlots };
+  return best;
 }
 
 /**
@@ -290,8 +546,9 @@ export function aiBestXI(
  * fatigue and rotation pressure are reflected in both the tactic and the XI:
  *
  * 1. Style/pressing from the squad attribute profile of its top contributors
- *    (technical/passing -> CONTROL, defending/physical -> PRESS, pace/finishing
- *    -> COUNTER; pressing levels gated by physical quality + energy reserve).
+ *    (CONTROL = technical/passing blend incl. playmaking share; PRESS =
+ *    defending + athleticism; COUNTER = pace + finishing; pressing levels gated
+ *    by athleticism quality + energy reserve).
  * 2. Formation/XI from `aiBestXI`, scored under the freshly chosen pressing so
  *    rotation cost projection matches reality.
  * 3. Direction exploits whichever slot group of the chosen XI rates higher
@@ -299,19 +556,32 @@ export function aiBestXI(
  */
 export function chooseAiTactics(club: Club, allPlayers: Player[]): void {
   if (club.isHuman) return;
-  const cfg = MATCH_SIMULATOR_CONFIG.aiPregameTactics;
+  const cfg = MATCH_SIMULATOR_CONFIG.aiPregameTactics as unknown as {
+    profileSize: number;
+    controlTechnicalWeight: number;
+    controlPassingWeight: number;
+    controlPlaymakingShare: number;
+    pressDefendingWeight: number;
+    pressAthleticismWeight: number;
+    counterPaceWeight: number;
+    counterFinishingWeight: number;
+    pressingHeavyAthleticismMin: number;
+    pressingVeryHeavyAthleticismMin: number;
+    pressingEnergyReserveMin: number;
+    wideDirectionAdvantageMin: number;
+  };
   const available = allPlayers.filter(
     (p) => p.clubId === club.id && !p.onSale && p.injuryDays === 0 && p.suspendedGames === 0
   );
   if (available.length === 0) return;
 
-  // Style: argmax over the three style scores; ties keep the earlier candidate
-  // in the fixed CONTROL/PRESS/COUNTER order (engineStyle mapping: 0/1/2).
   const profile = squadProfile(available, cfg.profileSize);
+  // §10: CONTROL = technical + blended creation (passing/playmaking share).
+  const controlCreation = (1 - cfg.controlPlaymakingShare) * profile.passing + cfg.controlPlaymakingShare * profile.playmaking;
   let style = 0;
   let bestStyleScore =
-    cfg.controlTechnicalWeight * profile.technical + cfg.controlPassingWeight * profile.passing;
-  const pressScore = cfg.pressDefendingWeight * profile.defending + cfg.pressPhysicalWeight * profile.physical;
+    cfg.controlTechnicalWeight * profile.technique + cfg.controlPassingWeight * controlCreation;
+  const pressScore = cfg.pressDefendingWeight * profile.defending + cfg.pressAthleticismWeight * profile.athleticism;
   const counterScore = cfg.counterPaceWeight * profile.pace + cfg.counterFinishingWeight * profile.finishing;
   if (pressScore > bestStyleScore) {
     style = 1;
@@ -322,28 +592,29 @@ export function chooseAiTactics(club: Club, allPlayers: Player[]): void {
     bestStyleScore = counterScore;
   }
 
-  // Pressing intensity: escalate only while the squad is physical enough to
+  // Pressing intensity: escalate only while the squad is athletic enough to
   // sustain it; Heavy additionally requires an energy reserve.
   let pressing = 0;
-  if (profile.physical >= cfg.pressingHeavyPhysicalMin) pressing = 1;
-  if (profile.physical >= cfg.pressingVeryHeavyPhysicalMin && profile.energy >= cfg.pressingEnergyReserveMin) pressing = 2;
+  if (profile.athleticism >= cfg.pressingHeavyAthleticismMin) pressing = 1;
+  if (profile.athleticism >= cfg.pressingVeryHeavyAthleticismMin && profile.energy >= cfg.pressingEnergyReserveMin) pressing = 2;
 
   const best = aiBestXI(available, { pressing: enginePressingScale(pressing), futureFixtures: true });
   if (!best) return;
 
-  // Direction: compare mean tactical rating of the chosen XI's wide vs central
-  // outfield slots; play down the wings only when clearly stronger there.
+  // Direction: compare mean adjusted tactical rating of the chosen XI's wide vs
+  // central outfield slots; play down the wings only when clearly stronger there.
   let wideSum = 0;
   let wideCount = 0;
   let centralSum = 0;
   let centralCount = 0;
-  for (const { tacPos, player } of best.slots) {
-    if (tacPos === 1) continue; // goalkeeper belongs to neither group
-    if (WIDE_TAC_POS.has(tacPos)) {
-      wideSum += tacticalSkillRating(player.skills, tacPos);
+  for (const slot of best.slots) {
+    if (slot.role === "GK") continue;
+    const rating = adjustedTacticalRating(slot.player, slot.role) ?? 0;
+    if (WIDE_ROLES.has(slot.role)) {
+      wideSum += rating;
       wideCount++;
     } else {
-      centralSum += tacticalSkillRating(player.skills, tacPos);
+      centralSum += rating;
       centralCount++;
     }
   }
@@ -371,7 +642,13 @@ export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedL
   const byId = new Map(roster.map((p) => [p.id, p]));
   const all = [...input.starters, ...input.subs];
   const seen = new Set<number>();
-  for (const id of all) {
+  // §9.3 manual-save validation: exactly 11 starters, formation exists,
+  // slot 0 natural GK, no natural GK in slots 1..10, all pairings eligible.
+  const formationDef = formationById(input.formation);
+  if (!formationDef) return "Formation does not exist";
+  if (input.starters.length !== 11) return "A starting eleven requires exactly 11 players";
+  for (let i = 0; i < all.length; i++) {
+    const id = all[i];
     const p = byId.get(id);
     if (!p) return "Lineup contains a player not in the squad";
     if (p.injuryDays > 0 || p.suspendedGames > 0 || p.onSale) {
@@ -379,6 +656,12 @@ export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedL
     }
     if (seen.has(id)) return "A player appears twice in the lineup";
     seen.add(id);
+    if (i < 11) {
+      const role = formationDef.slots[i].role;
+      if (role === "GK" && p.position !== "GK") return "Slot 1 must be a natural goalkeeper";
+      if (role !== "GK" && p.position === "GK") return "A natural goalkeeper cannot occupy an outfield slot";
+      if (!isEligible(p.position, role)) return `${p.name} is ineligible for ${role}`;
+    }
   }
   if (input.penaltyTakerId !== null && !input.starters.includes(input.penaltyTakerId)) {
     return "Penalty taker must be in the starting eleven";
@@ -393,15 +676,12 @@ export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedL
 }
 
 /**
- * Repair a saved lineup whose players became unavailable after it was saved
- * (injured, suspended, on sale, sold, duplicated). The cascade keeps every
- * valid entry in its role:
- * 1. each invalid starter slot is filled from the remaining valid bench
- *    (position-fit first), then from the best available squad player;
- * 2. vacated bench slots are topped up from the squad so the match-squad size
- *    the user chose is preserved.
- * Returns null only when no valid starting eleven can be assembled; callers
- * fall back to a fresh `buildLineup`. Deterministic — no RNG, stable ordering.
+ * Repair a saved lineup whose players became unavailable (§9.3 sanitization).
+ * Every still-valid player keeps his saved slot. For each invalid slot choose
+ * the unused valid bench/squad candidate with the highest pair score for that
+ * slot; tie by lower player ID. Does not rearrange other valid starters during
+ * ordinary sanitization. Returns null only when no valid starting eleven can be
+ * assembled; callers fall back to a fresh `buildLineup`. Deterministic.
  */
 export function sanitizeSavedLineup(club: Club, allPlayers: Player[], saved: NonNullable<Club["savedLineup"]>): Lineup | null {
   const roster = allPlayers.filter((p) => p.clubId === club.id);
@@ -413,12 +693,19 @@ export function sanitizeSavedLineup(club: Club, allPlayers: Player[], saved: Non
   for (const player of allPlayers) {
     if (player.clubId === club.id) player.starter = false;
   }
-  const formation = FORMATION_POSITIONS[club.tactics.formation] ?? FORMATION_POSITIONS[4];
+  const formation = club.tactics.formation;
+  const formationDef = formationById(formation);
+  if (!formationDef) return null;
   const used = new Set<number>();
-  // Slot i of the saved starters maps to formation[i] (see lineupForMatch).
-  const slots: (Player | null)[] = saved.starters.slice(0, 11).map((id) => {
+  // §9.3 "valid" = available, still owned, unique in the squad AND non-null in
+  // the compatibility matrix for that EXACT slot (GK exclusivity included).
+  // Checking only availability let a saved starter survive a formation change
+  // into a slot his natural position cannot legally occupy.
+  const slots: (Player | null)[] = formationDef.slots.map((slot, index) => {
+    const id = saved.starters[index];
+    if (id === undefined) return null;
     const p = healthy(id);
-    if (!p || used.has(p.id)) return null;
+    if (!p || used.has(p.id) || !isEligible(p.position, slot.role)) return null;
     used.add(p.id);
     return p;
   });
@@ -428,15 +715,19 @@ export function sanitizeSavedLineup(club: Club, allPlayers: Player[], saved: Non
     .filter((p): p is Player => !!p && !used.has(p.id))
     .filter((p, index, list) => list.findIndex((candidate) => candidate.id === p.id) === index);
 
-  // Cascade step 1: promote a bench player into each invalid starter slot,
-  // preferring position fit; otherwise take the best remaining squad player.
   const availableSquad = () => roster.filter((p) => p.injuryDays === 0 && p.suspendedGames === 0 && !p.onSale && !used.has(p.id));
   for (let i = 0; i < slots.length; i++) {
     if (slots[i]) continue;
-    const tacPos = formation[i];
-    const promoted =
-      pickForTacPos(benchPool, tacPos, used, true) ??
-      pickFallbackForTacPos(availableSquad(), tacPos, used);
+    const role = formationDef.slots[i].role;
+    // Highest pair score for this exact slot; tie by lower player ID.
+    const candidates = [...benchPool, ...availableSquad()].filter((p) => currentScore(p, role) !== null);
+    candidates.sort((a, b) => {
+      const sa = currentScore(a, role)!;
+      const sb = currentScore(b, role)!;
+      if (Math.abs(sa - sb) > 1e-9) return sb - sa;
+      return a.id - b.id;
+    });
+    const promoted = candidates[0];
     if (!promoted) continue;
     const poolIdx = benchPool.findIndex((p) => p.id === promoted.id);
     if (poolIdx >= 0) benchPool.splice(poolIdx, 1);
@@ -446,26 +737,35 @@ export function sanitizeSavedLineup(club: Club, allPlayers: Player[], saved: Non
   const starters = slots.filter((p): p is Player => !!p);
   if (starters.length < 11) return null;
 
-  // Cascade step 2: keep surviving valid bench entries in their saved order,
-  // then top vacated bench slots up to the squad size the user chose with the
-  // best remaining available players (youth included — see buildLineup note).
-  const benchTarget = Math.min(BENCH_ORDER.length, saved.subs.length);
+  // Keep surviving valid bench entries in their saved order, then top up to
+  // the squad size the user chose with the best remaining available players.
+  const benchTarget = Math.min(11, saved.subs.length);
   const bench: Player[] = [...benchPool];
   const claimed = new Set(bench.map((p) => p.id));
-  const topUp = availableSquad().filter((p) => !claimed.has(p.id)).sort((a, b) => b.overall - a.overall || a.id - b.id);
+  // §9.4 append order: adjusted best-role rating desc, energy desc, overall
+  // desc, player ID asc.
+  const bestRoleRating = (p: Player): number => {
+    let best = -1;
+    for (const role of BENCH_ARCHETYPES) {
+      const rating = adjustedTacticalRating(p, role);
+      if (rating !== null && rating > best) best = rating;
+    }
+    return best;
+  };
+  const topUp = availableSquad()
+    .filter((p) => !claimed.has(p.id))
+    .sort((a, b) =>
+      bestRoleRating(b) - bestRoleRating(a) ||
+      b.energy - a.energy ||
+      b.overall - a.overall ||
+      a.id - b.id,
+    );
   while (bench.length < benchTarget && topUp.length > 0) {
     bench.push(topUp.shift()!);
   }
-  for (let i = 0; i < 11; i++) {
-    const p = starters[i];
-    p.tacPos = formation[i];
-    p.starter = true;
-  }
-  bench.forEach((p, i) => {
-    p.tacPos = BENCH_ORDER[i] ?? 1;
-    p.starter = false;
-  });
-  return { starters, subs: bench, formation: club.tactics.formation, positions: formation };
+  starters.forEach((p) => { p.starter = true; });
+  bench.forEach((p) => { p.starter = false; });
+  return { starters, subs: bench, formation };
 }
 
 export function lineupForMatch(club: Club, allPlayers: Player[], options: { futureFixtures?: boolean } = {}): Lineup | null {
@@ -477,8 +777,6 @@ export function lineupForMatch(club: Club, allPlayers: Player[], options: { futu
     return buildLineup(club, allPlayers, options);
   }
   if (saved) {
-    // Saved lineups survive unavailability: invalid entries are repaired by
-    // sanitizeSavedLineup instead of discarding the whole lineup.
     const sanitized = sanitizeSavedLineup(club, allPlayers, saved);
     if (sanitized) return sanitized;
   }
@@ -534,3 +832,5 @@ export function seniorRosterOverflowError(world: import("./types").World, clubId
 export function isEphemeralAI(club: Club): boolean {
   return club.ownerUserId === null && !club.isHuman;
 }
+
+export { overallFromSkills };

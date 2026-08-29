@@ -13,7 +13,8 @@ import {
 } from "../src/game/playerGeneration";
 import { overallFromSkills } from "../src/game/rating";
 import { simulateMatch, createLiveMatchState, tickLiveMatch, performLiveSub } from "../src/game/match";
-import type { Club, MatchEvent, Player, Position, TeamMatchStats, Tactics } from "../src/game/types";
+import type { Club, MatchEvent, Player, TeamMatchStats, Tactics } from "../src/game/types";
+import { NATURAL_POSITIONS, type NaturalPosition } from "../src/game/positions";
 
 /**
  * One-shot baseline capture for the characteristic-removal neutrality contract.
@@ -41,18 +42,18 @@ for (const [code, pools] of Object.entries(artifact.countries)) {
 // §15.1 fixed-seed generator oracle
 // ---------------------------------------------------------------------------
 
-const POSITIONS: Position[] = [0, 1, 2, 3, 4];
+const POSITIONS: NaturalPosition[] = [...NATURAL_POSITIONS];
 const TARGETS = [1, 20, 40, 55, 60, 73, 85, 99, 100];
 const SEEDS_PER_CASE = 256;
-const SKILL_ORDER = ["gol", "vel", "tec", "pas", "des", "arm", "fin"] as const;
+const SKILL_ORDER = ["gol", "pace", "tec", "pas", "des", "playmaking", "fin"] as const;
 
-type OracleRow = [number, number, number, number, number, number, number, number, number, number, number];
+type OracleRow = [NaturalPosition, ...number[]];
 
 const oracle: OracleRow[] = [];
 for (const position of POSITIONS) {
   for (const target of TARGETS) {
     for (let i = 0; i < SEEDS_PER_CASE; i++) {
-      const seed = position * 10_000_000 + target * 100_000 + i;
+      const seed = NATURAL_POSITIONS.indexOf(position) * 10_000_000 + target * 100_000 + i;
       const { skills } = generateSkillsForTarget(createRng(seed), position, target);
       oracle.push([
         position,
@@ -74,7 +75,7 @@ function seniorCtx(overrides: Partial<GeneratePlayerContext>): GeneratePlayerCon
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3,
+    position: "DM",
     isYouth: false,
     currentDivision: 1,
     highestDivisionReached: 1,
@@ -92,7 +93,7 @@ function youthCtx(overrides: Partial<GeneratePlayerContext>): GeneratePlayerCont
     id: 1,
     clubId: 10,
     country: "BRA",
-    position: 3,
+    position: "DM",
     age: 16,
     isYouth: true,
     currentDivision: 1,
@@ -133,7 +134,7 @@ for (const [current, highest] of pedigrees) {
       generateYouthPlayer(youthCtx({
         id: 500 + youthIndex,
         clubId: 300 + current * 10 + highest,
-        position: (slot % 5) as Position,
+        position: NATURAL_POSITIONS[slot % NATURAL_POSITIONS.length],
         age: 16 + (slot % 4),
         currentDivision: current,
         highestDivisionReached: highest,
@@ -155,7 +156,6 @@ function matchClub(id: number, tactics: Tactics): Club {
     name: id === 1 ? "Golden Home" : "Golden Away",
     shortName: id === 1 ? "GH" : "GA",
     ownerUserId: null,
-    timezone: null,
     competitionState: "ACTIVE",
     lastMeaningfulActivityAt: null,
     abandonmentEligibleAt: null,
@@ -178,7 +178,15 @@ function matchClub(id: number, tactics: Tactics): Club {
   };
 }
 
-const MATCH_POSITIONS: Position[] = [0, 0, 0, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 2, 3, 1, 4];
+// A standard generated 30-man squad at broad-group level (3 GK / 4 FB / 5 CB /
+// 10 MF / 8 FW), split into the nine natural positions.
+const MATCH_POSITIONS: NaturalPosition[] = [
+  "GK", "GK", "GK",
+  "LB", "LB", "RB", "RB",
+  "CB", "CB", "CB", "CB", "CB",
+  "DM", "DM", "DM", "DM", "DM", "AM", "AM", "AM", "AM", "AM",
+  "LW", "LW", "RW", "RW", "ST", "ST", "ST", "ST",
+];
 
 function generatedSquad(clubId: number, division: number, seedBase: number, offset: number): Player[] {
   return MATCH_POSITIONS.map((position, i) =>

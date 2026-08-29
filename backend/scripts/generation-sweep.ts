@@ -12,10 +12,14 @@
  */
 import { generateSeniorPlayer, seniorRosterTemplate } from "../src/game/playerGeneration";
 import type { Player } from "../src/game/types";
+import type { NaturalPosition } from "../src/game/positions";
 import { gameConfig } from "../src/config";
 
 const clubs = Number(process.argv[2] ?? 250);
-const XI_SHAPE = [1, 2, 2, 4, 2];
+// §13.4/§13.5 reporting shape: the fixed 4-3-3 natural-position XI.
+const XI_SHAPE: [NaturalPosition, number][] = [
+  ["GK", 1], ["LB", 1], ["RB", 1], ["CB", 2], ["DM", 1], ["AM", 2], ["LW", 1], ["RW", 1], ["ST", 1],
+];
 
 function mean(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
@@ -47,8 +51,8 @@ function measure(seed: number): { pop: number; xi: number; weakest: number; stro
     );
     for (const p of squad) all.push(p.overall);
     const xi: number[] = [];
-    for (let position = 0; position < XI_SHAPE.length; position++) {
-      xi.push(...squad.filter((p) => p.position === position).sort((a, b) => b.overall - a.overall).slice(0, XI_SHAPE[position]).map((p) => p.overall));
+    for (const [position, count] of XI_SHAPE) {
+      xi.push(...squad.filter((p) => p.position === position).sort((a, b) => b.overall - a.overall).slice(0, count).map((p) => p.overall));
     }
     xi.sort((a, b) => a - b);
     if (xi.length === 0) continue;

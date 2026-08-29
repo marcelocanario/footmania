@@ -1,6 +1,7 @@
 import type { Position } from "./types";
 import { gameConfig } from "../config";
-
+import { NATURAL_POSITION_ORDER, POSITION_GROUPS } from "./positions";
+import { allocateSeededCounts } from "./allocation";
 /**
  * Low-level generation MODEL: the division-quality anchors and canonical roster
  * weights, with no dependency on the economy, the RNG, or squad orchestration.
@@ -147,29 +148,50 @@ export function allocateSlots(weights: readonly number[], total: number): number
  * so market value carries the real age risk of the population (including the
  * goalkeeper retirement grace) without ever becoming position-dependent.
  */
-export const SENIOR_POSITION_WEIGHTS = [0.1, 0.14, 0.18, 0.32, 0.26] as const;
+export function seniorPositionWeights(): number[] {
+  const { seniorGroups } = gameConfig.playerGeneration.positionMix;
+  return POSITION_GROUPS.map((group) => seniorGroups[group]);
+}
 
 /**
  * Academy cohort position weights. Lives here beside the senior weights so the
  * population model can use them without importing squad orchestration.
  */
-export const ACADEMY_POSITION_WEIGHTS = [0.1, 0.28, 0.26, 0.22, 0.14] as const;
-
-const POSITION_GROUPS: readonly Position[] = [0, 1, 2, 3, 4];
+export function academyPositionWeights(): number[] {
+  const { academyGroups } = gameConfig.playerGeneration.positionMix;
+  return POSITION_GROUPS.map((group) => academyGroups[group]);
+}
 
 /**
- * Build the senior roster position template using the canonical weights via the
- * largest-remainder method. Broad groups map to base positions 0..4 (GK, FB,
- * CB, MF, FW), matching the existing subposition assignment inside each group.
+ * Build the senior roster position template using the canonical broad weights
+ * via the largest-remainder method, then split each broad group into the nine
+ * natural positions (§11.3). Broad groups map to natural positions; the
+ * within-group split uses the configured positionMix.
  */
+// Deterministic seed for seniorRosterTemplate within-group splits.
+// seniorRosterTemplate is used outside a world context (calibration scripts,
+// projection), so there is no world seed. Use a stable synthetic key derived
+// from the only deterministic input — the requested `total` — plus the group
+// identity. This preserves §11.2 unbiased rounding (the projection never
+// claims a fixed 2/2/4 for FW 8) while keeping the projection deterministic.
+//
+function seniorRosterWithinSeed(total: number, group: string): string {
+  return `seniorRosterTemplate|${total}|split|${group}`;
+}
+
 export function seniorRosterTemplate(total: number): Position[] {
-  const counts = allocateSlots(SENIOR_POSITION_WEIGHTS, total);
-  if (counts.length !== POSITION_GROUPS.length) {
-    throw new Error("Senior position weights must cover every position group");
-  }
+  const { seniorGroups, withinGroup } = gameConfig.playerGeneration.positionMix;
+  const counts = allocateSlots(POSITION_GROUPS.map((g) => seniorGroups[g]), total);
   const roster: Position[] = [];
-  for (let i = 0; i < counts.length; i++) {
-    for (let j = 0; j < counts[i]; j++) roster.push(POSITION_GROUPS[i]);
+  for (let i = 0; i < POSITION_GROUPS.length; i++) {
+    const group = POSITION_GROUPS[i];
+    // §11.3: within-group splits use seeded systematic rounding, not
+    // largest-remainder.
+    const seeded = allocateSeededCounts(counts[i], withinGroup[group], seniorRosterWithinSeed(total, group));
+    // Canonical natural-position display order (§11.3 step 3).
+    for (const role of NATURAL_POSITION_ORDER) {
+      for (let k = 0; k < (seeded[role] ?? 0); k++) roster.push(role);
+    }
   }
   return roster;
 }

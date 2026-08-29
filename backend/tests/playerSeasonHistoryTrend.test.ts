@@ -106,7 +106,7 @@ function makePlayer(id: number, overall: number, value: number, clubId: number |
     name: `P${id}`,
     country: "BRA",
     age: 22,
-    position: 3 as Player["position"],
+    position: "DM" as Player["position"],
     side: 1,
     overall,
     energy: 90,
@@ -150,6 +150,6 @@ function makePlayer(id: number, overall: number, value: number, clubId: number |
       declineSpeed: 0.5,
     } as { growthPotential: number; growthSpeed: number; peakAge: number; declinePotential: number; declineSpeed: number },
     recentMinutes: [],
-    skills: { gol: 1, vel: 70, tec: 70, pas: 70, des: 70, arm: 70, fin: 70 },
+    skills: { gol: 1, pace: 70, tec: 70, pas: 70, des: 70, playmaking: 70, fin: 70 },
   };
 }

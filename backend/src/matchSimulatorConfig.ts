@@ -97,6 +97,8 @@ const probabilityModelSchema = z.object({
   restartTypeByZone: z.record(z.string(), restartRowSchema),
   possessionStartDistribution: z.array(possessionStartRowSchema),
   foulProbabilityCalibrationMultiplier: positiveNumber,
+  /** Global calibration of corner awards after the empirical restart row. */
+  cornerRateCalibrationMultiplier: positiveNumber,
 });
 
 const shotModelSchema = z.object({
@@ -165,8 +167,10 @@ const normalizationSchema = z.object({
 
 const actionQualitySchema = z.object({
   localDensityCoefficient: nonNegativeNumber,
-  /** Pass execution density effect; normally matches the general local effect. */
+  /** Pass execution density effect; calibrated separately from shot quality. */
   passLocalDensityCoefficient: nonNegativeNumber,
+  /** Scales the playmaking contribution to forward destination quality. */
+  playmakingProgressionCoefficient: nonNegativeNumber,
   attributeWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
   defensiveResistanceWeights: z.record(z.string(), z.record(z.string(), nonNegativeNumber)),
 });
@@ -175,6 +179,8 @@ const numericalDisadvantageSchema = z.object({
   referencePlayers: z.number().int().positive(),
   remainingPlayerWorkloadExponent: nonNegativeNumber,
   maxRemainingPlayerWorkloadMultiplier: z.number().min(1),
+  /** Fraction of the raw formation support deficit applied after a departure. */
+  formationLossEffectScale: z.number().min(0).max(1),
 });
 
 const formationSupportSchema = z.record(z.string(), z.record(z.string(), nonNegativeNumber));
@@ -202,7 +208,7 @@ const tacticalFamiliaritySchema = z.object({
 
 const tacticalActionMixSchema = z.object({
   /** Uniformly scales the neutral PASS intent before the action-choice softmax. */
-  passIntentScale: z.number().min(0.1).max(2),
+  passIntentScale: z.number().min(0.1).max(3),
   /** Scales explicit action-mix corrections outside the neutral CONTROL/CONTROL matchup. */
   nonNeutralCorrectionScale: z.number().min(0).max(1),
   /** Direct logit shifts; the configured default scale is zero to preserve the baseline. */
@@ -259,10 +265,16 @@ const substitutionAiSchema = z.object({
     scoreUrgency: nonNegativeNumber,
     cardOrInjuryRisk: nonNegativeNumber,
   }),
-  replacementWeights: z.object({
+  // §9.5: the separate `fit` term is gone — out-of-position cost is already
+  // inside the adjusted role rating, so a second fit factor double-counted it.
+  replacementWeights: z.strictObject({
     effectiveSkill: nonNegativeNumber,
     energy: nonNegativeNumber,
-    fit: nonNegativeNumber,
+  }).superRefine((w, ctx) => {
+    const sum = w.effectiveSkill + w.energy;
+    if (Math.abs(sum - 1) > 1e-9) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `replacementWeights must sum to 1 (got ${sum})` });
+    }
   }),
   /** AI substitution gating (plan 6 §40). Evaluated once per match minute. */
   earliestMatchMinute: nonNegativeNumber,
@@ -278,21 +290,28 @@ const substitutionAiSchema = z.object({
 });
 
 /** Pre-match AI tactic selection from the club's own squad profile (no opponent scouting). */
-const aiPregameTacticsSchema = z.object({
+// §10: no field here may call Playmaking physical — the legacy
+// `press*Physical*` names are gone rather than aliased, so a stale config fails
+// loudly instead of silently feeding a different attribute into pressing.
+const aiPregameTacticsSchema = z.strictObject({
   /** Top contributors (by overall) whose attributes define the squad profile. */
   profileSize: z.number().int().min(1),
   controlTechnicalWeight: nonNegativeNumber,
   controlPassingWeight: nonNegativeNumber,
+  /** Playmaking's share of the CONTROL creation blend; the rest is passing. */
+  controlPlaymakingShare: z.number().min(0).max(1),
   pressDefendingWeight: nonNegativeNumber,
-  pressPhysicalWeight: nonNegativeNumber,
+  pressAthleticismWeight: nonNegativeNumber,
   counterPaceWeight: nonNegativeNumber,
   counterFinishingWeight: nonNegativeNumber,
-  pressingVeryHeavyPhysicalMin: z.number().min(0).max(100),
-  pressingHeavyPhysicalMin: z.number().min(0).max(100),
+  pressingVeryHeavyAthleticismMin: z.number().min(0).max(100),
+  pressingHeavyAthleticismMin: z.number().min(0).max(100),
   /** Heavy pressing additionally requires this mean squad energy. */
   pressingEnergyReserveMin: z.number().min(0).max(100),
   /** Wide slots must beat central slots by this many tactical-rating points to play down the wings. */
   wideDirectionAdvantageMin: nonNegativeNumber,
+  /** §9.2 rotation-cost coefficient for AI XI selection. */
+  futureCostWeight: nonNegativeNumber,
 });
 
 const aiTacticsSchema = z.object({
@@ -366,6 +385,19 @@ const matchSimulatorSchema = z
     substitutionAi: substitutionAiSchema,
     aiTactics: aiTacticsSchema,
     aiPregameTactics: aiPregameTacticsSchema,
+    // §5.6: shared discipline-risk normalization. Required — leaving it optional
+    // put a balance coefficient back into game code as a silent default.
+    defendingControl: z.strictObject({
+      riskMidpoint: z.number().min(0).max(1),
+      zRiskScale: nonNegativeNumber,
+    }),
+    // §7: the compatibility matrix and suitability bands. Required: a missing
+    // matrix used to degrade to "penalty 0 for everything", which silently
+    // disabled GK exclusivity and every out-of-position cost.
+    outOfPosition: z.strictObject({
+      skillPenaltyByNaturalAndRole: z.record(z.string(), z.record(z.string(), z.number().nullable())),
+      suitabilityBands: z.array(z.strictObject({ maxPenalty: z.number().int().min(0), label: z.string() })).min(1),
+    }),
     epv: epvSchema,
     commentary: commentarySchema,
     validation: validationSchema,
@@ -408,14 +440,111 @@ const matchSimulatorSchema = z
     // blockUnderPressure/woodwork are configured shares of the off-target
     // remainder; each is validated as a probability by the field schema.
 
-    // Action-quality weight vectors must sum to 1 for every action.
-    for (const [action, weights] of Object.entries(cfg.actionQuality.attributeWeights)) {
-      const sum = Object.values(weights).reduce((s, v) => s + v, 0);
-      if (Math.abs(sum - 1) > 1e-6) problems.push(`actionQuality.attributeWeights.${action} sums to ${sum}`);
+    // §5.3/§18.2: the eight canonical attributes are the ONLY legal weight keys.
+    // Obsolete aliases (`technical` -> technique, `physical`, `gk`, `discipline`)
+    // must be rejected, not silently ignored: an unknown key contributes zero and
+    // would quietly change every probability that consumes the row.
+    const CANONICAL_ATTRS = new Set([
+      "goalkeeping", "pace", "technique", "passing", "defending", "playmaking", "athleticism", "finishing",
+    ]);
+    const ACTIONS = ["PASS", "CROSS", "CARRY", "DRIBBLE", "CLEARANCE", "SHOT"];
+    const checkWeightRows = (label: string, rows: Record<string, Record<string, number>>): void => {
+      for (const action of ACTIONS) {
+        if (!rows[action]) problems.push(`${label} is missing the ${action} row`);
+      }
+      for (const [action, weights] of Object.entries(rows)) {
+        if (!ACTIONS.includes(action)) problems.push(`${label} has unknown action ${action}`);
+        for (const key of Object.keys(weights)) {
+          if (!CANONICAL_ATTRS.has(key)) problems.push(`${label}.${action} has unknown canonical attribute ${key}`);
+        }
+        const sum = Object.values(weights).reduce((s, v) => s + v, 0);
+        if (Math.abs(sum - 1) > 1e-6) problems.push(`${label}.${action} sums to ${sum}`);
+        // §5.4: no row may combine athleticism with either of its constituents.
+        if (weights.athleticism !== undefined && (weights.pace !== undefined || weights.defending !== undefined)) {
+          problems.push(`${label}.${action} combines athleticism with pace/defending`);
+        }
+      }
+    };
+    checkWeightRows("actionQuality.attributeWeights", cfg.actionQuality.attributeWeights);
+    checkWeightRows("actionQuality.defensiveResistanceWeights", cfg.actionQuality.defensiveResistanceWeights);
+
+    // §8: role-keyed tables cover exactly the twelve deployed roles. `CM` is not
+    // a deployed role any more; a leftover row (or a missing AM/DM) previously
+    // fell through to a hard-coded default at the call site.
+    const DEPLOYED = ["GK", "LB", "RB", "CB", "SW", "DM", "AM", "LM", "RM", "LW", "RW", "ST"];
+    const checkRoleKeyed = (label: string, row: Record<string, unknown>): void => {
+      for (const role of DEPLOYED) {
+        if (row[role] === undefined) problems.push(`${label} is missing deployed role ${role}`);
+      }
+      for (const key of Object.keys(row)) {
+        if (!DEPLOYED.includes(key)) problems.push(`${label} has unknown deployed role ${key}`);
+      }
+    };
+    checkRoleKeyed("shotModel.shooterRoleWeights", cfg.shotModel.shooterRoleWeights);
+    checkRoleKeyed("formationSupport", cfg.formationSupport);
+    for (const [role, kernel] of Object.entries(cfg.formationSupport)) {
+      const sum = Object.values(kernel).reduce((s, v) => s + v, 0);
+      if (Math.abs(sum - 1) > 1e-6) problems.push(`formationSupport.${role} sums to ${sum}`);
     }
-    for (const [action, weights] of Object.entries(cfg.actionQuality.defensiveResistanceWeights)) {
-      const sum = Object.values(weights).reduce((s, v) => s + v, 0);
-      if (Math.abs(sum - 1) > 1e-6) problems.push(`actionQuality.defensiveResistanceWeights.${action} sums to ${sum}`);
+
+    // §7/§8: validate the out-of-position matrix and suitability bands.
+    {
+      const matrix = cfg.outOfPosition.skillPenaltyByNaturalAndRole;
+      const natural = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"];
+      const deployed = DEPLOYED;
+      for (const key of Object.keys(matrix)) {
+        if (!natural.includes(key)) problems.push(`outOfPosition.skillPenaltyByNaturalAndRole has unknown natural position ${key}`);
+      }
+      for (const pos of natural) {
+        const row = matrix[pos];
+        if (!row) {
+          problems.push(`outOfPosition.skillPenaltyByNaturalAndRole missing row ${pos}`);
+          continue;
+        }
+        for (const key of Object.keys(row)) {
+          if (!deployed.includes(key)) problems.push(`outOfPosition row ${pos} has unknown deployed role ${key}`);
+        }
+        for (const role of deployed) {
+          const value = row[role];
+          if (value === undefined) {
+            problems.push(`outOfPosition penalty ${pos}->${role} is missing`);
+          } else if (value !== null && (value < 0 || value > 100 || !Number.isInteger(value))) {
+            problems.push(`outOfPosition penalty ${pos}->${role} must be an integer 0..100 or null`);
+          }
+        }
+        // GK exclusivity: GK row only GK=0, everything else null; outfield rows
+        // must have GK null.
+        if (pos === "GK") {
+          if (row.GK !== 0) problems.push(`outOfPosition GK->GK must be 0`);
+          for (const role of deployed) {
+            if (role !== "GK" && row[role] !== null) problems.push(`outOfPosition GK->${role} must be null`);
+          }
+        } else if (row.GK !== null) {
+          problems.push(`outOfPosition ${pos}->GK must be null (GK slot is GK-only)`);
+        }
+      }
+      // Identity pairs are zero for all nine natural positions.
+      for (const pos of natural) {
+        if (matrix[pos]?.[pos] !== 0) problems.push(`outOfPosition ${pos}->${pos} must be 0`);
+      }
+      // Every deployed role has at least one eligible natural position.
+      for (const role of deployed) {
+        const eligible = natural.some((pos) => matrix[pos]?.[role] !== null && matrix[pos]?.[role] !== undefined);
+        if (!eligible) problems.push(`outOfPosition role ${role} has no eligible natural position`);
+      }
+      // Suitability bands: ordered, exact coverage of every non-null matrix value.
+      const bands = cfg.outOfPosition.suitabilityBands;
+      const sorted = [...bands].sort((a, b) => a.maxPenalty - b.maxPenalty);
+      if (sorted.some((band, i) => band !== bands[i])) problems.push("outOfPosition.suitabilityBands must be ordered by maxPenalty");
+      if (bands[0]?.maxPenalty !== 0) problems.push("outOfPosition.suitabilityBands must start at maxPenalty 0 (Natural)");
+      const matrixValues = natural.flatMap((pos) => deployed.map((role) => matrix[pos]?.[role]).filter((v): v is number => typeof v === "number"));
+      for (const value of matrixValues) {
+        const covered = bands.some((band) => value <= band.maxPenalty);
+        if (!covered) problems.push(`outOfPosition penalty ${value} is not covered by suitabilityBands`);
+      }
+      if (bands.some((band, i) => i > 0 && band.maxPenalty <= bands[i - 1].maxPenalty)) {
+        problems.push("outOfPosition.suitabilityBands must strictly increase");
+      }
     }
 
     if (problems.length > 0) {
@@ -424,6 +553,24 @@ const matchSimulatorSchema = z
   });
 
 export type MatchSimulatorConfig = z.infer<typeof matchSimulatorSchema>;
+
+/**
+ * Exported so the validation itself is testable. The gap this closes is real:
+ * an unlisted `AM` in `shooterRoleWeights` and a stale `CM` row both survived
+ * startup because nothing asserted the rules the plan specified.
+ */
+export function validateMatchSimulatorConfig(candidate: unknown): { ok: true } | { ok: false; message: string } {
+  const parsed = matchSimulatorSchema.safeParse(candidate);
+  if (parsed.success) return { ok: true };
+  return { ok: false, message: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") };
+}
+
+/** The raw, unwrapped shipped config — the baseline a negative test perturbs. */
+export function readShippedMatchSimulatorConfig(): unknown {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const raw = JSON.parse(stripJsoncComments(readFileSync(join(here, "..", "config", "match-simulator.jsonc"), "utf8")));
+  return (raw as Record<string, unknown> | null)?.matchSimulator ?? raw;
+}
 
 function loadMatchSimulatorConfig(): MatchSimulatorConfig {
   const here = dirname(fileURLToPath(import.meta.url));

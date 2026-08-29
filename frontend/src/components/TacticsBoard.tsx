@@ -4,9 +4,7 @@ import { GripVertical, Target, Wand2 } from "lucide-react";
 import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { FootballKit } from "./kit/FootballKit";
-import { slotPointsForFormation, tacticalRoleLabel } from "./matchPitchUtils";
-import { POSITION_FULL_NAMES } from "./PlayerName";
-import { FORMATIONS } from "../tacticsOptions";
+import { formationsFromSnapshot } from "../tacticsOptions";
 
 interface Ed {
   formation: number;
@@ -19,8 +17,11 @@ interface Ed {
 interface BoardPlayer {
   id: number;
   name: string;
-  position: number;
+  naturalPosition: string;
+  positionName: string;
   tacticalPosition: string;
+  deployedRole?: string | null;
+  slotIndex?: number | null;
   overall: number;
   energy: number;
   injuryDays: number;
@@ -78,19 +79,13 @@ function isBoardPlayer(player: BoardPlayer | null | undefined): player is BoardP
   return player !== null && player !== undefined;
 }
 
-function positionLabel(position: number): string {
-  return ["GK", "FB", "CB", "MF", "FW"][position] ?? "PLAYER";
+function positionLabel(naturalPos?: string): string {
+  return naturalPos ?? "PLAYER";
 }
 
-/** Map a primary-position code to its full name for tooltips. */
-function positionFull(position: number): string {
-  return POSITION_FULL_NAMES[position] ?? "Player";
-}
-
-/** Reverse lookup of the abbreviated label back to its position code. */
-function positionLabelToIndex(label: string): number {
-  const index = ["GK", "FB", "CB", "MF", "FW"].indexOf(label);
-  return index >= 0 ? index : -1;
+/** Full-name tooltip for a slot role label (deployed role string). */
+function roleFullName(role: string): string {
+  return role;
 }
 
 export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange, customTooltips = false }: Props) {
@@ -103,6 +98,9 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
   const [dragging, setDragging] = useState<VisualDrag | null>(null);
   const pendingDragRef = useRef<PendingDrag | null>(null);
   const suppressClickRef = useRef(false);
+  // §16.2 slot preview cache keyed by `${formationId}:${playerId}`
+  const [previewCache, setPreviewCache] = useState<Map<string, LineupView["slotPreviews"]>>(new Map());
+  const [, setPreviewLoading] = useState(false);
 
   useEffect(() => {
     api
@@ -135,7 +133,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     for (const player of data?.squad ?? []) {
       players.set(player.id, {
         ...player,
-        tacticalPosition: positionLabel(player.position),
+        tacticalPosition: positionLabel(player.naturalPosition),
       });
     }
     for (const player of data?.starters ?? []) {
@@ -143,7 +141,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
         const existing = players.get(player.id);
         players.set(player.id, {
           ...player,
-          tacticalPosition: existing?.tacticalPosition ?? positionLabel(player.position),
+          tacticalPosition: existing?.tacticalPosition ?? positionLabel(player.naturalPosition),
         });
       }
     }
@@ -152,7 +150,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
         const existing = players.get(player.id);
         players.set(player.id, {
           ...player,
-          tacticalPosition: existing?.tacticalPosition ?? positionLabel(player.position),
+          tacticalPosition: existing?.tacticalPosition ?? positionLabel(player.naturalPosition),
         });
       }
     }
@@ -205,8 +203,10 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     () => (data?.squad ?? []).map((player) => byId.get(player.id)).filter(isBoardPlayer).filter((player) => !starterIds.has(player.id) && !benchIds.has(player.id)),
     [benchIds, byId, data?.squad, starterIds]
   );
-  const slotNames = useMemo(() => (data?.slots ?? []).map((slot) => tacticalRoleLabel(slot)), [data?.slots]);
-  const slotPoints = useMemo(() => slotPointsForFormation(data?.formation ?? 0, data?.slots ?? []), [data?.formation, data?.slots]);
+  // §16.2: labels and geometry come from the lineup response. The frontend
+  // holds no formation table, so there is nothing to fall back to.
+  const slotNames = useMemo(() => (data?.slots ?? []).map((s) => s.role), [data?.slots]);
+  const slotPoints = useMemo(() => (data?.slots ?? []).map((s) => ({ x: s.x, y: s.y })), [data?.slots]);
   const takerOptions = starters.filter(isBoardPlayer).map((player) => ({ id: player.id, label: `${player.name} (${player.overall})` }));
 
   const kit = mode === "match" && liveState
@@ -311,7 +311,41 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
       startY: event.clientY,
       active: false,
     };
+    // §16.2: start preview fetch on drag start as well.
+    if (ed) {
+      const playerId = location.area === "pool" ? location.id : (location.area === "starter" ? ed.starters[location.index] : ed.subs[location.index]);
+      if (playerId != null) void ensurePreview(playerId, ed.formation);
+    }
   };
+
+  // §16.2: fetch slot suitability/adjusted rating for a player across all
+  // 11 slots; cache by formation+player, clear when formation/squad changes.
+  const ensurePreview = useCallback(async (playerId: number, formation: number) => {
+    const key = `${formation}:${playerId}`;
+    if (previewCache.has(key)) return previewCache.get(key)!;
+    setPreviewLoading(true);
+    try {
+      const res = await api.getLineup(false, formation, playerId);
+      const previews = res.slotPreviews ?? [];
+      setPreviewCache((prev) => {
+        const next = new Map(prev);
+        next.set(key, previews);
+        return next;
+      });
+      return previews as NonNullable<LineupView["slotPreviews"]>;
+    } catch {
+      return [] as NonNullable<LineupView["slotPreviews"]>;
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [previewCache]);
+
+  const clearPreviewCache = useCallback(() => setPreviewCache(new Map()), []);
+
+  useEffect(() => {
+    // §16.2: clear cached previews when formation or squad composition changes.
+    clearPreviewCache();
+  }, [clearPreviewCache, data?.formation, data?.squad?.length]);
 
   const selectLocation = (location: BoardLocation) => {
     if (suppressClickRef.current) return;
@@ -320,11 +354,18 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
       setSelected(null);
       return;
     }
-    setSelected((current) => current ? null : location);
+    const next = selected ? null : location;
+    setSelected(next);
+    // Trigger preview fetch when a player is selected (drag/selection start).
+    if (next) {
+      const playerId = next.area === "pool" ? next.id : (next.area === "starter" ? ed?.starters[next.index] : ed?.subs[next.index]);
+      if (playerId != null && ed) void ensurePreview(playerId, ed.formation);
+    }
   };
 
   const changeFormation = async (formation: number) => {
     if (!ed) return;
+    clearPreviewCache();
     onFormationChange?.(formation);
     setSaving(true);
     try {
@@ -389,6 +430,27 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     return { left: `${point.x}%`, top: `${point.y}%` };
   };
   const isOver = (area: BoardArea, index: number) => dragging?.over?.area === area && dragging.over.index === index;
+  // Selected/dragged player previews (suitability + adjusted rating per slot)
+  const selectedPlayerId = selected
+    ? (selected.area === "pool" ? selected.id : (selected.area === "starter" ? ed?.starters[selected.index] : ed?.subs[selected.index]) ?? null)
+    : (dragging ? (dragging.source.area === "pool" ? dragging.source.id : (dragging.source.area === "starter" ? ed?.starters[dragging.source.index] : ed?.subs[dragging.source.index]) ?? null) : null);
+  const draggedPlayerId = dragging ? (dragging.source.area === "pool" ? dragging.source.id : (dragging.source.area === "starter" ? ed?.starters[dragging.source.index] : ed?.subs[dragging.source.index]) ?? null) : null;
+  const activePreviewPlayerId = selectedPlayerId ?? draggedPlayerId ?? null;
+  const activePreviewKey = activePreviewPlayerId != null && ed ? `${ed.formation}:${activePreviewPlayerId}` : null;
+  const activePreviews = activePreviewKey ? previewCache.get(activePreviewKey) ?? null : null;
+  const suitabilityClass = (label: string) => {
+    if (label === "Natural") return "is-natural";
+    if (label === "Comfortable") return "is-comfortable";
+    if (label === "Makeshift") return "is-makeshift";
+    if (label === "Poor") return "is-poor";
+    if (label === "Emergency") return "is-emergency";
+    return "is-ineligible";
+  };
+  const isIneligibleDrop = (slotIndex: number): boolean => {
+    if (!activePreviews) return false;
+    const pv = activePreviews.find((p) => p.slotIndex === slotIndex);
+    return pv?.suitabilityLabel === "Ineligible";
+  };
   // The jersey marker needs no per-player CSS vars (the FootballKit SVG carries
   // its own colors); the chip itself is plain so no style prop is required.
 
@@ -398,7 +460,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
         <div className="tb-field">
           <label htmlFor={`tb-formation-${mode}`}>Formation</label>
           <select id={`tb-formation-${mode}`} className="select" value={ed.formation} disabled={saving} onChange={(event) => void changeFormation(Number(event.target.value))}>
-            {FORMATIONS.map((formation) => <option key={formation.value} value={formation.value}>{formation.label}</option>)}
+            {formationsFromSnapshot(snapshot?.formationOptions).map((formation) => <option key={formation.value} value={formation.value}>{formation.label}</option>)}
           </select>
         </div>
         <button className="btn sm ghost" onClick={() => void autoFill()} disabled={saving || (mode === "match" && liveState?.phase === "halftime")}>
@@ -434,28 +496,44 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
               {starters.map((player, index) => {
                 const location: BoardLocation = { area: "starter", index, id: player?.id ?? -1 };
                 const active = selected?.area === "starter" && selected.index === index;
-                const isGoalkeeper = (data?.slots?.[index] ?? 0) === 1;
+                const isGoalkeeper = data?.slots?.[index]?.role === "GK";
+                const preview = activePreviews?.find((p) => p.slotIndex === index);
+                const suitability = player
+                  ? { label: (player as unknown as { suitabilityLabel?: string | null }).suitabilityLabel ?? null, rating: (player as unknown as { adjustedTacticalRating?: number | null }).adjustedTacticalRating ?? null }
+                  : null;
+                // When a preview player is active and this slot is empty (or holds that player after a drop target), show preview suitability/adjusted rating.
+                const previewForSlot = !player && preview ? preview : null;
+                const ineligible = previewForSlot ? previewForSlot.suitabilityLabel === "Ineligible" : (activePreviews ? isIneligibleDrop(index) : false);
                 return (
                   <button
                     key={`starter-${index}`}
                     type="button"
-                    className={`tb-slot${active ? " is-selected" : ""}${isOver("starter", index) ? " is-over" : ""}${player ? " has-player" : " is-empty"}`}
+                    className={`tb-slot${active ? " is-selected" : ""}${isOver("starter", index) ? " is-over" : ""}${player ? " has-player" : " is-empty"}${previewForSlot ? ` ${suitabilityClass(previewForSlot.suitabilityLabel)}` : ""}${ineligible ? " is-ineligible" : ""}`}
                     style={pitchStyle(index)}
                     data-tb-drop-area="starter"
                     data-tb-drop-index={index}
-                    disabled={!player && !selected}
-                    aria-label={`${slotNames[index] ?? `Slot ${index + 1}`}${player ? `: ${player.name}` : ": empty"}`}
+                    disabled={ineligible || (!player && !selected)}
+                    aria-label={`${slotNames[index] ?? `Slot ${index + 1}`}${player ? `: ${player.name}` : previewForSlot ? `: ${previewForSlot.suitabilityLabel} ${previewForSlot.adjustedTacticalRating ?? ""}` : ": empty"}`}
+                    title={previewForSlot ? `${previewForSlot.suitabilityLabel} · adj ${previewForSlot.adjustedTacticalRating ?? "—"}` : (player && suitability?.label ? `${suitability.label} · adj ${suitability.rating ?? player.overall}` : undefined)}
                     onPointerDown={(event) => player && beginDrag(location, event)}
                     onClick={() => player && selectLocation(location)}
                   >
-                    <span className={`tb-slot-role${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": POSITION_FULL_NAMES[positionLabelToIndex(slotNames[index] ?? "")] ?? slotNames[index] } : { title: POSITION_FULL_NAMES[positionLabelToIndex(slotNames[index] ?? "")] ?? slotNames[index] })}>{slotNames[index] ?? `#${index + 1}`}</span>
+                    <span className={`tb-slot-role${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": roleFullName(slotNames[index] ?? "") } : { title: roleFullName(slotNames[index] ?? "") })}>{slotNames[index] ?? `#${index + 1}`}</span>
                     {player ? (
                       <span className="tb-player-chip">
                         <span className="tb-player-kit">
                           <FootballKit {...(isGoalkeeper ? gkKit : kit)} number={player.number ?? (isGoalkeeper ? 1 : undefined)} size="100%" flat />
                         </span>
                         <span className="tb-player-name">{player.name}</span>
-                        <span className="tb-player-rating">{player.overall}</span>
+                        <span className="tb-player-rating" title={suitability?.label ? `${suitability.label} · adj ${suitability.rating ?? player.overall} / OVR ${player.overall}` : `OVR ${player.overall}`}>
+                          {suitability?.rating ?? player.overall}
+                          {suitability?.label ? <span className={`tb-suitability ${suitabilityClass(suitability.label)}`}> {suitability.label.slice(0,3)}</span> : null}
+                        </span>
+                      </span>
+                    ) : previewForSlot ? (
+                      <span className="tb-preview-chip">
+                        <span className="tb-preview-rating">{previewForSlot.adjustedTacticalRating ?? "—"}</span>
+                        <span className={`tb-preview-label ${suitabilityClass(previewForSlot.suitabilityLabel)}`}>{previewForSlot.suitabilityLabel}</span>
                       </span>
                     ) : <span className="tb-empty-dot" aria-hidden="true" />}
                   </button>
@@ -490,7 +568,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     onClick={() => player && selectLocation(location)}
                   >
                     <span className="tb-row-number">{index + 1}</span>
-                    <span className={`tb-row-position${customTooltips && player ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player ? positionFull(player.position) : undefined } : { title: player ? positionFull(player.position) : undefined })}>{player?.tacticalPosition ?? "—"}</span>
+                    <span className={`tb-row-position${customTooltips && player ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player ? player.positionName : undefined } : { title: player ? player.positionName : undefined })}>{player?.tacticalPosition ?? "—"}</span>
                     <span className="tb-row-name">{player?.name ?? "Empty bench slot"}</span>
                     <span className="tb-row-energy">EN {player ? Math.round(player.energy) : "—"}</span>
                     <span className="tb-row-rating">{player?.overall ?? "—"}</span>
@@ -525,7 +603,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     {...(customTooltips ? { "data-pr-tooltip": unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined } : { title: unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined })}
                     onPointerDown={(event) => !unavailable && beginDrag(location, event)}
                   >
-                    <span className={`tb-row-position${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": positionFull(player.position) } : { title: positionFull(player.position) })}>{player.tacticalPosition}</span>
+                    <span className={`tb-row-position${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player.positionName } : { title: player.positionName })}>{player.tacticalPosition}</span>
                     <span className="tb-row-name">{player.name}</span>
                     <span className="tb-row-energy">EN {Math.round(player.energy)}</span>
                     <span className="tb-row-rating">{player.overall}</span>

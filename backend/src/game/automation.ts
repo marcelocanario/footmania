@@ -3,12 +3,13 @@ import { AUTOMATION_CONFIG } from "../config";
 import type { AutomationAction, AutomationCondition, AutomationPreset, AutomationRule, AutomationTriggerKind, Club, LiveMatchState, World } from "./types";
 import { applyLiveFormationChange, applyLiveTacticsUpdate, performLiveSub } from "./match";
 import { isHalftime, isPregame } from "./match";
-import { DIRECTION_NAMES, EVENT_CODES, FORMATION_NAMES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
+import { DIRECTION_NAMES, EVENT_CODES, PRESSING_NAMES, STYLE_NAMES } from "./constants";
+import { FORMATIONS } from "./formations";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
 
 // Real tactic ranges (backend/src/game/constants.ts); presets may only ever
 // target values a club tactic could legitimately hold.
-const MAX_FORMATION = FORMATION_NAMES.length - 1;
+const MAX_FORMATION = FORMATIONS.length - 1;
 const MAX_STYLE = STYLE_NAMES.length - 1;
 const MAX_PRESSING = PRESSING_NAMES.length - 1;
 const MAX_DIRECTION = DIRECTION_NAMES.length - 1;

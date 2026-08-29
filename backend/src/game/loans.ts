@@ -210,7 +210,7 @@ export function claimLoan(
   loan.toClubId = club.id;
   player.clubId = club.id;
   player.loanId = loan.id;
-  player.tacPos = -1;
+  player.starter = false;
   // The borrowing club may already wear the player's number.
   ensureClubSquadNumbers(world, club.id);
   return { ok: true, loan };
@@ -243,7 +243,7 @@ export function returnLoanedPlayer(world: World, loan: Loan): void {
     if (p.clubId !== loan.fromClubId) settlePlayerPayroll(world, p);
     p.clubId = loan.fromClubId;
     p.loanId = null;
-    p.tacPos = -1;
+    p.starter = false;
     // The player's number may clash with a squadmate picked up meanwhile.
     ensureClubSquadNumbers(world, loan.fromClubId);
   }

@@ -24,11 +24,12 @@ import {
   type GeneratePlayerContext,
 } from "../src/game/playerGeneration";
 import { generateCareerProfile, densityMean, expectedActivePlayerLifetimeFromAcademyEntry, seniorSurvivalWeights, expectedActiveSeniorSeasons, activityModifiersFor, reconstructCurrentTarget } from "../src/game/careerCurves";
-import { ACADEMY_POSITION_WEIGHTS } from "../src/game/playerGeneration";
+import { academyPositionWeights } from "../src/game/playerGeneration";
 import { createRng } from "../src/game/rng";
 import { retirementBaselinePerClub, targetActivePopulation, targetFreeAgentPool } from "../src/game/population";
 import { initialClubPlayerValueTarget, projectDivisionQuality } from "../src/game/generationProjection";
-import type { Player, Position } from "../src/game/types";
+import type { Player } from "../src/game/types";
+import { NATURAL_POSITIONS, type NaturalPosition } from "../src/game/positions";
 import { gameConfig } from "../src/config";
 
 const clubsPerDivision = Number(process.argv[2] ?? 500);
@@ -36,7 +37,10 @@ const totalDivisions = Number(process.argv[3] ?? 5);
 const squadSize = gameConfig.playerGenerationRules.initialSeniorSquadSize;
 const initialActivity = gameConfig.playerGeneration.initialSeniorHistoricalActivity;
 
-const XI_SHAPE = [1, 2, 2, 4, 2];
+// §13.4/§13.5 reporting shape: the fixed 4-3-3 natural-position XI.
+const XI_SHAPE: [NaturalPosition, number][] = [
+  ["GK", 1], ["LB", 1], ["RB", 1], ["CB", 2], ["DM", 1], ["AM", 2], ["LW", 1], ["RW", 1], ["ST", 1],
+];
 
 function mean(values: number[]): number {
   return values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length;
@@ -90,7 +94,7 @@ function buildInitialAcademy(clubId: number, division: number): Player[] {
     id: clubId * 1000 + squadSize + slot,
     clubId,
     country: "BRA",
-    position: (slot % 5) as Position,
+    position: NATURAL_POSITIONS[slot % NATURAL_POSITIONS.length],
     age: minimumAge + (slot % ageCount),
     isYouth: true,
     currentDivision: division,
@@ -105,12 +109,12 @@ function buildInitialAcademy(clubId: number, division: number): Player[] {
 
 function startingXi(squad: Player[]): Player[] {
   const xi: Player[] = [];
-  for (let position = 0; position < XI_SHAPE.length; position++) {
+  for (const [position, count] of XI_SHAPE) {
     xi.push(
       ...squad
         .filter((p) => p.position === position)
         .sort((a, b) => b.overall - a.overall)
-        .slice(0, XI_SHAPE[position]),
+        .slice(0, count),
     );
   }
   return xi;
@@ -238,7 +242,7 @@ for (let age = gameConfig.playerGenerationRules.academyMinAge; age <= gameConfig
       id: i,
       clubId: 7,
       country: "BRA",
-      position: (i % 5) as Position,
+      position: NATURAL_POSITIONS[i % NATURAL_POSITIONS.length],
       age,
       isYouth: true,
       currentDivision: 1,
@@ -286,12 +290,12 @@ console.log("\n=== career profile distribution (50k draws) ===");
 }
 
 console.log("\n=== active-career survival ===");
-for (let position = 0 as Position; position < 5; position = (position + 1) as Position) {
+for (const position of NATURAL_POSITIONS) {
   const weights = seniorSurvivalWeights(position);
   const ages = [...weights.keys()];
   console.log(`  position ${position}: entry ${ages[0]}  last ${ages[ages.length - 1]}  expected seasons ${expectedActiveSeniorSeasons(position).toFixed(2)}`);
 }
-console.log(`  lifetime from academy entry: ${expectedActivePlayerLifetimeFromAcademyEntry(ACADEMY_POSITION_WEIGHTS).toFixed(2)} seasons`);
+console.log(`  lifetime from academy entry: ${expectedActivePlayerLifetimeFromAcademyEntry(academyPositionWeights()).toFixed(2)} seasons`);
 console.log(`  retirement baseline per club: ${retirementBaselinePerClub().toFixed(3)} recruits/season`);
 console.log(`  target free-agent pool (10 clubs): ${targetFreeAgentPool(10).toFixed(2)}`);
 console.log(`  target active population (10 clubs): ${targetActivePopulation(10).toFixed(2)}`);

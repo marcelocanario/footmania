@@ -1,4 +1,4 @@
-import { POSITION_CLASS, POSITION_LETTER, positionTitle } from "../PlayerName";
+import { positionClass, positionLetter } from "../../positions";
 
 /**
  * Compact market listing row shared by every transfers tab. `name` renders as
@@ -20,7 +20,8 @@ export function TransferPlayerRow({
   sub,
 }: {
   name: React.ReactNode;
-  position: number;
+  /** Natural-position string (e.g. "GK", "LW"). */
+  position: string;
   overall: number;
   age: number;
   country?: string | null;
@@ -35,7 +36,7 @@ export function TransferPlayerRow({
     <div className={`card hoverable transfer-row${muted ? " transfer-row-muted" : ""}`} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
       <div style={{ flex: 1, minWidth: 200 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
-          <span className={`pos-tag ${POSITION_CLASS[position] ?? ""}`} title={positionTitle(position)}>{POSITION_LETTER[position] ?? "?"}</span>
+          <span className={`pos-tag ${positionClass(position)}`} title={position}>{positionLetter(position)}</span>
           <button type="button" className="link-btn" onClick={onClick} style={{ textAlign: "left" }}>{name}</button>
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.15rem", color: "var(--grass-2)" }}>{overall}</span>
         </div>

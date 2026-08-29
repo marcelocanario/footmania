@@ -14,7 +14,7 @@ import {
 import { divisionForClub, lowestActiveTier } from "./multiplayer";
 import { generateSeasonalAcademyIntake, academyIntakeDone, markAcademyIntakeDone } from "./clubGenerator";
 import { bumpSkillsVersion } from "./skillsVersion";
-import { generateSeniorPlayer } from "./playerGeneration";
+import { generateSeniorPlayer, allocateBroadGroupCounts, allocateSeededCounts } from "./playerGeneration";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { playerHasActiveListing } from "./market";
 import { isEphemeralAI, seniorRosterFullError } from "./club";
@@ -35,6 +35,18 @@ import {
   type IntakePlan,
 } from "./population";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { NATURAL_POSITION_ORDER } from "./positions";
+
+/** FNV-1a 32-bit hash (same authority as the seeded allocators in
+ *  playerGeneration.ts; deterministic senior-floor tie rotation). */
+function fnv1a(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
 
 /** Add game-days without wrapping at a civil-month or season boundary. */
 export function seasonEndDay(dayIndex: number, daysFromNow: number): number {
@@ -82,7 +94,7 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
   settlePlayerPayroll(world, player);
   player.isYouth = false;
   resetPayrollPeriod(player, world.dayIndex);
-  player.tacPos = -1;
+  player.starter = false;
   player.starter = false;
   // Promoted youth need a squad number that no senior currently wears.
   ensureClubSquadNumbers(world, club.id);
@@ -226,13 +238,24 @@ export function computeSeasonAwards(world: World) {
         detail: `Overall ${pot.overall}, ${pot.seasonGoals} goals, ${pot.seasonAssists} assists`,
       });
     }
-    const pickBest = (position: number, count: number): Player[] => {
+    const pickBest = (position: string, count: number): Player[] => {
       const pool = players
         .filter((p) => p.position === position)
         .sort((a, b) => b.overall + b.seasonGoals * 2 - (a.overall + a.seasonGoals * 2));
       return pool.slice(0, count);
     };
-    const xi = [...pickBest(0, 1), ...pickBest(1, 2), ...pickBest(2, 2), ...pickBest(3, 4), ...pickBest(4, 2)];
+    // §13.4: fixed 4-3-3 natural-position Best XI shape.
+    const xi = [
+      ...pickBest("GK", 1),
+      ...pickBest("LB", 1),
+      ...pickBest("RB", 1),
+      ...pickBest("CB", 2),
+      ...pickBest("DM", 1),
+      ...pickBest("AM", 2),
+      ...pickBest("LW", 1),
+      ...pickBest("RW", 1),
+      ...pickBest("ST", 1),
+    ];
     if (xi.length > 0) {
       world.seasonAwards.push({
         season,
@@ -320,7 +343,7 @@ export function processContractExpiry(world: World, playerId: number): void {
   if (prepared && !prepared.ok) throw new Error(`Could not create free-agent listing after contract expiry: ${prepared.error}`);
   player.clubId = null;
   player.contractDays = Math.max(1, Math.round(DAYS_PER_YEAR / 2));
-  player.tacPos = -1;
+  player.starter = false;
   player.starter = false;
   player.onSale = false;
   if (prepared && prepared.ok) world.freeAgentListings.push(prepared.listing);
@@ -344,7 +367,7 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
     }
     p.clubId = loan.fromClubId;
     p.loanId = null;
-    p.tacPos = -1;
+    p.starter = false;
   }
   const from = world.clubs.find((c) => c.id === loan.fromClubId);
   const to = loan.toClubId !== null ? world.clubs.find((c) => c.id === loan.toClubId) : null;
@@ -482,11 +505,50 @@ export function processSeasonalAcademyIntake(rng: World["rng"], world: World): v
       const division = divisionForClub(world, club.id);
       const totalDivisions = Math.max(1, lowestActiveTier(world, seasonId));
       for (let i = squad.length; i < SENIOR_SQUAD_FLOOR; i++) {
+        // §11.4: fill the largest positive natural-role deficit instead of
+        // always generating a legacy MF. Target = current lineup-purpose senior
+        // count + 1; broad targets via largest-remainder, child split via the
+        // seeded allocator with the exact senior-floor key.
+        const current = world.players.filter((p) => p.clubId === club.id && !p.isYouth);
+        const targetSize = current.length + 1;
+        const mix = (gameConfig as unknown as { playerGeneration?: { positionMix?: { seniorGroups?: Record<string, number>; withinGroup?: Record<string, Record<string, number>> } } })?.playerGeneration?.positionMix;
+        const seniorGroups = mix?.seniorGroups ?? { GK: 0.1, FB: 0.14, CB: 0.18, MF: 0.32, FW: 0.26 };
+        const withinGroup = mix?.withinGroup ?? { GK: { GK: 1 }, FB: { LB: 0.5, RB: 0.5 }, CB: { CB: 1 }, MF: { DM: 0.5, AM: 0.5 }, FW: { LW: 1 / 3, RW: 1 / 3, ST: 1 / 3 } };
+        const broad = allocateBroadGroupCounts(targetSize, seniorGroups);
+        const seedKey = `${world.seed}|${club.id}|${seasonId ?? "none"}|senior-floor|${targetSize}|split|`;
+        const currentCounts: Record<string, number> = { GK: 0, LB: 0, RB: 0, CB: 0, DM: 0, AM: 0, LW: 0, RW: 0, ST: 0 };
+        for (const p of current) {
+          const pos = p.position as string;
+          if (pos in currentCounts) currentCounts[pos]++;
+        }
+        const targets: Record<string, number> = {};
+        for (const [group, count] of Object.entries(broad)) {
+          const split = allocateSeededCounts(count, withinGroup[group] ?? {}, `${seedKey}${group}`);
+          for (const [role, n] of Object.entries(split)) targets[role] = (targets[role] ?? 0) + n;
+        }
+        // Deficit per role; largest positive deficit wins, tie by canonical
+        // natural-position display order rotated by FNV-1a of the slot key.
+        // §11.4 step 6: ties break by canonical display order ROTATED by one
+        // hash of the slot key, so no role is permanently favoured.
+        const rotation = fnv1a(`${world.seed}|${club.id}|${seasonId ?? "none"}|senior-floor|slot`) % NATURAL_POSITION_ORDER.length;
+        const rotated = NATURAL_POSITION_ORDER.map(
+          (_, i) => NATURAL_POSITION_ORDER[(i + rotation) % NATURAL_POSITION_ORDER.length],
+        );
+        let bestRole: string | null = null;
+        let bestDeficit = -Infinity;
+        for (const role of rotated) {
+          const deficit = (targets[role] ?? 0) - (currentCounts[role] ?? 0);
+          if (deficit > bestDeficit) {
+            bestDeficit = deficit;
+            bestRole = role;
+          }
+        }
+        const position = (bestRole ?? "DM") as import("./positions").NaturalPosition;
         const p = generateSeniorPlayer({
           id: world.nextId++,
           clubId: club.id,
           country: club.country,
-          position: 3,
+          position,
           isYouth: false,
           currentDivision: division,
           highestDivisionReached: club.highestDivision,

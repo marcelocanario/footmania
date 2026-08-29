@@ -6,7 +6,8 @@ import { preferredHoursFromClubRow } from "./saveService";
 import { deserializeClubKits, resolveClubKits, selectMatchKits } from "../game/kits";
 import { standingsTiebreak } from "../game/league";
 import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf } from "../game/multiplayer";
-import { POSITION_NAMES, TACTICAL_POSITION_NAMES } from "../game/constants";
+
+import { NATURAL_POSITION_ORDER, positionGroup, positionName } from "../game/positions";
 import { footmaniaRanking, isFootmaniaRankedClub } from "../game/elo";
 
 type MpStateView = {
@@ -494,11 +495,14 @@ export function buildTeamProfile(world: World, clubId: number) {
   // Ordering for the timeline list: first-team before youth, then pitch
   // position, then name; the client renders any nickname in quotes.
   const squad = world.players.filter((p) => p.clubId === clubId);
+  const positionOrder = new Map<string, number>(NATURAL_POSITION_ORDER.map((pos, idx) => [pos, idx]));
   const players = squad
     .slice()
     .sort((a, b) => {
       if (a.isYouth !== b.isYouth) return a.isYouth ? 1 : -1;
-      if (a.position !== b.position) return a.position - b.position;
+      const aPos = typeof a.position === "string" ? positionOrder.get(a.position) ?? 99 : (a.position as number);
+      const bPos = typeof b.position === "string" ? positionOrder.get(b.position) ?? 99 : (b.position as number);
+      if (aPos !== bPos) return aPos - bPos;
       return a.name.localeCompare(b.name);
     })
     .map((p) => {
@@ -519,9 +523,9 @@ export function buildTeamProfile(world: World, clubId: number) {
         id: p.id,
         name: p.name,
         nickname: p.nickname ?? null,
-        position: p.position,
-        positionName: POSITION_NAMES[p.position] ?? "",
-        tacPosName: TACTICAL_POSITION_NAMES[p.tacPos] ?? "",
+        naturalPosition: p.position,
+        positionGroup: positionGroup(p.position as import("../game/positions").NaturalPosition),
+        positionName: positionName(p.position as import("../game/positions").NaturalPosition),
         overall: p.overall,
         age: p.age,
         country: p.country,

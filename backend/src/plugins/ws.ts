@@ -47,6 +47,11 @@ function broadcastState(world: import("../game/types").World, matchId?: number) 
   }
 }
 
+/** §15.4: formations last pushed to sockets, per match, so a delta can carry
+ *  the new slot geometry when either side changes shape. Transient by design —
+ *  a reconnecting client always receives a full state first. */
+const lastEmittedFormations = new Map<number, { home: number; away: number }>();
+
 function broadcastLiveMatchUpdates(world: import("../game/types").World, updates: LiveMatchUpdate[]) {
   for (const update of updates) {
     const sockets = conns.get(update.matchId);
@@ -56,8 +61,19 @@ function broadcastLiveMatchUpdates(world: import("../game/types").World, updates
     // liveStateDeltaView carries no viewer-specific fields at all, and
     // liveStateView's only per-viewer fields are humanSide/isParticipant, so
     // compute the shared payload once per match per update, not per socket.
+    if (finished) {
+      lastEmittedFormations.delete(update.matchId);
+    }
     const fullState = !finished && update.phaseChanged ? liveStateView(world, state!, null) : null;
-    const delta = !finished && !update.phaseChanged ? liveStateDeltaView(world, state!, update.eventStart) : null;
+    const delta = !finished && !update.phaseChanged
+      ? liveStateDeltaView(world, state!, update.eventStart, lastEmittedFormations.get(update.matchId))
+      : null;
+    if (!finished) {
+      lastEmittedFormations.set(update.matchId, {
+        home: state!.homeTactics.formation,
+        away: state!.awayTactics.formation,
+      });
+    }
     for (const ws of sockets) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
       // Spectators follow the match too; control messages remain
