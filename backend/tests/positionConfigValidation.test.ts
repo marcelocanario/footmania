@@ -84,10 +84,16 @@ describe("match-simulator config validation", () => {
   });
 
   it("rejects a missing cell, an unknown key and an out-of-range penalty", () => {
-    expectRejected((cfg) => { delete cfg.outOfPosition.skillPenaltyByNaturalAndRole.LB.LM; }, /LB->LM is missing/);
+    expectRejected((cfg) => { delete cfg.outOfPosition.skillPenaltyByNaturalAndRole.LB.DM; }, /LB->DM is missing/);
     expectRejected((cfg) => { cfg.outOfPosition.skillPenaltyByNaturalAndRole.LB.CM = 5; }, /row LB has unknown deployed role CM/);
     expectRejected((cfg) => { cfg.outOfPosition.skillPenaltyByNaturalAndRole.LB.CB = 4.5; }, /must be an integer 0\.\.100 or null/);
     expectRejected((cfg) => { cfg.outOfPosition.skillPenaltyByNaturalAndRole.LB.CB = -1; }, /must be an integer 0\.\.100 or null/);
+  });
+
+  it("rejects the removed legacy sub-roles as unknown in the matrix", () => {
+    for (const legacy of ["SW", "LM", "RM"]) {
+      expectRejected((cfg) => { cfg.outOfPosition.skillPenaltyByNaturalAndRole.LB[legacy] = 5; }, /row LB has unknown deployed role/);
+    }
   });
 
   it("rejects suitability bands that are unordered or fail to cover the matrix", () => {

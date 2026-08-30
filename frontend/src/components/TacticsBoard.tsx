@@ -206,7 +206,10 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
   // §16.2: labels and geometry come from the lineup response. The frontend
   // holds no formation table, so there is nothing to fall back to.
   const slotNames = useMemo(() => (data?.slots ?? []).map((s) => s.role), [data?.slots]);
-  const slotPoints = useMemo(() => (data?.slots ?? []).map((s) => ({ x: s.x, y: s.y })), [data?.slots]);
+  // §15.4 slots use the landscape convention (x = depth, y = lane); this
+  // board's portrait pitch maps the lane to left and inverted depth to top
+  // so the keeper rests at the bottom and attackers at the top.
+  const slotPoints = useMemo(() => (data?.slots ?? []).map((s) => ({ x: s.y, y: 100 - s.x })), [data?.slots]);
   const takerOptions = starters.filter(isBoardPlayer).map((player) => ({ id: player.id, label: `${player.name} (${player.overall})` }));
 
   const kit = mode === "match" && liveState

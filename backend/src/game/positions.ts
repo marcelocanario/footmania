@@ -10,9 +10,14 @@ export type PositionGroup = (typeof POSITION_GROUPS)[number];
 export const RATING_ROLES = ["GK", "FB", "CB", "MID", "FWD"] as const;
 export type RatingRole = (typeof RATING_ROLES)[number];
 
-export const DEPLOYED_ROLES = [
-  "GK", "LB", "RB", "CB", "SW", "DM", "AM", "LM", "RM", "LW", "RW", "ST",
-] as const;
+/**
+ * Deployed roles are the roles a formation slot can demand. They now coincide
+ * with the nine natural positions: there are no tactical sub-roles (SW/LM/RM
+ * were removed) that no player is ever born with — every slot is a position a
+ * player can actually occupy naturally, so any slot can be filled penalty-free
+ * by a player of the matching natural position.
+ */
+export const DEPLOYED_ROLES = NATURAL_POSITIONS;
 export type DeployedRole = (typeof DEPLOYED_ROLES)[number];
 
 const POSITION_GROUP_MAP: Record<NaturalPosition, PositionGroup> = {

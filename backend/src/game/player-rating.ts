@@ -34,8 +34,8 @@ export function coarseRole(fineRole: string): CoarseRole {
   switch (fineRole) {
     case "GK": return "GK";
     case "LB": case "RB": return "FB";
-    case "CB": case "SW": return "CB";
-    case "LM": case "RM": case "DM": case "AM": return "MID";
+    case "CB": return "CB";
+    case "DM": case "AM": return "MID";
     case "LW": case "RW": case "ST": return "FWD";
     default: return "MID";
   }

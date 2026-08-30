@@ -271,28 +271,39 @@ by a physical setback.
 ### 3.2 Deployed roles, formations and playing out of position
 
 A player's natural position is his permanent identity. The role he actually plays
-is a property of the **formation slot** he occupies, and there are twelve of them:
-GK, LB, RB, CB, SW, DM, AM, LM, RM, LW, RW, ST. `SW` is a deployed role only —
-it is the central defender of every three-centre-back line, and no player is ever
-generated as one.
+is a property of the **formation slot** he occupies. There are exactly nine
+deployed roles — the nine natural positions: GK, LB, RB, CB, DM, AM, LW, RW, ST.
+There are no tactical sub-roles (a sweeper `SW` or wide mids `LM`/`RM` were
+removed): every slot is a position a player can actually be born with, so any
+slot can be filled penalty-free by a player of the matching natural position.
 
-The thirteen formations are fixed:
+The twenty-three formations are fixed:
 
 | ID | Name | Shape from back to front |
 | ---: | --- | --- |
-| 0 | 5-4-1 | LB CB SW CB RB · LM DM AM RM · ST |
-| 1 | 5-4-1 Wide | LB CB SW CB RB · DM DM · LM RM · ST |
-| 2 | 5-3-2 | LB CB SW CB RB · DM AM AM · ST ST |
-| 3 | 4-5-1 | LB CB CB RB · LM DM AM DM RM · ST |
-| 4 | 4-4-2 | LB CB CB RB · LM DM AM RM · ST ST |
+| 0 | 5-4-1 | LB CB CB CB RB · AM DM DM AM · ST |
+| 1 | 5-4-1 Wide | LB CB CB CB RB · DM DM · AM AM · ST |
+| 2 | 5-3-2 | LB CB CB CB RB · DM AM AM · ST ST |
+| 3 | 4-5-1 | LB CB CB RB · AM DM DM DM AM · ST |
+| 4 | 4-4-2 | LB CB CB RB · AM DM DM AM · ST ST |
 | 5 | 4-4-2 Diamond | LB CB CB RB · DM · AM AM · AM · ST ST |
 | 6 | 4-4-2 Attacking | LB CB CB RB · LW AM AM RW · ST ST |
 | 7 | 4-3-3 | LB CB CB RB · DM AM AM · LW ST RW |
 | 8 | 4-3-3 Holding | LB CB CB RB · DM DM · AM · LW ST RW |
-| 9 | 3-5-2 | CB SW CB · LM DM AM DM RM · ST ST |
-| 10 | 3-4-3 | CB SW CB · LM DM AM RM · LW ST RW |
+| 9 | 3-5-2 | CB CB CB · AM DM AM DM AM · ST ST |
+| 10 | 3-4-3 | CB CB CB · AM DM DM AM · LW ST RW |
 | 11 | 4-2-3-1 | LB CB CB RB · DM DM · LW AM RW · ST |
-| 12 | 4-2-3-1 Wide | LB CB CB RB · DM DM · LM AM RM · ST |
+| 12 | 4-2-3-1 Wide | LB CB CB RB · DM DM · AM AM AM · ST |
+| 13 | 4-3-1-2 | LB CB CB RB · DM DM DM · AM · ST ST |
+| 14 | 4-1-3-2 | LB CB CB RB · DM · AM AM AM · ST ST |
+| 15 | 3-4-1-2 | CB CB CB · AM DM DM AM · AM · ST ST |
+| 16 | 3-3-2-2 | CB CB CB · DM AM DM · AM AM · ST ST |
+| 17 | 4-2-4 | LB CB CB RB · DM DM · LW ST ST RW |
+| 18 | 4-3-2-1 | LB CB CB RB · DM DM DM · AM AM · ST |
+| 19 | 4-2-2-2 | LB CB CB RB · DM DM · AM AM · ST ST |
+| 20 | 3-5-1-1 | CB CB CB · AM DM DM DM AM · AM · ST |
+| 21 | 4-1-4-1 | LB CB CB RB · DM · AM DM DM AM · ST |
+| 22 | 5-2-3 | LB CB CB CB RB · DM DM · LW ST RW |
 
 Only goalkeeping is structurally restricted: the GK slot accepts natural
 goalkeepers and nobody else, and a natural goalkeeper can never take an outfield

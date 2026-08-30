@@ -120,7 +120,7 @@ describe("parseStoredPresets legacy migration", () => {
           // pressing 4 was accepted by the old loose schema; it must be dropped
           { id: "r1", trigger: { kind: "HALF_TIME" }, condition: "ANY", action: { kind: "TACTICS", pressing: 4, style: 2 } },
           // this rule only carried an invalid value, so it disappears entirely
-          { id: "r2", trigger: { kind: "HALF_TIME" }, condition: "ANY", action: { kind: "TACTICS", formation: 15 } },
+          { id: "r2", trigger: { kind: "HALF_TIME" }, condition: "ANY", action: { kind: "TACTICS", pressing: 15 } },
         ],
       },
     ];

@@ -69,8 +69,8 @@ export function physicalSkill(player: Pick<Player, "skills">): number {
 
 export function roleForPosition(position: string): "GK" | "DEF" | "MID" | "ATT" {
   if (position === "GK") return "GK";
-  if (position === "LB" || position === "RB" || position === "CB" || position === "SW") return "DEF";
-  if (position === "DM" || position === "AM" || position === "LM" || position === "RM") return "MID";
+  if (position === "LB" || position === "RB" || position === "CB") return "DEF";
+  if (position === "DM" || position === "AM") return "MID";
   return "ATT";
 }
 

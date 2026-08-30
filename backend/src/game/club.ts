@@ -321,7 +321,7 @@ export function aiSelectionValue(player: Player, role: DeployedRole, pressing = 
 function aiScoreOf(pressing: number) {
   // The value depends only on (player, role) — never on the formation or slot —
   // and each call runs two multi-day energy projections, so memoize across the
-  // thirteen formations aiBestXI evaluates.
+  // formations aiBestXI evaluates.
   const cache = new Map<string, number | null>();
   return (p: Player, role: DeployedRole): number | null => {
     const key = `${p.id}:${role}`;
@@ -337,8 +337,8 @@ function aiScoreOf(pressing: number) {
 /** §13.1 energy/load role from a deployed role (GK/DEF/MID/ATT). */
 function roleToEnergyRole(role: DeployedRole): "GK" | "DEF" | "MID" | "ATT" {
   if (role === "GK") return "GK";
-  if (role === "LB" || role === "RB" || role === "CB" || role === "SW") return "DEF";
-  if (role === "DM" || role === "AM" || role === "LM" || role === "RM") return "MID";
+  if (role === "LB" || role === "RB" || role === "CB") return "DEF";
+  if (role === "DM" || role === "AM") return "MID";
   return "ATT";
 }
 
@@ -390,15 +390,15 @@ export function buildLineup(club: Club, allPlayers: Player[], options: { futureF
 
 /**
  * Bench construction (§9.4): partial DP against the archetype order
- * GK, LB, RB, CB, DM, AM, LW, RW, ST, LM, RM. A state may skip an archetype.
+ * GK, LB, RB, CB, DM, AM, LW, RW, ST. A state may skip an archetype.
  * Compare final states by: more archetypes filled; lexicographically larger
- * 11-bit filled-archetype mask read GK→RM (earlier archetype wins at equal
+ * 11-bit filled-archetype mask read GK→ST (earlier archetype wins at equal
  * counts); larger total current score; lexicographically smaller player-ID
  * array in archetype order (Number.MAX_SAFE_INTEGER for unfilled).
  * Append any still-unfilled places by adjusted best-role rating desc, energy
  * desc, overall desc, player ID asc.
  */
-const BENCH_ARCHETYPES: DeployedRole[] = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST", "LM", "RM"];
+const BENCH_ARCHETYPES: DeployedRole[] = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"];
 
 function buildBench(available: Player[], excluded: Set<number>, scoreOf: (p: Player, role: DeployedRole) => number | null): Player[] {
   const pool = available.filter((p) => !excluded.has(p.id));
@@ -487,8 +487,8 @@ function enginePressingScale(pressing: number): number {
 // tactics, so a restart or retry cannot reroll a different setup.
 // ---------------------------------------------------------------------------
 
-/** Deployed roles played out wide (fullbacks, wide midfielders, wingers). */
-const WIDE_ROLES = new Set<DeployedRole>(["LB", "RB", "LM", "RM", "LW", "RW"]);
+/** Deployed roles played out wide (fullbacks and wingers). */
+const WIDE_ROLES = new Set<DeployedRole>(["LB", "RB", "LW", "RW"]);
 
 interface AiTacticsProfile {
   pace: number;
@@ -528,13 +528,25 @@ export function aiBestXI(
   aiOptions: { pressing: number; futureFixtures: boolean }
 ): { formation: number; slots: AssignedSlot[]; totalScore: number } | null {
   void aiOptions.futureFixtures;
-  let best: BestXiResult | null = null;
   const scoreOf = aiScoreOf(aiOptions.pressing);
-  for (const { id: f } of FORMATIONS) {
-    const assigned = assignBestXI(available, f, scoreOf);
+  let best: BestXiResult | null = null;
+  // The XI-assignment DP maximizes the sum of scoreOf(player, role), which
+  // depends only on how many of each role a formation demands — not their
+  // physical order. Two formations with the same role multiset therefore have
+  // identical optimal scores (and the same eligibility outcome). FORMATIONS is
+  // ordered by id, so the first formation of each multiset seen is that group's
+  // lowest id — the existing tie-break winner — and later duplicates can be
+  // skipped entirely. This key is derived from the catalog at runtime, so the
+  // dedup stays correct automatically as formations are added or removed.
+  const seen = new Set<string>();
+  for (const f of FORMATIONS) {
+    const key = f.slots.map((s) => s.role).sort().join(",");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const assigned = assignBestXI(available, f.id, scoreOf);
     if (!assigned) continue;
-    if (!best || assigned.totalScore > best.totalScore + 1e-9 || (Math.abs(assigned.totalScore - best.totalScore) <= 1e-9 && f < best.formation)) {
-      best = { formation: f, slots: assigned.slots, totalScore: assigned.totalScore };
+    if (!best || assigned.totalScore > best.totalScore + 1e-9 || (Math.abs(assigned.totalScore - best.totalScore) <= 1e-9 && f.id < best.formation)) {
+      best = { formation: f.id, slots: assigned.slots, totalScore: assigned.totalScore };
     }
   }
   return best;

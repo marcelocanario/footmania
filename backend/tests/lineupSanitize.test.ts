@@ -32,8 +32,8 @@ function makeClub(id = 900): Club {
   };
 }
 
-// Formation 4 slot roles: GK, LB, CB1, CB2, LM, DM, AM, RM, ST1, ST2, ... —
-// kept as natural positions so every slot has a legal pairing.
+// Formation 4 slot roles: GK, LB, CB1, CB2, AM, DM, DM, AM, ST1, ST2 — the
+// test players are natural positions, kept eligible for every slot they occupy.
 const STARTER_POSITIONS: Position[] = ["GK", "LB", "CB", "CB", "AM", "DM", "AM", "AM", "ST", "ST", "AM"];
 const BENCH_POSITIONS: Position[] = ["GK", "CB", "LB", "DM", "ST", "LW", "AM"];
 

@@ -375,10 +375,10 @@ const gameConfigSchema = z
         }
       }),
       tacticalRatingByRole: z.record(z.string(), z.record(z.string(), z.number().min(0))).superRefine((rows, ctx) => {
-        const want = ["GK", "LB", "RB", "CB", "SW", "DM", "AM", "LM", "RM", "LW", "RW", "ST"];
+        const want = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"];
         const keys = Object.keys(rows);
         if (keys.length !== want.length || !want.every((k) => keys.includes(k))) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "tacticalRatingByRole must have exactly the twelve deployed roles" });
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: "tacticalRatingByRole must have exactly the nine deployed roles" });
         }
         const skillKeys = ["gol", "pace", "tec", "pas", "des", "playmaking", "fin"];
         for (const [role, row] of Object.entries(rows)) {
@@ -1059,11 +1059,8 @@ const DEFAULT_GAME_CONFIG: GameConfig = {
       LB: { des: 0.40, pas: 0.30, pace: 0.10, tec: 0.10, playmaking: 0.05, fin: 0.05 },
       RB: { des: 0.40, pas: 0.30, pace: 0.10, tec: 0.10, playmaking: 0.05, fin: 0.05 },
       CB: { des: 0.50, pace: 0.25, tec: 0.10, pas: 0.10, playmaking: 0.05 },
-      SW: { des: 0.45, pas: 0.20, pace: 0.15, tec: 0.10, playmaking: 0.10 },
       DM: { des: 0.40, pas: 0.20, pace: 0.15, tec: 0.10, playmaking: 0.10, fin: 0.05 },
       AM: { playmaking: 0.40, pas: 0.25, tec: 0.10, pace: 0.10, fin: 0.10, des: 0.05 },
-      LM: { pace: 0.25, pas: 0.25, playmaking: 0.20, tec: 0.15, fin: 0.10, des: 0.05 },
-      RM: { pace: 0.25, pas: 0.25, playmaking: 0.20, tec: 0.15, fin: 0.10, des: 0.05 },
       LW: { fin: 0.40, pace: 0.25, tec: 0.25, pas: 0.05, playmaking: 0.05 },
       RW: { fin: 0.40, pace: 0.25, tec: 0.25, pas: 0.05, playmaking: 0.05 },
       ST: { fin: 0.40, pace: 0.25, tec: 0.15, pas: 0.15, playmaking: 0.05 },

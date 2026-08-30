@@ -77,7 +77,10 @@ const storedActionSchema = z.object({
   outPlayerId: z.number().int().optional(),
   inPlayerId: z.number().int().optional(),
   // Legacy bounds were looser than the real tactic ranges; sanitize below.
-  formation: z.number().int().min(0).max(20).optional(),
+  // Formation's loose bound is the real catalog max: with 23 formations the
+  // highest id (22) exceeds the old fixed 20 cap, which would have dropped
+  // legitimate stored presets as corrupt.
+  formation: z.number().int().min(0).max(MAX_FORMATION).optional(),
   style: z.number().int().min(0).max(20).optional(),
   pressing: z.number().int().min(0).max(20).optional(),
   direction: z.number().int().min(0).max(20).optional(),
@@ -94,7 +97,7 @@ const storedPresetsSchema = z.array(
   z.object({
     id: z.string().min(1).max(64),
     name: z.string().trim().min(1).max(40),
-    formationId: z.number().int().min(0).max(20).nullable(),
+    formationId: z.number().int().min(0).max(MAX_FORMATION).nullable(),
     enabled: z.boolean(),
     rules: z.array(storedRuleSchema).max(AUTOMATION_CONFIG.maxRulesPerPreset),
   })

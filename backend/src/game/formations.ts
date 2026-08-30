@@ -27,9 +27,8 @@ function laneFromY(y: number): TacticalLane {
 
 function lineFromRole(role: DeployedRole): TacticalLine {
   if (role === "GK") return "GOAL";
-  if (role === "LB" || role === "RB" || role === "CB" || role === "SW") return "DEFENCE";
+  if (role === "LB" || role === "RB" || role === "CB") return "DEFENCE";
   if (role === "DM") return "DEFENSIVE_MIDFIELD";
-  if (role === "LM" || role === "RM") return "MIDFIELD";
   if (role === "AM") return "ATTACKING_MIDFIELD";
   return "ATTACK";
 }
@@ -79,29 +78,29 @@ function def(id: number, name: string, lines: { x: number; roles: string[] }[]):
 
 export const FORMATIONS: readonly FormationDefinition[] = [
   def(0, "5-4-1", [
-    { x: 25, roles: ["LB", "CB1", "SW", "CB2", "RB"] },
-    { x: 45, roles: ["LM", "DM", "AM", "RM"] },
+    { x: 25, roles: ["LB", "CB1", "CB2", "CB3", "RB"] },
+    { x: 45, roles: ["AM1", "DM1", "DM2", "AM2"] },
     { x: 68, roles: ["ST"] },
   ]),
   def(1, "5-4-1 Wide", [
-    { x: 25, roles: ["LB", "CB1", "SW", "CB2", "RB"] },
+    { x: 25, roles: ["LB", "CB1", "CB2", "CB3", "RB"] },
     { x: 38, roles: ["DM1", "DM2"] },
-    { x: 54, roles: ["LM", "RM"] },
+    { x: 54, roles: ["AM1", "AM2"] },
     { x: 70, roles: ["ST"] },
   ]),
   def(2, "5-3-2", [
-    { x: 25, roles: ["LB", "CB1", "SW", "CB2", "RB"] },
+    { x: 25, roles: ["LB", "CB1", "CB2", "CB3", "RB"] },
     { x: 45, roles: ["DM", "AM1", "AM2"] },
     { x: 68, roles: ["ST1", "ST2"] },
   ]),
   def(3, "4-5-1", [
     { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
-    { x: 45, roles: ["LM", "DM1", "AM", "DM2", "RM"] },
+    { x: 45, roles: ["AM1", "DM1", "DM2", "DM3", "AM2"] },
     { x: 68, roles: ["ST"] },
   ]),
   def(4, "4-4-2", [
     { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
-    { x: 45, roles: ["LM", "DM", "AM", "RM"] },
+    { x: 45, roles: ["AM1", "DM1", "DM2", "AM2"] },
     { x: 68, roles: ["ST1", "ST2"] },
   ]),
   def(5, "4-4-2 Diamond", [
@@ -128,13 +127,13 @@ export const FORMATIONS: readonly FormationDefinition[] = [
     { x: 68, roles: ["LW", "ST", "RW"] },
   ]),
   def(9, "3-5-2", [
-    { x: 25, roles: ["CB1", "SW", "CB2"] },
-    { x: 45, roles: ["LM", "DM1", "AM", "DM2", "RM"] },
+    { x: 25, roles: ["CB1", "CB2", "CB3"] },
+    { x: 45, roles: ["AM1", "DM1", "AM2", "DM2", "AM3"] },
     { x: 68, roles: ["ST1", "ST2"] },
   ]),
   def(10, "3-4-3", [
-    { x: 25, roles: ["CB1", "SW", "CB2"] },
-    { x: 45, roles: ["LM", "DM", "AM", "RM"] },
+    { x: 25, roles: ["CB1", "CB2", "CB3"] },
+    { x: 45, roles: ["AM1", "DM1", "DM2", "AM2"] },
     { x: 68, roles: ["LW", "ST", "RW"] },
   ]),
   def(11, "4-2-3-1", [
@@ -146,12 +145,70 @@ export const FORMATIONS: readonly FormationDefinition[] = [
   def(12, "4-2-3-1 Wide", [
     { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
     { x: 36, roles: ["DM1", "DM2"] },
-    { x: 54, roles: ["LM", "AM", "RM"] },
+    { x: 54, roles: ["AM1", "AM2", "AM3"] },
     { x: 70, roles: ["ST"] },
+  ]),
+  def(13, "4-3-1-2", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
+    { x: 38, roles: ["DM1", "DM2", "DM3"] },
+    { x: 52, roles: ["AM"] },
+    { x: 66, roles: ["ST1", "ST2"] },
+  ]),
+  def(14, "4-1-3-2", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
+    { x: 34, roles: ["DM"] },
+    { x: 50, roles: ["AM1", "AM2", "AM3"] },
+    { x: 66, roles: ["ST1", "ST2"] },
+  ]),
+  def(15, "3-4-1-2", [
+    { x: 25, roles: ["CB1", "CB2", "CB3"] },
+    { x: 40, roles: ["AM1", "DM1", "DM2", "AM2"] },
+    { x: 52, roles: ["AM3"] },
+    { x: 66, roles: ["ST1", "ST2"] },
+  ]),
+  def(16, "3-3-2-2", [
+    { x: 25, roles: ["CB1", "CB2", "CB3"] },
+    { x: 40, roles: ["DM1", "AM1", "DM2"] },
+    { x: 52, roles: ["AM2", "AM3"] },
+    { x: 66, roles: ["ST1", "ST2"] },
+  ]),
+  def(17, "4-2-4", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
+    { x: 40, roles: ["DM1", "DM2"] },
+    { x: 62, roles: ["LW", "ST1", "ST2", "RW"] },
+  ]),
+  def(18, "4-3-2-1", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
+    { x: 38, roles: ["DM1", "DM2", "DM3"] },
+    { x: 52, roles: ["AM1", "AM2"] },
+    { x: 66, roles: ["ST"] },
+  ]),
+  def(19, "4-2-2-2", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
+    { x: 38, roles: ["DM1", "DM2"] },
+    { x: 52, roles: ["AM1", "AM2"] },
+    { x: 66, roles: ["ST1", "ST2"] },
+  ]),
+  def(20, "3-5-1-1", [
+    { x: 25, roles: ["CB1", "CB2", "CB3"] },
+    { x: 42, roles: ["AM1", "DM1", "DM2", "DM3", "AM2"] },
+    { x: 54, roles: ["AM3"] },
+    { x: 68, roles: ["ST"] },
+  ]),
+  def(21, "4-1-4-1", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "RB"] },
+    { x: 34, roles: ["DM1"] },
+    { x: 46, roles: ["AM1", "DM2", "DM3", "AM2"] },
+    { x: 66, roles: ["ST"] },
+  ]),
+  def(22, "5-2-3", [
+    { x: 25, roles: ["LB", "CB1", "CB2", "CB3", "RB"] },
+    { x: 40, roles: ["DM1", "DM2"] },
+    { x: 62, roles: ["LW", "ST", "RW"] },
   ]),
 ];
 
-// §4.3: every one of the twelve deployed roles must occur somewhere in the
+// §4.3: every one of the nine deployed roles must occur somewhere in the
 // catalog, otherwise a configured role kernel or penalty row is unreachable.
 {
   const covered = new Set(FORMATIONS.flatMap((f) => f.slots.map((s) => s.role)));

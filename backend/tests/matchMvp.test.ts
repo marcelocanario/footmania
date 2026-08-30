@@ -29,9 +29,8 @@ describe("rating math", () => {
     expect(coarseRole("LB")).toBe("FB");
     expect(coarseRole("RB")).toBe("FB");
     expect(coarseRole("CB")).toBe("CB");
-    expect(coarseRole("SW")).toBe("CB");
-    expect(coarseRole("LM")).toBe("MID");
-    expect(coarseRole("RM")).toBe("MID");
+    expect(coarseRole("DM")).toBe("MID");
+    expect(coarseRole("AM")).toBe("MID");
     expect(coarseRole("CM")).toBe("MID");
     expect(coarseRole("LW")).toBe("FWD");
     expect(coarseRole("RW")).toBe("FWD");
@@ -58,7 +57,7 @@ describe("rating math", () => {
     expect(balancedZ(1.2, { role: "GK", zRaws: [0.5], usable: false })).toBe(1.2);
   });
 
-  // §17: benchmarks are keyed by the twelve DEPLOYED roles, not the five coarse
+  // §17: benchmarks are keyed by the nine DEPLOYED roles, not the five coarse
   // groups — a shared MID row would make DM and AM indistinguishable to the
   // rating observer, which is the whole point of the fine-role taxonomy.
   it("builds a median benchmark for every deployed role, not just the coarse groups", () => {

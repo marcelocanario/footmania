@@ -342,11 +342,8 @@
       "LB": { "des": 0.40, "pas": 0.30, "pace": 0.10, "tec": 0.10, "playmaking": 0.05, "fin": 0.05 },
       "RB": { "des": 0.40, "pas": 0.30, "pace": 0.10, "tec": 0.10, "playmaking": 0.05, "fin": 0.05 },
       "CB": { "des": 0.50, "pace": 0.25, "tec": 0.10, "pas": 0.10, "playmaking": 0.05 },
-      "SW": { "des": 0.45, "pas": 0.20, "pace": 0.15, "tec": 0.10, "playmaking": 0.10 },
       "DM": { "des": 0.40, "pas": 0.20, "pace": 0.15, "tec": 0.10, "playmaking": 0.10, "fin": 0.05 },
       "AM": { "playmaking": 0.40, "pas": 0.25, "tec": 0.10, "pace": 0.10, "fin": 0.10, "des": 0.05 },
-      "LM": { "pace": 0.25, "pas": 0.25, "playmaking": 0.20, "tec": 0.15, "fin": 0.10, "des": 0.05 },
-      "RM": { "pace": 0.25, "pas": 0.25, "playmaking": 0.20, "tec": 0.15, "fin": 0.10, "des": 0.05 },
       "LW": { "fin": 0.40, "pace": 0.25, "tec": 0.25, "pas": 0.05, "playmaking": 0.05 },
       "RW": { "fin": 0.40, "pace": 0.25, "tec": 0.25, "pas": 0.05, "playmaking": 0.05 },
       "ST": { "fin": 0.40, "pace": 0.25, "tec": 0.15, "pas": 0.15, "playmaking": 0.05 }

@@ -87,8 +87,8 @@ describe("natural positions", () => {
 
   it("maps every fine deployed role to its prescribed coarse rating role (§20.26)", () => {
     const expected: Record<DeployedRole, string> = {
-      GK: "GK", LB: "FB", RB: "FB", CB: "CB", SW: "CB",
-      DM: "MID", AM: "MID", LM: "MID", RM: "MID",
+      GK: "GK", LB: "FB", RB: "FB", CB: "CB",
+      DM: "MID", AM: "MID",
       LW: "FWD", RW: "FWD", ST: "FWD",
     };
     for (const role of DEPLOYED_ROLES) expect(coarseRole(role)).toBe(expected[role]);
@@ -100,8 +100,8 @@ describe("natural positions", () => {
 // ---------------------------------------------------------------------------
 
 describe("formation catalog", () => {
-  it("has 13 formations of 11 unique, well-formed slots with one goalkeeper", () => {
-    expect(FORMATIONS).toHaveLength(13);
+  it("has 23 formations of 11 unique, well-formed slots with one goalkeeper", () => {
+    expect(FORMATIONS).toHaveLength(23);
     for (const formation of FORMATIONS) {
       expect(formation.slots).toHaveLength(11);
       expect(new Set(formation.slots.map((s) => s.key)).size).toBe(11);
@@ -133,9 +133,8 @@ describe("formation catalog", () => {
   it("derives every tactical line from the deployed role alone", () => {
     const expected: Record<DeployedRole, string> = {
       GK: "GOAL",
-      LB: "DEFENCE", RB: "DEFENCE", CB: "DEFENCE", SW: "DEFENCE",
+      LB: "DEFENCE", RB: "DEFENCE", CB: "DEFENCE",
       DM: "DEFENSIVE_MIDFIELD",
-      LM: "MIDFIELD", RM: "MIDFIELD",
       AM: "ATTACKING_MIDFIELD",
       LW: "ATTACK", RW: "ATTACK", ST: "ATTACK",
     };
@@ -144,16 +143,14 @@ describe("formation catalog", () => {
     }
   });
 
-  it("uses all twelve deployed roles across the catalog", () => {
+  it("uses all nine deployed roles across the catalog", () => {
     const used = new Set(FORMATIONS.flatMap((f) => f.slots.map((s) => s.role)));
     for (const role of DEPLOYED_ROLES) expect(used.has(role), `${role} unused`).toBe(true);
   });
 
-  it("uses SW for the central defender of every three-centre-back line", () => {
-    for (const id of [0, 1, 2, 9, 10]) {
-      const backLine = formationById(id)!.slots.filter((s) => s.line === "DEFENCE");
-      expect(backLine.filter((s) => s.role === "SW")).toHaveLength(1);
-    }
+  it("uses only natural positions as slot roles — no sweeper or wide-mid sub-roles", () => {
+    const used = new Set<string>(FORMATIONS.flatMap((f) => f.slots.map((s) => s.role)));
+    for (const legacy of ["SW", "LM", "RM"]) expect(used.has(legacy)).toBe(false);
   });
 
   it("scores formation similarity on role/lane/line tokens, symmetric in [0,1]", () => {
@@ -170,13 +167,15 @@ describe("formation catalog", () => {
 
   it("returns hand-calculated similarity for two known pairs", () => {
     // 4-4-2 (id 4) vs 4-4-2 Attacking (id 6). Tokens differ only in the middle
-    // band: 4-4-2 has LM:LEFT:MIDFIELD, DM:LEFT:DEFENSIVE_MIDFIELD,
-    // AM:RIGHT:ATTACKING_MIDFIELD, RM:RIGHT:MIDFIELD; the Attacking variant has
-    // LW:LEFT:ATTACK, AM:LEFT:.., AM:RIGHT:.., RW:RIGHT:ATTACK. Shared: GK, the
-    // four defenders, the two strikers and AM:RIGHT = 8 of 14 distinct slots.
+    // band: 4-4-2 has AM:LEFT:ATTACKING_MIDFIELD, DM:LEFT:DEFENSIVE_MIDFIELD,
+    // DM:RIGHT:DEFENSIVE_MIDFIELD, AM:RIGHT:ATTACKING_MIDFIELD; the Attacking
+    // variant has LW:LEFT:ATTACK, AM:LEFT:.., AM:RIGHT:.., RW:RIGHT:ATTACK.
+    // Shared: GK, the four defenders, both strikers, and AM:LEFT+AM:RIGHT = 9 of
+    // 13 distinct tokens (4-4-2's two DMs are unmatched; the Attacking's LW/RW
+    // add one extra attack token per flank).
     const a = formationById(4)!;
     const b = formationById(6)!;
-    expect(formationSimilarity(a, b)).toBeCloseTo(8 / 14, 12);
+    expect(formationSimilarity(a, b)).toBeCloseTo(9 / 13, 12);
 
     // 4-3-3 (id 7) vs 4-3-3 Holding (id 8): identical defence and attack; the
     // midfield goes DM+AM+AM -> DM+DM+AM. Shared 8 of 11 + 3 unmatched = 8/14... but
@@ -305,8 +304,8 @@ describe("out-of-position compatibility", () => {
       GK: "GK", LB: "RB", RB: "LB", CB: "CB", DM: "DM", AM: "AM", LW: "RW", RW: "LW", ST: "ST",
     };
     const mirrorRole: Record<DeployedRole, DeployedRole> = {
-      GK: "GK", LB: "RB", RB: "LB", CB: "CB", SW: "SW", DM: "DM", AM: "AM",
-      LM: "RM", RM: "LM", LW: "RW", RW: "LW", ST: "ST",
+      GK: "GK", LB: "RB", RB: "LB", CB: "CB", DM: "DM", AM: "AM",
+      LW: "RW", RW: "LW", ST: "ST",
     };
     for (const pos of NATURAL_POSITIONS) {
       for (const role of DEPLOYED_ROLES) {
@@ -394,7 +393,7 @@ function testPlayer(id: number, position: NaturalPosition, overrides: Partial<Pl
 }
 
 describe("XI assignment DP", () => {
-  const formationId = 4; // 4-4-2: GK, LB, CB, CB, RB, LM, DM, AM, RM, ST, ST
+  const formationId = 4; // 4-4-2: GK, LB, CB, CB, RB, AM, DM, DM, AM, ST, ST
   const squad = (): Player[] => [
     testPlayer(1, "GK"), testPlayer(2, "GK"),
     testPlayer(3, "LB"), testPlayer(4, "RB"),
@@ -412,17 +411,17 @@ describe("XI assignment DP", () => {
     const table = new Map<string, number>();
     const set = (id: number, role: DeployedRole, v: number) => table.set(`${id}:${role}`, v);
     for (const p of players) for (const role of roles) set(p.id, role, 1);
-    // Player 3 is excellent at LB (10) and also the only decent LM (10);
-    // player 9 is a slightly worse LB (9) but hopeless at LM (1).
-    set(3, "LB", 10); set(3, "LM", 10);
-    set(9, "LB", 9); set(9, "LM", 1);
+    // Player 3 is excellent at LB (10) and also the only decent AM (10);
+    // player 9 is a slightly worse LB (9) but hopeless at AM (1).
+    set(3, "LB", 10); set(3, "AM", 10);
+    set(9, "LB", 9); set(9, "AM", 1);
     const scoreOf = (p: Player, role: DeployedRole) =>
       p.position === "GK" ? (role === "GK" ? 5 : null) : role === "GK" ? null : table.get(`${p.id}:${role}`)!;
 
     const result = assignBestXI(players, formationId, scoreOf)!;
     expect(result).not.toBeNull();
     const bySlot = result.slots.map((s) => s.player.id);
-    // Optimum puts 9 at LB (9) and 3 at LM (10) = 19, beating 3 at LB + 9 at LM = 11.
+    // Optimum puts 9 at LB (9) and 3 at AM (10) = 19, beating 3 at LB + 9 at AM = 11.
     expect(bySlot[1]).toBe(9);
     expect(bySlot[5]).toBe(3);
   });

@@ -2574,7 +2574,7 @@ function pushFullTimeWhistle(eng: Engine): void {
 function cornerTakerId(eng: Engine, attSide: 0 | 1, cornerOrdinal: number): number | null {
   const outfield = sideOf(eng, attSide).on.filter((ps) => ps.deployedRole !== "GK");
   if (outfield.length === 0) return null;
-  const preferred = outfield.filter((ps) => ["LW", "RW", "LM", "RM", "ST"].includes(ps.deployedRole));
+  const preferred = outfield.filter((ps) => ["LW", "RW", "ST"].includes(ps.deployedRole));
   const pool = preferred.length > 0 ? preferred : outfield;
   return pool[(cornerOrdinal - 1) % pool.length].id;
 }

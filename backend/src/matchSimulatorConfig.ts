@@ -468,10 +468,10 @@ const matchSimulatorSchema = z
     checkWeightRows("actionQuality.attributeWeights", cfg.actionQuality.attributeWeights);
     checkWeightRows("actionQuality.defensiveResistanceWeights", cfg.actionQuality.defensiveResistanceWeights);
 
-    // §8: role-keyed tables cover exactly the twelve deployed roles. `CM` is not
-    // a deployed role any more; a leftover row (or a missing AM/DM) previously
-    // fell through to a hard-coded default at the call site.
-    const DEPLOYED = ["GK", "LB", "RB", "CB", "SW", "DM", "AM", "LM", "RM", "LW", "RW", "ST"];
+    // §8: role-keyed tables cover exactly the nine deployed roles (the natural
+    // positions). `CM` is not a deployed role; a leftover row (or a missing
+    // AM/DM) previously fell through to a hard-coded default at the call site.
+    const DEPLOYED = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"];
     const checkRoleKeyed = (label: string, row: Record<string, unknown>): void => {
       for (const role of DEPLOYED) {
         if (row[role] === undefined) problems.push(`${label} is missing deployed role ${role}`);

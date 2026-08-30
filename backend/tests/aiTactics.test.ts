@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { aiBestXI, chooseAiTactics } from "../src/game/club";
+import { aiBestXI, aiSelectionValue, assignBestXI, chooseAiTactics } from "../src/game/club";
+import { FORMATIONS } from "../src/game/formations";
+import type { DeployedRole } from "../src/game/positions";
 
 import { generatePlayer } from "../src/game/player";
 import { createRng, type RngState } from "../src/game/rng";
@@ -203,5 +205,44 @@ describe("chooseAiTactics", () => {
     const before = { ...club.tactics };
     chooseAiTactics(club, squad);
     expect(club.tactics).toEqual(before);
+  });
+});
+
+describe("aiBestXI role-multiset dedup", () => {
+  // Reference implementation of the pre-dedup behavior: evaluate every formation
+  // and keep the argmax by (totalScore, lowest formation id). May return null
+  // when no formation can field a legal XI.
+  function reference(players: Player[]): NonNullable<ReturnType<typeof aiBestXI>> | null {
+    const scoreOf = (p: Player, role: DeployedRole) => aiSelectionValue(p, role, 50);
+    let best: NonNullable<ReturnType<typeof aiBestXI>> | null = null;
+    for (const { id: f } of FORMATIONS) {
+      const assigned = assignBestXI(players, f, scoreOf);
+      if (!assigned) continue;
+      if (!best || assigned.totalScore > best.totalScore + 1e-9 || (Math.abs(assigned.totalScore - best.totalScore) <= 1e-9 && f < best.formation)) {
+        best = { formation: f, slots: assigned.slots, totalScore: assigned.totalScore };
+      }
+    }
+    return best;
+  }
+
+  it("matches the full-loop evaluation for several squads", () => {
+    for (const seed of [11, 42, 777]) {
+      const rng = createRng(seed);
+      const club = makeClub(false);
+      const squad = makeSquad(rng, club, 30);
+      // A too-small slice cannot field any XI (both paths must return null); the
+      // larger slices each contain enough of every role to field one.
+      for (const n of [5, 21, 30]) {
+        const available = squad.slice(0, n);
+        const deduped = aiBestXI(available, { pressing: 50, futureFixtures: true });
+        const full = reference(available);
+        expect(deduped === null).toBe(full === null);
+        if (deduped) {
+          expect(deduped.formation).toBe(full!.formation);
+          expect(deduped.totalScore).toBeCloseTo(full!.totalScore, 12);
+          expect(deduped.slots.map((s) => s.player.id)).toEqual(full!.slots.map((s) => s.player.id));
+        }
+      }
+    }
   });
 });

@@ -4052,13 +4052,10 @@
           "LW": 0.80,
           "RW": 0.80,
           "AM": 0.70,
-          "LM": 0.55,
-          "RM": 0.55,
           "DM": 0.25,
           "LB": 0.20,
           "RB": 0.20,
           "CB": 0.20,
-          "SW": 0.15,
           "GK": 0.01
         },
         "shotsOnTarget": {
@@ -4259,26 +4256,22 @@
           "DEF_CENTRAL": 0.85,
           "MID_CENTRAL": 0.15
         },
-        "SW": {
-          "DEF_CENTRAL": 0.90,
-          "MID_CENTRAL": 0.10
-        },
         "DM": {
           "DEF_CENTRAL": 0.30,
           "MID_CENTRAL": 0.70
         },
+        // AM covers both the central and wide lanes. The wide-mid roles (LM/RM)
+        // were removed so formations only show natural positions; their wide
+        // attacking contribution now lives on the AM role so 4-4-2 and similar
+        // shapes keep enough attacking presence through the flanks (calibrated
+        // against the neutral population bands; goals/xG otherwise fall below
+        // target when the midfield goes fully central).
         "AM": {
-          "MID_CENTRAL": 0.35,
-          "ATT_CENTRAL": 0.50,
-          "BOX": 0.15
-        },
-        "LM": {
-          "MID_WIDE": 0.75,
-          "ATT_WIDE": 0.25
-        },
-        "RM": {
-          "MID_WIDE": 0.75,
-          "ATT_WIDE": 0.25
+          "MID_WIDE": 0.20,
+          "MID_CENTRAL": 0.25,
+          "ATT_WIDE": 0.25,
+          "ATT_CENTRAL": 0.25,
+          "BOX": 0.05
         },
         "LW": {
           "MID_WIDE": 0.25,
@@ -4428,15 +4421,15 @@
       },
       "outOfPosition": {
         "skillPenaltyByNaturalAndRole": {
-          "GK": { "GK": 0, "LB": null, "RB": null, "CB": null, "SW": null, "DM": null, "AM": null, "LM": null, "RM": null, "LW": null, "RW": null, "ST": null },
-          "LB": { "GK": null, "LB": 0, "RB": 4, "CB": 6, "SW": 8, "DM": 6, "AM": 14, "LM": 4, "RM": 10, "LW": 8, "RW": 12, "ST": 18 },
-          "RB": { "GK": null, "LB": 4, "RB": 0, "CB": 6, "SW": 8, "DM": 6, "AM": 14, "LM": 10, "RM": 4, "LW": 12, "RW": 8, "ST": 18 },
-          "CB": { "GK": null, "LB": 6, "RB": 6, "CB": 0, "SW": 2, "DM": 4, "AM": 10, "LM": 10, "RM": 10, "LW": 14, "RW": 14, "ST": 12 },
-          "DM": { "GK": null, "LB": 8, "RB": 8, "CB": 4, "SW": 6, "DM": 0, "AM": 6, "LM": 6, "RM": 6, "LW": 10, "RW": 10, "ST": 10 },
-          "AM": { "GK": null, "LB": 14, "RB": 14, "CB": 12, "SW": 14, "DM": 6, "AM": 0, "LM": 4, "RM": 4, "LW": 3, "RW": 3, "ST": 4 },
-          "LW": { "GK": null, "LB": 10, "RB": 16, "CB": 16, "SW": 18, "DM": 12, "AM": 4, "LM": 2, "RM": 10, "LW": 0, "RW": 6, "ST": 5 },
-          "RW": { "GK": null, "LB": 16, "RB": 10, "CB": 16, "SW": 18, "DM": 12, "AM": 4, "LM": 10, "RM": 2, "LW": 6, "RW": 0, "ST": 5 },
-          "ST": { "GK": null, "LB": 18, "RB": 18, "CB": 14, "SW": 16, "DM": 12, "AM": 5, "LM": 10, "RM": 10, "LW": 5, "RW": 5, "ST": 0 }
+          "GK": { "GK": 0, "LB": null, "RB": null, "CB": null, "DM": null, "AM": null, "LW": null, "RW": null, "ST": null },
+          "LB": { "GK": null, "LB": 0, "RB": 4, "CB": 6, "DM": 6, "AM": 14, "LW": 8, "RW": 12, "ST": 18 },
+          "RB": { "GK": null, "LB": 4, "RB": 0, "CB": 6, "DM": 6, "AM": 14, "LW": 12, "RW": 8, "ST": 18 },
+          "CB": { "GK": null, "LB": 6, "RB": 6, "CB": 0, "DM": 4, "AM": 10, "LW": 14, "RW": 14, "ST": 12 },
+          "DM": { "GK": null, "LB": 8, "RB": 8, "CB": 4, "DM": 0, "AM": 6, "LW": 10, "RW": 10, "ST": 10 },
+          "AM": { "GK": null, "LB": 14, "RB": 14, "CB": 12, "DM": 6, "AM": 0, "LW": 3, "RW": 3, "ST": 4 },
+          "LW": { "GK": null, "LB": 10, "RB": 16, "CB": 16, "DM": 12, "AM": 4, "LW": 0, "RW": 6, "ST": 5 },
+          "RW": { "GK": null, "LB": 16, "RB": 10, "CB": 16, "DM": 12, "AM": 4, "LW": 6, "RW": 0, "ST": 5 },
+          "ST": { "GK": null, "LB": 18, "RB": 18, "CB": 14, "DM": 12, "AM": 5, "LW": 5, "RW": 5, "ST": 0 }
         },
         "suitabilityBands": [
           { "maxPenalty": 0, "label": "Natural" },

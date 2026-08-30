@@ -12,11 +12,11 @@ describe("formation catalog", () => {
 
   it("uses three center-backs for the 3-5-2 back line", () => {
     const backLine = FORMATIONS[9].slots.slice(1, 4);
-    expect(backLine.map((slot) => slot.role)).toEqual(["CB", "SW", "CB"]);
+    expect(backLine.map((slot) => slot.role)).toEqual(["CB", "CB", "CB"]);
   });
 
   it("keeps every named formation at eleven unique slots with one goalkeeper", () => {
-    expect(FORMATIONS).toHaveLength(13);
+    expect(FORMATIONS).toHaveLength(23);
     for (const formation of FORMATIONS) {
       expect(formation.slots).toHaveLength(11);
       expect(new Set(formation.slots.map((s) => s.key)).size).toBe(11);
@@ -30,8 +30,13 @@ describe("formation catalog", () => {
     expect(ams.map((s) => s.lane)).toEqual(["LEFT", "RIGHT", "CENTRE"]);
   });
 
-  it("covers all twelve deployed roles across the catalog", () => {
+  it("covers all nine deployed roles across the catalog", () => {
     const roles = new Set(FORMATIONS.flatMap((f) => f.slots.map((s) => s.role)));
-    expect(roles.size).toBe(12);
+    expect(roles.size).toBe(9);
+  });
+
+  it("uses no legacy sub-roles anywhere in the catalog", () => {
+    const roles = new Set<string>(FORMATIONS.flatMap((f) => f.slots.map((s) => s.role)));
+    for (const legacy of ["SW", "LM", "RM"]) expect(roles.has(legacy)).toBe(false);
   });
 });

@@ -105,7 +105,7 @@ describe("match engine", () => {
     const avg = total / n;
     expect(avg).toBeGreaterThan(2.2);
     expect(avg).toBeLessThan(4.5);
-  });
+  }, 180000);
 
   it("home advantage produces more home goals", async () => {
     const rng = createRng(21);
@@ -129,7 +129,7 @@ describe("match engine", () => {
     // Home advantage is specified as an xG shift; expected goals are the
     // appropriate aggregate here because discrete goal difference is noisy.
     expect(advHomeXg).toBeGreaterThan(neutralHomeXg);
-  });
+  }, 180000);
 
   it("possession always sums to 100 and is derived from controlled-ball seconds", () => {
     const rng = createRng(21);

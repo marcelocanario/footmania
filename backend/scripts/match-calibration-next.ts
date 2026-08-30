@@ -512,9 +512,9 @@ function full(
  */
 function calibrationRole(role: DeployedRole): "GK" | "CB" | "WIDE" | "CM" | "ATT" {
   if (role === "GK") return "GK";
-  if (role === "LB" || role === "RB" || role === "LM" || role === "RM" || role === "LW" || role === "RW") return "WIDE";
+  if (role === "LB" || role === "RB" || role === "LW" || role === "RW") return "WIDE";
   if (role === "ST") return "ATT";
-  if (role === "CB" || role === "SW") return "CB";
+  if (role === "CB") return "CB";
   return "CM";
 }
 
