@@ -18,7 +18,6 @@ import { playerMatchScoreView } from "../services/playerPerformance";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup, seniorRosterFullError, seniorRosterOverflowError } from "../game/club";
 import { formationById, formationOptions } from "../game/formations";
-import { positionGroup } from "../game/positions";
 import { adjustedTacticalRating, rolePenalty, suitabilityLabel } from "../game/outOfPosition";
 import type { DeployedRole } from "../game/positions";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
@@ -330,12 +329,10 @@ export async function gameRoutes(app: FastifyInstance) {
       const penalty = slot ? getPenalty(p, slot.role) : null;
       const label = suitabilityLabel(penalty);
       const rating = slot ? adjustedRating(p, slot.role) : null;
-      const grp = positionGroup(p.position as import("../game/positions").NaturalPosition);
       return {
         id: p.id,
         name: p.name,
         naturalPosition: p.position,
-        positionGroup: grp,
         overall: p.overall,
         energy: p.energy,
         injuryDays: injuryDaysRemaining(p, gameDay),
@@ -383,12 +380,10 @@ export async function gameRoutes(app: FastifyInstance) {
     const squadView = players
       .sort((a, b) => b.overall - a.overall)
       .map((p) => {
-        const grp = positionGroup(p.position as import("../game/positions").NaturalPosition);
         return {
           id: p.id,
           name: p.name,
           naturalPosition: p.position,
-          positionGroup: grp,
           overall: p.overall,
           energy: p.energy,
           slotIndex: null,
@@ -404,7 +399,6 @@ export async function gameRoutes(app: FastifyInstance) {
       });
     return {
       formation,
-      formationName: formationDef.name,
       // §15.3: `slots` IS the authoritative slot metadata. There is no numeric
       // slot array beside it — the index in this array is the slot index.
       slots: formationDef.slots.map((s, idx) => ({ index: idx, key: s.key, role: s.role, lane: s.lane, line: s.line, x: s.x, y: s.y, label: s.label })),

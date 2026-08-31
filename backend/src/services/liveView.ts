@@ -1,8 +1,6 @@
 import type { LiveBallAction, LiveMatchState, Player, World } from "../game/types";
 import { livePhase, tacticsCooldownMinutesRemaining } from "../game/match";
-import { multiplayerDayLabel } from "../game/calendar";
 import { EVENT_CODES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
-import { positionGroup } from "../game/positions";
 import { formationById } from "../game/formations";
 import {
   canonicalFromLive,
@@ -96,7 +94,6 @@ export interface LivePlayerView {
   displayName: string;
   nickname: string | null;
   naturalPosition: string;
-  positionGroup: string;
   slotIndex: number | null;
   deployedRole: string | null;
   /** Squad shirt number shown on the pitch marker. */
@@ -193,7 +190,7 @@ export interface LiveStateView {
   groupNumber: number | null;
   roundNumber: number | null;
   stadiumName: string;
-  dateLabel: string;
+  dayIndex: number;
   homeClubId: number;
   awayClubId: number;
   home: string;
@@ -331,8 +328,6 @@ function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Play
   const p = byId.get(id);
   if (!p) return null;
   const gameDay = world.mp.absoluteGameDay ?? world.dayIndex;
-  const naturalPos = p.position as unknown as import("../game/positions").NaturalPosition;
-  const grp = positionGroup(naturalPos);
   // Resolve live slot assignment if present
   const homeSlot = (st as unknown as { homeSlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[p.id];
   const awaySlot = (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[p.id];
@@ -350,7 +345,6 @@ function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Play
     displayName: displayName(p),
     nickname: p.nickname ?? null,
     naturalPosition: p.position as unknown as string,
-    positionGroup: grp,
     slotIndex,
     deployedRole,
     number: p.squadNumber ?? null,
@@ -379,8 +373,6 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
   const pv = (id: number): LivePlayerView | null => {
     const p = byId.get(id);
     if (!p) return null;
-    const naturalPos2 = p.position as unknown as import("../game/positions").NaturalPosition;
-    const grp = positionGroup(naturalPos2);
     const homeSlot = (st as unknown as { homeSlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[p.id];
     const awaySlot = (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[p.id];
     const slotIndex = homeSlot ?? awaySlot ?? null;
@@ -397,7 +389,6 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
       displayName: displayName(p),
       nickname: p.nickname ?? null,
       naturalPosition: p.position as unknown as string,
-      positionGroup: grp,
       slotIndex,
       deployedRole,
       number: p.squadNumber ?? null,
@@ -445,7 +436,7 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     groupNumber: isDivision ? ((comp?.groupIndex ?? 0) + 1) : null,
     roundNumber: fixture ? fixture.round + 1 : null,
     stadiumName: home?.stadiumName ?? "",
-    dateLabel: multiplayerDayLabel(world.dayIndex),
+    dayIndex: world.dayIndex,
     homeClubId: st.homeClubId,
     awayClubId: st.awayClubId,
     home: home?.name ?? "",

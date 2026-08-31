@@ -223,7 +223,7 @@ const nextKickoff = snapshot.nextFixture ? formatKickoff(snapshot.nextFixture.ki
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-3)", fontSize: "0.85rem", marginTop: 8 }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-              {snapshot.nextFixture && <Clock size={12} />} {snapshot.nextFixture?.dayLabel}
+              {snapshot.nextFixture && <Clock size={12} />} {snapshot.nextFixture && t("common.day", { n: snapshot.nextFixture.dayIndex })}
               {nextKickoff && <span style={{ color: "var(--gold-2)", fontWeight: 600 }}>· {nextKickoff}</span>}
             </span>
             {snapshot.nextFixture && <ChevronRight size={14} />}
@@ -251,7 +251,7 @@ const nextKickoff = snapshot.nextFixture ? formatKickoff(snapshot.nextFixture.ki
                     {news.headline(n.headline) && <div style={{ fontWeight: 800 }}>{news.headline(n.headline)}</div>}
                     {news.body(n)}
                   </div>
-                  <span className="day">{n.dayLabel}</span>
+                  <span className="day">{t("common.day", { n: n.dayIndex })}</span>
                 </div>
               ))}
             </div>

@@ -7,7 +7,7 @@ import { deserializeClubKits, resolveClubKits, selectMatchKits } from "../game/k
 import { standingsTiebreak } from "../game/league";
 import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf } from "../game/multiplayer";
 
-import { NATURAL_POSITION_ORDER, positionGroup } from "../game/positions";
+import { NATURAL_POSITION_ORDER } from "../game/positions";
 import { footmaniaRanking, isFootmaniaRankedClub } from "../game/elo";
 
 type MpStateView = {
@@ -524,7 +524,6 @@ export function buildTeamProfile(world: World, clubId: number) {
         name: p.name,
         nickname: p.nickname ?? null,
         naturalPosition: p.position,
-        positionGroup: positionGroup(p.position as import("../game/positions").NaturalPosition),
         overall: p.overall,
         age: p.age,
         country: p.country,

@@ -107,7 +107,7 @@ export function MotdTab({ version, notify }: TabProps) {
                     {message.text}
                   </div>
                 </div>
-                <span className="day">{message.dayLabel}</span>
+                <span className="day">Day {message.dayIndex}</span>
                 <button
                   className="btn ghost sm danger"
                   disabled={busy}

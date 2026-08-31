@@ -55,7 +55,6 @@ export interface PlayerView {
   age: number;
   country: string;
   naturalPosition: string;
-  positionGroup: string;
   slotIndex?: number | null;
   deployedRole?: string | null;
   rolePenalty?: number | null;
@@ -176,7 +175,7 @@ export interface ClubView {
   coachEditAllowed?: boolean;
   trainingFocus: "assistant" | "primary" | "secondary";
   competitionState?: string;
-  tactics: { formation: number; style: number; pressing: number; direction: number; formationName: string; styleName: string; pressingName: string; directionName: string; familiarity?: number; projections?: TacticProjection[] } | null;
+  tactics: { formation: number; style: number; pressing: number; direction: number; familiarity?: number; projections?: TacticProjection[] } | null;
   trophies: Record<string, number>;
   ledger: { income: LedgerEntry[]; expense: LedgerEntry[] };
   finance?: { activeBidCommitments: number; remainingSalaryCommitments: number; contingentSalary: number; immediateAvailableCash: number; remainingSeasonFraction: number; financialCushion: number; status: "SAFE" | "AT_RISK" | "NEGATIVE_CASH" };
@@ -555,8 +554,6 @@ export interface Snapshot {
   save: {
     year: number;
     dayIndex: number;
-    dateLabel: string;
-    dayOfWeek: string;
     seasonDays: number;
     seasonDayIndex: number;
     phase: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
@@ -574,7 +571,7 @@ export interface Snapshot {
     leagueRunnerUpId: number | null;
   } | null;
   club: ClubView | null;
-  nextFixture: { id: number; home: string; away: string; homeClubId: number; awayClubId: number; dayLabel: string; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
+  nextFixture: { id: number; home: string; away: string; homeClubId: number; awayClubId: number; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
   formationOptions: Array<{ id: number; name: string }>;
   competitions: { id: number; kind: string; name: string; stage: string; round: number; tier: number | null; groupIndex: number | null; position: number; winnerId: number | null }[];
   squad: PlayerView[];
@@ -600,7 +597,6 @@ export interface NewsEntryView {
 export interface NewsItemView {
   id?: number;
   dayIndex: number;
-  dayLabel: string;
   text: string;
   kind: string;
   /** Locale-independent body (frame key or direct ref); absent on legacy rows. */
@@ -666,7 +662,6 @@ export interface TeamPlayerRow {
   name: string;
   nickname: string | null;
   naturalPosition: string;
-  positionGroup: string;
   overall: number;
   age: number;
   country: string;
@@ -789,7 +784,6 @@ export interface AuctionView {
   playerName: string;
   overall: number;
   naturalPosition: string;
-  positionGroup: string;
   age: number;
   salary: number;
   skills: SkillSet;
@@ -819,7 +813,6 @@ export interface FreeAgentView {
   playerName: string;
   overall: number;
   naturalPosition: string;
-  positionGroup: string;
   age: number;
   salary: number;
   contractDays: number;
@@ -846,7 +839,6 @@ export interface LivePlayer {
   displayName?: string;
   nickname?: string | null;
   naturalPosition: string;
-  positionGroup: string;
   slotIndex: number | null;
   deployedRole: string | null;
   /** Squad shirt number shown on the pitch marker. */
@@ -1002,7 +994,7 @@ export interface LiveState {
   groupNumber: number | null;
   roundNumber: number | null;
   stadiumName: string;
-  dateLabel: string;
+  dayIndex: number;
   homeClubId: number;
   awayClubId: number;
   home: string;
@@ -1093,7 +1085,6 @@ export interface LineupPlayer {
   id: number;
   name: string;
   naturalPosition: string;
-  positionGroup: string;
   overall: number;
   energy: number;
   injuryDays: number;
@@ -1109,14 +1100,13 @@ export interface LineupPlayer {
 
 export interface LineupView {
   formation: number;
-  formationName?: string;
   /** §15.3: the formation's authoritative slot metadata, in slot order. */
   slots: Array<{ index: number; key: string; role: string; lane: string; line: string; x: number; y: number; label: string }>;
   starters: (LineupPlayer | null)[];
   subs: (LineupPlayer | null)[];
   penaltyTakerId: number | null;
   freeKickTakerId: number | null;
-  squad: { id: number; name: string; naturalPosition: string; positionGroup: string; overall: number; energy: number; slotIndex?: number | null; deployedRole?: string | null; injuryDays: number; suspended: boolean; number?: number | null }[];
+  squad: { id: number; name: string; naturalPosition: string; overall: number; energy: number; slotIndex?: number | null; deployedRole?: string | null; injuryDays: number; suspended: boolean; number?: number | null }[];
   slotPreviews?: Array<{ slotIndex: number; deployedRole: string; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }>;
   previewPlayerId?: number | null;
 }
@@ -1606,7 +1596,7 @@ export const api = {
   adminAnalytics: () => request<{ analytics: AdminAnalytics | null }>("/api/admin/analytics"),
   adminClubDetail: (clubId: number) => request<{ club: AdminClubDetail }>(`/api/admin/clubs/${clubId}`),
   adminSuggestedClubName: (attempt = 0) => request<{ name: string }>(`/api/admin/suggested-club-name?attempt=${attempt}`),
-  adminGetMotd: () => request<{ messages: { dayIndex: number; dayLabel: string; text: string }[] }>("/api/admin/motd"),
+  adminGetMotd: () => request<{ messages: { dayIndex: number; text: string }[] }>("/api/admin/motd"),
   adminPostMotd: (text: string) => request<{ ok: boolean; text: string; dayIndex: number }>("/api/admin/motd", { method: "POST", body: JSON.stringify({ text }) }),
   adminDeleteMotdMessage: (dayIndex: number, text: string) => request<{ ok: boolean; removed: number }>(`/api/admin/motd/message?dayIndex=${dayIndex}&text=${encodeURIComponent(text)}`, { method: "DELETE" }),
   adminDeleteMotd: () => request<{ ok: boolean; removed: number }>("/api/admin/motd", { method: "DELETE" }),

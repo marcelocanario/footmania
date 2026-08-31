@@ -158,7 +158,7 @@ export function PreGame() {
       <div className="page-head">
         <div>
           <div className="kicker">
-            {t("pregame.title")} · {fixture.dayLabel}
+            {t("pregame.title")} · {t("common.day", { n: fixture.dayIndex })}
             {fixture.isHome ? ` ${t("pregame.home")}` : ` ${t("pregame.away")}`}
           </div>
           <h1>

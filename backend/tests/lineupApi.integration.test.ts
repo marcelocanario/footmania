@@ -38,13 +38,13 @@ async function setupClub(app: FastifyInstance, username: string) {
 }
 
 interface LineupSlot { index: number; key: string; role: string; lane: string; line: string; x: number; y: number; label: string }
-interface LineupPlayer { id: number; naturalPosition: string; positionGroup: string; slotIndex: number | null; deployedRole: string | null; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }
+interface LineupPlayer { id: number; naturalPosition: string; slotIndex: number | null; deployedRole: string | null; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }
 
 async function getLineup(app: FastifyInstance, cookie: string, query = "") {
   const res = await app.inject({ method: "GET", url: `/api/club/lineup${query}`, headers: { cookie } });
   expect(res.statusCode).toBe(200);
   return res.json() as {
-    formation: number; formationName: string; slots: LineupSlot[];
+    formation: number; slots: LineupSlot[];
     starters: LineupPlayer[]; subs: LineupPlayer[]; squad: LineupPlayer[];
     penaltyTakerId: number | null; freeKickTakerId: number | null;
     slotPreviews: Array<{ slotIndex: number; deployedRole: string; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }>;
@@ -61,7 +61,6 @@ describe("lineup API position rules", () => {
 
     expect(view.slots).toHaveLength(11);
     expect(view.slots[0].role).toBe("GK");
-    expect(view.formationName).toEqual(expect.any(String));
     for (const slot of view.slots) {
       expect(typeof slot.role).toBe("string");
       expect(["LEFT", "CENTRE", "RIGHT"]).toContain(slot.lane);

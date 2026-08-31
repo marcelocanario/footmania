@@ -1,11 +1,8 @@
 import type { World } from "../game/types";
 import { EVENT_CODES, GOAL_SUBTYPES } from "../game/constants";
-import { multiplayerDayLabel, weekdayName } from "../game/calendar";
 import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
 import { MOTD_NEWS_KIND, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
-import { formationById } from "../game/formations";
-import { positionGroup } from "../game/positions";
 import { formationOptions } from "../game/formations";
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
@@ -24,11 +21,10 @@ import {
 const snapshotCache = new WeakMap<World, Map<number, unknown>>();
 
 /** Wire shape of one news item as served to clients. */
-export function newsItemView(n: World["news"][number], dayLabelText: string) {
+export function newsItemView(n: World["news"][number]) {
   return {
     id: n.id,
     dayIndex: n.dayIndex,
-    dayLabel: dayLabelText,
     text: n.text,
     kind: n.kind,
     ...(n.body !== undefined ? { body: n.body } : {}),
@@ -93,8 +89,6 @@ export function playerView(
     (p.yellowsTurnKey ?? null) === nextFixtureTurnKey &&
     turnYellowLimit >= 1 &&
     (p.turnYellows ?? 0) >= turnYellowLimit - 1;
-  const naturalPos = p.position as unknown as import("../game/positions").NaturalPosition;
-  const group = positionGroup(naturalPos);
   return {
     id: p.id,
     name: p.name,
@@ -103,7 +97,6 @@ export function playerView(
     age: p.age,
     country: p.country,
     naturalPosition: p.position,
-    positionGroup: group,
     squadNumber: p.squadNumber ?? null,
     overall: p.overall,
     skills: p.skills,
@@ -213,9 +206,6 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
   const playerById = new Map(world.players.map((item) => [item.id, item]));
   const loanById = new Map(world.loans.map((item) => [item.id, item]));
   const club = clubById.get(clubId);
-  const dayLabel = (day: number) => multiplayerDayLabel(day);
-  const currentDateLabel = multiplayerDayLabel(world.dayIndex);
-  const currentDayOfWeek = new Date(Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, Math.max(1, world.dayIndex))).getUTCDay();
   const calendar = calendarValues();
   const seasonDayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
   const currentSeasonDivisions = new Set(
@@ -282,7 +272,7 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
     .filter((n) => n.kind !== MOTD_NEWS_KIND && newsVisibleTo(n, clubId))
     .slice(-(compact ? 12 : 30))
     .reverse();
-  const news = [...pinnedNews, ...chronological].map((n) => newsItemView(n, dayLabel(n.dayIndex)));
+  const news = [...pinnedNews, ...chronological].map((n) => newsItemView(n));
 
   const auctions = includeMarket ? (() => {
     const bidsByListing = new Map<number, typeof world.marketBids>();
@@ -297,15 +287,12 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
       const p = playerById.get(a.playerId);
       const listingBids = bidsByListing.get(a.id) ?? [];
       const myBid = clubId !== null ? listingBids.find((b) => b.clubId === clubId) : undefined;
-      const natPos = p?.position as unknown as import("../game/positions").NaturalPosition | undefined;
-      const grp = natPos ? positionGroup(natPos) : undefined;
       return {
         id: a.id,
         playerId: a.playerId,
         playerName: p?.name ?? "",
         overall: p?.overall ?? 0,
         naturalPosition: p?.position ?? null,
-        positionGroup: grp ?? null,
         age: p?.age ?? 0,
         salary: p?.salary ?? 0,
         skills: p?.skills ?? { gol: 0, pace: 0, tec: 0, pas: 0, des: 0, playmaking: 0, fin: 0 },
@@ -341,8 +328,6 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
     save: {
       year: world.year,
       dayIndex: world.dayIndex,
-       dateLabel: currentDateLabel,
-       dayOfWeek: weekdayName(currentDayOfWeek),
        seasonDays: calendar.seasonDays,
        seasonDayIndex,
        phase: world.mp.phase ?? phaseForSeasonDayIndex(seasonDayIndex),
@@ -410,10 +395,6 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
                   style: club.tactics.style,
                   pressing: club.tactics.pressing,
                   direction: club.tactics.direction,
-                  formationName: formationById(club.tactics.formation)?.name ?? "",
-                  styleName: STYLE_NAMES[club.tactics.style] ?? "",
-                  pressingName: PRESSING_NAMES[club.tactics.pressing] ?? "",
-                  directionName: DIRECTION_NAMES[club.tactics.direction] ?? "",
                   familiarity: Math.round(srcValue),
                   projections: projectSetups(
                     srcValue,
@@ -443,7 +424,6 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
           // IDs so clients can link both teams to the team screen.
           homeClubId: nextFixture.homeClubId,
           awayClubId: nextFixture.awayClubId,
-          dayLabel: dayLabel(nextFixture.dayIndex),
           dayIndex: nextFixture.dayIndex,
           isHome: nextFixture.homeClubId === clubId,
           // Raw epoch ms; the client renders it browser-local via utils/time.ts

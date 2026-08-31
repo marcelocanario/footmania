@@ -23,7 +23,6 @@ import {
 import { calendarValues, seasonSchedulePreview } from "../services/seasonCalendar";
 import { publishUserWorldEvent, publishWorldEventToUsers, publishWorldReset, type UserWorldEvent } from "../services/worldEvents";
 import { EVENT_CODES, MOTD_NEWS_KIND } from "../game/constants";
-import { multiplayerDayLabel } from "../game/calendar";
 import { displayElo } from "../game/elo";
 import type { World } from "../game/types";
 import { archiveRowsFromWorld } from "../game/identityArchive";
@@ -1100,7 +1099,7 @@ export async function adminRoutes(app: FastifyInstance) {
     const messages = loaded.world.news
       .filter((n) => n.kind === MOTD_NEWS_KIND)
       .reverse()
-      .map((n) => ({ dayIndex: n.dayIndex, dayLabel: multiplayerDayLabel(n.dayIndex), text: n.text }));
+      .map((n) => ({ dayIndex: n.dayIndex, text: n.text }));
     return { messages };
   });
 

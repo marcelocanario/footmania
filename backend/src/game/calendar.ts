@@ -37,10 +37,6 @@ export function multiplayerDayLabel(dayIndex: number): string {
   return `Day ${Math.max(1, Math.trunc(dayIndex))}`;
 }
 
-export function weekdayName(dayOfWeek: number): string {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dayOfWeek];
-}
-
 /** True when `dayIndex` is a multiple of `interval` (interval-trigger helper). */
 export function isIntervalDay(dayIndex: number, interval: number): boolean {
   if (interval <= 0) return false;
