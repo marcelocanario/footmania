@@ -39,6 +39,7 @@ import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { positionToCode, positionFromV2Code } from "../game/positions";
 import { formationById } from "../game/formations";
 import { ensureNamePools } from "./namePoolService";
+import { deepEqual } from "./deepEqual";
 
 type Tx = Prisma.TransactionClient;
 
@@ -56,25 +57,50 @@ function cloneWorld(world: World): World {
   return structuredClone(world);
 }
 
+/**
+ * Store a world in the process cache, cloning it first so the cache's copy is
+ * insulated from any further mutation the caller performs on `world` after
+ * this call returns. This is the ONLY safe default: `loadGlobalWorldReadOnly`
+ * hands out the cached object BY REFERENCE (no clone) to read routes, so an
+ * in-place mutation of a cached entry would corrupt a concurrent read.
+ */
 function rememberWorld(prisma: PrismaClient, saveId: number, revision: number, world: World): void {
+  rememberWorldOwned(prisma, saveId, revision, cloneWorld(world));
+}
+
+/**
+ * Store a world in the process cache WITHOUT cloning it. Only call this with
+ * a `world` object the caller just built and will never read or mutate again
+ * — e.g. one assembled by spreading a previous cache entry with a couple of
+ * fields replaced. Passing a live, still-mutable object (a route handler's
+ * working copy, a mutation's `world` argument) would alias it into the cache
+ * and corrupt whatever `loadGlobalWorldReadOnly` hands to concurrent readers.
+ */
+function rememberWorldOwned(prisma: PrismaClient, saveId: number, revision: number, world: World): void {
   let cache = worldCaches.get(prisma);
   if (!cache) {
     cache = new Map<number, CachedWorld>();
     worldCaches.set(prisma, cache);
   }
-  cache.set(saveId, { revision, world: cloneWorld(world) });
+  cache.set(saveId, { revision, world });
 }
 
 function changedWorldCollections(previous: World | undefined, world: World): Set<string> {
   if (!previous) return new Set(TABLE_NAMES);
-  const changed = <K extends keyof World>(key: K): boolean => JSON.stringify(previous[key]) !== JSON.stringify(world[key]);
+  // See deepEqual.ts for why this is a safe, behavior-preserving swap for the
+  // `JSON.stringify(a) !== JSON.stringify(b)` comparisons this function used
+  // to do throughout: same true/false result for every value this data model
+  // can hold, without paying to serialize the whole (possibly enormous)
+  // world to strings first, and with a free fast path when a caller has
+  // structurally shared an untouched collection between two World snapshots.
+  const changed = <K extends keyof World>(key: K): boolean => !deepEqual(previous[key], world[key]);
   const clubCore = (club: Club) => {
     const { ledger: _ledger, trophies: _trophies, ...core } = club;
     return core;
   };
-  const clubsCoreChanged = JSON.stringify(previous.clubs.map(clubCore)) !== JSON.stringify(world.clubs.map(clubCore));
-  const ledgersChanged = previous.clubs.some((club, index) => JSON.stringify(club.ledger) !== JSON.stringify(world.clubs[index]?.ledger));
-  const trophiesChanged = previous.clubs.some((club, index) => JSON.stringify(club.trophies) !== JSON.stringify(world.clubs[index]?.trophies));
+  const clubsCoreChanged = !deepEqual(previous.clubs.map(clubCore), world.clubs.map(clubCore));
+  const ledgersChanged = previous.clubs.some((club, index) => !deepEqual(club.ledger, world.clubs[index]?.ledger));
+  const trophiesChanged = previous.clubs.some((club, index) => !deepEqual(club.trophies, world.clubs[index]?.trophies));
   const tables = new Set<string>();
   if (clubsCoreChanged) tables.add("club");
   if (ledgersChanged) {
@@ -485,11 +511,11 @@ export async function persistWorld(
         const standingsCompetitionIds = new Set<number>();
         for (const competition of previous.competitions) {
           const next = currentById.get(competition.id);
-          if (!next || JSON.stringify(competition.standings) !== JSON.stringify(next.standings) || JSON.stringify(competition.groupStandings) !== JSON.stringify(next.groupStandings)) standingsCompetitionIds.add(competition.id);
+          if (!next || !deepEqual(competition.standings, next.standings) || !deepEqual(competition.groupStandings, next.groupStandings)) standingsCompetitionIds.add(competition.id);
         }
         for (const competition of world.competitions) {
           const old = previousById.get(competition.id);
-          if (!old || JSON.stringify(old.standings) !== JSON.stringify(competition.standings) || JSON.stringify(old.groupStandings) !== JSON.stringify(competition.groupStandings)) standingsCompetitionIds.add(competition.id);
+          if (!old || !deepEqual(old.standings, competition.standings) || !deepEqual(old.groupStandings, competition.groupStandings)) standingsCompetitionIds.add(competition.id);
         }
         if (standingsCompetitionIds.size > 0) {
           await tx.standingsRow.deleteMany({ where: { saveId, competitionId: { in: [...standingsCompetitionIds] } } });
@@ -590,6 +616,12 @@ export async function persistWorld(
         for (const club of world.clubs) {
           const old = previousClubById.get(club.id);
           if (!old) creates.push(clubRow(club, saveId));
+          // Per-row loop over many small, flat objects: measured slower with
+          // deepEqual than JSON.stringify here (no shared references, no
+          // early-exit opportunity worth its recursive-call overhead against
+          // V8's native stringify for an object this size) — see the sibling
+          // player loop below and deepEqual.ts's header for the full
+          // reasoning on where the swap does and doesn't pay off.
           else if (JSON.stringify(old) !== JSON.stringify(club)) {
             await tx.club.update({ where: { saveId_id: { saveId, id: club.id } }, data: clubRow(club, saveId) });
           }
@@ -604,6 +636,17 @@ export async function persistWorld(
         for (const player of world.players) {
           const old = previousPlayerById.get(player.id);
           if (!old) creates.push(playerRow(player, saveId));
+          // Measured: JSON.stringify beats deepEqual here for typical player
+          // counts. This loop calls the comparison once PER PLAYER on two
+          // independent, always-different-reference objects — there is no
+          // reference-equality fast path and no useful early exit for the
+          // overwhelming majority of players, who are unchanged, so it's pure
+          // "confirm every field matches" work either way. V8's native
+          // stringify wins that specific race against a hand-written
+          // recursive walker; deepEqual's real wins are the single-call,
+          // whole-collection comparisons in changedWorldCollections above,
+          // where reference equality (post cache-refresh sharing) and
+          // positional early-exit both apply.
           else if (JSON.stringify(old) !== JSON.stringify(player)) {
             await tx.player.update({ where: { saveId_id: { saveId, id: player.id } }, data: playerRow(player, saveId) });
           }
@@ -805,7 +848,7 @@ export async function persistWorld(
           })),
         );
       }
-      if (world.mp.seasonId !== 0 && (!previous || JSON.stringify(previous.mp) !== JSON.stringify(world.mp))) {
+      if (world.mp.seasonId !== 0 && (!previous || !deepEqual(previous.mp, world.mp))) {
        await tx.mpSeason.updateMany({
         where: { id: world.mp.seasonId },
         data: {
@@ -817,11 +860,11 @@ export async function persistWorld(
         },
       });
     }
-    const mpQueueChanged = !previous || JSON.stringify(previous.mpQueue) !== JSON.stringify(world.mpQueue);
-    const allocationsChanged = !previous || JSON.stringify(previous.seasonAllocations) !== JSON.stringify(world.seasonAllocations);
-    const membershipsChanged = !previous || JSON.stringify(previous.mpMemberships) !== JSON.stringify(world.mpMemberships);
-    const clubSeasonsChanged = !previous || JSON.stringify(previous.mpClubSeasons) !== JSON.stringify(world.mpClubSeasons);
-    const activitiesChanged = !previous || JSON.stringify(previous.mpActivities) !== JSON.stringify(world.mpActivities);
+    const mpQueueChanged = !previous || !deepEqual(previous.mpQueue, world.mpQueue);
+    const allocationsChanged = !previous || !deepEqual(previous.seasonAllocations, world.seasonAllocations);
+    const membershipsChanged = !previous || !deepEqual(previous.mpMemberships, world.mpMemberships);
+    const clubSeasonsChanged = !previous || !deepEqual(previous.mpClubSeasons, world.mpClubSeasons);
+    const activitiesChanged = !previous || !deepEqual(previous.mpActivities, world.mpActivities);
 
     // Multiplayer queue + allocations (idempotent unique constraints).
     if (mpQueueChanged) await tx.mpQueue.deleteMany({});
@@ -929,12 +972,23 @@ export async function persistLiveMatchState(
   if (process.env.NODE_ENV !== "test" && expectedRevision !== undefined) {
     const cached = worldCaches.get(prisma)?.get(saveId) ?? mutationBaselines.get(prisma)?.get(saveId);
     if (cached?.revision === expectedRevision) {
-      const next = cloneWorld(cached.world);
-      next.rng.state = rngState;
-      const index = next.liveMatches.findIndex((match) => match.matchId === state.matchId);
-      if (index >= 0) next.liveMatches[index] = structuredClone(state);
-      else next.liveMatches.push(structuredClone(state));
-      rememberWorld(prisma, saveId, expectedRevision + 1, next);
+      // A live-match tick only ever changes one LiveMatchState and the RNG
+      // cursor — never clubs, players, fixtures, or any other collection. The
+      // previous version deep-cloned the ENTIRE cached world (every club and
+      // player) via `cloneWorld`, then deep-cloned it a SECOND time inside
+      // `rememberWorld`, to change two fields — O(world size) work, twice,
+      // on a path that runs once per live match every `liveMatchIntervalMs`.
+      // Every other collection is structurally shared with the outgoing cache
+      // entry instead: safe because a cached world is never mutated in place
+      // (read routes hand it out by reference on that exact assumption), and
+      // this function is the sole writer of the two fields that DO change.
+      const liveMatches = cached.world.liveMatches.slice();
+      const index = liveMatches.findIndex((match) => match.matchId === state.matchId);
+      const clonedState = structuredClone(state);
+      if (index >= 0) liveMatches[index] = clonedState;
+      else liveMatches.push(clonedState);
+      const next: World = { ...cached.world, rng: { ...cached.world.rng, state: rngState }, liveMatches };
+      rememberWorldOwned(prisma, saveId, expectedRevision + 1, next);
       mutationBaselines.get(prisma)?.delete(saveId);
     }
   } else {
@@ -1189,13 +1243,18 @@ function changedClubIds(previous: Club[], current: Club[], field: "ledger" | "tr
   const previousById = new Map(previous.map((club) => [club.id, club]));
   const currentById = new Map(current.map((club) => [club.id, club]));
   const ids = new Set<number>();
+  // Same field types (ledger/trophies) as ledgersChanged/trophiesChanged
+  // below, which measurably favor deepEqual (ledger nests two arrays that
+  // grow through a season, giving deepEqual's early exit real work to skip;
+  // trophies is small enough either way to be noise). Kept on deepEqual for
+  // consistency rather than splitting strategy by field inside one function.
   for (const club of previous) {
     const next = currentById.get(club.id);
-    if (!next || JSON.stringify(club[field]) !== JSON.stringify(next[field])) ids.add(club.id);
+    if (!next || !deepEqual(club[field], next[field])) ids.add(club.id);
   }
   for (const club of current) {
     const old = previousById.get(club.id);
-    if (!old || JSON.stringify(old[field]) !== JSON.stringify(club[field])) ids.add(club.id);
+    if (!old || !deepEqual(old[field], club[field])) ids.add(club.id);
   }
   return ids;
 }
@@ -1241,12 +1300,23 @@ async function syncAutoEntities<T extends AutoEntity>(
   for (const entity of current) {
     let old = entity.id === undefined ? undefined : previousById.get(entity.id);
     if (!old && entity.id === undefined) {
+      // Identity recovery by exact-content match, not a change check — kept on
+      // `JSON.stringify` equality deliberately. `deepEqual` is a stricter
+      // equality (see deepEqual.ts: object key order and explicit-undefined
+      // vs. absent keys can make it report "different" where stringify says
+      // "same"), which is the safe direction for every OTHER comparison in
+      // this file (worst case, a harmless redundant write) but not for this
+      // one: failing to find a real match here would create a duplicate row
+      // instead of updating the existing one. This path only runs for
+      // entities without an assigned id yet, so it is not hot.
       old = previous.find((candidate) => unmatchedPrevious.has(candidate.id!) && JSON.stringify(candidate) === JSON.stringify(entity));
       if (old?.id !== undefined) entity.id = old.id;
     }
     if (!old) creates.push(rowFor(entity));
     else {
       unmatchedPrevious.delete(old.id!);
+      // Per-entity loop over small flat objects -- same measured result as
+      // the club/player loops above: JSON.stringify wins this shape.
       if (JSON.stringify(old) !== JSON.stringify(entity)) await model.update({ where: { id: old.id }, data: rowFor(entity) });
     }
   }
@@ -1272,6 +1342,8 @@ async function syncStableEntities<T extends StableEntity>(
   for (const entity of current) {
     const old = previousById.get(entity.id);
     if (!old) creates.push(rowFor(entity));
+    // Per-entity loop over small flat objects -- same measured result as the
+    // club/player loops above: JSON.stringify wins this shape.
     else if (JSON.stringify(old) !== JSON.stringify(entity)) await model.update({ where: updateWhere(saveId, entity.id), data: rowFor(entity) });
   }
   if (creates.length > 0) await createManyChunked(model, creates);
@@ -1284,6 +1356,8 @@ async function syncMatchEvents(tx: Tx, saveId: number, previous: Match[] | undef
   const affectedIds = new Set<number>();
   for (const old of previous) {
     const next = currentById.get(old.id);
+    // Per-match loop over small event objects -- same measured result as the
+    // other per-row loops above: JSON.stringify wins this shape.
     if (!next || JSON.stringify(old.events) !== JSON.stringify(next.events)) affectedIds.add(old.id);
   }
   for (const next of current) {
