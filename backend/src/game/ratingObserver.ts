@@ -83,7 +83,7 @@ export interface RatingObserver {
   ): void;
   /** Per-tick on-pitch seconds (plan §17 §12): the rating-only seconds counter
    *  used for the 10-minute rule and role durations. Never read by gameplay. */
-  onSeconds(seconds: Record<number, { seconds: number; fineRole: string }>): void;
+  onSeconds(entries: readonly { playerId: number; seconds: number; fineRole: string }[]): void;
 }
 
 /** A no-op observer: rating capture disabled (matches stay byte-identical). */
@@ -176,10 +176,17 @@ export function createRatingObserver(opts: RatingObserverOptions): RatingObserve
   const live = opts.base ?? {};
   const accum = new Map<number, PlayerRatingAccum>();
   for (const [id, a] of Object.entries(live)) accum.set(Number(id), a);
-  // Keep the map and the live object in sync: after each decision, write the
-  // map back into the live object (cheap: only touched players).
+  // Keep the map and the live object in sync. Accumulator entries are mutated
+  // in place and never removed, so an id already present in `live` holds the
+  // very same object and re-assigning it is a no-op. Only a newly created
+  // entry needs writing back, and the map's size is an exact witness for that
+  // -- the previous unconditional walk re-wrote every player's entry after
+  // each of the ~5000 observer hooks a match fires.
+  let flushedSize = 0;
   const flush = () => {
+    if (accum.size === flushedSize) return;
     for (const [id, a] of accum) live[id] = a;
+    flushedSize = accum.size;
   };
 
   return {
@@ -191,10 +198,10 @@ export function createRatingObserver(opts: RatingObserverOptions): RatingObserve
         // Rating capture must never affect the match.
       }
     },
-    onSeconds(seconds) {
+    onSeconds(entries) {
       try {
-        for (const [pid, entry] of Object.entries(seconds)) {
-          const playerId = Number(pid);
+        for (const entry of entries) {
+          const playerId = entry.playerId;
           let a = accum.get(playerId);
           if (!a) {
             a = { playerId, clubId: 0, roleSeconds: {}, rawImpact: 0, rawVariance: 0, categoryImpacts: {}, roleSecondsTotal: 0 };

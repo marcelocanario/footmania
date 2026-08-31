@@ -11,6 +11,8 @@ import { remainingPlayerWorkloadMultiplier } from "./numericalDisadvantage";
 import type { DeployedRole, NaturalPosition } from "./positions";
 import { adjustedTacticalRating as adjustedRoleRating, effectiveSkillsOrFloor } from "./outOfPosition";
 import { formationById } from "./formations";
+import { playerIndexFor } from "./playerIndex";
+import { currentSkillsVersion } from "./skillsVersion";
 
 // ---------------------------------------------------------------------------
 // Possession-state match engine (plans/6. match-simulator-overhaul.md).
@@ -48,6 +50,24 @@ export interface LivePlayerState {
   zDefending: number;
   zPassing: number;
   zPlaymaking: number;
+  /** Readiness-invariant robust-Z of each canonical attribute (usable Z with
+   *  the readiness factor divided out). Effective skills depend only on raw
+   *  skills, natural position and deployed role — none of which change while a
+   *  player is on the pitch — so fatigue only rescales these. Caching them
+   *  turns the per-step readiness refresh into eight multiplications instead of
+   *  a fresh adjusted-skill set plus eight robust-Z evaluations per player. */
+  baseZ: {
+    tech: number;
+    pace: number;
+    physical: number;
+    finishing: number;
+    gk: number;
+    defending: number;
+    passing: number;
+    playmaking: number;
+  };
+  /** Athleticism of the raw skill set (fatigue input); constant per player. */
+  physical: number;
   onPitch: boolean;
 }
 
@@ -189,6 +209,18 @@ export function weightedPick(rng: RngState, labels: string[], weights: number[])
   return labels[labels.length - 1];
 }
 
+/** Involvement-weighted mean readiness; identical accumulation order to the
+ *  `weightedMean(local.map(readiness), local.map(weight))` it replaces. */
+function involvedReadinessMean(local: { ps: LivePlayerState; weight: number }[]): number {
+  let sum = 0;
+  let weightSum = 0;
+  for (let i = 0; i < local.length; i++) {
+    sum += local[i].ps.readiness * local[i].weight;
+    weightSum += local[i].weight;
+  }
+  return weightSum > 0 ? sum / weightSum : 0;
+}
+
 function weightedMean(values: number[], weights: number[]): number {
   let s = 0, ws = 0;
   for (let i = 0; i < values.length; i++) {
@@ -205,6 +237,20 @@ function weightedMean(values: number[], weights: number[]): number {
 /** Zone involvement weight for a player: their formation-support weight for the zone. */
 function involvement(role: DeployedRole, zone: MatchZone): number {
   return MS.formationSupport[role]?.[zone] ?? 0;
+}
+
+/** Flattened `MS.formationSupport` rows: the same (zone, weight) pairs in the
+ *  same order the config object enumerates them, materialized once so the
+ *  per-step support/coverage rebuild does not call `Object.entries` twice per
+ *  on-pitch player. */
+const SUPPORT_KERNELS = new Map<string, { zone: MatchZone; weight: number }[]>();
+function supportKernel(role: DeployedRole): { zone: MatchZone; weight: number }[] {
+  let kernel = SUPPORT_KERNELS.get(role);
+  if (!kernel) {
+    kernel = Object.entries(MS.formationSupport[role] ?? {}).map(([zone, weight]) => ({ zone: zone as MatchZone, weight }));
+    SUPPORT_KERNELS.set(role, kernel);
+  }
+  return kernel;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +300,8 @@ interface Side {
    *  only on deployed role + zone, not the per-step-changing readiness values on
    *  the same `ps` references, so it's safe to reuse until rosterVersion moves. */
   involvedCache: Partial<Record<MatchZone, { version: number; result: { ps: LivePlayerState; weight: number }[] }>>;
+  /** The same memo projected to player ids, for the rating observer. */
+  involvedIdCache: Partial<Record<MatchZone, { version: number; result: number[] }>>;
 }
 
 interface Engine {
@@ -308,6 +356,9 @@ interface Engine {
    *  (mirrors st.aiSubLastMinute; -1 = never). Keeps once-per-minute cadence
    *  across chunked/streamed engine rebuilds. */
   aiSubLastMinute: [number, number];
+  /** Scratch payload for `observeRatingSeconds`, keyed by roster version. */
+  ratingSecondsRosterKey: string;
+  ratingSecondsEntries: { playerId: number; seconds: number; fineRole: string }[];
   commentary: string[];
   ended: boolean;
   extraTimePlayed: boolean;
@@ -340,7 +391,7 @@ function opp(eng: Engine, side: 0 | 1): Side {
 function ratingContext(eng: Engine, action?: string): RatingDecisionInput {
   const sideView = (s: Side): RatingDecisionInput["sides"]["home"] => {
     const local = involvedPlayers(s, eng.zone);
-    const readiness = local.length > 0 ? weightedMean(local.map((l) => l.ps.readiness), local.map((l) => l.weight)) : 1;
+    const readiness = local.length > 0 ? involvedReadinessMean(local) : 1;
     return {
       involved: local,
       localDensity: localDensity(s, eng.zone),
@@ -384,13 +435,21 @@ function emitDecision(
  *  a full-match player accumulates the full match clock). Read-only. */
 function observeRatingSeconds(eng: Engine, seconds: number): void {
   if (!eng.ratingObserver) return;
-  const perPlayer: Record<number, { seconds: number; fineRole: string }> = {};
-  for (const side of [eng.home, eng.away]) {
-    for (const ps of side.on) {
-      perPlayer[ps.id] = { seconds, fineRole: ps.deployedRole };
+  // The payload's shape (which ids, in which role) only changes when a side's
+  // roster does, but the hook fires once per resolved action. Reuse one
+  // scratch payload -- the observer consumes it synchronously -- and rebuild it
+  // only when a substitution or dismissal moves a roster version.
+  const rosterKey = `${eng.home.rosterVersion}:${eng.away.rosterVersion}`;
+  if (eng.ratingSecondsRosterKey !== rosterKey) {
+    const entries: { playerId: number; seconds: number; fineRole: string }[] = [];
+    for (const side of [eng.home, eng.away]) {
+      for (const ps of side.on) entries.push({ playerId: ps.id, seconds, fineRole: ps.deployedRole });
     }
+    eng.ratingSecondsEntries = entries;
+    eng.ratingSecondsRosterKey = rosterKey;
   }
-  eng.ratingObserver.onSeconds(perPlayer);
+  for (const entry of eng.ratingSecondsEntries) entry.seconds = seconds;
+  eng.ratingObserver.onSeconds(eng.ratingSecondsEntries);
 }
 
 function phaseForZone(zone: MatchZone): MatchPhase {
@@ -471,6 +530,18 @@ function buildPlayerState(p: Player, centers: AttributeCenters, role: DeployedRo
   // exactly once; usableZ = robustZ(effectiveRaw) * readiness (no fit factor).
   const effective = adjustedSkillsForRole(p, role);
   const z = (attr: CanonicalAttr, value: number) => robustZ(value, centers.median[attr], centers.sigma[attr]);
+  // §5.3: eight distinct canonical attributes; passing/playmaking each have
+  // their own median/sigma and stored Z, not an average of tech/pace.
+  const baseZ = {
+    tech: z("technique", effective.tec),
+    pace: z("pace", effective.pace),
+    physical: z("athleticism", athleticismOf(effective)),
+    finishing: z("finishing", effective.fin),
+    gk: z("goalkeeping", effective.gol),
+    defending: z("defending", effective.des),
+    passing: z("passing", effective.pas),
+    playmaking: z("playmaking", effective.playmaking),
+  };
   return {
     id: p.id,
     skills: { ...p.skills },
@@ -481,35 +552,32 @@ function buildPlayerState(p: Player, centers: AttributeCenters, role: DeployedRo
     slotIndex,
     energy,
     readiness,
-    zTech: z("technique", effective.tec) * readiness,
-    zPace: z("pace", effective.pace) * readiness,
-    // §5.3: eight distinct canonical attributes; passing/playmaking each have
-    // their own median/sigma and stored Z, not an average of tech/pace.
-    zPhysical: z("athleticism", athleticismOf(effective)) * readiness,
-    zFinishing: z("finishing", effective.fin) * readiness,
-    zGk: z("goalkeeping", effective.gol) * readiness,
-    zDefending: z("defending", effective.des) * readiness,
-    zPassing: z("passing", effective.pas) * readiness,
-    zPlaymaking: z("playmaking", effective.playmaking) * readiness,
+    zTech: baseZ.tech * readiness,
+    zPace: baseZ.pace * readiness,
+    zPhysical: baseZ.physical * readiness,
+    zFinishing: baseZ.finishing * readiness,
+    zGk: baseZ.gk * readiness,
+    zDefending: baseZ.defending * readiness,
+    zPassing: baseZ.passing * readiness,
+    zPlaymaking: baseZ.playmaking * readiness,
+    baseZ,
+    physical: physicalSkill(p),
     onPitch: true,
   };
 }
 
-function refreshReadiness(ps: LivePlayerState, centers: AttributeCenters): void {
-  ps.readiness = readinessFactor(ps.energy);
-  const effective = adjustedSkillsForRole(
-    { position: ps.position, skills: ps.skills } as Player,
-    ps.deployedRole,
-  );
-  const z = (attr: CanonicalAttr, value: number) => robustZ(value, centers.median[attr], centers.sigma[attr]);
-  ps.zTech = z("technique", effective.tec) * ps.readiness;
-  ps.zPace = z("pace", effective.pace) * ps.readiness;
-  ps.zPhysical = z("athleticism", athleticismOf(effective)) * ps.readiness;
-  ps.zFinishing = z("finishing", effective.fin) * ps.readiness;
-  ps.zGk = z("goalkeeping", effective.gol) * ps.readiness;
-  ps.zDefending = z("defending", effective.des) * ps.readiness;
-  ps.zPassing = z("passing", effective.pas) * ps.readiness;
-  ps.zPlaymaking = z("playmaking", effective.playmaking) * ps.readiness;
+function refreshReadiness(ps: LivePlayerState): void {
+  const r = readinessFactor(ps.energy);
+  const b = ps.baseZ;
+  ps.readiness = r;
+  ps.zTech = b.tech * r;
+  ps.zPace = b.pace * r;
+  ps.zPhysical = b.physical * r;
+  ps.zFinishing = b.finishing * r;
+  ps.zGk = b.gk * r;
+  ps.zDefending = b.defending * r;
+  ps.zPassing = b.passing * r;
+  ps.zPlaymaking = b.playmaking * r;
 }
 
 function playerUsableZ(ps: LivePlayerState, attr: CanonicalAttr): number {
@@ -536,6 +604,16 @@ function involvedPlayers(side: Side, zone: MatchZone): { ps: LivePlayerState; we
   }
   side.involvedCache[zone] = { version: side.rosterVersion, result: out };
   return out;
+}
+
+/** Ids of the zone-involved players, memoized on the same roster version as
+ *  `involvedPlayers`. Only the rating observer consumes them. */
+function involvedIds(side: Side, zone: MatchZone): number[] {
+  const cached = side.involvedIdCache[zone];
+  if (cached && cached.version === side.rosterVersion) return cached.result;
+  const result = involvedPlayers(side, zone).map((l) => l.ps.id);
+  side.involvedIdCache[zone] = { version: side.rosterVersion, result };
+  return result;
 }
 
 /**
@@ -580,23 +658,46 @@ function localDensity(side: Side, zone: MatchZone): number {
 function localQuality(side: Side, zone: MatchZone, attr: CanonicalAttr): number {
   const local = involvedPlayers(side, zone);
   if (local.length === 0) return 0;
-  const values = local.map((l) => playerUsableZ(l.ps, attr));
-  const weights = local.map((l) => l.weight);
-  return weightedMean(values, weights);
+  let sum = 0;
+  let weightSum = 0;
+  for (let i = 0; i < local.length; i++) {
+    sum += playerUsableZ(local[i].ps, attr) * local[i].weight;
+    weightSum += local[i].weight;
+  }
+  return weightSum > 0 ? sum / weightSum : 0;
 }
 
-/** Team action quality (§11): weighted mean of usable attribute Z across local involvement. */
-function actionQualityFor(side: Side, zone: MatchZone, action: string): number {
-  const weights = MS.actionQuality.attributeWeights[action];
-  if (!weights) return 0;
-  let sum = 0;
+/** Flattened attribute-weight rows, materialized once per action so the
+ *  per-step aggregates do not call `Object.entries` on config objects. The
+ *  arrays preserve the config's own key order, so the accumulation sequence —
+ *  and therefore every floating-point result — is unchanged. */
+type AttributeWeightRow = { attr: CanonicalAttr; weight: number }[];
+const ATTRIBUTE_WEIGHT_ROWS = new Map<string, AttributeWeightRow | null>();
+const RESISTANCE_WEIGHT_ROWS = new Map<string, AttributeWeightRow | null>();
+function weightRow(cache: Map<string, AttributeWeightRow | null>, table: Record<string, Record<string, number>>, action: string): AttributeWeightRow | null {
+  let row = cache.get(action);
+  if (row === undefined) {
+    const source = table[action];
+    row = source ? Object.entries(source).map(([attr, weight]) => ({ attr: attr as CanonicalAttr, weight })) : null;
+    cache.set(action, row);
+  }
+  return row;
+}
+
+/** Shared body of the two §11 aggregates: Σ_attr w_attr · weightedMean(usableZ)
+ *  scaled by local density. The involvement weights are the same for every
+ *  attribute, so their sum is accumulated once instead of per attribute. */
+function weightedAttributeAggregate(side: Side, zone: MatchZone, row: AttributeWeightRow): number {
   const local = involvedPlayers(side, zone);
   if (local.length === 0) return 0;
-  for (const [attrKey, w] of Object.entries(weights)) {
-    const canonical = attrKey as CanonicalAttr;
-    const values = local.map((l) => playerUsableZ(l.ps, canonical));
-    const ws = local.map((l) => l.weight);
-    sum += w * weightedMean(values, ws);
+  let weightSum = 0;
+  for (let i = 0; i < local.length; i++) weightSum += local[i].weight;
+  let sum = 0;
+  for (let a = 0; a < row.length; a++) {
+    const attr = row[a].attr;
+    let acc = 0;
+    for (let i = 0; i < local.length; i++) acc += playerUsableZ(local[i].ps, attr) * local[i].weight;
+    sum += row[a].weight * (weightSum > 0 ? acc / weightSum : 0);
   }
   // A weighted mean alone hides a missing player when the remaining players
   // are near-average. Local density keeps the effect zone-specific: losing a
@@ -604,19 +705,17 @@ function actionQualityFor(side: Side, zone: MatchZone, action: string): number {
   return sum * localDensity(side, zone);
 }
 
+/** Team action quality (§11): weighted mean of usable attribute Z across local involvement. */
+function actionQualityFor(side: Side, zone: MatchZone, action: string): number {
+  const row = weightRow(ATTRIBUTE_WEIGHT_ROWS, MS.actionQuality.attributeWeights, action);
+  if (!row) return 0;
+  return weightedAttributeAggregate(side, zone, row);
+}
+
 function defensiveResistanceFor(side: Side, zone: MatchZone, action: string): number {
-  const weights = MS.actionQuality.defensiveResistanceWeights[action];
-  if (!weights) return 0;
-  let sum = 0;
-  const local = involvedPlayers(side, zone);
-  if (local.length === 0) return 0;
-  for (const [attrKey, w] of Object.entries(weights)) {
-    const canonical = attrKey as CanonicalAttr;
-    const values = local.map((l) => playerUsableZ(l.ps, canonical));
-    const ws = local.map((l) => l.weight);
-    sum += w * weightedMean(values, ws);
-  }
-  return sum * localDensity(side, zone);
+  const row = weightRow(RESISTANCE_WEIGHT_ROWS, MS.actionQuality.defensiveResistanceWeights, action);
+  if (!row) return 0;
+  return weightedAttributeAggregate(side, zone, row);
 }
 
 // ---------------------------------------------------------------------------
@@ -631,11 +730,12 @@ function computeSupport(side: Side): void {
     side.coverage[zone] = 0;
   }
   for (const ps of side.on) {
-    const kernel = MS.formationSupport[ps.deployedRole] ?? {};
-    for (const [zone, w] of Object.entries(kernel)) {
-      const z = zone as MatchZone;
-      side.support[z] += w;
-      side.coverage[z] += w * (0.55 + 0.45 * ps.readiness);
+    const kernel = supportKernel(ps.deployedRole);
+    const coverageFactor = 0.55 + 0.45 * ps.readiness;
+    for (let i = 0; i < kernel.length; i++) {
+      const { zone, weight } = kernel[i];
+      side.support[zone] += weight;
+      side.coverage[zone] += weight * coverageFactor;
     }
   }
   // A dismissal/injury reduces the side's available support, but the raw
@@ -664,10 +764,7 @@ function expectedSupport(formation: number): Record<MatchZone, number> {
   const def = formationById(formation) ?? formationById(4);
   if (!def) return out;
   for (const slot of def.slots) {
-    const kernel = MS.formationSupport[slot.role] ?? {};
-    for (const [zone, w] of Object.entries(kernel)) {
-      out[zone as MatchZone] += w;
-    }
+    for (const { zone, weight } of supportKernel(slot.role)) out[zone] += weight;
   }
   return out;
 }
@@ -691,7 +788,7 @@ function pressSignalAtExecution(side: Side, zone: MatchZone, executionFactor: nu
   if (intensity <= 0) return 0;
   const localSupport = (side.support[zone] ?? 0) / Math.max(1e-6, side.expectedSupport[zone] ?? 1);
   const local = involvedPlayers(side, zone);
-  const readinessMean = local.length > 0 ? weightedMean(local.map((l) => l.ps.readiness), local.map((l) => l.weight)) : 1;
+  const readinessMean = local.length > 0 ? involvedReadinessMean(local) : 1;
   const raw = intensity * localSupport * executionFactor * readinessMean;
   // Standardize against the neutral reference (raw ≈ 1 at moderate press).
   const z = (raw - 0.6) / 0.5;
@@ -715,11 +812,18 @@ function laneScore(tactics: LiveTactics, lane: Lane): number {
   return lane === "CENTRE" ? 1 : 0;
 }
 
-/** Destination lane preference (used for next-zone lane selection). */
+/** Destination lane preference (used for next-zone lane selection).
+ *  `laneScore` reads nothing but the side's direction, so the standardized
+ *  triple has exactly two possible values; both are derived once. */
+const DIRECTION_SIGNALS = new Map<string, number[]>();
 function directionSignal(eng: Engine, candidateLane: Lane): number {
   const side = sideOf(eng, eng.possessionSide);
-  const vals = LANES.map((l) => laneScore(side.tactics, l));
-  const standardized = robustStandardize(vals);
+  const direction = side.tactics.direction;
+  let standardized = DIRECTION_SIGNALS.get(direction);
+  if (!standardized) {
+    standardized = robustStandardize(LANES.map((l) => laneScore(side.tactics, l)));
+    DIRECTION_SIGNALS.set(direction, standardized);
+  }
   return standardized[LANES.indexOf(candidateLane)];
 }
 
@@ -837,14 +941,23 @@ function gammaParams(action: string, phase: MatchPhase, zone: MatchZone): { shap
 
 function qualityCompensation(players: Player[], clubIds: Set<number>, initialXIIds: number[]): { passIntentScale: number; tempoScale: number } {
   const cfg = MS.normalization.qualityCompensation;
-  const roster = players.filter((player) => player.clubId !== null && clubIds.has(player.clubId));
-  const byId = new Map(players.map((player) => [player.id, player]));
+  const byId = playerIndexFor(players);
   const initialXI = initialXIIds.map((id) => byId.get(id)).filter((player): player is Player => Boolean(player));
+  // The two-club roster scan is only the fallback for an empty initial XI, so
+  // it stays behind that branch instead of running on every engine build.
+  const rosterMean = (): number | null => {
+    let sum = 0;
+    let count = 0;
+    for (const player of players) {
+      if (player.clubId === null || !clubIds.has(player.clubId)) continue;
+      sum += player.overall ?? 0;
+      count++;
+    }
+    return count > 0 ? sum / count : null;
+  };
   const referenceOverall = initialXI.length > 0
     ? initialXI.reduce((sum, player) => sum + (player.overall ?? 0), 0) / initialXI.length
-    : roster.length > 0
-      ? roster.reduce((sum, player) => sum + (player.overall ?? 0), 0) / roster.length
-      : cfg.referenceOverall;
+    : rosterMean() ?? cfg.referenceOverall;
   const fraction = clamp((referenceOverall - cfg.referenceOverall) / Math.max(1, cfg.highOverall - cfg.referenceOverall), 0, 1);
   return {
     passIntentScale: MS.tacticalActionMix.passIntentScale + fraction * (cfg.highQualityPassIntentScale - MS.tacticalActionMix.passIntentScale),
@@ -898,9 +1011,13 @@ function outcomeBaseline(eng: Engine, action: string): { continue: number; turno
   };
 }
 
+const EMPTY_BASELINE: Readonly<Record<string, number>> = Object.freeze({});
+/** Read-only view of the configured next-zone row. Callers only read it, and
+ *  `pickNextZone` asks for the same row once per candidate destination, so the
+ *  defensive copy this used to return was pure per-step garbage. */
 function nextZoneBaseline(eng: Engine, action: string): Record<string, number> {
   const row = MS.probabilityModel.nextZoneByStateAction[`${stateKey(eng.phase, eng.zone)}.${action}`];
-  return row ? { ...row } : {};
+  return row ?? EMPTY_BASELINE;
 }
 
 // ---------------------------------------------------------------------------
@@ -922,7 +1039,9 @@ function controlFailureStep(eng: Engine): FailureAction | null {
     const dispU = Math.log(dispossessed);
     failure = choice(eng.rng, ["MISCONTROL", "DISPOSSESSED"], [misU, dispU]) as FailureAction;
   }
-  emitDecision(eng, "control-failure", { FAIL: pFail, KEEP: 1 - pFail }, failed ? "FAIL" : "KEEP", involvedPlayers(sideOf(eng, att), eng.zone).map((l) => l.ps.id));
+  if (eng.ratingObserver) {
+    emitDecision(eng, "control-failure", { FAIL: pFail, KEEP: 1 - pFail }, failed ? "FAIL" : "KEEP", involvedIds(sideOf(eng, att), eng.zone));
+  }
   return failure;
 }
 
@@ -970,12 +1089,31 @@ function selectIntentionalAction(eng: Engine): string {
     return utility(eng, baseLogP, zTeam, zTactics, cu);
   });
   const chosen = choice(eng.rng, labels, utilities) as string;
-  const weights = utilities.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
-  const total = weights.reduce((s, w) => s + w, 0) || 1;
-  const probs: Record<string, number | string> = {};
-  labels.forEach((l, i) => { probs[l] = weights[i] / total; });
-  emitDecision(eng, "intent", probs, chosen, involvedPlayers(sideOf(eng, att), eng.zone).map((l) => l.ps.id));
+  // The normalized vector is observer-only reporting; re-exponentiating every
+  // utility is wasted work when nothing is listening.
+  if (eng.ratingObserver) {
+    const weights = utilities.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
+    const total = weights.reduce((s, w) => s + w, 0) || 1;
+    const probs: Record<string, number | string> = {};
+    labels.forEach((l, i) => { probs[l] = weights[i] / total; });
+    emitDecision(eng, "intent", probs, chosen, involvedIds(sideOf(eng, att), eng.zone));
+  }
   return chosen;
+}
+
+/** §14 CONTROL risk scores for a (phase, zone) state: the legal non-shot
+ *  actions and their robust-standardized turnover logits. Config-only, so the
+ *  memo is valid for the process lifetime. */
+const CONTROL_RISK_SCORES = new Map<string, { legal: string[]; standardized: number[] }>();
+function controlRiskScores(eng: Engine): { legal: string[]; standardized: number[] } {
+  const key = stateKey(eng.phase, eng.zone);
+  let cached = CONTROL_RISK_SCORES.get(key);
+  if (!cached) {
+    const legal = Object.keys(intentBaseline(eng)).filter((a) => a !== "SHOT");
+    cached = { legal, standardized: robustStandardize(legal.map((a) => logit(outcomeBaseline(eng, a).turnover + 1e-9))) };
+    CONTROL_RISK_SCORES.set(key, cached);
+  }
+  return cached;
 }
 
 /** Centered action-mix correction outside the neutral CONTROL/CONTROL matchup. */
@@ -999,13 +1137,15 @@ function tacticalSignalForAction(eng: Engine, action: string): number {
   // Shape
   components.push(shapeSignal(eng, eng.zone));
   if (style === "CONTROL") {
-    // riskScore(action) = robust standardized logit(TURNOVER | state, action)
-    const legal = Object.keys(intentBaseline(eng)).filter((a) => a !== "SHOT");
-    const logits = legal.map((a) => logit(outcomeBaseline(eng, a).turnover + 1e-9));
-    const standardized = robustStandardize(logits);
-    const idx = legal.indexOf(action);
+    // riskScore(action) = robust standardized logit(TURNOVER | state, action).
+    // The whole table depends only on (phase, zone) — never on the candidate
+    // action or on either side — so it is derived once per state instead of
+    // being rebuilt (two sorts plus a baseline object per legal action) for
+    // every candidate of every intent draw.
+    const risk = controlRiskScores(eng);
+    const idx = risk.legal.indexOf(action);
     if (idx >= 0) {
-      const styleSignal = -standardized[idx];
+      const styleSignal = -risk.standardized[idx];
       components.push(styleSignal * executionFactor);
     }
   } else if (style === "COUNTER") {
@@ -1044,9 +1184,7 @@ function defendingRisk(zDefending: number): number {
 
 function foulContextShift(eng: Engine, defSide: Side): number {
   const local = involvedPlayers(defSide, eng.zone);
-  const localReadiness = local.length > 0
-    ? weightedMean(local.map((l) => l.ps.readiness), local.map((l) => l.weight))
-    : 1;
+  const localReadiness = local.length > 0 ? involvedReadinessMean(local) : 1;
   // Discipline risk from the zone-level defending Z (§5.6).
   const defendingZ = localQuality(defSide, eng.zone, "defending");
   const disciplineRisk = defendingRisk(defendingZ);
@@ -1082,16 +1220,18 @@ function resolveOutcome(eng: Engine, action: string): Outcome {
   const foulU = utility(eng, Math.log(base.foul), 0, 0, foulShift);
   const retainedU = utility(eng, Math.log(base.retainedRestart), 0, 0, 0);
   const out = choice(eng.rng, ["CONTINUE", "TURNOVER", "FOUL", "RETAINED_RESTART"], [continueU, turnoverU, foulU, retainedU]) as Outcome;
-  const weights = [continueU, turnoverU, foulU, retainedU].map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
-  const total = weights.reduce((s, w) => s + w, 0) || 1;
-  const probs: Record<string, number | string> = {
-    CONTINUE: weights[0] / total,
-    TURNOVER: weights[1] / total,
-    FOUL: weights[2] / total,
-    RETAINED_RESTART: weights[3] / total,
-    action,
-  };
-  emitDecision(eng, "outcome", probs, out, [...involvedPlayers(sideOf(eng, att), eng.zone).map((l) => l.ps.id), ...involvedPlayers(def, eng.zone).map((l) => l.ps.id)]);
+  if (eng.ratingObserver) {
+    const weights = [continueU, turnoverU, foulU, retainedU].map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
+    const total = weights.reduce((s, w) => s + w, 0) || 1;
+    const probs: Record<string, number | string> = {
+      CONTINUE: weights[0] / total,
+      TURNOVER: weights[1] / total,
+      FOUL: weights[2] / total,
+      RETAINED_RESTART: weights[3] / total,
+      action,
+    };
+    emitDecision(eng, "outcome", probs, out, [...involvedIds(sideOf(eng, att), eng.zone), ...involvedIds(def, eng.zone)]);
+  }
   return out;
 }
 
@@ -1165,12 +1305,14 @@ function pickNextZone(eng: Engine, action: string): MatchZone {
   if (candidates.length === 0) return eng.zone;
   const utilities = candidates.map((z) => destinationUtility(eng, action, z));
   const chosen = choice(eng.rng, candidates, utilities) as MatchZone;
-  const weights = utilities.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
-  const total = weights.reduce((s, w) => s + w, 0) || 1;
-  const probs: Record<string, number | string> = {};
-  candidates.forEach((z, i) => { probs[z] = weights[i] / total; });
-  probs.action = action;
-  emitDecision(eng, "next-zone", probs, chosen, involvedPlayers(sideOf(eng, eng.possessionSide), eng.zone).map((l) => l.ps.id));
+  if (eng.ratingObserver) {
+    const weights = utilities.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
+    const total = weights.reduce((s, w) => s + w, 0) || 1;
+    const probs: Record<string, number | string> = {};
+    candidates.forEach((z, i) => { probs[z] = weights[i] / total; });
+    probs.action = action;
+    emitDecision(eng, "next-zone", probs, chosen, involvedIds(sideOf(eng, eng.possessionSide), eng.zone));
+  }
   return chosen;
 }
 
@@ -1316,25 +1458,28 @@ function syntheticOutfielder(side: Side): LivePlayerState {
     zDefending: any?.zDefending ?? 0,
     zPassing: (any as unknown as { zPassing?: number })?.zPassing ?? 0,
     zPlaymaking: (any as unknown as { zPlaymaking?: number })?.zPlaymaking ?? 0,
+    baseZ: any?.baseZ ?? { tech: 0, pace: 0, physical: 0, finishing: 0, gk: 0, defending: 0, passing: 0, playmaking: 0 },
+    physical: any?.physical ?? 0,
     onPitch: true,
   };
   return base;
 }
 
+const SHOT_ZONE_CENTRES: Record<MatchZone, { x: number; y: number }> = {
+  DEF_WIDE: { x: 12, y: 66 },
+  DEF_CENTRAL: { x: 14, y: 40 },
+  MID_WIDE: { x: 45, y: 66 },
+  MID_CENTRAL: { x: 50, y: 40 },
+  ATT_WIDE: { x: 88, y: 66 },
+  ATT_CENTRAL: { x: 95, y: 40 },
+  BOX: { x: 111, y: 40 },
+};
+
 function shotLocationForZone(eng: Engine, zone: MatchZone): { x: number; y: number } {
   // Virtual pitch coordinates in 0-120 (x) by 0-80 (y) units; the goal is at
   // x=120, y=40. Seeded jitter spreads shots across the empirical distance and
   // angle bins rather than clustering at each zone's centre.
-  const base: Record<MatchZone, { x: number; y: number }> = {
-    DEF_WIDE: { x: 12, y: 66 },
-    DEF_CENTRAL: { x: 14, y: 40 },
-    MID_WIDE: { x: 45, y: 66 },
-    MID_CENTRAL: { x: 50, y: 40 },
-    ATT_WIDE: { x: 88, y: 66 },
-    ATT_CENTRAL: { x: 95, y: 40 },
-    BOX: { x: 111, y: 40 },
-  };
-  const c = base[zone] ?? { x: 95, y: 40 };
+  const c = SHOT_ZONE_CENTRES[zone] ?? { x: 95, y: 40 };
   const jx = (nextDouble(eng.rng) - 0.5) * 14;
   const jy = (nextDouble(eng.rng) - 0.5) * 18;
   return { x: Math.max(2, Math.min(119, c.x + jx)), y: Math.max(2, Math.min(78, c.y + jy)) };
@@ -1856,16 +2001,30 @@ function evaluateAiSubstitutions(eng: Engine): void {
  *  simulations average `injuries.targetPerMatch`. A single RNG draw per action
  *  keeps the stream chunk-independent (determinism between instant and
  *  streamed simulation). */
-function resolveInjuryHazard(eng: Engine, action: string, minute: number, addedTime?: number): void {
+// Every term below comes purely from config and the versioned energy/injury
+// model, yet the hazard runs once per resolved action (~950 a match). They are
+// derived once on first use instead of on every action.
+let _hazardConstants: { meanRawActionRisk: number; baseHazardPerAction: number } | null = null;
+function hazardConstants(): { meanRawActionRisk: number; baseHazardPerAction: number } {
+  if (_hazardConstants) return _hazardConstants;
   const expectedActionsPerMatch = 2 * (MS.validation.reference["TEAM_MATCH.modeledActions"]?.mean ?? 956);
   const rawActions = ENERGY_INJURY_MODEL.injuryRisk.actionRiskRaw;
-  const rawAction = rawActions[action] ?? rawActions.PASS;
   // Spec §13.5 normalizes with the neutral empirical action distribution from
   // football-baseline.json; that artifact is not in the repository yet, so the
   // unweighted mean over the versioned table stands in until it lands.
   const meanRawActionRisk = Object.values(rawActions).reduce((sum, value) => sum + value, 0) / Object.values(rawActions).length;
   const referenceRisk = injuryRiskMultiplier(ENERGY_INJURY_MODEL.injuryRisk.referenceEnergy, ENERGY_INJURY_MODEL.injuryRisk.referenceRecentLoad, ENERGY_INJURY_MODEL.injuryRisk.ageReference);
-  const baseHazardPerAction = gameConfig.injuries.matchTargetPerMatch / Math.max(1, expectedActionsPerMatch * referenceRisk);
+  _hazardConstants = {
+    meanRawActionRisk,
+    baseHazardPerAction: gameConfig.injuries.matchTargetPerMatch / Math.max(1, expectedActionsPerMatch * referenceRisk),
+  };
+  return _hazardConstants;
+}
+
+function resolveInjuryHazard(eng: Engine, action: string, minute: number, addedTime?: number): void {
+  const rawActions = ENERGY_INJURY_MODEL.injuryRisk.actionRiskRaw;
+  const rawAction = rawActions[action] ?? rawActions.PASS;
+  const { meanRawActionRisk, baseHazardPerAction } = hazardConstants();
   const participants: { ps: LivePlayerState; player: Player; side: Side; weight: number; lambda: number }[] = [];
   for (const currentSide of [eng.home, eng.away]) {
     for (const { ps, weight } of involvedPlayers(currentSide, eng.zone)) {
@@ -1910,9 +2069,9 @@ function fatigueEnergyLoss(eng: Engine, side: Side, dtSeconds: number): void {
   for (const ps of side.on) {
     const involvementWeight = involvement(ps.deployedRole, eng.zone);
     const press = side.tactics.pressing * 100;
-    ps.energy = Math.max(0, ps.energy - workloadMultiplier * energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: physicalSkill({ skills: ps.skills }), position: ps.deployedRole, pressing: press, involvement: involvementWeight, minutes }));
+    ps.energy = Math.max(0, ps.energy - workloadMultiplier * energyLoss({ energy: ps.energy, age: ps.age, physicalSkill: ps.physical, position: ps.deployedRole, pressing: press, involvement: involvementWeight, minutes }));
     eng.playerMatchLoad[ps.id] = (eng.playerMatchLoad[ps.id] ?? 0) + workloadMultiplier * loadIncrement({ position: ps.deployedRole, pressing: press, involvement: involvementWeight, minutes });
-    refreshReadiness(ps, eng.centers);
+    refreshReadiness(ps);
   }
   // Formation support/coverage feeds tactical and organisation signals, so it
   // must follow the same readiness changes in instant and streamed runs.
@@ -2675,7 +2834,7 @@ function buildEngine(
   // live match resumes deterministically after a reload; `rng` is only the
   // fallback for states created before the stream field existed.
   const engineRng = st.rngState ?? { seed: rng.seed, state: rng.state };
-  const playersById = new Map(players.map((p) => [p.id, p]));
+  const playersById = playerIndexFor(players);
   const resolve = (ids: number[]) => ids.map((id) => playersById.get(id)).filter((p): p is Player => !!p);
   st.playerEnergy ??= {};
   const homeXI = resolve(st.homeOn);
@@ -2711,6 +2870,7 @@ function buildEngine(
     cachedBaselineOrganisation: 0,
     rosterVersion: 0,
     involvedCache: {},
+    involvedIdCache: {},
   };
   const awaySide: Side = {
     idx: 1,
@@ -2729,6 +2889,7 @@ function buildEngine(
     cachedBaselineOrganisation: 0,
     rosterVersion: 0,
     involvedCache: {},
+    involvedIdCache: {},
   };
   for (const side of [homeSide, awaySide]) {
     side.expectedSupportTotal = ZONES.reduce((s, z) => s + (side.expectedSupport[z] ?? 0), 0) || 7;
@@ -2801,6 +2962,8 @@ function buildEngine(
     playerRecentLoad: { ...(st.playerRecentLoad ?? {}) },
     playerMatchLoad: { ...(st.playerMatchLoad ?? {}) },
     aiSubLastMinute: [...(st.aiSubLastMinute ?? [-1, -1])],
+    ratingSecondsRosterKey: "",
+    ratingSecondsEntries: [],
     commentary: [],
     ended: st.ended ?? false,
     extraTimePlayed: st.extraTimePlayed ?? false,
@@ -2999,6 +3162,25 @@ export function possessionPercent(controlledSeconds: [number, number]): [number,
   if (total <= 0) return [50, 50];
   const home = Math.round((controlledSeconds[0] / total) * 100);
   return [home, 100 - home];
+}
+
+// Attribute centers are 16 sorts over the whole player population. Every match
+// setup needs them twice (the engine's own normalization and the rating
+// benchmarks), and every match of a game day computes the same answer. The key
+// is the array reference plus the skills version, exactly as documented on
+// `bumpSkillsVersion`: a push bumps the version, a reassignment changes the
+// reference, and an in-place skill edit bumps the version.
+let _centersPlayers: Player[] | null = null;
+let _centersVersion = -1;
+let _centers: AttributeCenters | null = null;
+
+export function cachedAttributeCenters(players: Player[]): AttributeCenters {
+  const version = currentSkillsVersion();
+  if (_centers && _centersPlayers === players && _centersVersion === version) return _centers;
+  _centers = computeAttributeCenters(players);
+  _centersPlayers = players;
+  _centersVersion = version;
+  return _centers;
 }
 
 export function centersForWorld(world: World): AttributeCenters {

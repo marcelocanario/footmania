@@ -1,7 +1,8 @@
 import { MATCH_SIMULATOR_CONFIG as MS, INFLUENCE_SCALES } from "../matchSimulatorConfig";
 import type { Player, Match } from "./types";
 import type { LivePlayerState, MatchZone } from "./matchSim";
-import { computeAttributeCenters, robustZ, athleticismOf, adjustedSkillsForRole, type AttributeCenters, type CanonicalAttr } from "./matchSim";
+import { cachedAttributeCenters, robustZ, athleticismOf, adjustedSkillsForRole, type CanonicalAttr } from "./matchSim";
+import { currentSkillsVersion } from "./skillsVersion";
 import { DEPLOYED_ROLES, naturalDefaultRole } from "./positions";
 import { bandUpperBound, rolePenalty } from "./outOfPosition";
 import { actionQualityWithOverride, defensiveResistanceWithOverride, shotOutcomeProbabilities, weightedUsableZ, weightedUsableZWithOverride, type FrozenSide, type FrozenContext } from "./probabilityEval";
@@ -77,36 +78,52 @@ function medianOf(values: number[]): number {
  * Note the pool is defined by *eligibility for the role*, not by who happens to
  * be deployed there — otherwise a role nobody currently plays has no benchmark.
  */
+// Benchmarks are role-intrinsic: they depend only on the player population, so
+// every match of the same game day derives an identical table. Memoized on the
+// same (array reference, skills version) key the attribute centers use.
+let _benchmarkPlayers: Player[] | null = null;
+let _benchmarkVersion = -1;
+let _benchmarks: RoleBenchmarks | null = null;
+
 export function buildRoleBenchmarks(players: Player[], deployedRoleOf: (p: Player) => string): RoleBenchmarks {
   void deployedRoleOf; // benchmarks are role-intrinsic, not lineup-dependent
-  const centers = computeAttributeCenters(players);
+  const version = currentSkillsVersion();
+  if (_benchmarks && _benchmarkPlayers === players && _benchmarkVersion === version) return _benchmarks;
+  const centers = cachedAttributeCenters(players);
   const makeshiftBound = bandUpperBound("Makeshift");
   const seniors = players.filter((p) => !p.isYouth);
   const out: RoleBenchmarks = {};
   for (const role of DEPLOYED_ROLES) {
-    const eligibleForRole = seniors.filter((p) => rolePenalty(p.position, role) !== null);
-    const primary = eligibleForRole.filter((p) => (rolePenalty(p.position, role) as number) <= makeshiftBound);
+    const eligibleForRole: Player[] = [];
+    const primary: Player[] = [];
+    for (const p of seniors) {
+      const penalty = rolePenalty(p.position, role);
+      if (penalty === null) continue;
+      eligibleForRole.push(p);
+      if (penalty <= makeshiftBound) primary.push(p);
+    }
     // Step 4 fallback: same coarse group, compatibility non-null.
     const pool = primary.length > 0
       ? primary
       : eligibleForRole.filter((p) => coarseRole(naturalDefaultRole(p.position)) === coarseRole(role));
-    out[role] = {};
-    for (const key of BENCHMARK_ATTRS) {
-      out[role][key] = medianOf(pool.map((p) => usableZOf(p, key, centers, role)));
+    // One adjusted skill set per (player, role) feeds all eight attribute
+    // columns; the per-attribute pass used to rebuild it eight times over.
+    const columns: number[][] = BENCHMARK_ATTRS.map(() => []);
+    for (const p of pool) {
+      const effective = adjustedSkillsForRole(p, role);
+      for (let a = 0; a < BENCHMARK_ATTRS.length; a++) {
+        const key = BENCHMARK_ATTRS[a];
+        // Benchmarks assume a fully ready (energy 100) player; readiness ~ 1.
+        columns[a].push(robustZ(canonicalValueOf(effective, key), centers.median[key], centers.sigma[key]));
+      }
     }
+    out[role] = {};
+    for (let a = 0; a < BENCHMARK_ATTRS.length; a++) out[role][BENCHMARK_ATTRS[a]] = medianOf(columns[a]);
   }
+  _benchmarks = out;
+  _benchmarkPlayers = players;
+  _benchmarkVersion = version;
   return out;
-}
-
-/** Usable-Z for a player attribute in the engine's space (robustZ(effectiveRaw)
- *  at full readiness; no fit factor — §7.1). Mirrors matchSim.buildPlayerState.
- *  The centers use the canonical attribute keys. */
-function usableZOf(p: Player, key: CanonicalAttr, centers: AttributeCenters, deployedRole: string): number {
-  const effective = adjustedSkillsForRole(p, deployedRole as import("./positions").DeployedRole);
-  const value = canonicalValueOf(effective, key);
-  const z = robustZ(value, centers.median[key], centers.sigma[key]);
-  // Benchmarks assume a fully ready (energy 100) player; readiness ~ 1.
-  return z;
 }
 
 const CANONICAL_OF: Record<CanonicalAttr, (s: Player["skills"]) => number> = {
@@ -215,17 +232,27 @@ export function observeDecision(
   const def = ctx.sides[defKey];
   const attInvolved = att.involved;
   const defInvolved = def.involved;
+  // The frozen projections of both sides depend only on `ctx`, but
+  // recomputeWithOverride used to rebuild them (two allocations per involved
+  // player, each with an eight-field usable-Z object) for every participant of
+  // every decision — several hundred thousand throwaway objects per match.
+  // Build them once here and reuse them for the whole decision.
+  const frozen = kind === "shot" || kind === "next-zone"
+    ? null
+    : { att: toFrozenSide(att, ctx.zone), def: toFrozenSide(def, ctx.zone) };
+  const attIds = new Set(attInvolved.map((l) => l.ps.id));
+  const defIds = new Set(defInvolved.map((l) => l.ps.id));
+  const homeIds = ctx.sides.home === att ? attIds : defIds;
 
   for (const pid of participants) {
-    const onAtt = attInvolved.some((l) => l.ps.id === pid);
-    const onDef = !onAtt && defInvolved.some((l) => l.ps.id === pid);
+    const onAtt = attIds.has(pid);
+    const onDef = !onAtt && defIds.has(pid);
     if (!onAtt && !onDef) continue;
     const isAttacker = onAtt;
     const side = onAtt ? att : def;
     // §17: the observer uses the player's EXACT deployed-role benchmark.
     const bench = benchmarks[fineRoleOf(pid)] ?? {};
-    const q = recomputeWithOverride(ctx, kind, isAttacker, pid, bench, probabilities, typeof probabilities.action === "string" ? probabilities.action : "PASS");
-    const numQ = Object.fromEntries(Object.entries(q).filter(([, v]) => typeof v === "number" && Number.isFinite(v))) as Record<string, number>;
+    const q = recomputeWithOverride(ctx, frozen, kind, isAttacker, pid, bench, probabilities, typeof probabilities.action === "string" ? probabilities.action : "PASS");
     // Next-zone decisions carry no direct rating contribution: the destination
     // distribution is a routine progression step (a completed pass/carry into
     // a zone), not a decisive event. Attempting a threat-delta credit here
@@ -243,8 +270,22 @@ export function observeDecision(
     // all routine resolutions leaves only favorable events in the sample and
     // systematically drives the most involved defenders toward 10. KEEP is a
     // control-failure label and was excluded above.
-    const mu = Object.entries(numQ).reduce((s, [k, p]) => s + p * util(k), 0);
-    const v = Object.entries(numQ).reduce((s, [k, p]) => s + p * (util(k) - mu) ** 2, 0);
+    // Iterate the counterfactual vector directly instead of materializing a
+    // filtered copy plus two entry arrays per participant. Outcome labels are
+    // non-numeric strings, so `for...in` visits them in the same insertion
+    // order the entry arrays did and the accumulation is bit-for-bit the same.
+    let mu = 0;
+    for (const key in q) {
+      const p = q[key];
+      if (typeof p !== "number" || !Number.isFinite(p)) continue;
+      mu += p * util(key);
+    }
+    let v = 0;
+    for (const key in q) {
+      const p = q[key];
+      if (typeof p !== "number" || !Number.isFinite(p)) continue;
+      v += p * (util(key) - mu) ** 2;
+    }
     const c = util(resolved) - mu;
     // A team-level outcome is shared by every zone-involved participant on the
     // side: dividing by the involved count keeps total impact bounded instead
@@ -255,7 +296,7 @@ export function observeDecision(
     const vShared = v / share;
     // Guard against NaN/degenerate counterfactuals: they carry no information.
     if (!Number.isFinite(mu) || !Number.isFinite(v) || !Number.isFinite(c) || v <= 0) continue;
-    const clubId = ctx.sides.home.involved.some((l) => l.ps.id === pid) ? ctx.homeClubId : ctx.awayClubId;
+    const clubId = homeIds.has(pid) ? ctx.homeClubId : ctx.awayClubId;
     const a = accum.get(pid) ?? emptyAccum(pid, clubId);
     a.clubId = clubId;
     a.rawImpact += cShared;
@@ -310,6 +351,7 @@ function toFrozenSide(side: EngineSideView, zone: MatchZone): FrozenSide {
 /** Recompute a decision's probability vector with one player substituted. */
 function recomputeWithOverride(
   ctx: RatingDecisionInput,
+  frozen: { att: FrozenSide; def: FrozenSide } | null,
   kind: string,
   isAttacker: boolean,
   playerId: number,
@@ -319,16 +361,18 @@ function recomputeWithOverride(
 ): Record<string, number | string> {
   const attKey = ctx.possessionSide === 0 ? "home" : "away";
   const defKey = ctx.possessionSide === 0 ? "away" : "home";
-  const attFrozen = toFrozenSide(ctx.sides[attKey], ctx.zone);
-  const defFrozen = toFrozenSide(ctx.sides[defKey], ctx.zone);
+  // Lazy: the shot and next-zone branches never touch the frozen sides, so
+  // they must not pay for building them.
+  const attFrozen = (): FrozenSide => frozen?.att ?? toFrozenSide(ctx.sides[attKey], ctx.zone);
+  const defFrozen = (): FrozenSide => frozen?.def ?? toFrozenSide(ctx.sides[defKey], ctx.zone);
 
   if (kind === "control-failure") {
     // Ball security consumes the attacking involved players' technical usable-Z
     // only. Anchor on the engine's actual probability, then apply the exact
     // logit change from substituting this one player.
     const pFailActual = typeof actual.FAIL === "number" ? actual.FAIL : 0;
-    const zActual = weightedUsableZ(attFrozen, "technique");
-    const zSub = weightedUsableZWithOverride(attFrozen, "technique", playerId, bench.technique ?? 0);
+    const zActual = weightedUsableZ(attFrozen(), "technique");
+    const zSub = weightedUsableZWithOverride(attFrozen(), "technique", playerId, bench.technique ?? 0);
     const pFailSub = logisticOf(
       logitOf(clamp(pFailActual, 1e-6, 1 - 1e-6))
       - INFLUENCE_SCALES.teamScale * (zSub - zActual),
@@ -358,11 +402,11 @@ function recomputeWithOverride(
     // benchmark PER ATTRIBUTE (each attribute the action consumes gets its own
     // benchmark value).
     const attAggSub = isAttacker
-      ? actionQualityWithOverride(toFrozenSide(att, ctx.zone), ctx.zone, action, playerId, bench)
+      ? actionQualityWithOverride(attFrozen(), ctx.zone, action, playerId, bench)
       : attAggActual;
     const defAggSub = isAttacker
       ? defAggActual
-      : defensiveResistanceWithOverride(toFrozenSide(def, ctx.zone), ctx.zone, action, playerId, bench);
+      : defensiveResistanceWithOverride(defFrozen(), ctx.zone, action, playerId, bench);
     const zExecSub = clamp(
       (attAggSub - defAggSub) / Math.SQRT2 + densityCoefficient * (att.localDensity - def.localDensity),
       -MS.normalization.contestZClamp,
@@ -442,27 +486,47 @@ function logisticOf(x: number): number {
  * zExec enters each outcome utility with coefficient: +1 CONTINUE, −1
  * TURNOVER, 0 FOUL / RETAINED_RESTART (mirrors resolveOutcome).
  */
+/** zExec enters each outcome utility with coefficient +1 CONTINUE, -1 TURNOVER,
+ *  0 FOUL / RETAINED_RESTART (mirrors resolveOutcome). */
+const OUTCOME_Z_COEFF = [1, -1, 0, 0];
+const OUTCOME_WEIGHT_SCRATCH = new Float64Array(4);
+const OUTCOME_SCRATCH_P = new Float64Array(4);
+
 function outcomeCounterfactual(
   actual: Record<string, number | string>,
   zExecActual: number,
   zExecSub: number,
 ): Record<string, number | string> {
-  const labels = ["CONTINUE", "TURNOVER", "FOUL", "RETAINED_RESTART"];
-  const actualP = labels.map((l) => (typeof actual[l] === "number" ? (actual[l] as number) : 0));
-  const totalActual = actualP.reduce((s, p) => s + p, 0) || 1;
-  const normalized = actualP.map((p) => p / totalActual);
-  // log-utilities up to a constant C: u_k = log(p_k) + C. The softmax is
-  // shift-invariant, so we can pick C=0.
-  const uActual = normalized.map((p) => Math.log(Math.max(1e-12, p)));
+  // Fixed four-outcome vector, evaluated in place: this runs once per
+  // participant of every non-shot decision, and the six intermediate arrays it
+  // used to allocate were the single largest source of garbage in the rating
+  // pipeline. Same operations, same order, same results.
+  const p0 = typeof actual.CONTINUE === "number" ? actual.CONTINUE : 0;
+  const p1 = typeof actual.TURNOVER === "number" ? actual.TURNOVER : 0;
+  const p2 = typeof actual.FOUL === "number" ? actual.FOUL : 0;
+  const p3 = typeof actual.RETAINED_RESTART === "number" ? actual.RETAINED_RESTART : 0;
+  const actualP = OUTCOME_SCRATCH_P;
+  actualP[0] = p0; actualP[1] = p1; actualP[2] = p2; actualP[3] = p3;
+  const totalActual = (p0 + p1 + p2 + p3) || 1;
   const { teamScale } = INFLUENCE_SCALES;
-  const zCoeff = [1, -1, 0, 0];
   const delta = teamScale * (zExecSub - zExecActual);
-  const uSub = uActual.map((u, i) => u + zCoeff[i] * delta);
-  const weights = uSub.map((u) => Math.exp(Math.max(-50, Math.min(50, u))));
-  const total = weights.reduce((s, w) => s + w, 0) || 1;
-  const out: Record<string, number | string> = {};
-  labels.forEach((l, i) => { out[l] = total > 0 ? weights[i] / total : 1 / labels.length; });
-  return out;
+  let total = 0;
+  const weights = OUTCOME_WEIGHT_SCRATCH;
+  for (let i = 0; i < 4; i++) {
+    // log-utilities up to a constant C: u_k = log(p_k) + C. The softmax is
+    // shift-invariant, so we can pick C=0.
+    const u = Math.log(Math.max(1e-12, actualP[i] / totalActual)) + OUTCOME_Z_COEFF[i] * delta;
+    const w = Math.exp(Math.max(-50, Math.min(50, u)));
+    weights[i] = w;
+    total += w;
+  }
+  total = total || 1;
+  return {
+    CONTINUE: total > 0 ? weights[0] / total : 0.25,
+    TURNOVER: total > 0 ? weights[1] / total : 0.25,
+    FOUL: total > 0 ? weights[2] / total : 0.25,
+    RETAINED_RESTART: total > 0 ? weights[3] / total : 0.25,
+  };
 }
 
 export type { Match, MatchZone, FrozenSide, FrozenContext };
