@@ -139,6 +139,48 @@ function changedWorldCollections(previous: World | undefined, world: World): Set
   return tables;
 }
 
+// World fields whose value is a primitive (number | string | null): safe to
+// copy directly with no cloning, since a primitive has no shared identity to
+// alias-corrupt. Every OTHER field defaults to the copy-on-write treatment in
+// `buildCacheWorld` below, so a future field added to `World` without being
+// added here is still handled correctly (just slightly less cheaply) rather
+// than silently aliasing the caller's live, still-mutable object into the
+// cache. Keep this list to true primitives only.
+const PRIMITIVE_WORLD_FIELDS = new Set<keyof World>(["seed", "year", "dayIndex", "dayOfWeek", "nextId", "humanClubId"]);
+
+/**
+ * Build the world object to install in the cache after a successful persist:
+ * a shallow copy of `world` where every non-primitive field is copy-on-write
+ * against `previous` (the pristine pre-mutation baseline) — shared BY
+ * REFERENCE from `previous` when unchanged, cloned from `world` when it
+ * differs. `structuredClone(world)` (the previous behavior, still used when
+ * there is no `previous` to diff against) pays to deep-copy the entire world
+ * on every persisted action regardless of how much of it a single mutation
+ * actually touched; most collections (news, market/auction history, season
+ * records, ...) are untouched by most actions.
+ *
+ * Safety: an unchanged field is aliased to `previous[key]`, never to
+ * `world[key]` — `previous` is the immutable baseline in `mutationBaselines`
+ * that nothing mutates, whereas `world` is the caller's live object and may
+ * still be mutated by the caller after `persistWorld` returns (e.g.
+ * `withWorld` calls `materializeSeasonEvents(app.prisma, loaded.save.id,
+ * loaded.world)` after persisting). A changed field is `structuredClone`d
+ * from `world`, so a later mutation of `world[key]` cannot reach the cache
+ * either. This mirrors the sharing `persistLiveMatchState` already does for
+ * `liveMatches`/`rng` specifically; this generalizes it to every field.
+ */
+function buildCacheWorld(previous: World | undefined, world: World): World {
+  if (!previous) return cloneWorld(world);
+  const next = { ...world } as World;
+  for (const key of Object.keys(world) as (keyof World)[]) {
+    if (PRIMITIVE_WORLD_FIELDS.has(key)) continue;
+    (next as unknown as Record<string, unknown>)[key] = deepEqual(previous[key], world[key])
+      ? previous[key]
+      : structuredClone(world[key]);
+  }
+  return next;
+}
+
 export function invalidateWorldCache(prisma: PrismaClient, saveId?: number): void {
   if (saveId === undefined) {
     worldCaches.delete(prisma);
@@ -929,7 +971,10 @@ export async function persistWorld(
     }
   });
   if (process.env.NODE_ENV !== "test" && expectedRevision !== undefined) {
-    rememberWorld(prisma, saveId, expectedRevision + 1, world);
+    // buildCacheWorld already returns a value nobody else holds a reference
+    // to (its own shallow copy, with every changed field freshly cloned), so
+    // rememberWorldOwned installs it directly — no second whole-world clone.
+    rememberWorldOwned(prisma, saveId, expectedRevision + 1, buildCacheWorld(previous, world));
     mutationBaselines.get(prisma)?.delete(saveId);
   } else {
     invalidateWorldCache(prisma, saveId);

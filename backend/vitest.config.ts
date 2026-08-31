@@ -12,6 +12,8 @@ export default defineConfig({
       "tests/live.test.ts",
       "tests/namePoolService.test.ts",
       "tests/persistence.test.ts",
+      "tests/worldCache.test.ts",
+      "tests/playerSeasonHistoryTrend.test.ts",
       "tests/scheduler.test.ts",
       "tests/worker.test.ts",
       "tests/seasonArchive.test.ts",
