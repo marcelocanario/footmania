@@ -303,3 +303,11 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     recovery, injury, or lasting-setback calculations, and no AI config or
     profile field may treat it as physical.
 
+45. **News history is render-immutable.** A persisted `NewsItem` is never
+    rewritten once written: its `text`, `entriesJson` and `bodyJson` are the
+    authoritative record, and the client renders whatever was stored. Localized
+    news is emitted as a stable message key (`body`) at publish time; merging
+    same-day same-subject items recomputes only the frame key and accumulates
+    entries. Legacy rows (non-null `text`, null `bodyJson`) are never backfilled
+    or migrated to keys — they keep rendering from `text` forever.
+

@@ -9,9 +9,11 @@ import { notifyFriendshipsChanged } from "../services/saveService";
 // /api/auth/*; this file exposes account-scoped game features and a
 // better-auth-backed /me + /logout for the SPA.
 
-function toUserView(u: { id: number | string; name: string; email: string; isAdmin: boolean; isPro: boolean; bannedAt?: Date | null; banReason?: string | null }) {
-  return { id: Number(u.id), name: u.name, email: u.email, isAdmin: u.isAdmin, isPro: Boolean(u.isPro || u.isAdmin), bannedAt: u.bannedAt ?? null, banReason: u.banReason ?? null };
+function toUserView(u: { id: number | string; name: string; email: string; isAdmin: boolean; isPro: boolean; locale?: string | null; bannedAt?: Date | null; banReason?: string | null }) {
+  return { id: Number(u.id), name: u.name, email: u.email, isAdmin: u.isAdmin, isPro: Boolean(u.isPro || u.isAdmin), locale: u.locale ?? null, bannedAt: u.bannedAt ?? null, banReason: u.banReason ?? null };
 }
+
+const LOCALES = ["en", "fr", "pt-BR"] as const;
 
 export async function accountRoutes(app: FastifyInstance) {
   app.get("/me", async (req, reply) => {
@@ -26,6 +28,18 @@ export async function accountRoutes(app: FastifyInstance) {
   app.post("/logout", async (req, reply) => {
     await getAuth().api.signOut({ headers: fromNodeHeaders(req.headers) });
     return { ok: true };
+  });
+
+  // Player-facing UI language preference. User-scoped and non-mutating to the
+  // world, so it deliberately does NOT take the global lock (it follows the
+  // warnings/:id/acknowledge pattern, not the withWorld mutation path).
+  app.put("/me/locale", async (req, reply) => {
+    await app.authenticate(req, reply);
+    if (!req.user) return;
+    const parsed = z.object({ locale: z.enum(LOCALES) }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid locale" });
+    await app.prisma.user.update({ where: { id: req.user.id }, data: { locale: parsed.data.locale } });
+    return { ok: true, locale: parsed.data.locale };
   });
 
   // Accept a pending invitation AFTER the account exists (Google sign-up flow):

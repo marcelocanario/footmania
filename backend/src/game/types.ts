@@ -1,6 +1,7 @@
 import type { RngState } from "./rng";
 export type { RngState };
 
+import type { Displayable, MessageRef } from "../i18n/catalog";
 import type { NaturalPosition } from "./positions";
 export type Position = NaturalPosition;
 export type { NaturalPosition } from "./positions";
@@ -651,12 +652,15 @@ export interface LiveMatchState {
 
 /** One persisted fact inside a grouped dashboard news message. */
 export interface NewsEntry {
-  /** Stable dedupe key within a grouped message (player id, fixture id…). */
+  /** Stable dedupe key within a grouped message (player id, fixture id…).
+   *  This is the DEDUPE key — not a message key. Detail refs carry their own
+   *  `k` (message key) separately via `Displayable`. */
   key?: string;
-  /** Primary label, usually a name. */
-  label?: string;
+  /** Primary label: a proper name (player/club, passed through untranslated)
+   *  or a prose label (`Displayable`). */
+  label?: Displayable;
   /** Specific detail rendered next to the label. */
-  detail?: string;
+  detail?: Displayable;
 }
 
 export interface NewsItem {
@@ -678,7 +682,11 @@ export interface NewsItem {
    * into one message. Null = never merges (legacy rows, MOTDs, reports).
    */
   subject?: string;
-  /** Optional headline retained as metadata for the dashboard news item. */
+  /** Locale-independent body. On grouped items it is the frame key (the
+   *  client composes lead + entry list + tail); on ungrouped text items it is
+   *  a direct message ref. Absent = legacy row: render `text`. */
+  body?: MessageRef;
+  /** Optional headline: a MessageKey on new rows, legacy English before. */
   headline?: string;
   /** Structured facts rendered as the message's detail list. */
   entries?: NewsEntry[];

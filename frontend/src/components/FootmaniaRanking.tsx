@@ -1,16 +1,18 @@
 import { Medal, Trophy } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { FootmaniaRankingEntry } from "../api/client";
 import { countryFlag } from "../countryFlags";
 import { ClubCrest } from "./ClubCrest";
 import { ClubNameLink } from "./ClubNameLink";
 
 export function FootmaniaRankBadge({ rank, compact = false }: { rank: number | null; compact?: boolean }) {
-  if (rank === null) return <span className={`footmania-rank-badge muted${compact ? " compact" : ""}`}>Not ranked</span>;
+  const { t } = useTranslation();
+  if (rank === null) return <span className={`footmania-rank-badge muted${compact ? " compact" : ""}`}>{t("ranking.notRanked")}</span>;
   const tier = rank <= 3 ? "podium" : rank <= 10 ? "top-ten" : "standard";
   return (
     <span className={`footmania-rank-badge ${tier}${compact ? " compact" : ""}`}>
       <Trophy size={compact ? 12 : 14} />
-      FM #{rank}
+      {t("ranking.fmRank", { rank })}
     </span>
   );
 }
@@ -47,18 +49,19 @@ export function FootmaniaRankingPanel({
   totalRanked: number;
   viewerRank: number | null;
 }) {
+  const { t } = useTranslation();
   return (
     <section className="card footmania-ranking-panel">
       <div className="footmania-ranking-head">
         <div>
-          <div className="kicker">World ranking</div>
-          <h2><Trophy size={18} /> Footmania ranking</h2>
+          <div className="kicker">{t("ranking.worldRanking")}</div>
+          <h2><Trophy size={18} /> {t("ranking.ranking")}</h2>
         </div>
-        <span className="footmania-ranking-count">{totalRanked} active clubs</span>
+        <span className="footmania-ranking-count">{t("ranking.activeClubs", { count: totalRanked })}</span>
       </div>
-      <p className="footmania-ranking-copy">Competitive Elo decides the order. Exact rating values stay private.</p>
+      <p className="footmania-ranking-copy">{t("ranking.copy")}</p>
       {rankings.length === 0 ? (
-        <div className="empty-state" style={{ padding: "28px 10px" }}>The ranking will appear when active clubs have joined.</div>
+        <div className="empty-state" style={{ padding: "28px 10px" }}>{t("ranking.empty")}</div>
       ) : (
         <div className="footmania-ranking-list">
           {rankings.map((entry) => <RankingRow key={entry.clubId} entry={entry} />)}
@@ -66,7 +69,7 @@ export function FootmaniaRankingPanel({
       )}
       {viewerRank !== null && (
         <div className="footmania-ranking-footer">
-          <span>Your current rank</span>
+          <span>{t("ranking.yourRank")}</span>
           <FootmaniaRankBadge rank={viewerRank} compact />
         </div>
       )}

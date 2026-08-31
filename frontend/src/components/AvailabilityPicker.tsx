@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { userTimeZone } from "../utils/time";
 
 /**
@@ -18,12 +19,12 @@ function range(from: number, to: number): number[] {
 
 export const PRESET_EVENINGS = [...range(34, SLOTS_PER_DAY), ...range(0, 2)]; // 17:00–01:00
 
-const PRESETS: { label: string; slots: number[] }[] = [
-  { label: "All day", slots: range(0, SLOTS_PER_DAY) },
-  { label: "Daytime", slots: range(16, 40) }, // 08:00–20:00
-  { label: "Evenings", slots: PRESET_EVENINGS },
-  { label: "Nights", slots: [...range(40, SLOTS_PER_DAY), ...range(0, 8)] }, // 20:00–04:00
-];
+const PRESET_SLOTS = {
+  allDay: () => range(0, SLOTS_PER_DAY),
+  daytime: () => range(16, 40),
+  evenings: () => PRESET_EVENINGS,
+  nights: () => [...range(40, SLOTS_PER_DAY), ...range(0, 8)],
+} as const;
 
 function slotLabel(slot: number): string {
   const h = Math.floor(slot / 2);
@@ -38,6 +39,13 @@ interface Props {
 }
 
 export function AvailabilityPicker({ value, onChange, disabled }: Props) {
+  const { t } = useTranslation();
+  const presets: { label: string; slots: number[] }[] = [
+    { label: t("availability.allDay"), slots: PRESET_SLOTS.allDay() },
+    { label: t("availability.daytime"), slots: PRESET_SLOTS.daytime() },
+    { label: t("availability.evenings"), slots: PRESET_SLOTS.evenings() },
+    { label: t("availability.nights"), slots: PRESET_SLOTS.nights() },
+  ];
   const selected = new Set(value);
   const painting = useRef<{ active: boolean; mode: boolean }>({ active: false, mode: true });
   // Anchor slot for shift+click range fills (last slot clicked without Shift).
@@ -78,10 +86,10 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
   return (
     <div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-        {PRESETS.map((p) => (
+        {presets.map((p) => (
           <button key={p.label} type="button" className="btn sm" disabled={disabled} onClick={() => onChange(p.slots)}>{p.label}</button>
         ))}
-        <button type="button" className="btn sm ghost" disabled={disabled} onClick={() => onChange([])}>Clear</button>
+        <button type="button" className="btn sm ghost" disabled={disabled} onClick={() => onChange([])}>{t("availability.clear")}</button>
       </div>
       {/* Each column is one hour: full hour (:00) stacked above its half-hour (:30),
           with minute indicators on the left edge. */}
@@ -153,10 +161,10 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
         <span>24:00</span>
       </div>
       <div style={{ marginTop: 8, fontSize: "0.88rem", color: enough ? "var(--text-2)" : "var(--gold-2)" }}>
-        {hours.toFixed(1)} h selected{!enough && ` — pick at least ${MIN_SLOTS / 2} hours`}
+        {t("availability.hoursSelected", { hours: hours.toFixed(1) })}{!enough && ` ${t("availability.pickAtLeast", { hours: MIN_SLOTS / 2 })}`}
       </div>
       <div style={{ marginTop: 4, fontSize: "0.78rem", color: "var(--text-3)" }}>
-        Shift-click to fill a range of slots at once. Times shown in your timezone ({userTimeZone()}).
+        {t("availability.hint", { zone: userTimeZone() })}
       </div>
     </div>
   );

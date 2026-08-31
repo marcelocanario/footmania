@@ -1,4 +1,5 @@
 import { money } from "../format";
+import { useTranslation } from "react-i18next";
 
 /**
  * Compact inline-SVG trend line for a player's per-season overall or market
@@ -15,14 +16,15 @@ export function PlayerTrendSparkline({
   values: (number | null)[];
   unit?: "ovr" | "money";
 }) {
+  const { t } = useTranslation();
   const points = values.filter((v): v is number => v !== null && Number.isFinite(v));
-  const labelValue = (v: number) => (unit === "money" ? money(v) : `OVR ${v}`);
+  const labelValue = (v: number) => (unit === "money" ? money(v) : t("playerScores.ovrValue", { value: v }));
 
   if (points.length === 0) {
     return (
       <div className="player-trend player-trend-empty">
         <span className="player-trend-label">{label}</span>
-        <span className="player-trend-note">No data yet</span>
+        <span className="player-trend-note">{t("playerScores.noData")}</span>
       </div>
     );
   }

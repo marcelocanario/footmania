@@ -6,6 +6,9 @@ import { useGame } from "./store/game";
 import { useSettings } from "./store/settings";
 import { Layout } from "./components/Layout";
 import { PageLoading } from "./components/PageLoading";
+import { i18n } from "./i18n";
+import { isLang } from "./i18n/languages";
+import { useLang } from "./i18n/store";
 
 // Route-level code-splitting: each screen is lazily loaded so only the
 // critical auth gate + layout ship as the initial bundle.
@@ -37,13 +40,25 @@ function Gate({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [clubDataReady, setClubDataReady] = useState(false);
+  const [localeReady, setLocaleReady] = useState(false);
 
   useEffect(() => {
     if (user) return;
+    setLocaleReady(false);
     api
       .me()
-      .then((res) => {
+      .then(async (res) => {
+        const detected = useLang.getState();
+        if (detected.source === "local") {
+          // An explicit choice on this device wins over a stale account row.
+          if (res.user.locale !== detected.lang) await api.updateLocale(detected.lang).catch(() => undefined);
+        } else if (isLang(res.user.locale)) {
+          // Browser detection is not an opinion: adopt the account preference
+          // and persist it so subsequent boots do not need reconciliation.
+          await detected.setLanguage(res.user.locale);
+        }
         setUser(res.user);
+        setLocaleReady(true);
         // Complete a pending friend invitation stashed before the Google
         // redirect; best-effort (an invalid/used token is ignored silently).
         const pending = sessionStorage.getItem("fm_pending_invite");
@@ -52,7 +67,10 @@ function Gate({ children }: { children: React.ReactNode }) {
           void api.acceptInvite(pending).catch(() => undefined);
         }
       })
-      .catch(() => navigate("/login"));
+      .catch(() => {
+        setLocaleReady(true);
+        navigate("/login");
+      });
   }, [user, setUser, navigate]);
 
   useEffect(() => {
@@ -108,7 +126,8 @@ function Gate({ children }: { children: React.ReactNode }) {
     };
   }, [user, location.pathname, status, snapshot, loadStatus, loadClub]);
 
-  if (!user) return <PageLoading message="Signing you in" />;
+  if (!user) return <PageLoading message={i18n.t("common.signingIn")} />;
+  if (!localeReady) return <PageLoading message={i18n.t("common.signingIn")} />;
   if (!clubDataReady && location.pathname !== "/join" && location.pathname !== "/admin") return <PageLoading />;
   return <>{children}</>;
 }
@@ -188,7 +207,7 @@ export default function App() {
             path="/*"
             element={
               <Gate>
-                <Layout>
+                  <Layout>
                   <AppRoutes />
                 </Layout>
               </Gate>

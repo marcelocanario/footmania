@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Dropdown } from "primereact/dropdown";
 import { InputText } from "primereact/inputtext";
 import { Toast } from "primereact/toast";
@@ -34,7 +35,6 @@ import { FootballKit } from "../components/kit/FootballKit";
 import { ColorRow, KitDesigner } from "../components/kit/KitDesigner";
 import { applyTeamColorPreset, deriveKitDefaults } from "../components/kit/defaults";
 import { PREVIEW_NUMBERS, type ClubKits } from "../components/kit/types";
-import { strings } from "../strings";
 import { useGame } from "../store/game";
 import { PageLoading } from "../components/PageLoading";
 import { localSlotsToUtc } from "../utils/time";
@@ -46,9 +46,9 @@ const DEFAULT_SECONDARY = "#ffffff";
 type TabId = "identity" | "style" | "schedule";
 
 const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
-  { id: "identity", label: "Club", icon: <Shield size={16} /> },
-  { id: "style", label: "Kit", icon: <Shirt size={16} /> },
-  { id: "schedule", label: "Schedule", icon: <CalendarClock size={16} /> },
+  { id: "identity", label: "join.tabClub", icon: <Shield size={16} /> },
+  { id: "style", label: "join.tabKit", icon: <Shirt size={16} /> },
+  { id: "schedule", label: "join.tabSchedule", icon: <CalendarClock size={16} /> },
 ];
 
 function FieldHelp({ text }: { text: string }) {
@@ -63,6 +63,7 @@ function FieldHelp({ text }: { text: string }) {
 }
 
 export function Join() {
+  const { t } = useTranslation();
   const { loadStatus, loadClub, setLiveMatch } = useGame();
   const user = useGame((s) => s.user);
   const navigate = useNavigate();
@@ -91,7 +92,7 @@ export function Join() {
   const stadiumValid = stadiumName.trim().length > 0;
   const coachNameTrim = coachName.trim();
   const coachNameValid = coachNameTrim.length >= 2 && coachNameTrim.length <= 40;
-  const stadiumPreviewName = stadiumName.trim() || "Name your stadium";
+  const stadiumPreviewName = stadiumName.trim() || t("join.nameStadium");
 
   /** Team colors seed all three kits as a preset; kits stay editable. */
   const applyTeamColors = (primary: string, secondary: string) => {
@@ -106,7 +107,7 @@ export function Join() {
       const st = await loadStatus();
       setStatus(st);
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("join.errorTitle"), detail: (e as Error).message });
     } finally {
       setLoading(false);
     }
@@ -128,8 +129,8 @@ export function Join() {
         const sorted = [...res.tiers].sort((a, b) => a.tier - b.tier);
         const lowest = sorted[sorted.length - 1];
         const withAI = lowest.divisions.find((d) => d.aiCount > 0) ?? lowest.divisions[0];
-        if (withAI) setEntryDiv(`Division ${withAI.name}`);
-        else setEntryDiv(`Division ${lowest.tier}`);
+        if (withAI) setEntryDiv(t("competitions.divisionOption", { tier: withAI.name }));
+        else setEntryDiv(t("competitions.divisionOption", { tier: lowest.tier }));
       })
       .catch(() => undefined);
   }, []);
@@ -163,8 +164,8 @@ export function Join() {
   const countryOptions = useMemo(
     () =>
       [
-        { label: "★ Featured", items: featured.map((c) => ({ label: c.name, value: c.code })) },
-        { label: "All nations", items: countries.map((c) => ({ label: c.name, value: c.code })) },
+        { label: t("join.featured"), items: featured.map((c) => ({ label: c.name, value: c.code })) },
+        { label: t("join.allNations"), items: countries.map((c) => ({ label: c.name, value: c.code })) },
       ].filter((g) => g.items.length > 0),
     [featured, countries],
   );
@@ -190,7 +191,7 @@ export function Join() {
       await loadClub();
       navigate("/dashboard");
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("join.errorTitle"), detail: (e as Error).message });
       setReturning(false);
     }
   };
@@ -200,7 +201,7 @@ export function Join() {
       const res = await api.practice();
       setPractice({ homeGoals: res.homeGoals, awayGoals: res.awayGoals, opponentName: res.opponentName });
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("join.errorTitle"), detail: (e as Error).message });
     }
   };
 
@@ -208,14 +209,14 @@ export function Join() {
     if (!selectedCountry || !nameValid || !stadiumValid || !coachNameValid) {
       toast.current?.show({
         severity: "warn",
-        summary: "Complete your club",
-        detail: !selectedCountry ? "Choose a country." : !nameValid ? "Club name must be 3–30 characters." : !stadiumValid ? "Name your home ground." : "Manager name must be 2–40 characters.",
+        summary: t("join.completeYourClub"),
+        detail: !selectedCountry ? t("join.chooseCountry") : !nameValid ? t("join.nameTooShort") : !stadiumValid ? t("join.nameStadium") : t("join.nameCoach"),
       });
       setActiveTab("identity");
       return;
     }
     if (preferredHours.length < MIN_SLOTS) {
-      toast.current?.show({ severity: "warn", summary: "Availability", detail: `Pick at least ${MIN_SLOTS / 2} hours.` });
+      toast.current?.show({ severity: "warn", summary: t("join.availability"), detail: t("join.pickHours", { count: MIN_SLOTS / 2 }) });
       setActiveTab("schedule");
       return;
     }
@@ -237,13 +238,13 @@ export function Join() {
       await loadClub();
       navigate("/dashboard");
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("join.errorTitle"), detail: (e as Error).message });
       setJoining(false);
     }
   };
 
   if (loading) {
-    return <PageLoading message="Loading team creation" />;
+    return <PageLoading message={t("join.loadingCreation")} />;
   }
 
   if (hasClub) {
@@ -252,8 +253,8 @@ export function Join() {
         <Toast ref={toast} position="bottom-right" />
         <div className="page-head">
           <div>
-            <div className="kicker">{strings.join.startNew}</div>
-            <h1>{strings.join.title}</h1>
+            <div className="kicker">{t("join.startNew")}</div>
+            <h1>{t("join.title")}</h1>
           </div>
         </div>
 
@@ -264,11 +265,11 @@ export function Join() {
             </div>
             <div>
               <div className="join-hasclub-kicker">
-                <BadgeCheck size={14} /> Active career
+                <BadgeCheck size={14} /> {t("join.activeCareer")}
               </div>
-              <h2 style={{ margin: "6px 0 4px" }}>You manage {status?.club?.name}</h2>
+              <h2 style={{ margin: "6px 0 4px" }}>{t("join.youManage", { name: status?.club?.name ?? "" })}</h2>
               <div style={{ color: "var(--text-3)", fontSize: "0.9rem" }}>
-                {status?.club?.country} · Division {status?.club?.highestDivision} · {clubState}
+                {t("join.clubMeta", { division: status?.club?.highestDivision ?? "", state: clubState ?? "" })}
               </div>
             </div>
           </div>
@@ -279,24 +280,24 @@ export function Join() {
                 <div className="join-callout warn">
                   <AlertTriangle size={18} />
                   <div>
-                    <b>Dormant club</b>
-                    <p>Return at the lowest available division, or wait for next season.</p>
+                    <b>{t("join.dormantClub")}</b>
+                    <p>{t("join.dormantClubText")}</p>
                   </div>
                 </div>
               ) : isProvisional ? (
                 <div className="join-callout gold">
                   <Clock size={18} />
                   <div>
-                    <b>Provisional — next season entry</b>
-                    <p>Manage your squad, transfers and practice matches while you wait.</p>
+                    <b>{t("join.provisionalEntry")}</b>
+                    <p>{t("join.provisionalText")}</p>
                   </div>
                 </div>
               ) : (
                 <div className="join-callout good">
                   <Sparkles size={18} />
                   <div>
-                    <b>Ready for matchday</b>
-                    <p>Fixtures, tables and live matches are ready.</p>
+                    <b>{t("join.readyMatchday")}</b>
+                    <p>{t("join.readyMatchdayText")}</p>
                   </div>
                 </div>
               )}
@@ -304,24 +305,24 @@ export function Join() {
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
                 {isDormant ? (
                   <button className="btn gold" style={{ fontSize: "1rem" }} onClick={() => void returnToPyramid()} disabled={returning}>
-                    <Play size={16} /> {returning ? "Returning…" : "Return to the pyramid"}
+                    <Play size={16} /> {returning ? t("join.returningDots") : t("join.returnToPyramid")}
                   </button>
                 ) : (
                   <button className="btn gold" style={{ fontSize: "1rem" }} onClick={() => navigate("/dashboard")}>
-                    <Play size={16} /> {strings.dashboard.continue}
+                    <Play size={16} /> {t("dashboard.continue")}
                   </button>
                 )}
                 {isProvisional ? (
                   <button className="btn" onClick={() => void playPractice()}>
-                    <Shield size={16} /> Practice match
+                    <Shield size={16} /> {t("join.practiceMatch")}
                   </button>
                 ) : (
                   <button className="btn ghost" onClick={() => navigate("/squad")}>
-                    <Users size={16} /> Squad <ArrowRight size={14} />
+                    <Users size={16} /> {t("squad.title")} <ArrowRight size={14} />
                   </button>
                 )}
-                <button className="btn ghost" onClick={() => navigate("/my-club")} title="Edit your club name, stadium and kits">
-                  <Shirt size={16} /> Edit team
+                <button className="btn ghost" onClick={() => navigate("/my-club")} title={t("join.editTeamTitle")}>
+                  <Shirt size={16} /> {t("join.editTeam")}
                 </button>
               </div>
 
@@ -334,7 +335,7 @@ export function Join() {
                     </span>
                     <span className="jm-practice-opp">{practice.opponentName}</span>
                   </div>
-                  <div className="jm-practice-hint">Practice match · no league impact</div>
+                  <div className="jm-practice-hint">{t("join.practiceNoImpact")}</div>
                 </div>
               )}
             </div>
@@ -354,12 +355,12 @@ export function Join() {
   const tabIdx = TABS.findIndex((t) => t.id === activeTab);
 
   const handleNext = () => {
-    if (activeTab === "identity") {
+if (activeTab === "identity") {
           if (!identityValid) {
             toast.current?.show({
               severity: "warn",
-              summary: "Complete your club",
-              detail: !selectedCountry ? "Choose a national association." : !nameValid ? "Club name must be 3–30 characters." : !stadiumValid ? "Name your home ground." : "Manager name must be 2–40 characters.",
+              summary: t("join.completeYourClub"),
+              detail: !selectedCountry ? t("join.chooseCountry") : !nameValid ? t("join.nameTooShort") : !stadiumValid ? t("join.nameStadium") : t("join.nameCoach"),
             });
         return;
       }
@@ -387,10 +388,10 @@ export function Join() {
         <div className="jm-hero-inner">
           <div>
             <div className="kicker" style={{ color: "var(--gold-2)" }}>
-               <Sparkles size={13} /> {strings.join.startNew}
+               <Sparkles size={13} /> {t("join.startNew")}
             </div>
             <h1 className="jm-title">
-              Create your team
+              {t("join.createYourTeam")}
             </h1>
           </div>
           <div className="jm-hero-badge">
@@ -398,8 +399,8 @@ export function Join() {
               <Trophy size={22} />
             </div>
             <div className="jm-hero-meta">
-              <div className="jm-hero-season">{entryDiv ?? "Division —"}</div>
-              <div className="jm-hero-round">{season ? (joinOpen ? "Open to join" : "Locked for this season") : "Loading"}</div>
+              <div className="jm-hero-season">{entryDiv ?? t("join.entryDiv")}</div>
+              <div className="jm-hero-round">{season ? (joinOpen ? t("join.openToJoin") : t("join.lockedThisSeason")) : t("join.loadingDots")}</div>
             </div>
           </div>
         </div>
@@ -410,12 +411,12 @@ export function Join() {
         <div className="jm-season-banner open">
           <BadgeCheck size={17} className="jm-season-icon" />
           <div className="jm-season-copy">
-            <b>Welcome back — your club identity is preserved</b>
+            <b>{t("join.welcomeBack")}</b>
             <span>
-              {preserved.name} will be recreated with its name, colors, kit, crest, stadium and match-time availability when you join.
+              {t("join.identityPreserved", { name: preserved.name })}
             </span>
           </div>
-          <span className="jm-season-pill open">Restored</span>
+          <span className="jm-season-pill open">{t("join.restored")}</span>
         </div>
       )}
 
@@ -423,22 +424,22 @@ export function Join() {
         <div className={`jm-season-banner ${joinOpen ? "open" : "locked"}`}>
           <Info size={17} className="jm-season-icon" />
           <div className="jm-season-copy">
-            <b>{joinOpen ? `There is still time to enjoy Season ${season.seasonNumber}` : "The next campaign starts here"}</b>
+            <b>{joinOpen ? t("join.timeForSeason", { season: season.seasonNumber }) : t("join.nextCampaign")}</b>
             <span>
               {joinOpen
-                ? `Join before round ${season.joinLockRound} to play this season.`
-                : `Season ${season.seasonNumber} is locked. Build your club, play practice matches, and enter the league next season.`}
+                ? t("join.joinBeforeRound", { round: season.joinLockRound })
+                : t("join.seasonLocked", { season: season.seasonNumber })}
             </span>
           </div>
           <span className={`jm-season-pill ${joinOpen ? "open" : "locked"}`}>
-            {joinOpen ? "Open" : "Locked"}
+            {joinOpen ? t("join.open") : t("join.locked")}
           </span>
         </div>
       )}
 
       {/* TABS */}
       <div className="jm-shell">
-        <div className="jm-tabs" role="tablist" aria-label="Create team steps">
+        <div className="jm-tabs" role="tablist" aria-label={t("join.createTeamSteps")}>
           {TABS.map((t, idx) => {
             const valid = t.id === "identity" ? identityValid : t.id === "schedule" ? scheduleValid : true;
             const active = t.id === activeTab;
@@ -458,7 +459,7 @@ export function Join() {
                 disabled={locked}
               >
                 <span className="jm-tab-icon">{done ? <Check size={14} /> : t.icon}</span>
-                <span className="jm-tab-text"><b>{t.label}</b></span>
+                <span className="jm-tab-text"><b>{(t as unknown as (k: string) => string)(t.label)}</b></span>
               </button>
             );
           })}
@@ -480,15 +481,15 @@ export function Join() {
                 <div id="panel-identity" role="tabpanel" aria-labelledby="tab-identity" className="jm-panel animate-in">
                   <div className="jm-panel-head">
                     <h2>
-                      <Shield size={18} /> Club & nation
+                      <Shield size={18} /> {t("join.clubAndNation")}
                     </h2>
-                    <p>Every great campaign starts with a name, a flag, and a home ground. Choose yours.</p>
+                    <p>{t("join.identityIntro")}</p>
                   </div>
 
                   <div className="jm-field">
                     <label className="jm-label">
-                       <Flag size={13} /> {strings.join.teamName}
-                      <FieldHelp text="Enter 3–30 characters. This is the name the crowd sees in tables and match results." />
+                       <Flag size={13} /> {t("join.teamName")}
+                      <FieldHelp text={t("join.teamNameHelp")} />
                       <span className="jm-req">*</span>
                     </label>
                     <span className="p-input-icon-left jm-input-wrap">
@@ -496,7 +497,7 @@ export function Join() {
                       <InputText
                         value={clubName}
                         onChange={(e) => setClubName(e.target.value)}
-                        placeholder="e.g. John Doe FC, São Paulo United, Aurora SC"
+                        placeholder={t("join.namePlaceholder")}
                         maxLength={30}
                         className={clubName.length > 0 && !nameValid ? "jm-invalid" : ""}
                         style={{ width: "100%" }}
@@ -504,7 +505,7 @@ export function Join() {
                     </span>
                     <div className="jm-hint-row">
                       <span className={`jm-hint ${nameLen > 0 && !nameValid ? "bad" : ""}`}>
-                        {nameLen > 0 && !nameValid ? (nameLen < 3 ? "Minimum 3 characters" : "Maximum 30 characters") : ""}
+                        {nameLen > 0 && !nameValid ? (nameLen < 3 ? t("join.min3") : t("join.max30")) : ""}
                       </span>
                       <span className="jm-count">{nameLen}/30</span>
                     </div>
@@ -512,8 +513,8 @@ export function Join() {
 
                   <div className="jm-field">
                     <label className="jm-label">
-                       <Home size={13} /> {strings.join.stadium}
-                      <FieldHelp text="Name your home ground. It is where your club welcomes opponents on matchday." />
+                       <Home size={13} /> {t("join.stadium")}
+                      <FieldHelp text={t("join.stadiumHelp")} />
                       <span className="jm-req">*</span>
                     </label>
                     <span className="p-input-icon-left jm-input-wrap">
@@ -521,7 +522,7 @@ export function Join() {
                       <InputText
                         value={stadiumName}
                         onChange={(e) => setStadiumName(e.target.value)}
-                        placeholder={`${nameTrim || "Your club"} Stadium`}
+                        placeholder={t("join.stadiumPlaceholder", { name: nameTrim || t("join.yourClub") })}
                         maxLength={40}
                         className={stadiumName.length > 0 && !stadiumValid ? "jm-invalid" : ""}
                         style={{ width: "100%" }}
@@ -529,15 +530,15 @@ export function Join() {
                     </span>
                     <div className="jm-hint-row">
                       <span className={`jm-hint ${stadiumName.length > 0 && !stadiumValid ? "bad" : ""}`}>
-                        {stadiumName.length > 0 && !stadiumValid ? "Name your home ground" : ""}
+                        {stadiumName.length > 0 && !stadiumValid ? t("join.nameStadium") : ""}
                       </span>
                     </div>
                   </div>
 
                   <div className="jm-field">
                     <label className="jm-label" htmlFor="join-coach">
-                      <UserRound size={13} /> Manager
-                      <FieldHelp text="Choose the name shown as your manager in match coverage and club identity." />
+                      <UserRound size={13} /> {t("join.manager")}
+                      <FieldHelp text={t("join.managerHelp")} />
                       <span className="jm-req">*</span>
                     </label>
                     <span className="p-input-icon-left jm-input-wrap">
@@ -546,7 +547,7 @@ export function Join() {
                         id="join-coach"
                         value={coachName}
                         onChange={(e) => setCoachName(e.target.value)}
-                        placeholder="e.g. Marcelo Canario"
+                        placeholder={t("join.managerPlaceholder")}
                         maxLength={40}
                         className={coachName.length > 0 && !coachNameValid ? "jm-invalid" : ""}
                         style={{ width: "100%" }}
@@ -554,7 +555,7 @@ export function Join() {
                     </span>
                     <div className="jm-hint-row">
                       <span className={`jm-hint ${coachName.length > 0 && !coachNameValid ? "bad" : ""}`}>
-                        {coachName.length > 0 && !coachNameValid ? (coachNameTrim.length < 2 ? "Minimum 2 characters" : "Maximum 40 characters") : ""}
+                        {coachName.length > 0 && !coachNameValid ? (coachNameTrim.length < 2 ? t("join.min2") : t("join.max40")) : ""}
                       </span>
                       <span className="jm-count">{coachNameTrim.length}/40</span>
                     </div>
@@ -562,8 +563,8 @@ export function Join() {
 
                   <div className="jm-field">
                     <label className="jm-label">
-                       <Globe2 size={13} /> {strings.join.country}
-                      <FieldHelp text="Choose the nation your club represents. It shapes the names of players and academy recruits you meet." />
+                       <Globe2 size={13} /> {t("join.country")}
+                      <FieldHelp text={t("join.countryHelp")} />
                       <span className="jm-req">*</span>
                     </label>
                     <Dropdown
@@ -575,20 +576,20 @@ export function Join() {
                       filter
                       filterBy="label"
                       showClear
-                      placeholder="Select your football association"
+                      placeholder={t("join.selectAssociation")}
                       style={{ width: "100%" }}
-                       aria-label={strings.join.country}
+                       aria-label={t("join.country")}
                       panelClassName="jm-dropdown-panel"
                     />
                     {selectedCountryObj ? (
                       <div className="jm-country-meta">
                         <span className="jm-country-name">{selectedCountryObj.name}</span>
                         <span className={`jm-country-tier s${selectedCountryObj.strength}`}>
-                          {selectedCountryObj.featured ? "★ Featured · Larger pool" : "Standard pool"}
+                          {selectedCountryObj.featured ? t("join.featuredPool") : t("join.standardPool")}
                         </span>
                       </div>
                     ) : (
-                      <div className="jm-hint">Player names and academy pool</div>
+                      <div className="jm-hint">{t("join.poolHint")}</div>
                     )}
                   </div>
                 </div>
@@ -599,20 +600,20 @@ export function Join() {
                 <div id="panel-style" role="tabpanel" aria-labelledby="tab-style" className="jm-panel animate-in">
                   <div className="jm-panel-head">
                     <h2>
-                      <Palette size={18} /> Club colours
+                      <Palette size={18} /> {t("join.clubColours")}
                     </h2>
-                    <p>Pick your club's two main colors. Your kits are pre-filled from them.</p>
+                    <p>{t("join.coloursIntro")}</p>
                   </div>
 
                   <div className="jm-field">
                     <ColorRow
-                      label="Primary color"
+                      label={t("join.primaryColor")}
                       value={teamPrimary}
                       onChange={(hex) => applyTeamColors(hex, teamSecondary)}
                     />
                     <div style={{ height: 8 }} />
                     <ColorRow
-                      label="Secondary color"
+                      label={t("join.secondaryColor")}
                       value={teamSecondary}
                       onChange={(hex) => applyTeamColors(teamPrimary, hex)}
                     />
@@ -621,9 +622,9 @@ export function Join() {
                   {/* ── Kits (separate section) ── */}
                   <div className="jm-panel-head" style={{ marginTop: 22 }}>
                     <h2>
-                      <Shirt size={18} /> Match kits
+                      <Shirt size={18} /> {t("join.matchKits")}
                     </h2>
-                    <p>Home and away are seeded from your club colors (away reversed) — customize every kit independently.</p>
+                    <p>{t("join.kitsIntro")}</p>
                   </div>
                   <KitDesigner value={kits} onChange={setKits} />
                 </div>
@@ -634,15 +635,15 @@ export function Join() {
                 <div id="panel-schedule" role="tabpanel" aria-labelledby="tab-schedule" className="jm-panel animate-in">
                   <div className="jm-panel-head">
                     <h2>
-                      <Clock size={18} /> Matchday schedule
+                      <Clock size={18} /> {t("join.matchdaySchedule")}
                     </h2>
-                    <p>Pick the hours when you can answer the call of matchday.</p>
+                    <p>{t("join.scheduleIntro")}</p>
                   </div>
 
                   <div className="jm-field">
                     <label className="jm-label">
-                      <Clock size={13} /> Preferred match times
-                      <FieldHelp text="Mark at least 8 hours when you can play, in your local time. We use these windows to group you with players on similar schedules and to place your fixtures at a time you can enjoy." />
+                      <Clock size={13} /> {t("join.preferredTimes")}
+                      <FieldHelp text={t("join.preferredTimesHelp")} />
                       <span className="jm-req">*</span>
                     </label>
                     <div className="jm-availability-card">
@@ -650,7 +651,7 @@ export function Join() {
                     </div>
                     {preferredHours.length < MIN_SLOTS && (
                       <div className="jm-warn">
-                        <AlertTriangle size={13} /> Pick at least {MIN_SLOTS / 2} hours — {preferredHours.length / 2} h selected.
+                        <AlertTriangle size={13} /> {t("join.pickAtLeast", { count: MIN_SLOTS / 2, hours: preferredHours.length / 2 })}
                       </div>
                     )}
                   </div>
@@ -661,13 +662,13 @@ export function Join() {
               {/* NAV */}
               <div className="jm-nav">
                 <button className="btn ghost" onClick={handleBack} disabled={activeTab === "identity"} type="button">
-                  <ChevronLeft size={16} /> Back
+                  <ChevronLeft size={16} /> {t("join.back")}
                 </button>
                 <div className="jm-nav-hint">
                   {activeTab === "schedule" ? (
-                    <span className={scheduleValid ? "good" : "bad"}>{preferredHours.length / 2} h · {scheduleValid ? "ready" : `need ${MIN_SLOTS / 2} h`}</span>
+                    <span className={scheduleValid ? "good" : "bad"}>{preferredHours.length / 2} h · {scheduleValid ? t("join.ready") : t("join.needHours", { count: MIN_SLOTS / 2 })}</span>
                   ) : (
-                    <span>{activeTab === "identity" && !identityValid ? "Finish the Club step" : ""}</span>
+                    <span>{activeTab === "identity" && !identityValid ? t("join.finishClubStep") : ""}</span>
                   )}
                 </div>
                 <button
@@ -677,14 +678,14 @@ export function Join() {
                   type="button"
                 >
                   {joining ? (
-                    strings.common.loading
+                    t("common.loading")
                   ) : activeTab === "schedule" ? (
                     <>
-                      <Sparkles size={16} /> Create club
+                      <Sparkles size={16} /> {t("join.createClub")}
                     </>
                   ) : (
                     <>
-                      Next <ChevronRight size={16} />
+                      {t("join.next")} <ChevronRight size={16} />
                     </>
                   )}
                 </button>
@@ -692,7 +693,7 @@ export function Join() {
               {activeTab === "schedule" && !allValid && (
                 <div className="jm-foot-warn">
                   <HelpCircle size={13} />
-                  {!identityValid ? "Complete the Club step first." : `Availability needs ${MIN_SLOTS / 2} hours.`}
+                  {!identityValid ? t("join.completeClubFirst") : t("join.availabilityNeeds", { count: MIN_SLOTS / 2 })}
                 </div>
               )}
             </div>
@@ -711,38 +712,38 @@ export function Join() {
                       <FootballKit {...kits.home} number={PREVIEW_NUMBERS.home} size="100%" />
                     </div>
                     <div className="jm-preview-club">
-                      <div className="jm-preview-name">{nameTrim || "Your Club"}</div>
+                      <div className="jm-preview-name">{nameTrim || t("join.yourClub")}</div>
                       <div className="jm-preview-sub">
-                        {selectedCountryObj ? selectedCountryObj.name : "Pick a nation"}
-                        {selectedCountryObj?.featured ? " · ★ Featured" : ""}
+                        {selectedCountryObj ? selectedCountryObj.name : t("join.pickNation")}
+                        {selectedCountryObj?.featured ? t("join.featuredSuffix") : ""}
                       </div>
                     </div>
                   </div>
 
                   <div className="jm-preview-divs">
                     <div className="jm-preview-row">
-                      <span className="jm-preview-k">Primary</span>
+                      <span className="jm-preview-k">{t("join.primary")}</span>
                       <span className="jm-preview-v">
                         <i className="jm-preview-dot" style={{ background: teamPrimary }} /> {teamPrimary}
                       </span>
                     </div>
                     <div className="jm-preview-row">
-                      <span className="jm-preview-k">Secondary</span>
+                      <span className="jm-preview-k">{t("join.secondary")}</span>
                       <span className="jm-preview-v">
                         <i className="jm-preview-dot" style={{ background: teamSecondary }} /> {teamSecondary}
                       </span>
                     </div>
                     <div className="jm-preview-row">
-                      <span className="jm-preview-k">Home</span>
+                      <span className="jm-preview-k">{t("join.home")}</span>
                       <span className="jm-preview-v">{stadiumPreviewName}</span>
                     </div>
                     <div className="jm-preview-row">
-                      <span className="jm-preview-k">Manager</span>
-                      <span className="jm-preview-v">{coachNameTrim || "Name your manager"}</span>
+                      <span className="jm-preview-k">{t("join.previewManager")}</span>
+                      <span className="jm-preview-v">{coachNameTrim || t("join.nameYourManager")}</span>
                     </div>
                     <div className="jm-preview-row">
-                      <span className="jm-preview-k">Availability</span>
-                      <span className="jm-preview-v" style={{ fontSize: "0.82rem" }}>{preferredHours.length / 2} h/week</span>
+                      <span className="jm-preview-k">{t("join.previewAvailability")}</span>
+                      <span className="jm-preview-v" style={{ fontSize: "0.82rem" }}>{t("join.hoursPerWeek", { count: preferredHours.length / 2 })}</span>
                     </div>
                   </div>
 
@@ -756,7 +757,7 @@ export function Join() {
                     </div>
                     <div>
                       <div className="jm-preview-stadium-name">{stadiumPreviewName}</div>
-                      <div className="jm-preview-stadium-hint">Home ground</div>
+                      <div className="jm-preview-stadium-hint">{t("join.homeGround")}</div>
                     </div>
                   </div>
                 </div>

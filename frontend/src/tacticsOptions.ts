@@ -6,6 +6,8 @@
  * names and geometry (§15.3/§16.1). Consume `snapshot.formationOptions`,
  * `LineupView.slots` or the live view's formation slots.
  */
+import i18n from "i18next";
+
 export interface TacticOption {
   label: string;
   value: number;
@@ -23,34 +25,38 @@ export function formationsFromSnapshot(options?: Array<{ id: number; name: strin
   return (options ?? []).map((o) => ({ label: o.name, value: o.id }));
 }
 
-export const STYLES: TacticOption[] = [
-  { label: "Balanced", value: 0, desc: "No strong lean either way: safe, lower-risk actions with balanced execution." },
-  { label: "Offensive", value: 1, desc: "Press and attack aggressively — more pressure on the opponent, at the cost of more risk." },
-  { label: "Counter-attack", value: 2, desc: "Sit back and strike quickly when transitioning from defense to attack." },
-];
+export function styleOptions(): TacticOption[] {
+  return [
+    { label: i18n.t("tactics.styles.balanced"), value: 0, desc: i18n.t("tactics.styles.balancedDesc") },
+    { label: i18n.t("tactics.styles.offensive"), value: 1, desc: i18n.t("tactics.styles.offensiveDesc") },
+    { label: i18n.t("tactics.styles.counter"), value: 2, desc: i18n.t("tactics.styles.counterDesc") },
+  ];
+}
 
-export const PRESSING: TacticOption[] = [
-  { label: "Light", value: 0, desc: "Minimal pressing. Conserves energy and reduces foul risk." },
-  { label: "Balanced", value: 1, desc: "Moderate pressing: a middle ground between pressure and fatigue." },
-  { label: "Heavy", value: 2, desc: "Maximum press intensity. Forces more mistakes, but tires players faster and risks more fouls." },
-];
+export function pressingOptions(): TacticOption[] {
+  return [
+    { label: i18n.t("tactics.pressing.light"), value: 0, desc: i18n.t("tactics.pressing.lightDesc") },
+    { label: i18n.t("tactics.pressing.balanced"), value: 1, desc: i18n.t("tactics.pressing.balancedDesc") },
+    { label: i18n.t("tactics.pressing.heavy"), value: 2, desc: i18n.t("tactics.pressing.heavyDesc") },
+  ];
+}
 
-export const DIRECTIONS: TacticOption[] = [
-  { label: "Through the middle", value: 0, desc: "Focus attacks through the center of the pitch." },
-  { label: "Down the wings", value: 1, desc: "Focus attacks down the flanks, stretching the opponent's shape." },
-];
+export function directionOptions(): TacticOption[] {
+  return [
+    { label: i18n.t("tactics.directions.middle"), value: 0, desc: i18n.t("tactics.directions.middleDesc") },
+    { label: i18n.t("tactics.directions.wings"), value: 1, desc: i18n.t("tactics.directions.wingsDesc") },
+  ];
+}
 
 /** Formation label from the snapshot catalog; the id itself is the fallback. */
 export function formationLabelFromOptions(value: number, options?: Array<{ id: number; name: string }>): string {
-  return options?.find((o) => o.id === value)?.name ?? `Formation ${value}`;
+  return options?.find((o) => o.id === value)?.name ?? i18n.t("tactics.formationFallback", { id: value });
 }
 
 /** Option meaning "leave this tactic aspect unchanged" in automation rules. */
-const UNCHANGED = { label: "(unchanged)", value: null } as const;
-
-export type UnchangedOption = typeof UNCHANGED;
+export type UnchangedOption = { label: string; value: null };
 
 /** Prepends the "(unchanged)" option used by automation tactic dropdowns; selecting it omits the field from the rule. */
 export function withUnchanged(options: TacticOption[]): [UnchangedOption, ...TacticOption[]] {
-  return [UNCHANGED, ...options];
+  return [{ label: i18n.t("tactics.unchanged"), value: null }, ...options];
 }

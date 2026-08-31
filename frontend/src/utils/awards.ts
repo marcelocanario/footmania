@@ -1,4 +1,5 @@
 import type { SeasonAward, SeasonAwardEntry } from "../api/client";
+import i18n from "i18next";
 
 /**
  * Best XI members of a best_xi award. Prefers the server-resolved `entries`
@@ -28,7 +29,20 @@ export function bestXiEntries(award: SeasonAward): SeasonAwardEntry[] | null {
   }
 }
 
-/** Human-readable detail line for an individual (non-Best-XI) award. */
+/** Human-readable detail line for an individual (non-Best-XI) award. The
+ *  persisted English detail embeds numbers; the category determines which
+ *  localized template applies (unknown categories fall back verbatim). */
 export function individualAwardDetail(award: SeasonAward): string {
-  return award.detail ?? "";
+  const detail = award.detail ?? "";
+  const n = (pattern: RegExp): number => Number(detail.match(pattern)?.[1] ?? 0);
+  switch (award.category) {
+    case "top_scorer":
+      return i18n.t("awards.topScorer", { count: n(/^(\d+)\s+goals?/) });
+    case "top_assists":
+      return i18n.t("awards.topAssists", { count: n(/^(\d+)\s+assists?/) });
+    case "player_of_season":
+      return i18n.t("awards.playerOfSeason", { overall: n(/Overall\s+(\d+)/), goals: n(/(\d+)\s+goals?/), assists: n(/(\d+)\s+assists?/) });
+    default:
+      return detail;
+  }
 }

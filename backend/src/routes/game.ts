@@ -18,12 +18,13 @@ import { playerMatchScoreView } from "../services/playerPerformance";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup, seniorRosterFullError, seniorRosterOverflowError } from "../game/club";
 import { formationById, formationOptions } from "../game/formations";
-import { positionGroup, positionName } from "../game/positions";
+import { positionGroup } from "../game/positions";
 import { adjustedTacticalRating, rolePenalty, suitabilityLabel } from "../game/outOfPosition";
 import type { DeployedRole } from "../game/positions";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
 import { setPlayerSquadNumber } from "../game/squadNumbers";
 import { NEWS_SUBJECTS, publishNews } from "../game/news";
+import { msg } from "../i18n/catalog";
 import { divisionForClub, lowestActiveTier } from "../game/multiplayer";
 import { gameConfig } from "../config";
 import type { Tactics, World } from "../game/types";
@@ -330,13 +331,11 @@ export async function gameRoutes(app: FastifyInstance) {
       const label = suitabilityLabel(penalty);
       const rating = slot ? adjustedRating(p, slot.role) : null;
       const grp = positionGroup(p.position as import("../game/positions").NaturalPosition);
-      const full = positionName(p.position as import("../game/positions").NaturalPosition);
       return {
         id: p.id,
         name: p.name,
         naturalPosition: p.position,
         positionGroup: grp,
-        positionName: full,
         overall: p.overall,
         energy: p.energy,
         injuryDays: injuryDaysRemaining(p, gameDay),
@@ -385,13 +384,11 @@ export async function gameRoutes(app: FastifyInstance) {
       .sort((a, b) => b.overall - a.overall)
       .map((p) => {
         const grp = positionGroup(p.position as import("../game/positions").NaturalPosition);
-        const full = positionName(p.position as import("../game/positions").NaturalPosition);
         return {
           id: p.id,
           name: p.name,
           naturalPosition: p.position,
           positionGroup: grp,
-          positionName: full,
           overall: p.overall,
           energy: p.energy,
           slotIndex: null,
@@ -623,8 +620,8 @@ export async function gameRoutes(app: FastifyInstance) {
         kind: "contract",
         subject: NEWS_SUBJECTS.contractRenewal,
         recipientClubId: club.id,
-        headline: "Contract agreed",
-        entries: [{ key: `renew:${player.id}`, label: player.name, detail: `signed a new contract for ${seasons} more ${seasons === 1 ? "season" : "seasons"}` }],
+        headline: "news.headline.contractRenewal",
+        entries: [{ key: `renew:${player.id}`, label: player.name, detail: msg("news.detail.renewed", { count: seasons }) }],
       });
       return { value: { ok: true, demand } };
     });
@@ -751,8 +748,8 @@ export async function gameRoutes(app: FastifyInstance) {
         kind: "tactics",
         subject: NEWS_SUBJECTS.tactics,
         recipientClubId: club.id,
-        headline: "New tactical setup",
-        entries: [{ key: `tactics:${world.dayIndex}`, label: club.name, detail: "adopted new tactics" }],
+        headline: "news.headline.tactics",
+        entries: [{ key: `tactics:${world.dayIndex}`, label: club.name, detail: msg("news.detail.tactics") }],
       });
       return { value: { ok: true } };
     });

@@ -1,6 +1,7 @@
 import type { Club, NewsEntry, World } from "./types";
 import { gameConfig } from "../config";
-import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
+import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 import { activeDivisionForClub, tierOf } from "./multiplayer";
 import { getCommitmentTotals, financialState } from "./finance";
 import { multiplayerDayLabel } from "./calendar";
@@ -10,13 +11,22 @@ import { multiplayerDayLabel } from "./calendar";
  * club on the first day of the new season, written at SEASON_ROLLOVER_COMMIT
  * once divisions, budgets, fixtures and academy intake are final. Idempotent
  * per club/season so a retried commit cannot duplicate reports.
+ *
+ * The report is the one grouped message with bespoke prose: its `body` is a
+ * direct `news.preseason` ref whose params (division, cash, contract count,
+ * finance state) the client composes into the lead + finance + contract leads,
+ * followed by the entry fact list. `text` stays empty.
  */
 
-const FINANCE_STATUS_LABELS: Record<string, string> = {
-  SAFE: "finances are in good order",
-  AT_RISK: "financial cushion is under strain",
-  NEGATIVE_CASH: "cash position is negative",
+const FINANCE_STATE: Record<string, "safe" | "atRisk" | "negative"> = {
+  SAFE: "safe",
+  AT_RISK: "atRisk",
+  NEGATIVE_CASH: "negative",
 };
+
+function financeKey(state: string): "safe" | "atRisk" | "negative" {
+  return FINANCE_STATE[state] ?? "safe";
+}
 
 function previousSeasonFinish(world: World, clubId: number): { divisionName: string; position: number } | null {
   const history = world.seasonHistory[world.seasonHistory.length - 1];
@@ -33,7 +43,7 @@ function divisionTier(name: string): number | null {
   return Number.isInteger(tier) && tier > 0 ? tier : null;
 }
 
-function nextFixtureLine(world: World, clubId: number): string | null {
+function nextFixtureLine(world: World, clubId: number): { opponent: string; venue: "home" | "away"; day: string } | null {
   let best: { dayIndex: number; homeClubId: number; awayClubId: number } | undefined;
   for (const fixture of world.fixtures) {
     if (fixture.played || (fixture.homeClubId !== clubId && fixture.awayClubId !== clubId)) continue;
@@ -42,8 +52,7 @@ function nextFixtureLine(world: World, clubId: number): string | null {
   if (!best) return null;
   const opponentId = best.homeClubId === clubId ? best.awayClubId : best.homeClubId;
   const opponent = world.clubs.find((candidate) => candidate.id === opponentId);
-  const venue = best.homeClubId === clubId ? "at home" : "away";
-  return `${opponent?.name ?? "TBD"}, ${venue}, ${multiplayerDayLabel(best.dayIndex)}`;
+  return { opponent: opponent?.name ?? "TBD", venue: best.homeClubId === clubId ? "home" : "away", day: multiplayerDayLabel(best.dayIndex) };
 }
 
 /** Write the pre-season report for every eligible human club. */
@@ -71,26 +80,25 @@ export function generatePreseasonReport(world: World, club: Club, seasonId: numb
   const tier = division ? tierOf(division) : null;
   const previous = previousSeasonFinish(world, club.id);
   if (division && tier !== null) {
-    entries.push({ key: "league", label: `Division ${tier}`, detail: `${division.name} · Group ${(division.groupIndex ?? 0) + 1}` });
+    entries.push({ key: "league", label: msg("news.preseason.division", { division: tier }), detail: `${division.name} · Group ${(division.groupIndex ?? 0) + 1}` });
     if (previous && previous.divisionName === division.name) {
-      entries.push({ key: "last-finish", label: "Last season", detail: `Finished ${previous.position} in ${previous.divisionName}` });
+      entries.push({ key: "last-finish", label: msg("news.preseason.lastSeason"), detail: msg("news.preseason.finished", { count: previous.position, division: previous.divisionName }) });
     } else if (previous && tier !== null) {
       const previousTier = divisionTier(previous.divisionName);
-      const movement = previousTier === null || previousTier === tier
-        ? "Regrouped into a new division"
-        : previousTier > tier ? "Promoted" : "Relegated";
-      entries.push({ key: "last-finish", label: "Last season", detail: `Finished ${previous.position} in ${previous.divisionName}` });
-      entries.push({ key: "movement", label: "Movement", detail: movement });
+      const movement = previousTier === null || previousTier === tier ? "regrouped" : previousTier > tier ? "promoted" : "relegated";
+      entries.push({ key: "last-finish", label: msg("news.preseason.lastSeason"), detail: msg("news.preseason.finished", { count: previous.position, division: previous.divisionName }) });
+      entries.push({ key: "movement", label: msg("news.preseason.movement"), detail: msg(`news.preseason.movement_${movement}`) });
     }
   }
 
   // --- Finance section ---
   const totals = getCommitmentTotals(world, club);
-  entries.push({ key: "cash", label: "Cash", detail: formatMoney(club.cash) });
+  const finance = financeKey(financialState(world, club));
+  entries.push({ key: "cash", label: msg("news.preseason.cash"), detail: msg("news.preseason.amount", { amount: club.cash }) });
   entries.push({
     key: "cushion",
-    label: "Financial cushion",
-    detail: `${formatMoney(totals.financialCushion)} (${FINANCE_STATUS_LABELS[financialState(world, club)] ?? "review required"})`,
+    label: msg("news.preseason.cushion"),
+    detail: msg(`news.preseason.cushion_${finance}`, { amount: totals.financialCushion }),
   });
 
   // --- Contract section ---
@@ -98,42 +106,34 @@ export function generatePreseasonReport(world: World, club: Club, seasonId: numb
     .filter((p) => p.loanId === null && p.contractDays <= warningDays)
     .sort((a, b) => a.contractDays - b.contractDays);
   for (const player of expiring.slice(0, 12)) {
-    entries.push({ key: `contract:${player.id}`, label: player.name, detail: `${player.contractDays} days remaining on his contract` });
+    entries.push({ key: `contract:${player.id}`, label: player.name, detail: msg("news.detail.contractWarning", { count: player.contractDays }) });
   }
   if (expiring.length > 12) {
-    entries.push({ key: "contract-more", label: `+${expiring.length - 12} more`, detail: "additional contracts approaching expiry" });
+    entries.push({ key: "contract-more", label: msg("news.preseason.contractsMore", { count: expiring.length - 12 }), detail: msg("news.preseason.additionalApproaching") });
   }
 
   // --- Squad & academy section ---
-  entries.push({ key: "squad", label: "Senior squad", detail: `${squad.length} professionals` });
-  entries.push({ key: "academy", label: "Academy", detail: `${juniors.length} youth players` });
+  entries.push({ key: "squad", label: msg("news.preseason.squad"), detail: msg("news.preseason.professionals", { count: squad.length }) });
+  entries.push({ key: "academy", label: msg("news.preseason.academy"), detail: msg("news.preseason.youthPlayers", { count: juniors.length }) });
   const flow = world.mp.pendingPreseasonFlow?.[String(club.id)];
   if (flow) {
-    if (flow.promotions > 0) entries.push({ key: "promotions", label: "Promotions", detail: `${flow.promotions} youth ${flow.promotions === 1 ? "player" : "players"} stepped up to the senior squad` });
-    if (flow.intake > 0) entries.push({ key: "intake", label: "New intake", detail: `${flow.intake} new ${flow.intake === 1 ? "prospect" : "prospects"} joined the academy` });
-    if (flow.replacements > 0) entries.push({ key: "replacements", label: "Replacements", detail: `${flow.replacements} senior ${flow.replacements === 1 ? "player" : "players"} arrived to complete the squad` });
+    if (flow.promotions > 0) entries.push({ key: "promotions", label: msg("news.preseason.promotions"), detail: msg("news.preseason.promotedCount", { count: flow.promotions }) });
+    if (flow.intake > 0) entries.push({ key: "intake", label: msg("news.preseason.intake"), detail: msg("news.preseason.intakeCount", { count: flow.intake }) });
+    if (flow.replacements > 0) entries.push({ key: "replacements", label: msg("news.preseason.replacements"), detail: msg("news.preseason.replacementsCount", { count: flow.replacements }) });
   }
 
   // --- Next fixture ---
   const fixtureLine = nextFixtureLine(world, club.id);
-  if (fixtureLine) entries.push({ key: "next-fixture", label: "First fixture", detail: fixtureLine });
-
-  // --- Lead copy ---
-  const leagueLead = division && tier !== null ? `The new campaign begins in Division ${tier}.` : "A new campaign is about to begin.";
-  const financeLead = `Cash stands at ${formatMoney(club.cash)} and your ${FINANCE_STATUS_LABELS[financialState(world, club)] ?? "finances deserve a review"}.`;
-  const contractLead = expiring.length > 0
-    ? `${expiring.length === 1 ? "One contract needs" : `${expiring.length} contracts need`} attention before ${expiring.length === 1 ? "its" : "their"} expiry window closes.`
-    : "Every senior contract has comfortable runway.";
-  const briefingFacts = entries
-    .map((entry) => `${entry.label}: ${entry.detail}`)
-    .join("; ");
+  if (fixtureLine) {
+    entries.push({ key: "next-fixture", label: msg("news.preseason.firstFixture"), detail: msg("news.preseason.fixture", { opponent: fixtureLine.opponent, day: fixtureLine.day, context: fixtureLine.venue }) });
+  }
 
   publishNews(world, {
     kind: "season",
     subject: NEWS_SUBJECTS.preseasonReport,
     recipientClubId: club.id,
-    headline: `Season ${world.mp.seasonNumber ?? world.year} briefing: the campaign ahead`,
-    text: `${leagueLead} ${financeLead} ${contractLead} The dressing room is ready for the next chapter. Boardroom briefing: ${briefingFacts}.`,
+    headline: "news.preseason.headline",
+    body: msg("news.preseason", { division: tier ?? 0, cash: club.cash, count: expiring.length, finance }),
     entries,
   });
 }

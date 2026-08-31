@@ -9,6 +9,7 @@ import { nextDouble } from "./rng";
 import { calendarValues, roundForSeasonDayIndex } from "../services/seasonCalendar";
 import { injuryDaysRemaining, loadFactor, ageFactor, recordInjury, recoverEnergy, recoveryCeiling, syncLegacyInjuryDays, ENERGY_INJURY_MODEL } from "./energyInjury";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 
 /**
  * Authoritative game-day processing. The durable scheduler drives one
@@ -90,11 +91,11 @@ function processTrainingInjuries(world: World, absoluteGameDay: number, seasonDa
         kind: "injury",
         subject: NEWS_SUBJECTS.injuries,
         recipientClubId: club.id,
-        headline: "Treatment room update",
+        headline: "news.headline.injuries",
         entries: injured.map((player) => ({
           key: `injury:${player.id}`,
           label: player.name,
-          detail: `${injuryDaysRemaining(player, absoluteGameDay)} days out with a training injury`,
+          detail: msg("news.detail.injury", { count: injuryDaysRemaining(player, absoluteGameDay) }),
         })),
       });
     }

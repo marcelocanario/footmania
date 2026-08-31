@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { CalendarDays, Clock, Landmark, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
 import { api, type FixtureView, type TeamProfile } from "../api/client";
 import { countryFlag } from "../countryFlags";
 import { money } from "../format";
+import { positionLabel } from "../positions";
 import { useGame } from "../store/game";
 import { groupLabel } from "../components/competition/shared";
 import { ClubCrest } from "../components/ClubCrest";
@@ -15,18 +17,13 @@ import { ClubNameLink } from "../components/ClubNameLink";
 import { FootmaniaRankBadge } from "../components/FootmaniaRanking";
 import { SeasonHistoryTimeline } from "../components/SeasonHistoryTimeline";
 
-const KIT_LABELS: Record<"home" | "away" | "gk", string> = {
-  home: "Home",
-  away: "Away",
-  gk: "Goalkeeper",
-};
-
 /**
  * Public team screen (/team/:id): identity hero, kits, current division
  * table, results & fixtures and the immutable season timeline. Every club
  * name across the app links here.
  */
 export function TeamScreen() {
+  const { t } = useTranslation();
   const { clubId } = useParams();
   const navigate = useNavigate();
   const statusClubId = useGame((s) => s.status?.userClubId ?? null);
@@ -40,7 +37,7 @@ export function TeamScreen() {
   const id = Number(clubId);
   const load = useCallback(() => {
     if (!Number.isInteger(id) || id <= 0) {
-      setError("Unknown team.");
+      setError(t("team.unknown"));
       return;
     }
     setError(null);
@@ -56,7 +53,7 @@ export function TeamScreen() {
   }, [load]);
 
   if (error) return <div className="empty-state" style={{ paddingTop: 80 }}>{error}</div>;
-  if (!profile) return <div className="empty-state" style={{ paddingTop: 80 }}>Loading team…</div>;
+  if (!profile) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.loading")}</div>;
 
   const { club } = profile;
   const flag = countryFlag(club.country);
@@ -88,30 +85,30 @@ export function TeamScreen() {
             <div className="head-chips">
               {isOwnClub && (
                 <span className="chip" style={{ borderColor: "rgba(240,180,41,0.65)", color: "var(--gold-2)", background: "rgba(240,180,41,0.14)" }}>
-                  YOUR CLUB
+                  {t("team.yourClub")}
                 </span>
               )}
-              <span className={`chip${club.isHuman ? "" : " muted"}`}>{club.isHuman ? "Human managed" : "AI club"}</span>
+              <span className={`chip${club.isHuman ? "" : " muted"}`}>{club.isHuman ? t("team.humanManaged") : t("team.aiClub")}</span>
               {club.competitionState === "PROVISIONAL" && (
-                <span className="chip" style={{ borderColor: "rgba(240,180,41,0.5)", color: "var(--gold-2)" }}>Joins next season</span>
+                <span className="chip" style={{ borderColor: "rgba(240,180,41,0.5)", color: "var(--gold-2)" }}>{t("team.joinsNextSeason")}</span>
               )}
               {club.competitionState === "DORMANT" && (
-                <span className="chip" style={{ borderColor: "rgba(120,140,130,0.45)", color: "var(--text-3)" }}>Dormant</span>
+                <span className="chip" style={{ borderColor: "rgba(120,140,130,0.45)", color: "var(--text-3)" }}>{t("team.dormant")}</span>
               )}
             </div>
           </div>
-          <div className="team-hero-titles" title="Division titles">
+          <div className="team-hero-titles" title={t("team.divisionTitles")}>
             <Trophy size={20} />
             <b>{titlesTotal}</b>
           </div>
           <div className="team-hero-ranking">
             <FootmaniaRankBadge rank={profile.footmaniaRank} compact />
-            <span>Footmania rank</span>
+            <span>{t("team.footmaniaRank")}</span>
           </div>
         </div>
         {isOwnClub && (
           <button className="btn ghost team-hero-edit" onClick={() => navigate("/my-club")}>
-            <Pencil size={13} /> Edit my club
+            <Pencil size={13} /> {t("team.editMyClub")}
           </button>
         )}
       </div>
@@ -119,14 +116,14 @@ export function TeamScreen() {
       <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
         {/* Kits: all three designs stacked in one card */}
         <div className="card team-kit-card">
-          <h2 className="card-title"><Shirt size={17} /> Kits</h2>
+          <h2 className="card-title"><Shirt size={17} /> {t("team.kits")}</h2>
           {(["home", "away", "gk"] as const).map((side) => {
             const design = club.kits?.[side];
             if (!design) return null;
             return (
               <div key={side} className="team-kit-item">
                 <FootballKit {...design} size={150} />
-                <span className="team-kit-label">{KIT_LABELS[side]}</span>
+                <span className="team-kit-label">{side === "gk" ? t("team.gk") : t(side === "home" ? "matchday.home" : "matchday.away")}</span>
               </div>
             );
           })}
@@ -137,32 +134,32 @@ export function TeamScreen() {
           <h2 className="card-title">
             <CalendarDays size={17} />
             {profile.season
-              ? `Division ${profile.season.division.tier} · Group ${groupLabel(profile.season.division.groupIndex)} · Season ${profile.season.seasonNumber ?? "?"}`
-              : "Season"}
+              ? t("team.seasonTitle", { tier: profile.season.division.tier, group: groupLabel(profile.season.division.groupIndex), season: profile.season.seasonNumber ?? "?" })
+              : t("team.season")}
           </h2>
           {profile.season ? (
             <>
               <div className="stats-row">
                 <div className="stat">
-                  <div className="label">Position</div>
+                  <div className="label">{t("team.position")}</div>
                   <div className="value" style={{ fontSize: "1.7rem", color: profile.season.position === 1 ? "var(--gold-2)" : undefined }}>
                     {profile.season.position != null ? `#${profile.season.position}` : "—"}
                   </div>
                 </div>
                 <div className="stat">
-                  <div className="label">Record</div>
+                  <div className="label">{t("team.record")}</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{profile.season.wins}-{profile.season.draws}-{profile.season.losses}</div>
                 </div>
                 <div className="stat">
-                  <div className="label">Goals</div>
+                  <div className="label">{t("team.goals")}</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{profile.season.goalsFor}:{profile.season.goalsAgainst}</div>
                 </div>
                 <div className="stat">
-                  <div className="label">Total value</div>
-                  <div className="value" style={{ fontSize: "1.05rem" }} title="Squad market value + cash">{money(profile.totalValue)}</div>
+                  <div className="label">{t("team.totalValue")}</div>
+                  <div className="value" style={{ fontSize: "1.05rem" }} title={t("team.totalValueTitle")}>{money(profile.totalValue)}</div>
                 </div>
               </div>
-              <div className="jm-hint" style={{ marginBottom: 8 }}>Click any club below to open its profile.</div>
+              <div className="jm-hint" style={{ marginBottom: 8 }}>{t("team.clickClubHint")}</div>
               <StandingsTable
                 rows={profile.standings}
                 isTopDivision={profile.season.division.tier === 1}
@@ -174,8 +171,8 @@ export function TeamScreen() {
             </>
           ) : (
             <div className="empty-state" style={{ padding: "30px 10px" }}>
-              This club is not part of the current season yet.
-              {club.competitionState === "PROVISIONAL" && " It joins the pyramid next season."}
+              {t("team.notInSeason")}
+              {club.competitionState === "PROVISIONAL" && t("team.joinsNextSeasonHint")}
             </div>
           )}
         </div>
@@ -186,7 +183,7 @@ export function TeamScreen() {
         <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
           {played.length > 0 && (
             <div className="card">
-              <h2 className="card-title"><Clock size={17} /> Recent results</h2>
+              <h2 className="card-title"><Clock size={17} /> {t("team.recentResults")}</h2>
               {played.slice(-6).reverse().map((f) => (
                 <TeamFixtureRow key={f.id} fixture={f} onOpenResult={() => setResultFixture(f)} />
               ))}
@@ -194,7 +191,7 @@ export function TeamScreen() {
           )}
           {upcoming.length > 0 && (
             <div className="card">
-              <h2 className="card-title"><CalendarDays size={17} /> Upcoming matches</h2>
+              <h2 className="card-title"><CalendarDays size={17} /> {t("team.upcomingMatches")}</h2>
               {upcoming.slice(0, 6).map((f) => (
                 <TeamFixtureRow key={f.id} fixture={f} />
               ))}
@@ -206,16 +203,16 @@ export function TeamScreen() {
       {/* Simple squad list with the shared player-info popout */}
       {profile.players.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <h2 className="card-title"><Users size={17} /> Squad</h2>
+          <h2 className="card-title"><Users size={17} /> {t("squad.title")}</h2>
           <div className="team-player-grid">
             {profile.players.map((p) => {
               const playerFlag = countryFlag(p.country);
               return (
                 <button key={p.id} type="button" className={`team-player-row${p.onLoan ? " team-player-loan-in" : ""}`} onClick={() => setPlayerTarget({ id: p.id, name: p.name })}>
-                  <span className="rank-pill" title={p.positionName}>{p.naturalPosition}</span>
+                  <span className="rank-pill" title={positionLabel(p.naturalPosition)}>{p.naturalPosition}</span>
                   <b className={p.onLoan ? "loan-in-name" : undefined}>{p.name}{p.nickname ? <> "{p.nickname}"</> : null}</b>
                   {p.isYouth && <span className="chip" style={{ fontSize: "0.62rem", padding: "1px 6px" }}>YTH</span>}
-                  {p.onLoan && <span className="flag-chip fc-loan" title={`On loan from ${p.loanFromName ?? "another club"}`}>LOAN</span>}
+                  {p.onLoan && <span className="flag-chip fc-loan" title={t("team.onLoanFrom", { club: p.loanFromName ?? t("squad.anotherClub") })}>LOAN</span>}
                   <span style={{ marginLeft: "auto", color: "var(--text-3)", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                     {playerFlag ? `${playerFlag} ` : ""}{p.age} yrs
                   </span>
@@ -229,7 +226,7 @@ export function TeamScreen() {
 
       {/* Club journey: the same movement language used by the world archive. */}
       <div className="card team-history-card" style={{ marginTop: 16 }}>
-        <div className="card-title"><Trophy size={17} /> Club journey</div>
+        <div className="card-title"><Trophy size={17} /> {t("team.clubJourney")}</div>
         <SeasonHistoryTimeline rows={profile.history} trophies={profile.trophies} />
       </div>
 
@@ -242,6 +239,7 @@ export function TeamScreen() {
 /** Compact fixture row for the team screen lists. Played results open the
  *  events popout; live matches jump straight into the stadium. */
 function TeamFixtureRow({ fixture, onOpenResult }: { fixture: FixtureView; onOpenResult?: () => void }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const isLive = fixture.liveMatchId != null;
   const clickable = isLive || Boolean(onOpenResult);
@@ -261,16 +259,16 @@ function TeamFixtureRow({ fixture, onOpenResult }: { fixture: FixtureView; onOpe
         else onOpenResult?.();
       }}
     >
-      <span className="chip" style={{ minWidth: 56, justifyContent: "center" }}>R{fixture.round + 1}</span>
+      <span className="chip" style={{ minWidth: 56, justifyContent: "center" }}>{t("team.round", { round: fixture.round + 1 })}</span>
       {isLive && (
         <span className="live-tag" style={{ fontSize: "0.68rem", padding: "2px 8px" }}>
-          <span className="pulse-dot" /> LIVE
+          <span className="pulse-dot" /> {t("team.live")}
         </span>
       )}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <ClubNameLink clubId={fixture.homeClubId} name={fixture.home} kit={fixture.homeKit} hasCustomLogo={fixture.homeHasCustomLogo} size={22} />
-          <span className="score">{fixture.played || isLive ? `${fixture.homeScore ?? 0} - ${fixture.awayScore ?? 0}` : "vs"}</span>
+          <span className="score">{fixture.played || isLive ? `${fixture.homeScore ?? 0} - ${fixture.awayScore ?? 0}` : t("team.vs")}</span>
           <ClubNameLink clubId={fixture.awayClubId} name={fixture.away} kit={fixture.awayKit} hasCustomLogo={fixture.awayHasCustomLogo} size={22} />
         </div>
       </div>

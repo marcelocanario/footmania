@@ -1,21 +1,43 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, Clock3, Wallet } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api, type FinanceDetails, type FinanceSnapshot, type LedgerEntry } from "../api/client";
 import { Segmented } from "../components/Segmented";
 import { useGame } from "../store/game";
-import { strings } from "../strings";
 import { money } from "../format";
 
 const STATUS_LABEL: Record<FinanceSnapshot["status"], string> = {
-  SAFE: "SAFE",
-  AT_RISK: "AT RISK",
-  NEGATIVE_CASH: "EMERGENCY",
+  SAFE: "finances.statusSafe",
+  AT_RISK: "finances.statusAtRisk",
+  NEGATIVE_CASH: "finances.statusEmergency",
 };
+
+/** Code → localized ledger line. `name`/`season` are extracted from the
+ *  persisted English label; unknown codes fall back to the label verbatim. */
+const LEDGER_SPEC: Record<number, { key: string; param?: "name" | "season" }> = {
+  1: { key: "ledger.1", param: "name" },
+  2: { key: "ledger.2", param: "name" },
+  3: { key: "ledger.3", param: "name" },
+  4: { key: "ledger.4" },
+  13: { key: "ledger.13", param: "season" },
+  15: { key: "ledger.15", param: "name" },
+  16: { key: "ledger.16", param: "name" },
+  17: { key: "ledger.17", param: "name" },
+};
+
+function ledgerLabel(entry: { code: number; label: string }, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const spec = LEDGER_SPEC[entry.code];
+  if (!spec) return entry.label;
+  if (spec.param === "name") return t(spec.key, { name: entry.label.split(": ")[1] ?? "" });
+  if (spec.param === "season") return t(spec.key, { season: entry.label.match(/Season\s+(\d+)/)?.[1] ?? "" });
+  return t(spec.key);
+}
 
 type ActivityFilter = "all" | "income" | "expense";
 type Activity = LedgerEntry & { direction: Exclude<ActivityFilter, "all"> };
 
 export function Finances() {
+  const { t } = useTranslation();
   const { snapshot } = useGame();
   const [income, setIncome] = useState<LedgerEntry[]>([]);
   const [expense, setExpense] = useState<LedgerEntry[]>([]);
@@ -51,17 +73,17 @@ export function Finances() {
     <div className="finances-page">
       <div className="page-head fin-page-head">
         <div>
-          <div className="kicker">Club office</div>
-          <h1>{strings.finances.title}</h1>
+          <div className="kicker">{t("myclub.clubOffice")}</div>
+          <h1>{t("finances.title")}</h1>
         </div>
         {finance && (
           <div className="fin-head-meta">
             <span className={`chip fin-status ${statusTone}`}>
-              <i className="dot" /> {STATUS_LABEL[status]}
+              <i className="dot" /> {(t as unknown as (k: string) => string)(STATUS_LABEL[status])}
             </span>
             {finance.nextPayroll !== null && (
               <span className="chip">
-                <Clock3 size={13} /> Payroll in {formatPayroll(finance.nextPayroll)}
+                <Clock3 size={13} /> {t("finances.payrollIn", { time: formatPayroll(finance.nextPayroll) })}
               </span>
             )}
           </div>
@@ -70,53 +92,53 @@ export function Finances() {
 
       <div className="fin-stat-grid stagger">
         <div className="stat fin-stat fin-stat-primary">
-          <div className="label"><Wallet size={13} /> Cash</div>
+          <div className="label"><Wallet size={13} /> {t("finances.cash")}</div>
           <div className={`value ${club?.cash !== undefined && club.cash < 0 ? "negative" : "positive"}`}>{money(club?.cash ?? 0)}</div>
-          <div className="hint">Current club balance</div>
+          <div className="hint">{t("finances.currentBalance")}</div>
         </div>
         <div className="stat fin-stat">
-          <div className="label">Available now</div>
+          <div className="label">{t("finances.availableNow")}</div>
           <div className={`value ${(finance?.immediateAvailableCash ?? 0) < 0 ? "negative" : "positive"}`}>{money(finance?.immediateAvailableCash ?? 0)}</div>
-          <div className="hint">After reserved bids</div>
+          <div className="hint">{t("finances.afterReservedBids")}</div>
         </div>
         <div className="stat fin-stat">
-          <div className="label">Reserved bids</div>
+          <div className="label">{t("finances.reservedBids")}</div>
           <div className="value gold">{money(finance?.activeBidCommitments ?? 0)}</div>
-          <div className="hint">Held for active offers</div>
+          <div className="hint">{t("finances.heldForOffers")}</div>
         </div>
         <div className="stat fin-stat">
-          <div className="label">Season salaries</div>
+          <div className="label">{t("finances.seasonSalaries")}</div>
           <div className="value gold">{money(finance?.remainingSalaryCommitments ?? 0)}</div>
-          <div className="hint">Remaining commitment</div>
+          <div className="hint">{t("finances.remainingCommitment")}</div>
         </div>
       </div>
 
       <section className="card fin-commitments stagger" aria-labelledby="commitments-title">
         <div className="fin-section-head">
           <div>
-            <div className="kicker">Financial control</div>
-            <h2 id="commitments-title">Commitments</h2>
+            <div className="kicker">{t("finances.financialControl")}</div>
+            <h2 id="commitments-title">{t("finances.commitments")}</h2>
           </div>
-          <span className={`fin-cushion-badge ${statusTone}`}>{STATUS_LABEL[status]}</span>
+          <span className={`fin-cushion-badge ${statusTone}`}>{(t as unknown as (k: string) => string)(STATUS_LABEL[status])}</span>
         </div>
 
         <div className="fin-breakdown">
           <div className="fin-row">
-            <span>Reserved bids</span>
+            <span>{t("finances.reservedBids")}</span>
             <b className="gold">{money(finance?.activeBidCommitments ?? 0)}</b>
           </div>
           <div className="fin-row">
-            <span>Remaining season salaries</span>
+            <span>{t("finances.remainingSeasonSalaries")}</span>
             <b className="gold">{money(finance?.remainingSalaryCommitments ?? 0)}</b>
           </div>
           {!!finance?.contingentSalary && (
             <div className="fin-row">
-              <span>Contingent salaries</span>
+              <span>{t("finances.contingentSalaries")}</span>
               <b className="gold">{money(finance.contingentSalary)}</b>
             </div>
           )}
           <div className="fin-row fin-total">
-            <span>Financial cushion</span>
+            <span>{t("finances.financialCushion")}</span>
             <b className={finance?.financialCushion !== undefined && finance.financialCushion < 0 ? "negative" : "positive"}>
               {money(finance?.financialCushion ?? 0)}
             </b>
@@ -126,7 +148,7 @@ export function Finances() {
         {finance && finance.status !== "SAFE" && (
           <div className={`fin-callout ${statusTone}`}>
             <AlertTriangle size={16} />
-            <span>{warningCopy(finance.status, club?.competitionState, club?.cash ?? 0)}</span>
+            <span>{warningCopy(finance.status, club?.competitionState, club?.cash ?? 0, t as unknown as (k: string, o?: Record<string, unknown>) => string)}</span>
           </div>
         )}
       </section>
@@ -134,25 +156,25 @@ export function Finances() {
       <section className="card fin-activity stagger" aria-labelledby="activity-title">
         <div className="fin-section-head fin-activity-head">
           <div>
-            <div className="kicker">Club ledger</div>
-            <h2 id="activity-title">Recent activity</h2>
+            <div className="kicker">{t("finances.clubLedger")}</div>
+            <h2 id="activity-title">{t("finances.recentActivity")}</h2>
           </div>
           <Segmented
             value={activityFilter}
             onChange={setActivityFilter}
             items={[
-              { value: "all", label: "All", count: income.length + expense.length },
-              { value: "income", label: "Income", icon: <ArrowUpRight size={13} />, count: income.length },
-              { value: "expense", label: "Expenses", icon: <ArrowDownRight size={13} />, count: expense.length },
+              { value: "all", label: t("finances.all"), count: income.length + expense.length },
+              { value: "income", label: t("finances.income"), icon: <ArrowUpRight size={13} />, count: income.length },
+              { value: "expense", label: t("finances.expense"), icon: <ArrowDownRight size={13} />, count: expense.length },
             ]}
           />
         </div>
         <div className="fin-ledger-list">
-          {activity.length === 0 && <div className="empty-state fin-empty">No activity in this view</div>}
+          {activity.length === 0 && <div className="empty-state fin-empty">{t("finances.noActivity")}</div>}
           {activity.map((entry, index) => (
             <div key={`${entry.day}-${entry.code}-${entry.label}-${index}`} className="news-item fin-ledger-row">
-              <span className="day">Day {entry.day}</span>
-              <span className="fin-ledger-label">{entry.label}</span>
+              <span className="day">{t("finances.day", { day: entry.day })}</span>
+              <span className="fin-ledger-label">{ledgerLabel(entry, t as unknown as (k: string, o?: Record<string, unknown>) => string)}</span>
               <b className={entry.direction === "income" ? "positive" : "negative"}>
                 {entry.direction === "income" ? "+" : "−"}{money(entry.amount)}
               </b>
@@ -160,21 +182,21 @@ export function Finances() {
           ))}
         </div>
         {details && details.records.length > 0 && (
-          <div className="fin-ledger-foot">{details.records.length} club records archived separately</div>
+          <div className="fin-ledger-foot">{t("finances.recordsArchived", { count: details.records.length })}</div>
         )}
       </section>
     </div>
   );
 }
 
-function warningCopy(status: FinanceSnapshot["status"], competitionState: string | undefined, cash: number): string {
+function warningCopy(status: FinanceSnapshot["status"], competitionState: string | undefined, cash: number, t: (k: string, o?: Record<string, unknown>) => string): string {
   if (competitionState === "PROVISIONAL") {
-    return "Upcoming-season salary commitments exceed available funds. Salaries are frozen while the club is provisional; this warning will be recalculated when the club activates.";
+    return t("finances.provisionalWarn");
   }
   if (status === "NEGATIVE_CASH") {
-    return `Current cash: ${money(cash)}. If the balance is still negative at the next payroll, a financial intervention may force players to leave.`;
+    return t("finances.negativeWarn", { cash: money(cash) });
   }
-  return "Current cash does not cover existing bids and remaining salary commitments through season end. Keep an eye on your balance before making new commitments.";
+  return t("finances.atRiskWarn");
 }
 
 function formatPayroll(ts: number): string {

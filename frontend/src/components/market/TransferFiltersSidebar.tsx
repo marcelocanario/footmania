@@ -3,6 +3,8 @@ import { InputNumber } from "primereact/inputnumber";
 import { InputText } from "primereact/inputtext";
 import { MultiSelect } from "primereact/multiselect";
 import { Filter, RotateCcw } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import type { SkillSet } from "../../api/client";
 import { DISPLAY_ORDER } from "../../positions";
 
@@ -48,15 +50,18 @@ export function createMarketFilters(): MarketFilters {
 }
 
 const POSITION_OPTIONS = DISPLAY_ORDER.map((label) => ({ label, value: label }));
-const SKILL_OPTIONS: [keyof SkillSet, string][] = [
-  ["gol", "Goalkeeping"],
-  ["pace", "Pace"],
-  ["tec", "Technique"],
-  ["pas", "Passing"],
-  ["des", "Defending"],
-  ["playmaking", "Playmaking"],
-  ["fin", "Finishing"],
-];
+function skillOptions(): [keyof SkillSet, string][] {
+  const t = i18n.t as unknown as (k: string) => string;
+  return [
+    ["gol", t("market.skills.gol")],
+    ["pace", t("market.skills.pace")],
+    ["tec", t("market.skills.tec")],
+    ["pas", t("market.skills.pas")],
+    ["des", t("market.skills.des")],
+    ["playmaking", t("market.skills.playmaking")],
+    ["fin", t("market.skills.fin")],
+  ];
+}
 
 function RangeField({
   label,
@@ -77,6 +82,7 @@ function RangeField({
   maxValue?: number;
   unit?: "thousands";
 }) {
+  const { t } = useTranslation();
   const scale = unit === "thousands" ? 1_000 : 1;
   const displayValue = (value: number | null) => value === null ? null : Math.round(value / scale);
   const storedValue = (value: number | null) => value === null ? null : value * scale;
@@ -93,8 +99,8 @@ function RangeField({
           suffix={unit === "thousands" ? "k" : undefined}
           minFractionDigits={0}
           maxFractionDigits={0}
-          placeholder="Min"
-          aria-label={`${label} minimum`}
+          placeholder={t("market.min")}
+          aria-label={t("market.minAria", { label })}
         />
         <InputNumber
           value={displayValue(max)}
@@ -105,8 +111,8 @@ function RangeField({
           suffix={unit === "thousands" ? "k" : undefined}
           minFractionDigits={0}
           maxFractionDigits={0}
-          placeholder="Max"
-          aria-label={`${label} maximum`}
+          placeholder={t("market.max")}
+          aria-label={t("market.maxAria", { label })}
         />
       </div>
     </div>
@@ -120,7 +126,7 @@ export function TransferFiltersSidebar({
   resultCount,
   totalCount,
   showPriceFilter = true,
-  priceLabel = "Current price",
+  priceLabel,
 }: {
   filters: MarketFilters;
   onChange: (next: MarketFilters) => void;
@@ -130,6 +136,8 @@ export function TransferFiltersSidebar({
   showPriceFilter?: boolean;
   priceLabel?: string;
 }) {
+  const { t } = useTranslation();
+  const priceLabelText = priceLabel ?? t("market.currentPrice");
   const update = <K extends keyof MarketFilters>(key: K, value: MarketFilters[K]) => onChange({ ...filters, [key]: value });
   const activeFilterCount = [
     filters.query,
@@ -151,12 +159,12 @@ export function TransferFiltersSidebar({
     <aside className="card transfer-filters-card">
       <div className="transfer-filters-heading">
         <div>
-          <h2 className="card-title"><Filter size={17} /> Find players</h2>
-          <div className="transfer-filter-meta">{resultCount} of {totalCount} players shown</div>
+          <h2 className="card-title"><Filter size={17} /> {t("market.findPlayers")}</h2>
+          <div className="transfer-filter-meta">{t("market.shownOf", { result: resultCount, total: totalCount })}</div>
         </div>
         {activeFilterCount > 0 && (
-          <button className="btn ghost sm" type="button" onClick={() => onChange(createMarketFilters())} title="Clear all filters">
-            <RotateCcw size={13} /> Clear ({activeFilterCount})
+          <button className="btn ghost sm" type="button" onClick={() => onChange(createMarketFilters())} title={t("market.clearAll")}>
+            <RotateCcw size={13} /> {t("market.clear", { count: activeFilterCount })}
           </button>
         )}
       </div>
@@ -165,8 +173,8 @@ export function TransferFiltersSidebar({
         <InputText
           value={filters.query}
           onChange={(event) => update("query", event.target.value)}
-          placeholder="Search player name"
-          aria-label="Search player name"
+          placeholder={t("market.searchPlayerName")}
+          aria-label={t("market.searchPlayerName")}
           style={{ width: "100%" }}
         />
         <MultiSelect
@@ -175,11 +183,11 @@ export function TransferFiltersSidebar({
           onChange={(event) => update("positions", event.value as string[])}
           optionLabel="label"
           optionValue="value"
-          placeholder="All positions"
+          placeholder={t("market.allPositions")}
           maxSelectedLabels={1}
-          selectedItemsLabel="{0} positions"
+          selectedItemsLabel={t("market.positionsSelected")}
           scrollHeight="240px"
-          aria-label="Filter by position"
+          aria-label={t("market.filterByPosition")}
           style={{ width: "100%" }}
         />
         <Dropdown
@@ -188,32 +196,32 @@ export function TransferFiltersSidebar({
           onChange={(event) => update("sortKey", event.value as string)}
           optionLabel="label"
           optionValue="value"
-          aria-label="Sort players"
+          aria-label={t("market.sortPlayers")}
           style={{ width: "100%" }}
         />
       </div>
 
       <div className="transfer-filter-section">
-        <div className="section-label">Player profile</div>
+        <div className="section-label">{t("market.playerProfile")}</div>
         <div className="transfer-attr-filters">
           <RangeField label="OVR" min={filters.overallMin} max={filters.overallMax} onMin={(value) => update("overallMin", value)} onMax={(value) => update("overallMax", value)} minValue={0} maxValue={100} />
-          <RangeField label="Age" min={filters.ageMin} max={filters.ageMax} onMin={(value) => update("ageMin", value)} onMax={(value) => update("ageMax", value)} minValue={0} maxValue={100} />
+          <RangeField label={t("market.age")} min={filters.ageMin} max={filters.ageMax} onMin={(value) => update("ageMin", value)} onMax={(value) => update("ageMax", value)} minValue={0} maxValue={100} />
         </div>
       </div>
 
       <div className="transfer-filter-section">
-        <div className="section-label">Money</div>
+        <div className="section-label">{t("market.money")}</div>
         <div className="transfer-attr-filters">
-          <RangeField label="Value ($k)" min={filters.valueMin} max={filters.valueMax} onMin={(value) => update("valueMin", value)} onMax={(value) => update("valueMax", value)} unit="thousands" />
-          <RangeField label="Salary / season ($k)" min={filters.salaryMin} max={filters.salaryMax} onMin={(value) => update("salaryMin", value)} onMax={(value) => update("salaryMax", value)} unit="thousands" />
-          {showPriceFilter && <RangeField label={`${priceLabel} ($k)`} min={filters.priceMin} max={filters.priceMax} onMin={(value) => update("priceMin", value)} onMax={(value) => update("priceMax", value)} unit="thousands" />}
+          <RangeField label={t("market.valueK")} min={filters.valueMin} max={filters.valueMax} onMin={(value) => update("valueMin", value)} onMax={(value) => update("valueMax", value)} unit="thousands" />
+          <RangeField label={t("market.salaryK")} min={filters.salaryMin} max={filters.salaryMax} onMin={(value) => update("salaryMin", value)} onMax={(value) => update("salaryMax", value)} unit="thousands" />
+          {showPriceFilter && <RangeField label={t("market.priceK", { label: priceLabelText })} min={filters.priceMin} max={filters.priceMax} onMin={(value) => update("priceMin", value)} onMax={(value) => update("priceMax", value)} unit="thousands" />}
         </div>
       </div>
 
       <div className="transfer-filter-section">
-        <div className="section-label">Minimum skills</div>
+        <div className="section-label">{t("market.minimumSkills")}</div>
         <div className="transfer-skill-filters">
-          {SKILL_OPTIONS.map(([key, label]) => (
+          {skillOptions().map(([key, label]) => (
             <label key={key}>
               <span>{label}</span>
               <InputNumber
@@ -226,8 +234,8 @@ export function TransferFiltersSidebar({
                 }}
                 min={0}
                 max={100}
-                placeholder="Any"
-                aria-label={`Minimum ${label}`}
+                placeholder={t("market.any")}
+                aria-label={t("market.minSkillAria", { label })}
               />
             </label>
           ))}

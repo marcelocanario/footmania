@@ -38,7 +38,7 @@ async function setupClub(app: FastifyInstance, username: string) {
 }
 
 interface LineupSlot { index: number; key: string; role: string; lane: string; line: string; x: number; y: number; label: string }
-interface LineupPlayer { id: number; naturalPosition: string; positionGroup: string; positionName: string; slotIndex: number | null; deployedRole: string | null; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }
+interface LineupPlayer { id: number; naturalPosition: string; positionGroup: string; slotIndex: number | null; deployedRole: string | null; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }
 
 async function getLineup(app: FastifyInstance, cookie: string, query = "") {
   const res = await app.inject({ method: "GET", url: `/api/club/lineup${query}`, headers: { cookie } });

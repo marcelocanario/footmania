@@ -245,11 +245,13 @@ export function injuryDaysRemaining(player: Pick<Player, "injuryUntilAbsoluteGam
 
 export function isInjured(player: Pick<Player, "injuryUntilAbsoluteGameDay" | "injuryDays">, absoluteGameDay: number): boolean { return injuryDaysRemaining(player, absoluteGameDay) > 0; }
 
+/** Condition as a stable key; the client localizes it (never English prose).
+ *  Keys: injured | needsRest | tired | heavyLoad | fresh | normal. */
 export function conditionLabel(player: Pick<Player, "energy" | "recentLoad" | "injuryUntilAbsoluteGameDay" | "injuryDays">, absoluteGameDay: number): string {
-  if (isInjured(player, absoluteGameDay)) return "Injured";
-  if (player.energy < 60) return "Needs rest";
-  if (player.energy < 75) return "Tired";
-  if ((player.recentLoad ?? 0) >= 1.5) return "Heavy recent workload";
-  if ((player.recentLoad ?? 0) <= 0.5 && player.energy >= 90) return "Fresh";
-  return "Normal workload";
+  if (isInjured(player, absoluteGameDay)) return "injured";
+  if (player.energy < 60) return "needsRest";
+  if (player.energy < 75) return "tired";
+  if ((player.recentLoad ?? 0) >= 1.5) return "heavyLoad";
+  if ((player.recentLoad ?? 0) <= 0.5 && player.energy >= 90) return "fresh";
+  return "normal";
 }

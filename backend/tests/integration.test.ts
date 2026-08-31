@@ -343,3 +343,53 @@ describe("API flow", () => {
     await app.close();
   });
 });
+
+describe("user locale preference", () => {
+  it("persists a valid locale and returns it from /me", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie } = await createTestSessionCookie(app, { name: "Locale User", email: "locale@test.dev" });
+
+    const me = await app.inject({ method: "GET", url: "/api/account/me", headers: { cookie } });
+    expect(me.statusCode).toBe(200);
+    expect(me.json().user.locale).toBeNull();
+
+    const put = await app.inject({
+      method: "PUT",
+      url: "/api/account/me/locale",
+      headers: { cookie },
+      payload: { locale: "pt-BR" },
+    });
+    expect(put.statusCode).toBe(200);
+    expect(put.json()).toEqual({ ok: true, locale: "pt-BR" });
+
+    const after = await app.inject({ method: "GET", url: "/api/account/me", headers: { cookie } });
+    expect(after.json().user.locale).toBe("pt-BR");
+
+    await app.close();
+  });
+
+  it("rejects an invalid locale", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie } = await createTestSessionCookie(app, { name: "Locale Bad", email: "locale-bad@test.dev" });
+
+    const put = await app.inject({
+      method: "PUT",
+      url: "/api/account/me/locale",
+      headers: { cookie },
+      payload: { locale: "xx" },
+    });
+    expect(put.statusCode).toBe(400);
+
+    await app.close();
+  });
+
+  it("requires authentication", async () => {
+    const app = buildServer();
+    await app.ready();
+    const put = await app.inject({ method: "PUT", url: "/api/account/me/locale", payload: { locale: "fr" } });
+    expect(put.statusCode).toBe(401);
+    await app.close();
+  });
+});

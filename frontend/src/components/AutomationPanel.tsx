@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Toast } from "primereact/toast";
 import { InputText } from "primereact/inputtext";
 import { Dropdown } from "primereact/dropdown";
 import { ChevronDown, Zap } from "lucide-react";
 import { api, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
-import { strings } from "../strings";
-import { positionLetter } from "../positions";
-import { DIRECTIONS, PRESSING, STYLES, formationsFromSnapshot, withUnchanged, type TacticOption } from "../tacticsOptions";
+import { positionLabel } from "../positions";
+import { directionOptions, pressingOptions, styleOptions, formationsFromSnapshot, withUnchanged, type TacticOption } from "../tacticsOptions";
+import i18n from "i18next";
 
 /**
  * Match automation editor, scoped to the currently chosen tactic (formation).
@@ -41,33 +42,29 @@ interface Preset {
   rules: Rule[];
 }
 
-const TRIGGER_OPTS: { label: string; value: TriggerKind }[] = [
-  { label: "A specific minute…", value: "MINUTE" },
-  { label: "Half-time", value: "HALF_TIME" },
-  { label: "We score a goal", value: "GOAL_SCORED" },
-  { label: "We concede a goal", value: "GOAL_CONCEDED" },
-  { label: "We get a red card", value: "RED_CARD" },
+const TRIGGER_OPTS = (): { label: string; value: TriggerKind }[] => [
+  { label: i18n.t("automation.triggerMinute"), value: "MINUTE" },
+  { label: i18n.t("automation.triggerHalfTime"), value: "HALF_TIME" },
+  { label: i18n.t("automation.triggerGoalScored"), value: "GOAL_SCORED" },
+  { label: i18n.t("automation.triggerGoalConceded"), value: "GOAL_CONCEDED" },
+  { label: i18n.t("automation.triggerRedCard"), value: "RED_CARD" },
 ];
 
-const CONDITION_OPTS: { label: string; value: Condition }[] = [
-  { label: "any score", value: "ANY" },
-  { label: "we are winning", value: "WINNING" },
-  { label: "we are drawing", value: "DRAWING" },
-  { label: "we are losing", value: "LOSING" },
-  { label: "we are winning by 2+", value: "WINNING_BY_2" },
-  { label: "we are losing by 2+", value: "LOSING_BY_2" },
+const CONDITION_OPTS = (): { label: string; value: Condition }[] => [
+  { label: i18n.t("automation.condAny"), value: "ANY" },
+  { label: i18n.t("automation.condWinning"), value: "WINNING" },
+  { label: i18n.t("automation.condDrawing"), value: "DRAWING" },
+  { label: i18n.t("automation.condLosing"), value: "LOSING" },
+  { label: i18n.t("automation.condWinningBy2"), value: "WINNING_BY_2" },
+  { label: i18n.t("automation.condLosingBy2"), value: "LOSING_BY_2" },
 ];
 
-const ACTION_OPTS: { label: string; value: ActionKind }[] = [
-  { label: "Make a substitution", value: "SUB" },
-  { label: "Change tactics", value: "TACTICS" },
+const ACTION_OPTS = (): { label: string; value: ActionKind }[] => [
+  { label: i18n.t("automation.actionSub"), value: "SUB" },
+  { label: i18n.t("automation.actionTactics"), value: "TACTICS" },
 ];
 
 const MINUTE_OPTS = Array.from({ length: 90 }, (_, i) => ({ label: `${i + 1}'`, value: i + 1 }));
-
-const UNCHANGED_STYLE = withUnchanged(STYLES);
-const UNCHANGED_PRESSING = withUnchanged(PRESSING);
-const UNCHANGED_DIRECTION = withUnchanged(DIRECTIONS);
 
 /** Dropdown menu item for tactic options: label plus optional one-line description. */
 function automationItemTemplate(option: TacticOption | { label: string; value: null }) {
@@ -81,7 +78,7 @@ function automationItemTemplate(option: TacticOption | { label: string; value: n
 
 /** Formation label from the backend-owned catalog; the id itself is the fallback. */
 function labelOf(formations: TacticOption[], id: number): string {
-  return formations.find((f) => f.value === id)?.label ?? `Formation ${id}`;
+  return formations.find((f) => f.value === id)?.label ?? i18n.t("tactics.formationFallback", { id });
 }
 
 function uid() {
@@ -91,8 +88,8 @@ function uid() {
 /** Client-side mirror of the backend rule validation; a non-null message blocks saving. */
 function ruleIssue(rule: Rule): string | null {
   if (rule.action.kind === "SUB") {
-    if (!rule.action.outPlayerId || !rule.action.inPlayerId) return "Pick the player coming off and the player coming on.";
-    if (rule.action.outPlayerId === rule.action.inPlayerId) return "The two players must be different.";
+    if (!rule.action.outPlayerId || !rule.action.inPlayerId) return i18n.t("automation.issuePickPlayers");
+    if (rule.action.outPlayerId === rule.action.inPlayerId) return i18n.t("automation.issueDifferentPlayers");
     return null;
   }
   const changed =
@@ -100,8 +97,8 @@ function ruleIssue(rule: Rule): string | null {
     rule.action.style !== undefined ||
     rule.action.pressing !== undefined ||
     rule.action.direction !== undefined;
-  if (!changed) return "Choose at least one tactic change.";
-  if (rule.action.formation !== undefined && rule.trigger.kind !== "HALF_TIME") return "Formation changes may only trigger at half-time.";
+  if (!changed) return i18n.t("automation.issueChooseTactic");
+  if (rule.action.formation !== undefined && rule.trigger.kind !== "HALF_TIME") return i18n.t("automation.issueFormationHalftime");
   return null;
 }
 
@@ -123,10 +120,11 @@ function RuleRow({
   onChange: (next: Rule) => void;
   onRemove: () => void;
 }) {
+  const { t } = useTranslation();
   const playerOptions = useMemo(
     () => squad.map((pl) => {
       const nat = (pl as unknown as { naturalPosition?: string }).naturalPosition;
-      const posLabel = (pl as unknown as { positionName?: string }).positionName ?? (nat ? positionLetter(nat) : pl.positionName);
+      const posLabel = positionLabel(nat);
       return { label: `${pl.displayName ?? pl.name} · ${posLabel} · ${pl.overall}`, value: pl.id };
     }),
     [squad]
@@ -138,7 +136,7 @@ function RuleRow({
   return (
     <div className="card aut-rule" style={{ padding: 12, marginBottom: 8, background: "rgba(255,255,255,0.03)" }}>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <StepLabel>When</StepLabel>
+        <StepLabel>{t("automation.when")}</StepLabel>
         <Dropdown
           value={rule.trigger.kind}
           onChange={(e) => {
@@ -148,9 +146,9 @@ function RuleRow({
             const action = kind.kind !== "HALF_TIME" && rule.action.kind === "TACTICS" ? { ...rule.action, formation: undefined } : rule.action;
             onChange({ ...rule, trigger: kind, action });
           }}
-          options={TRIGGER_OPTS}
+          options={TRIGGER_OPTS()}
           style={{ minWidth: 190 }}
-          aria-label="Trigger event"
+          aria-label={t("automation.triggerAria")}
         />
         {rule.trigger.kind === "MINUTE" && (
           <Dropdown
@@ -159,31 +157,31 @@ function RuleRow({
             options={MINUTE_OPTS}
             filter
             style={{ width: 110 }}
-            aria-label="Minute"
+            aria-label={t("automation.minuteAria")}
           />
         )}
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-        <StepLabel>If</StepLabel>
+        <StepLabel>{t("automation.if")}</StepLabel>
         <Dropdown
           value={rule.condition}
           onChange={(e) => onChange({ ...rule, condition: e.value })}
-          options={CONDITION_OPTS}
+          options={CONDITION_OPTS()}
           style={{ minWidth: 190 }}
-          aria-label="Score condition"
+          aria-label={t("automation.conditionAria")}
         />
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-        <StepLabel>Then</StepLabel>
+        <StepLabel>{t("automation.then")}</StepLabel>
         <Dropdown
           value={rule.action.kind}
           onChange={(e) => onChange({ ...rule, action: { kind: e.value } })}
-          options={ACTION_OPTS}
+          options={ACTION_OPTS()}
           style={{ minWidth: 190 }}
-          aria-label="Action"
+          aria-label={t("automation.actionAria")}
         />
-        <button className="btn ghost danger sm" onClick={onRemove} style={{ marginLeft: "auto" }} aria-label="Remove rule">
-          Remove
+        <button className="btn ghost danger sm" onClick={onRemove} style={{ marginLeft: "auto" }} aria-label={t("automation.removeRuleAria")}>
+          {t("automation.remove")}
         </button>
       </div>
 
@@ -193,7 +191,7 @@ function RuleRow({
             value={rule.action.outPlayerId ?? null}
             onChange={(e) => patchAction(e.value === null ? { outPlayerId: undefined } : { outPlayerId: e.value })}
             options={playerOptions}
-            placeholder="On the pitch — comes off"
+            placeholder={t("automation.offPlaceholder")}
             showClear
             filter
             style={{ flex: 1, minWidth: 220 }}
@@ -202,7 +200,7 @@ function RuleRow({
             value={rule.action.inPlayerId ?? null}
             onChange={(e) => patchAction(e.value === null ? { inPlayerId: undefined } : { inPlayerId: e.value })}
             options={playerOptions}
-            placeholder="From the bench — comes on"
+            placeholder={t("automation.onPlaceholder")}
             showClear
             filter
             style={{ flex: 1, minWidth: 220 }}
@@ -215,36 +213,36 @@ function RuleRow({
               value={rule.action.formation ?? null}
               onChange={(e) => patchAction(e.value === null ? { formation: undefined } : { formation: e.value })}
               options={[...withUnchanged(formations)]}
-              placeholder="Formation"
+              placeholder={t("automation.formationPlaceholder")}
               style={{ minWidth: 160, flex: 1 }}
-              aria-label="New formation"
+              aria-label={t("automation.formationAria")}
             />
           )}
           <Dropdown
             value={rule.action.style ?? null}
             onChange={(e) => patchAction(e.value === null ? { style: undefined } : { style: e.value })}
-            options={[...UNCHANGED_STYLE]}
-            placeholder="Style"
+            options={[...withUnchanged(styleOptions())]}
+            placeholder={t("automation.stylePlaceholder")}
             style={{ minWidth: 150, flex: 1 }}
-            aria-label="New style"
+            aria-label={t("automation.styleAria")}
             itemTemplate={automationItemTemplate}
           />
           <Dropdown
             value={rule.action.pressing ?? null}
             onChange={(e) => patchAction(e.value === null ? { pressing: undefined } : { pressing: e.value })}
-            options={[...UNCHANGED_PRESSING]}
-            placeholder="Pressing"
+            options={[...withUnchanged(pressingOptions())]}
+            placeholder={t("automation.pressingPlaceholder")}
             style={{ minWidth: 140, flex: 1 }}
-            aria-label="New pressing"
+            aria-label={t("automation.pressingAria")}
             itemTemplate={automationItemTemplate}
           />
           <Dropdown
             value={rule.action.direction ?? null}
             onChange={(e) => patchAction(e.value === null ? { direction: undefined } : { direction: e.value })}
-            options={[...UNCHANGED_DIRECTION]}
-            placeholder="Direction"
+            options={[...withUnchanged(directionOptions())]}
+            placeholder={t("automation.directionPlaceholder")}
             style={{ minWidth: 170, flex: 1 }}
-            aria-label="New direction"
+            aria-label={t("automation.directionAria")}
             itemTemplate={automationItemTemplate}
           />
         </div>
@@ -276,29 +274,30 @@ function PresetBlock({
   onRemove: () => void;
   customTooltips: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
         <InputText
           value={preset.name}
           onChange={(e) => onChange({ ...preset, name: e.target.value })}
-          placeholder="Rule set name"
+          placeholder={t("automation.ruleSetName")}
           style={{ flex: "1 1 180px" }}
-          aria-label="Rule set name"
+          aria-label={t("automation.ruleSetName")}
         />
         <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: "0.85rem", cursor: "pointer" }}>
-          <input type="checkbox" checked={preset.enabled} onChange={(e) => onChange({ ...preset, enabled: e.target.checked })} /> Enabled
+          <input type="checkbox" checked={preset.enabled} onChange={(e) => onChange({ ...preset, enabled: e.target.checked })} /> {t("automation.enabled")}
         </label>
-        <span className={`chip${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": "This rule set only fires when the team starts a match in this formation" } : { title: "This rule set only fires when the team starts a match in this formation" })}>
+        <span className={`chip${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": t("automation.formationScopeTooltip") } : { title: t("automation.formationScopeTooltip") })}>
           {labelOf(formations, preset.formationId)}
         </span>
         <button className="btn ghost danger sm" onClick={onRemove}>
-          Delete rule set
+          {t("automation.deleteRuleSet")}
         </button>
       </div>
 
       {preset.rules.length === 0 && (
-        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>No rules yet — add one below.</div>
+        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>{t("automation.noRulesYet")}</div>
       )}
 
       {preset.rules.map((rule) => (
@@ -322,13 +321,14 @@ function PresetBlock({
           })
         }
       >
-        + Add rule ({preset.rules.length}/{maxRules})
+        + {t("automation.addRule", { count: preset.rules.length, max: maxRules })}
       </button>
     </div>
   );
 }
 
 export function AutomationPanel({ formation, customTooltips = false }: { formation: number; customTooltips?: boolean }) {
+  const { t } = useTranslation();
   const toast = useRef<Toast>(null);
   const user = useGame((s) => s.user);
   const snap = useGame((s) => s.snapshot);
@@ -373,7 +373,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
   };
 
   const addForCurrent = () => {
-    mutate((prev) => [...prev, { id: uid(), name: `${formationName(formation)} automation`, formationId: formation, enabled: true, rules: [] }]);
+    mutate((prev) => [...prev, { id: uid(), name: t("automation.defaultName", { formation: formationName(formation) }), formationId: formation, enabled: true, rules: [] }]);
   };
 
   const save = async () => {
@@ -385,12 +385,12 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
       window.setTimeout(() => setJustSaved(false), 3000);
       toast.current?.show({
         severity: "success",
-        summary: "Saved",
-        detail: "Automation saved. Rules fire while matches are simulated — pause them any time in Live Match.",
+        summary: t("automation.savedSummary"),
+        detail: t("automation.savedDetail"),
         life: 3000,
       });
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("automation.error"), detail: (e as Error).message });
     } finally {
       setBusy(false);
     }
@@ -399,8 +399,8 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
   if (!loaded) {
     return (
       <div className="card" style={{ marginTop: 16 }}>
-        <h2 className="card-title"><Zap size={17} /> {strings.squad.automationTitle}</h2>
-        <div style={{ color: "var(--text-3)", fontSize: "0.9rem" }}>Loading automation…</div>
+        <h2 className="card-title"><Zap size={17} /> {t("squad.automationTitle")}</h2>
+        <div style={{ color: "var(--text-3)", fontSize: "0.9rem" }}>{t("automation.loading")}</div>
       </div>
     );
   }
@@ -411,29 +411,28 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
   return (
     <div className="card" style={{ marginTop: 16 }}>
       <Toast ref={toast} position="bottom-right" />
-      <h2 className="card-title"><Zap size={17} /> {strings.squad.automationTitle}</h2>
+      <h2 className="card-title"><Zap size={17} /> {t("squad.automationTitle")}</h2>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ color: "var(--text-3)", fontSize: "0.85rem", lineHeight: 1.5, maxWidth: 720 }}>
-          Rules fire automatically while the server simulates your matches — even when you are offline. While watching live you can pause
-          them from the Live Match screen. Changes apply once you press <b>Save</b>.
+          {t("automation.intro")}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {justSaved && (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--grass-2)", fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap" }}>
-              ✓ Automation saved
+              {t("automation.savedCheck")}
             </span>
           )}
           <button className={`btn ${dirty ? "gold" : ""}${customTooltips && issues.length > 0 ? " squad-tooltip-trigger" : ""}`} onClick={() => void save()} disabled={!canSave || busy} {...(customTooltips ? { "data-pr-tooltip": issues.length > 0 ? issues[0] : undefined } : { title: issues.length > 0 ? issues[0] : undefined })}>
-            {busy ? "Saving…" : dirty ? "Save changes" : "Saved"}
+            {busy ? t("automation.saving") : dirty ? t("automation.saveChanges") : t("automation.saved")}
           </button>
         </div>
       </div>
 
       <div style={{ margin: "10px 0 14px", fontSize: "0.9rem" }}>
-        These rules apply when your team kicks off in <b>{formationName(formation)}</b>.
+        {t("automation.appliesIn", { formation: formationName(formation) })}
         {savedFormation !== undefined && savedFormation !== formation && (
-          <span style={{ color: "var(--gold-2)", fontSize: "0.82rem" }}> Not saved yet — save your lineup above to activate it.</span>
+          <span style={{ color: "var(--gold-2)", fontSize: "0.82rem" }}>{t("automation.notSavedYet")}</span>
         )}
       </div>
 
@@ -451,16 +450,15 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
         </div>
       ) : (
         <div className="empty-state" style={{ padding: 18 }}>
-          No automation for {formationName(formation)} yet.
+          {t("automation.noneFor", { formation: formationName(formation) })}
           {quotaBlocked ? (
             <div style={{ marginTop: 8, color: "var(--text-3)" }}>
-              You already have a rule set for {blockingOther ? formationName(blockingOther.formationId) : "another tactic"}. Regular managers
-              keep one rule set; <b>Pro</b> unlocks one per tactic.
+              {t("automation.quotaBlocked", { other: blockingOther ? formationName(blockingOther.formationId) : t("automation.anotherTactic") })}
             </div>
           ) : (
             <div style={{ marginTop: 10 }}>
               <button className="btn gold" onClick={addForCurrent}>
-                <Zap size={14} /> Create automation for {formationName(formation)}
+                <Zap size={14} /> {t("automation.createAutomation", { formation: formationName(formation) })}
               </button>
             </div>
           )}
@@ -469,7 +467,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
 
       {others.length > 0 && (
         <div style={{ marginTop: 14 }}>
-          <div className="section-label">Other tactics</div>
+          <div className="section-label">{t("automation.otherTactics")}</div>
           {others.map((p) => (
             <div key={p.id} className="card" style={{ padding: 10, marginTop: 8 }}>
               <button
@@ -479,10 +477,10 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
               >
                 <span>
                   <ChevronDown size={13} style={{ transform: openOthers[p.id] ? "none" : "rotate(-90deg)", transition: "transform .15s", verticalAlign: "-2px", marginRight: 6 }} />
-                  {formationName(p.formationId)} · {p.name || "Unnamed"} · {p.rules.length} rule{p.rules.length === 1 ? "" : "s"} ·{" "}
-                  {p.enabled ? "on" : "off"}
+                  {formationName(p.formationId)} · {p.name || t("automation.unnamed")} · {t("automation.ruleCount", { count: p.rules.length })} ·{" "}
+                  {p.enabled ? t("automation.on") : t("automation.off")}
                 </span>
-                <span style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>{openOthers[p.id] ? "collapse" : "edit"}</span>
+                <span style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>{openOthers[p.id] ? t("automation.collapse") : t("automation.edit")}</span>
               </button>
               {openOthers[p.id] && (
                 <div style={{ marginTop: 10 }}>
@@ -500,7 +498,7 @@ export function AutomationPanel({ formation, customTooltips = false }: { formati
             </div>
           ))}
           <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 6 }}>
-            {isPro ? "Pro: one rule set per tactic." : "Regular: one rule set in total. Pro = one per tactic."}
+            {isPro ? t("automation.proPerTactic") : t("automation.regularPerTactic")}
           </div>
         </div>
       )}

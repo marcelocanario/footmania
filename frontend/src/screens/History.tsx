@@ -1,32 +1,34 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Award, History as HistoryIcon, Medal, Trophy } from "lucide-react";
 import { api, type SeasonAward, type SeasonHistoryView } from "../api/client";
+import { bestXiEntries, individualAwardDetail } from "../utils/awards";
 import { ArchivedSeasonCard } from "../components/ArchivedSeasonCard";
 import { FootmaniaRankingPanel } from "../components/FootmaniaRanking";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
-import { bestXiEntries } from "../utils/awards";
 import { useGame } from "../store/game";
 
 const RECORD_LABELS: Record<string, string> = {
-  all_time_goals: "All-time top scorer",
-  all_time_top_scorer: "All-time top scorer",
-  most_goals_in_season: "Most goals in a season",
-  most_titles: "Most league titles",
-  most_league_titles: "Most league titles",
-  longest_unbeaten: "Longest unbeaten run",
+  all_time_goals: "history.recordAllTimeScorer",
+  all_time_top_scorer: "history.recordAllTimeScorer",
+  most_goals_in_season: "history.recordMostGoalsSeason",
+  most_titles: "history.recordMostTitles",
+  most_league_titles: "history.recordMostTitles",
+  longest_unbeaten: "history.recordLongestUnbeaten",
 };
 
 const AWARD_LABELS: Record<string, string> = {
-  top_scorer: "Top scorer",
-  top_assists: "Top assists",
-  player_of_season: "Player of the season",
-  best_xi: "Best XI",
+  top_scorer: "awards.categoryTopScorer",
+  top_assists: "awards.categoryTopAssists",
+  player_of_season: "awards.categoryPlayerOfSeason",
+  best_xi: "awards.categoryBestXi",
 };
 
 /** Best XI members; only players still in the world are clickable. */
 function AwardDetail({ award, onPlayerClick }: { award: SeasonAward; onPlayerClick?: (id: number, name: string) => void }) {
+  const { t } = useTranslation();
   const entries = bestXiEntries(award);
-  if (!entries) return <strong>{award.detail ?? ""}</strong>;
+  if (!entries) return <strong>{individualAwardDetail(award)}</strong>;
   return (
     <strong style={{ display: "flex", flexWrap: "wrap", gap: "2px 8px", justifyContent: "flex-end" }}>
       {entries.map((entry, index) => (
@@ -34,7 +36,7 @@ function AwardDetail({ award, onPlayerClick }: { award: SeasonAward; onPlayerCli
           {entry.active && entry.id !== null && onPlayerClick ? (
             <button type="button" className="event-player-link" onClick={() => onPlayerClick(entry.id as number, entry.name)}>{entry.name}</button>
           ) : (
-            <span title={entry.active ? undefined : "Retired"}>{entry.name}</span>
+            <span title={entry.active ? undefined : t("history.retired")}>{entry.name}</span>
           )}
         </span>
       ))}
@@ -43,6 +45,7 @@ function AwardDetail({ award, onPlayerClick }: { award: SeasonAward; onPlayerCli
 }
 
 export function History() {
+  const { t } = useTranslation();
   const [seasons, setSeasons] = useState<SeasonHistoryView[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [ranking, setRanking] = useState<Awaited<ReturnType<typeof api.footmaniaRanking>> | null>(null);
@@ -67,8 +70,8 @@ export function History() {
     });
   }, [load, loadRanking]);
 
-  if (historyError) return <div className="empty-state" style={{ paddingTop: 80 }}>Could not load history: {historyError}</div>;
-  if (!seasons) return <div className="empty-state" style={{ paddingTop: 80 }}>Loading…</div>;
+  if (historyError) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadFailed", { error: historyError })}</div>;
+  if (!seasons) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadingDots")}</div>;
 
   const records = snapshot?.records ?? [];
   const awards = snapshot?.seasonAwards ?? [];
@@ -87,13 +90,13 @@ export function History() {
         <div className="history-hero-floodlights" aria-hidden />
         <div className="history-hero-stripes" aria-hidden />
         <div className="history-hero-copy">
-          <div className="kicker"><HistoryIcon size={14} /> Club history</div>
-          <h1>The archive</h1>
-          <p>Every campaign, every division, every club that helped build the Footmania pyramid.</p>
+          <div className="kicker"><HistoryIcon size={14} /> {t("history.clubHistory")}</div>
+          <h1>{t("history.theArchive")}</h1>
+          <p>{t("history.heroIntro")}</p>
         </div>
         <div className="history-hero-seal">
           <Trophy size={28} />
-          <span>World football<br /><b>since kickoff</b></span>
+          <span>{t("history.worldFootball")}<br /><b>{t("history.sinceKickoff")}</b></span>
         </div>
       </section>
 
@@ -101,39 +104,39 @@ export function History() {
         <section className="card history-journey-card">
           <div className="history-section-head">
             <div>
-              <div className="kicker">Your footprint</div>
-              <h2>Your journey</h2>
+              <div className="kicker">{t("history.yourFootprint")}</div>
+              <h2>{t("history.yourJourney")}</h2>
             </div>
-            <span className="history-section-note">{myRows.length ? `${myRows.length} recorded campaigns` : "No archived campaigns"}</span>
+            <span className="history-section-note">{myRows.length ? t("history.recordedCampaigns", { count: myRows.length }) : t("history.noArchivedCampaigns")}</span>
           </div>
           <div className="history-stat-grid">
-            <div className="history-stat-card"><span>Seasons</span><b>{myRows.length}</b></div>
-            <div className="history-stat-card"><span>Your divisions</span><b>{myDivisionCount}</b></div>
-            <div className="history-stat-card"><span>League titles</span><b>{titles}</b></div>
-            <div className="history-stat-card"><span>Best finish</span><b>{bestFinish === null ? "—" : `#${bestFinish}`}</b></div>
+            <div className="history-stat-card"><span>{t("history.seasons")}</span><b>{myRows.length}</b></div>
+            <div className="history-stat-card"><span>{t("history.yourDivisions")}</span><b>{myDivisionCount}</b></div>
+            <div className="history-stat-card"><span>{t("history.leagueTitles")}</span><b>{titles}</b></div>
+            <div className="history-stat-card"><span>{t("history.bestFinish")}</span><b>{bestFinish === null ? "—" : `#${bestFinish}`}</b></div>
           </div>
-          {myRows.length === 0 && <div className="history-callout">Your club will appear here after its first completed season.</div>}
-          {myRows.length > 0 && <div className="history-callout good">Your rows are highlighted throughout the world archive.</div>}
+          {myRows.length === 0 && <div className="history-callout">{t("history.firstSeasonNote")}</div>}
+          {myRows.length > 0 && <div className="history-callout good">{t("history.rowsHighlighted")}</div>}
         </section>
         {ranking ? (
           <FootmaniaRankingPanel rankings={ranking.rankings} totalRanked={ranking.totalRanked} viewerRank={ranking.viewerRank} />
         ) : (
-          <section className="card footmania-ranking-panel"><div className="history-section-head"><div><div className="kicker">World ranking</div><h2>Footmania ranking</h2></div></div><div className="empty-state" style={{ padding: "28px 10px" }}>{rankingError ?? "Loading ranking…"}</div></section>
+          <section className="card footmania-ranking-panel"><div className="history-section-head"><div><div className="kicker">{t("history.worldRanking")}</div><h2>{t("history.footmaniaRanking")}</h2></div></div><div className="empty-state" style={{ padding: "28px 10px" }}>{rankingError ?? t("history.loadingRanking")}</div></section>
         )}
       </div>
 
       <div className="history-hall-grid">
         <section className="card history-records-card">
           <div className="history-section-head">
-            <div><div className="kicker">The record book</div><h2><Trophy size={18} /> Career records</h2></div>
-            <span className="history-section-note">All clubs</span>
+            <div><div className="kicker">{t("history.recordBook")}</div><h2><Trophy size={18} /> {t("history.careerRecords")}</h2></div>
+            <span className="history-section-note">{t("history.allClubs")}</span>
           </div>
-          {records.length === 0 ? <div className="empty-state">Records will appear after the first season.</div> : (
+          {records.length === 0 ? <div className="empty-state">{t("history.recordsEmpty")}</div> : (
             <div className="history-record-list">
               {records.map((record) => (
                 <div className="history-record" key={record.category}>
                   <span className="history-record-value">{record.value}</span>
-                  <span className="history-record-label">{RECORD_LABELS[record.category] ?? record.category}</span>
+                  <span className="history-record-label">{(t as unknown as (k: string) => string)(RECORD_LABELS[record.category] ?? record.category)}</span>
                   <b>{record.holderName}</b>
                 </div>
               ))}
@@ -143,15 +146,15 @@ export function History() {
 
         <section className="card history-awards-card">
           <div className="history-section-head">
-            <div><div className="kicker">Season honours</div><h2><Medal size={18} /> Recent awards</h2></div>
-            <span className="history-section-note">Latest 20</span>
+            <div><div className="kicker">{t("history.seasonHonours")}</div><h2><Medal size={18} /> {t("history.recentAwards")}</h2></div>
+            <span className="history-section-note">{t("history.latest20")}</span>
           </div>
-          {awards.length === 0 ? <div className="empty-state">Season awards will appear at rollover.</div> : (
+          {awards.length === 0 ? <div className="empty-state">{t("history.awardsEmpty")}</div> : (
             <div className="history-award-list">
               {awards.slice(0, 20).map((award, index) => (
                 <div className="history-award" key={`${award.season}-${award.category}-${award.competitionId}-${index}`}>
                   <span className="history-award-icon"><Award size={15} /></span>
-                  <div><b>{AWARD_LABELS[award.category] ?? award.category.replaceAll("_", " ")}</b><span>Season {award.season} · {award.playerNameSnapshot ?? "Club honour"}</span></div>
+                  <div><b>{(t as unknown as (k: string) => string)(AWARD_LABELS[award.category] ?? award.category.replaceAll("_", " "))}</b><span>{t("history.seasonLabel", { season: award.season })} · {award.playerNameSnapshot ?? t("history.clubHonour")}</span></div>
                   <AwardDetail award={award} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
                 </div>
               ))}
@@ -162,11 +165,11 @@ export function History() {
 
       <section className="history-seasons-section">
         <div className="history-section-head history-seasons-head">
-          <div><div className="kicker">The pyramid archive</div><h2>Season by season</h2></div>
-          <span className="history-section-note">{seasons.length} completed {seasons.length === 1 ? "season" : "seasons"}</span>
+          <div><div className="kicker">{t("history.pyramidArchive")}</div><h2>{t("history.seasonBySeason")}</h2></div>
+          <span className="history-section-note">{seasons.length === 1 ? t("history.completedSeasons", { count: 1 }) : t("history.completedSeasonsOther", { count: seasons.length })}</span>
         </div>
         {seasons.length === 0 ? (
-          <div className="card empty-state"><HistoryIcon size={30} /><span>No completed seasons yet. History appears after the first season rollover.</span></div>
+          <div className="card empty-state"><HistoryIcon size={30} /><span>{t("history.noCompletedSeasons")}</span></div>
         ) : (
           <div className="archive-season-list">
             {seasons.map((season, index) => <ArchivedSeasonCard key={season.seasonId} season={season} initialOpen={index === 0} />)}

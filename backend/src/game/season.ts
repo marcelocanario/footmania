@@ -35,6 +35,7 @@ import {
   type IntakePlan,
 } from "./population";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 import { NATURAL_POSITION_ORDER } from "./positions";
 
 /** FNV-1a 32-bit hash (same authority as the seeded allocators in
@@ -102,13 +103,13 @@ export function promoteYouthPlayer(world: World, player: Player, reason: "manual
     kind: "academy",
     subject: NEWS_SUBJECTS.academy,
     recipientClubId: club.id,
-    headline: "Academy and squad movement",
+    headline: "news.headline.academy",
     entries: [{
       key: `promote:${player.id}`,
       label: player.name,
       detail: reason === "age"
-        ? `promoted from the academy at age ${player.age} on his existing terms`
-        : "promoted from the academy to the senior squad on his existing terms",
+        ? msg("news.detail.promotedAge", { age: player.age })
+        : msg("news.detail.promotedTerms"),
     }],
   });
   return { ok: true };
@@ -128,8 +129,8 @@ export function dismissYouthPlayer(world: World, player: Player): { ok: boolean;
     kind: "academy",
     subject: NEWS_SUBJECTS.academy,
     recipientClubId: club.id,
-    headline: "Academy and squad movement",
-    entries: [{ key: `dismiss:${player.id}`, label: player.name, detail: "released from the youth academy" }],
+    headline: "news.headline.academy",
+    entries: [{ key: `dismiss:${player.id}`, label: player.name, detail: msg("news.detail.dismissed") }],
   });
   return { ok: true };
 }
@@ -322,8 +323,8 @@ export function processContractWarning(world: World, playerId: number): void {
     kind: "contract",
     subject: NEWS_SUBJECTS.contractWarning,
     recipientClubId: club.id,
-    headline: "Contracts entering their final stretch",
-    entries: [{ key: `warn:${player.id}`, label: player.name, detail: `${player.contractDays} days remaining on his current deal` }],
+    headline: "news.headline.contractWarning",
+    entries: [{ key: `warn:${player.id}`, label: player.name, detail: msg("news.detail.contractWarning", { count: player.contractDays }) }],
   });
 }
 
@@ -352,8 +353,8 @@ export function processContractExpiry(world: World, playerId: number): void {
     kind: "contract",
     subject: NEWS_SUBJECTS.contractExpiry,
     recipientClubId: club.id,
-    headline: "Contract expiries",
-    entries: [{ key: `expire:${player.id}`, label: player.name, detail: `left ${club.name} as a free agent after his contract expired` }],
+    headline: "news.headline.contractExpiry",
+    entries: [{ key: `expire:${player.id}`, label: player.name, detail: msg("news.detail.contractExpiry", { club: club.name }) }],
   });
 }
 
@@ -376,11 +377,11 @@ export function endLoan(world: World, loan: { id: number; playerId: number; from
       kind: "loan",
       subject: NEWS_SUBJECTS.loans,
       recipientClubId: from.id,
-      headline: "Loan movements",
+      headline: "news.headline.loans",
       entries: [{
         key: `loan:${loan.id}`,
         label: p.name,
-        detail: to ? `returned to ${from.name} after his loan at ${to.name} ended` : `was removed from the loan list of ${from.name}`,
+        detail: to ? msg("news.detail.loanReturn", { club: from.name, loan: to.name }) : msg("news.detail.loanRemoved", { club: from.name }),
       }],
     });
   }
@@ -430,8 +431,8 @@ export function processSeasonEndContracts(rng: World["rng"], world: World): void
           kind: "retirement",
           subject: NEWS_SUBJECTS.retirement,
           clubId: club?.id,
-          headline: "Retirement announcements",
-          entries: [{ key: `retire:${player.id}`, label: player.name, detail: `(${club?.name ?? ""}) announced this will be his last season` }],
+          headline: "news.headline.retirement",
+          entries: [{ key: `retire:${player.id}`, label: player.name, detail: msg("news.detail.retirement", { club: club?.name ?? "" }) }],
         });
       }
       if (shouldRetire(rng, player)) {

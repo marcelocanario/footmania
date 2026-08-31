@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NEWS_SUBJECTS, formatMoney, newsVisibleTo, publishNews } from "../src/game/news";
 import { generatePreseasonReport } from "../src/game/preseasonReport";
+import { isMessageRef, msg } from "../src/i18n/catalog";
 import { gameConfig } from "../src/config";
 import { buildSnapshot } from "../src/services/snapshot";
 import { makeClub, makeWorld } from "./helpers";
@@ -73,9 +74,11 @@ describe("grouped news publishing", () => {
     const warnings = world.news.filter((n) => n.subject === NEWS_SUBJECTS.contractWarning);
     expect(warnings).toHaveLength(1);
     expect(warnings[0].entries).toHaveLength(2);
-    // The dashboard message contains the grouped names and details itself.
-    expect(warnings[0].text).toContain("Player 101 (12 days remaining on his current deal)");
-    expect(warnings[0].text).toContain("Player 102 (20 days remaining on his current deal)");
+    // Key-native grouped items carry a frame body and no English text; the
+    // client composes the copy from the frame + entries.
+    expect(warnings[0].body?.k).toBe("news.contract.warning");
+    expect(warnings[0].text).toBe("");
+    expect(warnings[0].entries?.map((e) => e.label)).toEqual(["Player 101", "Player 102"]);
     expect(warnings[0].seasonId).toBe(world.mp.seasonId);
     expect(world.dayIndex).toBe(0);
   });
@@ -176,14 +179,15 @@ describe("pre-season report", () => {
     expect(reports).toHaveLength(1);
     const report = reports[0];
     expect(report.recipientClubId).toBe(clubA.id);
-    expect(report.headline).toContain("Season 4 briefing");
-    const labels = (report.entries ?? []).map((entry) => entry.label);
-    expect(labels).toContain("Division 1");
-    expect(labels).toContain("Cash");
-    expect(labels).toContain("Financial cushion");
+    expect(report.headline).toBe("news.preseason.headline");
+    expect(report.body?.k).toBe("news.preseason");
+    const labelKeys = (report.entries ?? []).map((entry) => isMessageRef(entry.label) ? entry.label.k : "");
+    expect(labelKeys).toContain("news.preseason.division");
+    expect(labelKeys).toContain("news.preseason.cash");
+    expect(labelKeys).toContain("news.preseason.cushion");
     expect(report.entries?.some((entry) => entry.label === "Expiring Guy")).toBe(true);
-    expect(labels).toContain("Senior squad");
-    expect(labels).toContain("Academy");
+    expect(labelKeys).toContain("news.preseason.squad");
+    expect(labelKeys).toContain("news.preseason.academy");
   });
 
   it("reports rollover flow captured during academy intake", () => {
@@ -192,10 +196,13 @@ describe("pre-season report", () => {
 
     generatePreseasonReport(world, clubA, world.mp.seasonId, gameConfig.seasonDays * gameConfig.contractWarningSeasons);
 
-    const details = (world.news[0].entries ?? []).map((entry) => `${entry.label}: ${entry.detail}`).join(" | ");
-    expect(details).toContain("Promotions: 2 youth players stepped up");
-    expect(details).toContain("New intake: 3 new prospects");
-    expect(details).toContain("Replacements: 1 senior player arrived");
+    const detailByLabel = new Map(
+      (world.news[0].entries ?? [])
+        .map((entry) => [isMessageRef(entry.label) ? entry.label.k : "", entry.detail] as const),
+    );
+    expect(detailByLabel.get("news.preseason.promotions")).toEqual(msg("news.preseason.promotedCount", { count: 2 }));
+    expect(detailByLabel.get("news.preseason.intake")).toEqual(msg("news.preseason.intakeCount", { count: 3 }));
+    expect(detailByLabel.get("news.preseason.replacements")).toEqual(msg("news.preseason.replacementsCount", { count: 1 }));
   });
 
   it("describes a move between tiers using the archived division", () => {
@@ -217,7 +224,8 @@ describe("pre-season report", () => {
 
     generatePreseasonReport(world, clubA, world.mp.seasonId, gameConfig.seasonDays * gameConfig.contractWarningSeasons);
 
-    expect(world.news[0].entries?.find((entry) => entry.label === "Movement")?.detail).toBe("Promoted");
+    const movement = world.news[0].entries?.find((entry) => isMessageRef(entry.label) && entry.label.k === "news.preseason.movement");
+    expect(movement?.detail).toEqual(msg("news.preseason.movement_promoted"));
   });
 });
 

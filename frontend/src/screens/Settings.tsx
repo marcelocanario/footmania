@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { Settings as SettingsIcon, Clock, Users } from "lucide-react";
+import { Settings as SettingsIcon, Clock, Users, Languages } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
-import { strings } from "../strings";
 import { AvailabilityPicker, PRESET_EVENINGS, MIN_SLOTS } from "../components/AvailabilityPicker";
 import { localSlotsToUtc, utcSlotsToLocal } from "../utils/time";
+import { LanguagePicker } from "../components/LanguagePicker";
 
 export function SettingsScreen() {
+  const { t } = useTranslation();
   const { status, loadStatus } = useGame();
   const [preferredHours, setPreferredHours] = useState<number[]>(PRESET_EVENINGS);
   const [hoursSaved, setHoursSaved] = useState(false);
@@ -26,16 +28,20 @@ export function SettingsScreen() {
     <div>
       <div className="page-head">
         <div>
-          <div className="kicker">Preferences</div>
-          <h1>Settings</h1>
+          <div className="kicker">{t("settings.preferences")}</div>
+          <h1>{t("settings.title")}</h1>
         </div>
       </div>
 
       <div className="card" style={{ maxWidth: 640 }}>
-        <h2 className="card-title"><Clock size={17} /> Preferred match times</h2>
+        <h2 className="card-title"><Languages size={17} /> {t("settings.language")}</h2>
+        <LanguagePicker />
+      </div>
+
+      <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
+        <h2 className="card-title"><Clock size={17} /> {t("settings.preferredMatchTimes")}</h2>
         <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
-          When can you usually play? Fixtures are scheduled inside these windows whenever possible, and players with similar
-          schedules are grouped into the same division next season. Changes apply from the next season — current fixtures never move.
+          {t("settings.preferredMatchTimesDescription")}
         </div>
         <AvailabilityPicker value={preferredHours} onChange={(next) => { setPreferredHours(next); setHoursSaved(false); }} disabled={!status?.club} />
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
@@ -54,17 +60,16 @@ export function SettingsScreen() {
             })()}
             disabled={!status?.club || savingHours || preferredHours.length < MIN_SLOTS}
           >
-            <SettingsIcon size={15} /> {savingHours ? strings.common.saving : strings.common.save}
+            <SettingsIcon size={15} /> {savingHours ? t("common.saving") : t("common.save")}
           </button>
-          {hoursSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{strings.settings.saved}</span>}
+          {hoursSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{t("settings.saved")}</span>}
         </div>
       </div>
 
       <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
-        <h2 className="card-title"><Users size={17} /> Group me with my friends</h2>
+        <h2 className="card-title"><Users size={17} /> {t("settings.groupFriends")}</h2>
         <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
-          When enabled, accepted friendships (see the Friends tab) influence next season's division grouping so you and your
-          friends land in the same group when possible. It only takes effect if your friend enables it too.
+          {t("settings.groupFriendsDescription")}
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: status?.club ? "pointer" : "default" }}>
           <input
@@ -73,7 +78,7 @@ export function SettingsScreen() {
             disabled={!status?.club}
             onChange={(e) => { setFriendGrouping(e.target.checked); setFriendGroupingSaved(false); }}
           />
-          <span style={{ fontSize: "0.92rem" }}>Try to place me in a group with my friends</span>
+          <span style={{ fontSize: "0.92rem" }}>{t("settings.groupFriendsLabel")}</span>
         </label>
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
           <button
@@ -86,19 +91,19 @@ export function SettingsScreen() {
             })()}
             disabled={!status?.club}
           >
-            {strings.common.save}
+            {t("common.save")}
           </button>
-          {friendGroupingSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{strings.settings.saved}</span>}
+          {friendGroupingSaved && <span style={{ color: "var(--grass-2)", fontSize: "0.9rem" }}>{t("settings.saved")}</span>}
         </div>
       </div>
 
       <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
-        <h2 className="card-title"><SettingsIcon size={17} /> Push notifications</h2>
+        <h2 className="card-title"><SettingsIcon size={17} /> {t("settings.pushNotifications")}</h2>
         <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 12 }}>
-          Match started / finished pushes land in your in-app bell. Enable browser pushes to receive them when the site is closed. <b>Pro</b> also gets goal pings and league digests.
+          {t("settings.pushDescription")}
         </div>
         {pushState === "unsupported" ? (
-          <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>Push is not supported in this browser.</div>
+          <div style={{ color: "var(--text-3)", fontSize: "0.85rem" }}>{t("settings.pushUnsupported")}</div>
         ) : (
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
@@ -108,7 +113,7 @@ export function SettingsScreen() {
                 setPushBusy(true);
                 try {
                   const perm = await Notification.requestPermission();
-                  if (perm !== "granted") throw new Error("Permission denied");
+                  if (perm !== "granted") throw new Error(t("settings.permissionDenied"));
                   const reg = await navigator.serviceWorker.ready;
                   const { publicKey } = await api.getVapidKey();
                   if (!publicKey) throw new Error("Push not configured on server (VAPID keys missing)");
@@ -119,9 +124,9 @@ export function SettingsScreen() {
                 } catch (e) { alert((e as Error).message); } finally { setPushBusy(false); }
               })()}
             >
-              {pushBusy ? "…" : pushState === "subscribed" ? "Subscribed ✓" : "Enable browser pushes"}
+              {pushBusy ? "…" : pushState === "subscribed" ? t("settings.subscribed") : t("settings.enablePush")}
             </button>
-            {pushState === "subscribed" && <button className="btn ghost" onClick={() => void (async () => { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) { await sub.unsubscribe(); await api.pushUnsubscribe(sub.endpoint); } setPushState("idle"); })()}>Unsubscribe</button>}
+            {pushState === "subscribed" && <button className="btn ghost" onClick={() => void (async () => { const reg = await navigator.serviceWorker.ready; const sub = await reg.pushManager.getSubscription(); if (sub) { await sub.unsubscribe(); await api.pushUnsubscribe(sub.endpoint); } setPushState("idle"); })()}>{t("settings.unsubscribe")}</button>}
           </div>
         )}
       </div>

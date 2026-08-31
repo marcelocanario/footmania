@@ -14,6 +14,7 @@ import { SENIOR_SQUAD_LIMIT } from "../src/game/constants";
 import { generateYouthPlayer } from "../src/game/playerGeneration";
 import { pendingYouthDismissalCount } from "./populationHelpers";
 import { gameConfig } from "../src/config";
+import { isMessageRef } from "../src/i18n/catalog";
 import type { Player, Position, World } from "../src/game/types";
 import { makeClub, makeWorld } from "./helpers";
 
@@ -156,7 +157,7 @@ describe("mandatory age promotion", () => {
     commitSeasonRollover(world);
     expect(player.age).toBe(RULES.academyAutomaticPromotionAge);
     expect(player.isYouth).toBe(false);
-    expect(world.news.some((n) => n.entries?.some((e) => e.detail?.includes("on his existing terms")))).toBe(true);
+    expect(world.news.some((n) => n.entries?.some((e) => isMessageRef(e.detail) && (e.detail.k === "news.detail.promotedAge" || e.detail.k === "news.detail.promotedTerms")))).toBe(true);
   });
 
   it("leaves no player in the academy at or after the automatic promotion age", () => {
@@ -213,7 +214,7 @@ describe("academy dismissal", () => {
     const player = youth(world, 1, 17, 1);
     expect(dismissYouthPlayer(world, player).ok).toBe(true);
     expect(world.players).toHaveLength(0);
-    expect(world.news.at(-1)?.entries?.some((e) => e.detail?.includes("released from the youth academy"))).toBe(true);
+    expect(world.news.at(-1)?.entries?.some((e) => isMessageRef(e.detail) && e.detail.k === "news.detail.dismissed")).toBe(true);
     // The loss is recorded as pending global compensation: the next seasonal
     // intake converts it into shared recruits, never into a reroll entitlement
     // for this club.

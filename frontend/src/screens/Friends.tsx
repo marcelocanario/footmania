@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link2, Trash2, UserPlus, Users, Copy, Check } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { ClubNameLink } from "../components/ClubNameLink";
+import { relativeTime } from "../utils/time";
 
 interface FriendRow {
   userId: number;
@@ -18,21 +20,13 @@ interface InvitationRow {
   createdAt: string;
 }
 
-function relativeTime(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  const days = Math.floor(ms / 86_400_000);
-  if (days < 1) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
 /**
  * Friends management (plan 9): invite links auto-create a friendship when the
  * invitee signs up; friendships influence season regrouping while BOTH owners
  * keep the Settings switch enabled.
  */
 export function FriendsScreen() {
+  const { t } = useTranslation();
   const { status } = useGame();
   const [friends, setFriends] = useState<FriendRow[]>([]);
   const [invitations, setInvitations] = useState<InvitationRow[]>([]);
@@ -56,7 +50,7 @@ export function FriendsScreen() {
     try {
       await action();
     } catch (e) {
-      setError((e as Error).message || "Something went wrong");
+      setError((e as Error).message || t("friends.somethingWrong"));
     } finally {
       setBusy(false);
     }
@@ -94,8 +88,8 @@ export function FriendsScreen() {
     <div>
       <div className="page-head">
         <div>
-          <div className="kicker">Play together</div>
-          <h1>Friends</h1>
+          <div className="kicker">{t("friends.playTogether")}</div>
+          <h1>{t("friends.title")}</h1>
         </div>
       </div>
 
@@ -106,37 +100,36 @@ export function FriendsScreen() {
       )}
 
       <div className="card" style={{ maxWidth: 640 }}>
-        <h2 className="card-title"><UserPlus size={17} /> Invite a friend</h2>
+        <h2 className="card-title"><UserPlus size={17} /> {t("friends.inviteFriend")}</h2>
         <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 14 }}>
-          Share your personal link. When your friend registers through it you become friends automatically, and — if you both
-          keep "Group me with my friends" switched on in Settings — next season's draw tries to place you in the same division.
+          {t("friends.inviteIntro")}
         </div>
         <button className="btn gold" onClick={() => void generate()} disabled={busy}>
-          <Link2 size={15} /> Generate invite link
+          <Link2 size={15} /> {t("friends.generateInvite")}
         </button>
         {newLink && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
             <input className="select" readOnly value={newLink} onFocus={(e) => e.currentTarget.select()} style={{ flex: 1 }} />
             <button className="btn sm ghost" onClick={() => void copy(newLink)}>
-              {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
+              {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? t("friends.copied") : t("friends.copy")}
             </button>
           </div>
         )}
       </div>
 
       <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
-        <h2 className="card-title"><Link2 size={17} /> Pending invitations</h2>
+        <h2 className="card-title"><Link2 size={17} /> {t("friends.pendingInvitations")}</h2>
         {invitations.length === 0 ? (
-          <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>No unused invite links right now.</div>
+          <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>{t("friends.noInviteLinks")}</div>
         ) : (
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
             {invitations.map((invitation) => (
               <li key={invitation.token} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
                 <span style={{ fontFamily: "monospace", fontSize: "0.82rem", color: "var(--text-2)" }}>
-                  …{invitation.token.slice(-8)} · created {relativeTime(invitation.createdAt)}
+                  …{invitation.token.slice(-8)} {t("friends.created", { time: relativeTime(invitation.createdAt) })}
                 </span>
                 <button className="btn sm ghost" disabled={busy} onClick={() => void revoke(invitation.token)}>
-                  <Trash2 size={13} /> Revoke
+                  <Trash2 size={13} /> {t("friends.revoke")}
                 </button>
               </li>
             ))}
@@ -145,10 +138,10 @@ export function FriendsScreen() {
       </div>
 
       <div className="card" style={{ maxWidth: 640, marginTop: 16 }}>
-        <h2 className="card-title"><Users size={17} /> Your friends</h2>
+        <h2 className="card-title"><Users size={17} /> {t("friends.yourFriends")}</h2>
         {friends.length === 0 ? (
           <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>
-            No friends yet — send an invite link above{status?.club ? "" : " after creating your club"}.
+            {t("friends.noFriends")}{status?.club ? "" : t("friends.afterCreatingClub")}.
           </div>
         ) : (
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
@@ -160,12 +153,12 @@ export function FriendsScreen() {
                     {" "}·{" "}
                     {friend.clubName && friend.clubId != null
                       ? <ClubNameLink clubId={friend.clubId} name={friend.clubName} showCrest={false} />
-                      : friend.clubName ?? "no club"}
-                    {friend.competitionState === "DORMANT" ? " (dormant)" : ""} · friend since {relativeTime(friend.since)}
+                      : friend.clubName ?? t("friends.noClub")}
+                    {friend.competitionState === "DORMANT" ? t("friends.dormant") : ""} {t("friends.friendSince", { time: relativeTime(friend.since) })}
                   </span>
                 </span>
                 <button className="btn sm ghost" disabled={busy} onClick={() => void removeFriend(friend.userId)}>
-                  <Trash2 size={13} /> Remove
+                  <Trash2 size={13} /> {t("friends.remove")}
                 </button>
               </li>
             ))}

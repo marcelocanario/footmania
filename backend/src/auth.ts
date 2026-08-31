@@ -42,6 +42,8 @@ function buildAuthConfig() {
         isPro: { type: "boolean" as const, required: false, defaultValue: false, input: false },
         bannedAt: { type: "date" as const, required: false, input: false },
         banReason: { type: "string" as const, required: false, input: false },
+        // Player-facing UI language; surfaced through /me for cross-device sync.
+        locale: { type: "string" as const, required: false, input: false },
       },
     },
     session: {

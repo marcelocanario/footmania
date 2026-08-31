@@ -657,7 +657,7 @@ export async function persistWorld(
         await createManyChunked(tx.clubEloEvent, (world.clubEloEvents ?? []).map((event) => ({ id: event.id, saveId, matchId: event.matchId, clubId: event.clubId, opponentClubId: event.opponentClubId, ratingBefore: event.ratingBefore, ratingAfter: event.ratingAfter, delta: event.delta, expectedScore: event.expectedScore, actualScore: event.actualScore, createdAt: new Date(event.createdAt) })));
       }
     if (rewriteTables.has("newsItem") && world.news.length > 0 && (!previous || !stableDeltaTables.has("newsItem"))) {
-      await createManyChunked(tx.newsItem, world.news.map((n) => ({ saveId, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? null, seasonId: n.seasonId ?? null, subject: n.subject ?? null, headline: n.headline ?? null, entriesJson: n.entries ? JSON.stringify(n.entries) : null, recipientClubId: n.recipientClubId ?? null })));
+      await createManyChunked(tx.newsItem, world.news.map((n) => ({ saveId, dayIndex: n.dayIndex, text: n.text, kind: n.kind, clubId: n.clubId ?? null, seasonId: n.seasonId ?? null, subject: n.subject ?? null, headline: n.headline ?? null, entriesJson: n.entries ? JSON.stringify(n.entries) : null, bodyJson: n.body ? JSON.stringify(n.body) : null, recipientClubId: n.recipientClubId ?? null })));
     }
     // Only walk every club's full ledger/trophy history when this persist will
     // actually use the result (fresh save, or an existing save whose ledger/
@@ -1140,8 +1140,20 @@ function newsRow(item: NewsItem, saveId: number) {
     subject: item.subject ?? null,
     headline: item.headline ?? null,
     entriesJson: item.entries ? JSON.stringify(item.entries) : null,
+    bodyJson: item.body ? JSON.stringify(item.body) : null,
     recipientClubId: item.recipientClubId ?? null,
   };
+}
+
+function newsBodyFromJson(raw: string | null): import("../i18n/catalog").MessageRef | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as { k?: unknown; p?: unknown };
+    if (typeof parsed.k !== "string") return undefined;
+    return parsed as import("../i18n/catalog").MessageRef;
+  } catch {
+    return undefined;
+  }
 }
 
 function newsEntriesFromJson(raw: string | null): import("../game/types").NewsEntry[] | undefined {
@@ -1834,6 +1846,7 @@ async function rebuildWorld(
       seasonId: n.seasonId ?? undefined,
       subject: n.subject ?? undefined,
       headline: n.headline ?? undefined,
+      ...(newsBodyFromJson(n.bodyJson) ? { body: newsBodyFromJson(n.bodyJson) } : {}),
       ...(newsEntriesFromJson(n.entriesJson) ? { entries: newsEntriesFromJson(n.entriesJson) } : {}),
       recipientClubId: n.recipientClubId ?? undefined,
     }));

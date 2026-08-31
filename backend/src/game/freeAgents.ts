@@ -19,7 +19,8 @@ import { DEVELOPMENT } from "./constants";
 import { calculateBaseSalary, calculateProfessionalContractSalary, contractDaysForTerm, contractDemandOptions, calculateReleaseClause, remainingSeasonFractionForDay, remainingSeasons } from "./economy";
 import { recordTerminalDeletion } from "./population";
 import { ensureClubSquadNumbers } from "./squadNumbers";
-import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
+import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 
 /**
  * Free-agent market (transfer-market-overhaul Phase 7, §41-§54).
@@ -389,11 +390,11 @@ export function settleFreeAgentListing(
     kind: "market",
     subject: NEWS_SUBJECTS.transfers,
     clubId: winner.id,
-    headline: "Free agent signed",
+    headline: "news.headline.freeAgent",
     entries: [{
       key: `free-agent:${listing.id}`,
       label: player.name,
-      detail: `${winner.name} signed ${player.name} as a free agent for ${formatMoney(finalPrice)}`,
+      detail: msg("news.detail.freeAgentSigned", { winner: winner.name, player: player.name, price: finalPrice }),
     }],
   });
   return { ok: true, winnerClubId: winner.id, finalPrice };

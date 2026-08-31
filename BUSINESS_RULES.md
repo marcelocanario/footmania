@@ -1754,3 +1754,38 @@ settings with no real effect today:
 - **Invite links**: the token is stashed client-side before the Google redirect
   and redeemed via `POST /api/account/invite/accept` once the session exists
   (friendship creation rules unchanged).
+
+## Localization
+
+- **Supported languages**: English (default), French, Brazilian Portuguese.
+  Locale bundles are one file per language under
+  `frontend/src/i18n/locales/`; `en.ts` is the type source of truth and `fr.ts` /
+  `pt-BR.ts` must mirror it exactly or `tsc -b` fails. English is bundled
+  statically; FR and PT-BR load as separate chunks before the first render.
+- **Detection and override order**: on boot the app uses, highest first, (1) an
+  explicit `localStorage["footmania:locale"]` choice, (2) the browser's
+  `navigator.languages` in order (`pt-PT`/bare `pt` map to `pt-BR`), (3) `en`.
+  A logged-in user's `User.locale` is reconciled against that: an explicit local
+  choice wins and is pushed to the account; a browser-detected (non-explicit)
+  boot adopts the account value.
+- **The server never renders localized text.** `User.locale` exists solely to
+  sync the preference across devices; it is surfaced through `GET /me` and
+  written by `PUT /api/account/me/locale`, and nothing server-side reads it for
+  output. Player-facing strings are rendered client-side through `t()`.
+- **Message-key boundary**: user-facing copy is either a translated key rendered
+  client-side or data (proper names) passed through untranslated. English prose
+  is never shipped as a user-facing string; the admin console stays English and
+  the privacy policy ships as whole per-locale documents.
+- **News localization**: the shared catalog `backend/src/i18n/catalog.ts`
+  (imported by the frontend through the `@server-i18n/*` path alias) is the
+  source of truth for every translatable string the server emits. A grouped
+  news item's `body` is a FRAME key (`news.injuries`, `news.tribunal` …) and the
+  client composes `t(lead) + Intl.ListFormat(entries) + t(tail)`; each entry's
+  `label`/`detail` is either a proper name or a `MessageRef` whose params are
+  raw values (money as integers the client formats). `NewsItem.bodyJson`
+  persists the body; `NULL` means a legacy row and the client renders the
+  English `text`. `backend/tests/i18nCatalog.test.ts` validates that every key
+  resolves in every locale with the declared params and no `$`/separator.
+  The pre-season report is a `composite` body ref (`news.preseason`) composed
+  client-side; the worldgen "Welcome" message is keyed (`news.welcome`).
+  News history is render-immutable.

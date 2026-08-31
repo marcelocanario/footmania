@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Flag, RefreshCw, Subscript, Users, Volume2, VolumeX } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
@@ -14,18 +15,8 @@ import { PlayerScoresTable } from "../components/PlayerScoresTable";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 import { FamiliarityBar } from "../components/FamiliarityBar";
-import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
-
-const PHASE_LABEL: Record<string, string> = {
-  pregame: "Lineups",
-  first: "1st half",
-  halftime: "Half-time",
-  second: "2nd half",
-  et1: "Extra time · 1st period",
-  et2: "Extra time · 2nd period",
-  shootout: "Penalty shootout",
-  fulltime: "Full time",
-};
+import { positionLabel } from "../positions";
+import { directionOptions, pressingOptions, styleOptions } from "../tacticsOptions";
 
 /** Natural (squad) position label: what position the player actually plays
  *  (their base position), used for the bench list in the substitution panel. */
@@ -33,18 +24,18 @@ function naturalPosition(player: LivePlayer): string {
   return player.naturalPosition ?? "PLAYER";
 }
 
-function matchContextLabel(state: LiveState): string {
+function matchContextLabel(state: LiveState, t: (k: string, o?: object) => string): string {
   const parts: string[] = [];
-  if (state.seasonNumber !== null) parts.push(`Season ${state.seasonNumber}`);
+  if (state.seasonNumber !== null) parts.push(t("live.season", { season: state.seasonNumber }));
   if (state.divisionTier !== null) {
-    parts.push(`Division ${state.divisionTier}`);
-    if (state.groupNumber !== null) parts.push(`Group ${state.groupNumber}`);
+    parts.push(t("live.division", { tier: state.divisionTier }));
+    if (state.groupNumber !== null) parts.push(t("live.group", { group: state.groupNumber }));
   } else if (state.competitionName) {
     parts.push(state.competitionName);
   }
-  if (state.roundNumber !== null) parts.push(`Round ${state.roundNumber}`);
+  if (state.roundNumber !== null) parts.push(t("live.round", { round: state.roundNumber }));
   if (state.stadiumName) parts.push(state.stadiumName);
-  return parts.join(" · ") || "Matchday";
+  return parts.join(" · ") || t("live.matchday");
 }
 
 interface WsMessage {
@@ -59,6 +50,7 @@ interface WsMessage {
 }
 
 export function LiveMatch() {
+  const { t } = useTranslation();
   const refresh = useGame((s) => s.refresh);
   const setLiveMatch = useGame((s) => s.setLiveMatch);
   const snapshot = useGame((s) => s.snapshot);
@@ -469,12 +461,12 @@ export function LiveMatch() {
       <div>
         <div className="page-head">
           <div>
-            <div className="kicker">Matchday</div>
-            <h1>Kickoff</h1>
+            <div className="kicker">{t("live.matchday")}</div>
+            <h1>{t("live.kickoff")}</h1>
           </div>
         </div>
         <div className="empty-state" style={{ paddingTop: 70 }}>
-          {reconnecting ? "Connecting to the stadium..." : "Loading..."}
+          {reconnecting ? t("live.connecting") : t("live.loading")}
         </div>
       </div>
     );
@@ -483,7 +475,7 @@ export function LiveMatch() {
   const isDone = state.ended;
   const scoreKey = `${state.homeScore}-${state.awayScore}`;
 
-  const phaseLabel = PHASE_LABEL[state.phase] ?? state.phase;
+  const phaseLabel = t(`live.phase.${state.phase}`) || state.phase;
   const canChangeTactics = !isSpectator && !isDone && state.phase !== "shootout" && tacticsCooldownMinutes <= 0;
 
   if (state.phase === "pregame") {
@@ -491,8 +483,8 @@ export function LiveMatch() {
       <div>
         <div className="page-head">
           <div>
-            <div className="kicker">{matchContextLabel(state)}</div>
-            <h1><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /> vs <ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></h1>
+            <div className="kicker">{matchContextLabel(state, t as unknown as (k: string, o?: object) => string)}</div>
+            <h1><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /> {t("team.vs")} <ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></h1>
           </div>
         </div>
         <div className="card" style={{ borderColor: "rgba(61,220,132,0.4)", marginBottom: 16, padding: "22px 20px" }}>
@@ -500,17 +492,17 @@ export function LiveMatch() {
             <div>
               <h2 className="card-title" style={{ marginBottom: 4 }}>
                 <span className="live-tag" style={{ fontSize: "0.7rem", padding: "3px 10px" }}>
-                  {wsMode && !reconnecting ? <><span className="pulse-dot" /> Live</> : <><RefreshCw size={11} /> {reconnecting ? "Reconnecting" : "Fallback"}</>}
+                  {wsMode && !reconnecting ? <><span className="pulse-dot" /> {t("live.live")}</> : <><RefreshCw size={11} /> {reconnecting ? t("live.reconnecting") : t("live.fallback")}</>}
                 </span>{" "}
-                {isSpectator ? "Lineups" : "Match lineup"}
+                {isSpectator ? t("live.phase.pregame") : t("live.matchLineup")}
               </h2>
               <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>
-                {isSpectator ? "You are watching as a spectator. The match starts shortly." : "Final check — kick-off in moments. Changes are saved instantly."}
+                {isSpectator ? t("live.spectatorPregame") : t("live.participantPregame")}
               </div>
             </div>
             {!isSpectator && (
               <button className="btn gold" style={{ fontSize: "1.05rem", padding: "12px 28px" }} onClick={() => void refreshLiveState()}>
-                <RefreshCw size={17} /> Refresh
+                <RefreshCw size={17} /> {t("live.refresh")}
               </button>
             )}
           </div>
@@ -526,10 +518,10 @@ export function LiveMatch() {
       <div className="page-head">
         <div>
           <div className="kicker">
-             {matchContextLabel(state)}
-            {isSpectator ? " · Watching as spectator" : ""}
+             {matchContextLabel(state, t as unknown as (k: string, o?: object) => string)}
+            {isSpectator ? t("live.watchingSpectator") : ""}
           </div>
-          <h1><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /> vs <ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></h1>
+          <h1><ClubNameLink clubId={state.homeClubId} name={state.home} showCrest={false} /> {t("team.vs")} <ClubNameLink clubId={state.awayClubId} name={state.away} showCrest={false} /></h1>
         </div>
       </div>
 
@@ -539,13 +531,13 @@ export function LiveMatch() {
           type="button"
           className="sound-toggle"
           onClick={toggleSoundMuted}
-          title={soundMuted ? "Unmute match sounds" : "Mute match sounds"}
-          aria-label={soundMuted ? "Unmute match sounds" : "Mute match sounds"}
+          title={soundMuted ? t("live.unmute") : t("live.mute")}
+          aria-label={soundMuted ? t("live.unmute") : t("live.mute")}
         >
           {soundMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}
         </button>
         {isDone ? (
-          <span className="live-minute">{state.shootout ? "Penalties decided it" : PHASE_LABEL.fulltime}</span>
+          <span className="live-minute">{state.shootout ? t("live.penaltiesDecided") : t("live.phase.fulltime")}</span>
         ) : (
           <span className="live-tag">
             <span className="pulse-dot" /> {phaseLabel}
@@ -563,13 +555,13 @@ export function LiveMatch() {
         </div>
         {state.shootout && (
           <div style={{ color: "var(--gold-2)", fontWeight: 700, marginBottom: 6 }}>
-            Pens {state.shootout.scores[0]} - {state.shootout.scores[1]} · {state.shootout.winner} win
+            {t("live.pens", { home: state.shootout.scores[0], away: state.shootout.scores[1], winner: state.shootout.winner })}
           </div>
         )}
       </div>
 
       {/* Match progress 0–90 (clamped, not stretched by added time) */}
-      <div className="match-progress" aria-label={`Match progress ${Math.round(state.progressPct)}%`} style={{ marginBottom: 16, height: 6, background: "rgba(255,255,255,0.12)", borderRadius: 999, overflow: "hidden" }}>
+      <div className="match-progress" aria-label={t("live.matchProgress", { pct: Math.round(state.progressPct) })} style={{ marginBottom: 16, height: 6, background: "rgba(255,255,255,0.12)", borderRadius: 999, overflow: "hidden" }}>
         <div className="match-progress-fill" style={{ width: `${Math.min(100, state.progressPct)}%`, height: "100%", background: "linear-gradient(90deg, var(--grass), var(--grass-2))", transition: "width 0.6s ease" }} />
       </div>
 
@@ -591,12 +583,12 @@ export function LiveMatch() {
         <aside className="card live-side">
           <div className="live-side-head">
             <span className="live-tag" style={{ fontSize: "0.68rem", padding: "3px 9px" }}>
-              {wsMode && !reconnecting ? <><span className="pulse-dot" /> Live</> : <><RefreshCw size={10} /> {reconnecting ? "Reconnecting" : "Fallback"}</>}
+              {wsMode && !reconnecting ? <><span className="pulse-dot" /> {t("live.live")}</> : <><RefreshCw size={10} /> {reconnecting ? t("live.reconnecting") : t("live.fallback")}</>}
             </span>
-            <div className="live-side-tabs" role="tablist" aria-label="Live match sidebar">
+            <div className="live-side-tabs" role="tablist" aria-label={t("live.matchHistory")}>
               {(["events", "scores", "stats", "tactics"] as const).map((tab) => (
                 <button key={tab} type="button" role="tab" aria-selected={sideTab === tab} className={`live-side-tab${sideTab === tab ? " active" : ""}`} onClick={() => setSideTab(tab)}>
-                  {tab === "events" ? "Match history" : tab[0].toUpperCase() + tab.slice(1)}
+                  {(t as unknown as (k: string) => string)(`live.side${tab[0].toUpperCase()}${tab.slice(1)}`)}
                 </button>
               ))}
             </div>
@@ -604,7 +596,7 @@ export function LiveMatch() {
 
           {sideTab === "events" && (
             <div className="live-side-content">
-              <MatchHistory events={historyEvents} homeClubId={state.homeClubId} homeName={state.home} awayName={state.away} emptyText={isDone ? "No goals, cards or injuries to report." : "The match is about to start..."} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
+              <MatchHistory events={historyEvents} homeClubId={state.homeClubId} homeName={state.home} awayName={state.away} emptyText={isDone ? t("live.noEvents") : t("live.matchStarting")} onPlayerClick={(id, name) => setPlayerTarget({ id, name })} />
             </div>
           )}
 
@@ -623,33 +615,33 @@ export function LiveMatch() {
           {sideTab === "tactics" && (
             <div className="live-side-content live-tactics">
               <div className="live-tactics-hint">
-                {isSpectator ? "You are watching these tactics as a spectator." : "Style, pressing and direction apply from the next simulation tick."}
+                {isSpectator ? t("live.spectatorTactics") : t("live.participantTactics")}
               </div>
               {!isSpectator && tacticsCooldownMinutes > 0 && (
                 <div className="live-tactics-hint" style={{ color: "var(--gold-2)" }}>
-                  Tactics are locked for {tacticsCooldownMinutes} more minute{tacticsCooldownMinutes === 1 ? "" : "s"} after your last change.
+                  {tacticsCooldownMinutes === 1 ? t("live.tacticsLocked", { count: 1 }) : t("live.tacticsLockedOther", { count: tacticsCooldownMinutes })}
                 </div>
               )}
-              <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{STYLES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-              <div className="live-tactics-hint">{STYLES[tacticDraft.style]?.desc}</div></label>
-              <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{PRESSING.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-              <div className="live-tactics-hint">{PRESSING[tacticDraft.pressing]?.desc}</div></label>
-              <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{DIRECTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-              <div className="live-tactics-hint">{DIRECTIONS[tacticDraft.direction]?.desc}</div></label>
+              <label><span>Style</span><select className="select" value={tacticDraft.style} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, style: Number(event.target.value) })}>{styleOptions().map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <div className="live-tactics-hint">{styleOptions()[tacticDraft.style]?.desc}</div></label>
+              <label><span>Pressing</span><select className="select" value={tacticDraft.pressing} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, pressing: Number(event.target.value) })}>{pressingOptions().map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <div className="live-tactics-hint">{pressingOptions()[tacticDraft.pressing]?.desc}</div></label>
+              <label><span>Direction</span><select className="select" value={tacticDraft.direction} disabled={!canChangeTactics || tacticsBusy} onChange={(event) => setTacticDraft({ ...tacticDraft, direction: Number(event.target.value) })}>{directionOptions().map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+              <div className="live-tactics-hint">{directionOptions()[tacticDraft.direction]?.desc}</div></label>
               {typeof liveTactics?.familiarity === "number" && (
                 <div>
                   <FamiliarityBar value={liveTactics.familiarity} projected={draftMatchesLive ? null : draftProjection} />
                   <div className="live-tactics-hint">
                     {draftMatchesLive
-                      ? "How well the team is drilled in this setup. Switching to an unfamiliar setup costs execution."
-                      : "Marker shows familiarity if you apply this draft — unfamiliar setups execute worse until drilled."}
+                      ? t("live.familiarityDrilled")
+                      : t("live.familiarityDraft")}
                   </div>
                 </div>
               )}
-              {!isSpectator && <button className="btn gold" onClick={() => void doTactics()} disabled={!canChangeTactics || tacticsBusy}>{tacticsBusy ? "Applying..." : tacticsCooldownMinutes > 0 ? `Locked (${tacticsCooldownMinutes}')` : "Apply tactics"}</button>}
-              {!isSpectator && !isDone && <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}><Subscript size={15} /> Substitutions ({subsLeft})</button>}
+              {!isSpectator && <button className="btn gold" onClick={() => void doTactics()} disabled={!canChangeTactics || tacticsBusy}>{tacticsBusy ? t("live.applying") : tacticsCooldownMinutes > 0 ? t("live.lockedMin", { min: tacticsCooldownMinutes }) : t("live.applyTactics")}</button>}
+              {!isSpectator && !isDone && <button className="btn" onClick={() => setShowSubs(true)} disabled={subsLeft <= 0}><Subscript size={15} /> {t("live.subs", { count: subsLeft })}</button>}
               {tacticsStatus && <div className="live-tactics-status">{tacticsStatus}</div>}
-              {!isSpectator && state.phase === "halftime" && <div className="live-tactics-hint">Formation and lineup changes are available in the interval controls.</div>}
+              {!isSpectator && state.phase === "halftime" && <div className="live-tactics-hint">{t("live.halftimeHint")}</div>}
             </div>
           )}
         </aside>
@@ -668,31 +660,31 @@ export function LiveMatch() {
         const canReady = (state.homeIsHuman && humanSide === 0) || (state.awayIsHuman && humanSide === 1);
         return (
           <div className="card" style={{ borderColor: "rgba(240,180,41,0.4)", marginBottom: 16, textAlign: "center", padding: "18px 14px" }}>
-            <h2 style={{ fontSize: "1.3rem", marginBottom: 6 }}>Interval — {mm}:{ss}</h2>
+            <h2 style={{ fontSize: "1.3rem", marginBottom: 6 }}>{t("live.interval", { time: `${mm}:${ss}` })}</h2>
             <div style={{ color: "var(--text-3)", fontSize: "0.9rem", marginBottom: 6 }}>
               {isSpectator
-                ? "You are watching as a spectator."
-                 : `You may change your formation here and make substitutions from the Tactics tab (${subsLeft} left).`}
+                ? t("live.spectatorHalftime")
+                : t("live.participantHalftime", { count: subsLeft })}
             </div>
             <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginBottom: 12 }}>
               {bothHumans ? (
-                <span>Home {homeReady ? "✓ Ready" : "⏳ Waiting"} · Away {awayReady ? "✓ Ready" : "⏳ Waiting"} {bothHumans && homeReady && awayReady ? "— Resuming..." : ""}</span>
+                <span>{t("matchday.home")} {homeReady ? t("live.ready") : t("live.waiting")} · {t("matchday.away")} {awayReady ? t("live.ready") : t("live.waiting")} {bothHumans && homeReady && awayReady ? t("live.resuming") : ""}</span>
               ) : (
-                <span>Second half resumes when ready or after {state.halftimePauseMinutes} min — {remainingSec > 0 ? `${mm}:${ss} left` : "Resuming..."}</span>
+                <span>{remainingSec > 0 ? t("live.secondHalfResumes", { min: state.halftimePauseMinutes ?? 5, time: `${mm}:${ss}` }) : t("live.resumingDots")}</span>
               )}
             </div>
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
                {!isSpectator && (
                  <button className="btn" onClick={() => setShowLineup((v) => !v)}>
-                   <Users size={15} /> {showLineup ? "Hide lineup" : "Change formation"}
+                   <Users size={15} /> {showLineup ? t("live.hideLineup") : t("live.changeFormation")}
                  </button>
                )}
               {canReady && (
                 <button className={`btn ${myReady ? "ghost" : "gold"}`} onClick={() => void doHalftimeReady()} disabled={halftimeBusy || myReady}>
-                  {myReady ? "✓ Ready" : "I'm Ready — Resume"}
+                  {myReady ? t("live.ready") : t("live.imReady")}
                 </button>
               )}
-              <button className="btn ghost" onClick={() => void refreshLiveState()}><RefreshCw size={15} /> Refresh</button>
+              <button className="btn ghost" onClick={() => void refreshLiveState()}><RefreshCw size={15} /> {t("live.refresh")}</button>
             </div>
             {showLineup && (
               <div style={{ textAlign: "left", marginTop: 16 }}>
@@ -714,8 +706,8 @@ export function LiveMatch() {
       {!isSpectator && !isDone && state.automationDisabled !== undefined && (
         <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
-            <div style={{ fontWeight: 700 }}>Auto-presets</div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{state.automationFiredCount ?? 0} rules fired · {state.automationDisabled?.[humanSide] ? "Automation paused for you" : "Automation active (set rules in Squad > Tactics > Match Automation)"}</div>
+            <div style={{ fontWeight: 700 }}>{t("live.autoPresets")}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{t("live.rulesFired", { count: state.automationFiredCount ?? 0, state: state.automationDisabled?.[humanSide] ? t("live.automationPaused") : t("live.automationActive") })}</div>
           </div>
           <button
             className={`btn ${state.automationDisabled?.[humanSide] ? "gold" : "ghost"}`}
@@ -727,7 +719,7 @@ export function LiveMatch() {
               if (!ok) setAutoBusy(false);
             }}
           >
-            {state.automationDisabled?.[humanSide] ? "Resume automation" : "Pause automation & take control"}
+            {state.automationDisabled?.[humanSide] ? t("live.resumeAutomation") : t("live.pauseAutomation")}
           </button>
         </div>
       )}
@@ -735,13 +727,13 @@ export function LiveMatch() {
       <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
         {isDone ? (
           <button className="btn gold" onClick={backToDashboard}>
-            <Flag size={15} /> Back to dashboard
+            <Flag size={15} /> {t("live.backToDashboard")}
           </button>
         ) : (
           state.phase !== "halftime" && (
             <>
               <button className="btn ghost" onClick={() => void refreshLiveState()}>
-                <RefreshCw size={15} /> Refresh
+                <RefreshCw size={15} /> {t("live.refresh")}
               </button>
             </>
           )
@@ -751,13 +743,13 @@ export function LiveMatch() {
       {showSubs && (
         <div className="modal-overlay" onClick={() => setShowSubs(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ marginBottom: 4 }}>Substitutions</h3>
+            <h3 style={{ marginBottom: 4 }}>{t("live.substitutions")}</h3>
             <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 12 }}>
-              {subsLeft} substitution{subsLeft === 1 ? "" : "s"} remaining · pick who comes off and who comes on
+              {subsLeft === 1 ? t("live.subsRemaining", { count: 1 }) : t("live.subsRemainingOther", { count: subsLeft })}
             </div>
             <div className="grid" style={{ gridTemplateColumns: "1fr 1fr", gap: 12 }}>
               <div>
-                <div className="card-title" style={{ marginBottom: 6 }}>On the pitch</div>
+                <div className="card-title" style={{ marginBottom: 6 }}>{t("live.onThePitch")}</div>
                 <div className="sub-list">
                   {onPitch.map((p) => (
                     <button
@@ -765,7 +757,7 @@ export function LiveMatch() {
                       className={`sub-row${subOut?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubOut(p)}
                     >
-                      <span className="pos-tag" title={p.positionName ?? p.naturalPosition}>{p.deployedRole ?? p.naturalPosition}</span>
+                      <span className="pos-tag" title={positionLabel(p.naturalPosition)}>{p.deployedRole ?? p.naturalPosition}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>
@@ -776,7 +768,7 @@ export function LiveMatch() {
                 </div>
               </div>
               <div>
-                <div className="card-title" style={{ marginBottom: 6 }}>Bench</div>
+                <div className="card-title" style={{ marginBottom: 6 }}>{t("live.bench")}</div>
                 <div className="sub-list">
                   {bench.map((p) => (
                     <button
@@ -785,7 +777,7 @@ export function LiveMatch() {
                       onClick={() => setSubIn(p)}
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
-                      <span className="pos-tag" title={p.positionName ?? p.naturalPosition}>{naturalPosition(p)}</span>
+                      <span className="pos-tag" title={positionLabel(p.naturalPosition)}>{naturalPosition(p)}</span>
                       <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
                       <span className="sub-energy">
                         <span>EN {Math.round(p.energy)}</span>
@@ -798,9 +790,9 @@ export function LiveMatch() {
               </div>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-              <button className="btn ghost" style={{ flex: 1 }} onClick={() => setShowSubs(false)}>Close</button>
+              <button className="btn ghost" style={{ flex: 1 }} onClick={() => setShowSubs(false)}>{t("live.close")}</button>
               <button className="btn" style={{ flex: 1 }} onClick={() => void doSub()} disabled={!subOut || !subIn || subBusy}>
-                Confirm sub
+                {t("live.confirmSub")}
               </button>
             </div>
           </div>

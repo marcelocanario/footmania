@@ -6,6 +6,7 @@ import { generateName } from "../game/names";
 import { ELO_CONFIG, MP_CONFIG } from "../config";
 import { generateNewClubRoster, totalDivisionsForGeneration } from "./clubGenerator";
 import { emptyPopulationLedger } from "./population";
+import { msg } from "../i18n/catalog";
 
 /**
  * World generation for the multiplayer game. The world is a single shared
@@ -26,7 +27,7 @@ export function generateWorld(seed: number): World {
     fixtures: [],
     matches: [],
     clubEloEvents: [],
-    news: [{ dayIndex: 0, text: "Welcome to Footmania! A new season is about to begin. Take charge of your squad, shape your tactics and lead the club up the pyramid.", kind: "season", headline: "Welcome to Footmania" }],
+    news: [{ dayIndex: 0, text: "", kind: "season", body: msg("news.welcome.body"), headline: "news.welcome.headline" }],
     loans: [],
     marketBids: [],
     transferAuctions: [],

@@ -2,7 +2,7 @@ import type { LiveBallAction, LiveMatchState, Player, World } from "../game/type
 import { livePhase, tacticsCooldownMinutesRemaining } from "../game/match";
 import { multiplayerDayLabel } from "../game/calendar";
 import { EVENT_CODES, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
-import { positionGroup, positionName } from "../game/positions";
+import { positionGroup } from "../game/positions";
 import { formationById } from "../game/formations";
 import {
   canonicalFromLive,
@@ -97,7 +97,6 @@ export interface LivePlayerView {
   nickname: string | null;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   slotIndex: number | null;
   deployedRole: string | null;
   /** Squad shirt number shown on the pitch marker. */
@@ -334,7 +333,6 @@ function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Play
   const gameDay = world.mp.absoluteGameDay ?? world.dayIndex;
   const naturalPos = p.position as unknown as import("../game/positions").NaturalPosition;
   const grp = positionGroup(naturalPos);
-  const full = positionName(naturalPos);
   // Resolve live slot assignment if present
   const homeSlot = (st as unknown as { homeSlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[p.id];
   const awaySlot = (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[p.id];
@@ -353,7 +351,6 @@ function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Play
     nickname: p.nickname ?? null,
     naturalPosition: p.position as unknown as string,
     positionGroup: grp,
-    positionName: full,
     slotIndex,
     deployedRole,
     number: p.squadNumber ?? null,
@@ -384,7 +381,6 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     if (!p) return null;
     const naturalPos2 = p.position as unknown as import("../game/positions").NaturalPosition;
     const grp = positionGroup(naturalPos2);
-    const full = positionName(naturalPos2);
     const homeSlot = (st as unknown as { homeSlotByPlayerId?: Record<number, number> }).homeSlotByPlayerId?.[p.id];
     const awaySlot = (st as unknown as { awaySlotByPlayerId?: Record<number, number> }).awaySlotByPlayerId?.[p.id];
     const slotIndex = homeSlot ?? awaySlot ?? null;
@@ -402,7 +398,6 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
       nickname: p.nickname ?? null,
       naturalPosition: p.position as unknown as string,
       positionGroup: grp,
-      positionName: full,
       slotIndex,
       deployedRole,
       number: p.squadNumber ?? null,

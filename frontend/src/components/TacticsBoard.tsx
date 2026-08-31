@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { GripVertical, Target, Wand2 } from "lucide-react";
 import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { FootballKit } from "./kit/FootballKit";
 import { formationsFromSnapshot } from "../tacticsOptions";
+import { positionLabel as naturalPositionLabel } from "../positions";
 
 interface Ed {
   formation: number;
@@ -18,7 +21,6 @@ interface BoardPlayer {
   id: number;
   name: string;
   naturalPosition: string;
-  positionName: string;
   tacticalPosition: string;
   deployedRole?: string | null;
   slotIndex?: number | null;
@@ -80,7 +82,7 @@ function isBoardPlayer(player: BoardPlayer | null | undefined): player is BoardP
 }
 
 function positionLabel(naturalPos?: string): string {
-  return naturalPos ?? "PLAYER";
+  return naturalPos ?? i18n.t("tactics.playerFallback");
 }
 
 /** Full-name tooltip for a slot role label (deployed role string). */
@@ -89,6 +91,7 @@ function roleFullName(role: string): string {
 }
 
 export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationChange, customTooltips = false }: Props) {
+  const { t } = useTranslation();
   const snapshot = useGame((state) => state.snapshot);
   const [data, setData] = useState<LineupView | null>(null);
   const [ed, setEd] = useState<Ed | null>(null);
@@ -169,11 +172,11 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
       };
       if (mode === "club") {
         await api.setLineup(payload);
-        setStatus({ kind: "ok", text: "Saved" });
+        setStatus({ kind: "ok", text: t("tactics.saved") });
         onSaved?.();
       } else if (matchId) {
         const result = await api.matchLineup(matchId, payload);
-        setStatus({ kind: "ok", text: "Saved" });
+        setStatus({ kind: "ok", text: t("tactics.saved") });
         onSaved?.(result.state);
       }
     } catch (error) {
@@ -249,7 +252,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
       else nextSubs[source.index] = target.id;
     } else if (source.area === "starter" && target.area === "starter") {
       if (nextStarters[target.index] === null) {
-        setStatus({ kind: "err", text: "Choose a player for the empty slot first." });
+        setStatus({ kind: "err", text: t("tactics.chooseEmptyFirst") });
         return;
       }
       [nextStarters[source.index], nextStarters[target.index]] = [nextStarters[target.index], nextStarters[source.index]];
@@ -257,7 +260,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
       [nextSubs[source.index], nextSubs[target.index]] = [nextSubs[target.index], nextSubs[source.index]];
     } else if (source.area === "starter" && target.area === "bench") {
       if (nextSubs[target.index] === null) {
-        setStatus({ kind: "err", text: "Drop onto an occupied bench slot to swap players." });
+        setStatus({ kind: "err", text: t("tactics.occupiedBenchDrop") });
         return;
       }
       [nextStarters[source.index], nextSubs[target.index]] = [nextSubs[target.index], nextStarters[source.index]];
@@ -396,7 +399,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
   const autoFill = async () => {
     if (!ed) return;
     if (mode === "match" && liveState?.phase === "halftime") {
-      setStatus({ kind: "err", text: "Auto lineup is unavailable at halftime; choose players manually." });
+      setStatus({ kind: "err", text: t("tactics.autoHalftimeUnavailable") });
       return;
     }
     setSaving(true);
@@ -423,7 +426,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
   };
 
   if (!data || !ed) {
-    return <div className="empty-state" style={{ padding: 24 }}>Loading lineup...</div>;
+    return <div className="empty-state" style={{ padding: 24 }}>{t("tactics.loadingLineup")}</div>;
   }
 
   const benchSlots = Array.from({ length: 11 }, (_, index) => subs[index] ?? null);
@@ -449,6 +452,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     if (label === "Emergency") return "is-emergency";
     return "is-ineligible";
   };
+  const suitText = (label: string) => (t as unknown as (k: string) => string)(`tactics.suitability.${label.toLowerCase()}`);
   const isIneligibleDrop = (slotIndex: number): boolean => {
     if (!activePreviews) return false;
     const pv = activePreviews.find((p) => p.slotIndex === slotIndex);
@@ -461,28 +465,28 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     <div className="tb-root">
       <div className="tb-toolbar">
         <div className="tb-field">
-          <label htmlFor={`tb-formation-${mode}`}>Formation</label>
+          <label htmlFor={`tb-formation-${mode}`}>{t("tactics.formation")}</label>
           <select id={`tb-formation-${mode}`} className="select" value={ed.formation} disabled={saving} onChange={(event) => void changeFormation(Number(event.target.value))}>
             {formationsFromSnapshot(snapshot?.formationOptions).map((formation) => <option key={formation.value} value={formation.value}>{formation.label}</option>)}
           </select>
         </div>
         <button className="btn sm ghost" onClick={() => void autoFill()} disabled={saving || (mode === "match" && liveState?.phase === "halftime")}>
-          <Wand2 size={14} /> Auto lineup
+          <Wand2 size={14} /> {t("tactics.autoLineup")}
         </button>
-        <span className="tb-status" style={{ color: statusColor }}>{saving ? "Saving..." : status.text || "Drag players to swap them."}</span>
+        <span className="tb-status" style={{ color: statusColor }}>{saving ? t("tactics.saving") : status.text || t("tactics.dragToSwap")}</span>
       </div>
 
       <div className="tb-layout">
-        <section className="tb-pitch-panel" aria-label="Starting eleven">
+        <section className="tb-pitch-panel" aria-label={t("tactics.elevenAria")}>
           <div className="tb-panel-head">
             <div>
-              <div className="section-label">Starting eleven</div>
-              <div className="tb-panel-hint">Drag a player onto another slot to swap.</div>
+              <div className="section-label">{t("tactics.startingEleven")}</div>
+              <div className="tb-panel-hint">{t("tactics.dragToSwapHint")}</div>
             </div>
             <span className="tb-count">{starterIds.size}/11</span>
           </div>
           <div className="tb-pitch">
-            <svg className="tb-pitch-lines" viewBox="0 0 68 100" role="img" aria-label="Formation pitch">
+            <svg className="tb-pitch-lines" viewBox="0 0 68 100" role="img" aria-label={t("tactics.formationPitchAria")}>
               <rect x="0" y="0" width="68" height="100" fill="url(#tbGrass)" />
               <defs>
                 <linearGradient id="tbGrass" x1="0" x2="1">
@@ -516,27 +520,27 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     data-tb-drop-area="starter"
                     data-tb-drop-index={index}
                     disabled={ineligible || (!player && !selected)}
-                    aria-label={`${slotNames[index] ?? `Slot ${index + 1}`}${player ? `: ${player.name}` : previewForSlot ? `: ${previewForSlot.suitabilityLabel} ${previewForSlot.adjustedTacticalRating ?? ""}` : ": empty"}`}
-                    title={previewForSlot ? `${previewForSlot.suitabilityLabel} · adj ${previewForSlot.adjustedTacticalRating ?? "—"}` : (player && suitability?.label ? `${suitability.label} · adj ${suitability.rating ?? player.overall}` : undefined)}
+                    aria-label={`${slotNames[index] ?? t("tactics.slotFallback", { index: index + 1 })}${player ? `: ${player.name}` : previewForSlot ? `: ${suitText(previewForSlot.suitabilityLabel)} ${previewForSlot.adjustedTacticalRating ?? ""}` : `: ${t("tactics.empty")}`}`}
+                    title={previewForSlot ? `${suitText(previewForSlot.suitabilityLabel)} · ${t("tactics.adj")} ${previewForSlot.adjustedTacticalRating ?? "—"}` : (player && suitability?.label ? `${suitText(suitability.label)} · ${t("tactics.adj")} ${suitability.rating ?? player.overall}` : undefined)}
                     onPointerDown={(event) => player && beginDrag(location, event)}
                     onClick={() => player && selectLocation(location)}
                   >
-                    <span className={`tb-slot-role${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": roleFullName(slotNames[index] ?? "") } : { title: roleFullName(slotNames[index] ?? "") })}>{slotNames[index] ?? `#${index + 1}`}</span>
+                    <span className={`tb-slot-role${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": roleFullName(slotNames[index] ?? "") } : { title: roleFullName(slotNames[index] ?? "") })}>{slotNames[index] ?? t("tactics.fallbackNumber", { index: index + 1 })}</span>
                     {player ? (
                       <span className="tb-player-chip">
                         <span className="tb-player-kit">
                           <FootballKit {...(isGoalkeeper ? gkKit : kit)} number={player.number ?? (isGoalkeeper ? 1 : undefined)} size="100%" flat />
                         </span>
                         <span className="tb-player-name">{player.name}</span>
-                        <span className="tb-player-rating" title={suitability?.label ? `${suitability.label} · adj ${suitability.rating ?? player.overall} / OVR ${player.overall}` : `OVR ${player.overall}`}>
+                        <span className="tb-player-rating" title={suitability?.label ? `${suitText(suitability.label)} · ${t("tactics.adj")} ${suitability.rating ?? player.overall} / ${t("tactics.ovr")} ${player.overall}` : `${t("tactics.ovr")} ${player.overall}`}>
                           {suitability?.rating ?? player.overall}
-                          {suitability?.label ? <span className={`tb-suitability ${suitabilityClass(suitability.label)}`}> {suitability.label.slice(0,3)}</span> : null}
+                          {suitability?.label ? <span className={`tb-suitability ${suitabilityClass(suitability.label)}`}> {suitText(suitability.label).slice(0, 3)}</span> : null}
                         </span>
                       </span>
                     ) : previewForSlot ? (
                       <span className="tb-preview-chip">
                         <span className="tb-preview-rating">{previewForSlot.adjustedTacticalRating ?? "—"}</span>
-                        <span className={`tb-preview-label ${suitabilityClass(previewForSlot.suitabilityLabel)}`}>{previewForSlot.suitabilityLabel}</span>
+                        <span className={`tb-preview-label ${suitabilityClass(previewForSlot.suitabilityLabel)}`}>{suitText(previewForSlot.suitabilityLabel)}</span>
                       </span>
                     ) : <span className="tb-empty-dot" aria-hidden="true" />}
                   </button>
@@ -547,11 +551,11 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
         </section>
 
         <aside className="tb-side">
-          <section className="tb-side-panel" aria-label="Bench">
+          <section className="tb-side-panel" aria-label={t("tactics.benchAria")}>
             <div className="tb-panel-head">
               <div>
-                <div className="section-label">Bench</div>
-                <div className="tb-panel-hint">Drag a bench player onto the pitch.</div>
+                <div className="section-label">{t("tactics.bench")}</div>
+                <div className="tb-panel-hint">{t("tactics.benchHint")}</div>
               </div>
               <GripVertical size={15} className="tb-muted-icon" />
             </div>
@@ -571,8 +575,8 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     onClick={() => player && selectLocation(location)}
                   >
                     <span className="tb-row-number">{index + 1}</span>
-                    <span className={`tb-row-position${customTooltips && player ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player ? player.positionName : undefined } : { title: player ? player.positionName : undefined })}>{player?.tacticalPosition ?? "—"}</span>
-                    <span className="tb-row-name">{player?.name ?? "Empty bench slot"}</span>
+                    <span className={`tb-row-position${customTooltips && player ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player ? naturalPositionLabel(player.naturalPosition) : undefined } : { title: player ? naturalPositionLabel(player.naturalPosition) : undefined })}>{player?.tacticalPosition ?? "—"}</span>
+                    <span className="tb-row-name">{player?.name ?? t("tactics.emptyBenchSlot")}</span>
                     <span className="tb-row-energy">EN {player ? Math.round(player.energy) : "—"}</span>
                     <span className="tb-row-rating">{player?.overall ?? "—"}</span>
                   </button>
@@ -581,19 +585,20 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
             </div>
           </section>
 
-          <section className="tb-side-panel" aria-label="Squad pool">
+          <section className="tb-side-panel" aria-label={t("tactics.poolAria")}>
             <div className="tb-panel-head">
               <div>
-                <div className="section-label">Squad pool</div>
-                <div className="tb-panel-hint">Drag an available player onto a slot.</div>
+                <div className="section-label">{t("tactics.squadPool")}</div>
+                <div className="tb-panel-hint">{t("tactics.poolHint")}</div>
               </div>
               <span className="tb-count">{poolPlayers.length}</span>
             </div>
             <div className="tb-pool-list" data-tb-pool-background="true">
-              {poolPlayers.length === 0 && <div className="tb-pool-empty">Everyone is assigned.</div>}
+              {poolPlayers.length === 0 && <div className="tb-pool-empty">{t("tactics.everyoneAssigned")}</div>}
               {poolPlayers.map((player, index) => {
                 const location: BoardLocation = { area: "pool", index, id: player.id };
                 const unavailable = player.injuryDays > 0 || player.suspended;
+                const unavailableTip = player.suspended ? t("tactics.suspended") : t("tactics.injuredFor", { days: player.injuryDays });
                 return (
                   <button
                     key={`pool-${player.id}`}
@@ -603,10 +608,10 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                     data-tb-drop-index={index}
                     data-tb-drop-id={player.id}
                     disabled={unavailable}
-                    {...(customTooltips ? { "data-pr-tooltip": unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined } : { title: unavailable ? player.suspended ? "Suspended" : `Injured for ${player.injuryDays}d` : undefined })}
+                    {...(customTooltips ? { "data-pr-tooltip": unavailable ? unavailableTip : undefined } : { title: unavailable ? unavailableTip : undefined })}
                     onPointerDown={(event) => !unavailable && beginDrag(location, event)}
                   >
-                    <span className={`tb-row-position${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player.positionName } : { title: player.positionName })}>{player.tacticalPosition}</span>
+                    <span className={`tb-row-position${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": naturalPositionLabel(player.naturalPosition) } : { title: naturalPositionLabel(player.naturalPosition) })}>{player.tacticalPosition}</span>
                     <span className="tb-row-name">{player.name}</span>
                     <span className="tb-row-energy">EN {Math.round(player.energy)}</span>
                     <span className="tb-row-rating">{player.overall}</span>
@@ -616,20 +621,20 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
             </div>
           </section>
 
-          <section className="tb-side-panel tb-takers" aria-label="Set pieces">
-            <div className="section-label">Set pieces</div>
+          <section className="tb-side-panel tb-takers" aria-label={t("tactics.setPiecesAria")}>
+            <div className="section-label">{t("tactics.setPieces")}</div>
             <div className="tb-taker-grid">
               <label>
-                <span><Target size={12} /> Penalty taker</span>
+                <span><Target size={12} /> {t("tactics.penaltyTaker")}</span>
                 <select className="select" value={ed.penaltyTakerId ?? ""} disabled={saving} onChange={(event) => setTaker("penaltyTakerId", event.target.value ? Number(event.target.value) : null)}>
-                  <option value="">— choose —</option>
+                  <option value="">{t("tactics.choose")}</option>
                   {takerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>
               </label>
               <label>
-                <span>Free kick taker</span>
+                <span>{t("tactics.freeKickTaker")}</span>
                 <select className="select" value={ed.freeKickTakerId ?? ""} disabled={saving} onChange={(event) => setTaker("freeKickTakerId", event.target.value ? Number(event.target.value) : null)}>
-                  <option value="">— choose —</option>
+                  <option value="">{t("tactics.choose")}</option>
                   {takerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>
               </label>

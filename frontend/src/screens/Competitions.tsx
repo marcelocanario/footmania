@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Dropdown } from "primereact/dropdown";
 import { TabView, TabPanel } from "primereact/tabview";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import { api, type FixtureView, type PyramidResponse, type StandingsRow } from "../api/client";
 import { useGame } from "../store/game";
-import { strings } from "../strings";
 import { groupLabel } from "../components/competition/shared";
 import { StandingsTable } from "../components/competition/StandingsTable";
 import { FixturesList } from "../components/competition/FixturesList";
 import { MatchResultDialog } from "../components/competition/MatchResultDialog";
 
 export function Competitions() {
+  const { t } = useTranslation();
   const { status } = useGame();
   const navigate = useNavigate();
   const [pyramid, setPyramid] = useState<PyramidResponse | null>(null);
@@ -40,13 +41,13 @@ export function Competitions() {
 
   const allDivisions = useMemo(() => pyramid?.tiers.flatMap((level) => level.divisions) ?? [], [pyramid]);
   const tierLevels = pyramid?.tiers ?? [];
-  const tierOptions = tierLevels.map((level) => ({ label: `Division ${level.tier}`, value: level.tier }));
+  const tierOptions = tierLevels.map((level) => ({ label: t("competitions.divisionOption", { tier: level.tier }), value: level.tier }));
   const groupsInTier = useMemo(
     () =>
       [...(tierLevels.find((level) => level.tier === selectedTier)?.divisions ?? [])].sort((a, b) => a.groupIndex - b.groupIndex),
     [tierLevels, selectedTier],
   );
-  const groupOptions = groupsInTier.map((d) => ({ label: `Group ${groupLabel(d.groupIndex)}`, value: d.id }));
+  const groupOptions = groupsInTier.map((d) => ({ label: t("competitions.groupOption", { group: groupLabel(d.groupIndex) }), value: d.id }));
 
   const selected = allDivisions.find((d) => d.id === selectedDiv) ?? null;
   const isTopDivision = selected?.tier === 1;
@@ -70,8 +71,8 @@ export function Competitions() {
     <div>
       <div className="page-head">
         <div>
-          <div className="kicker">{strings.competitions.title} · Season {status?.season?.seasonNumber ?? ""}</div>
-          <h1>{selected ? `Division ${selected.tier} · Group ${groupLabel(selected.groupIndex)}` : strings.competitions.title}</h1>
+          <div className="kicker">{t("competitions.seasonKicker", { season: status?.season?.seasonNumber ?? "" })}</div>
+          <h1>{selected ? t("competitions.divisionGroupTitle", { tier: selected.tier, group: groupLabel(selected.groupIndex) }) : t("competitions.title")}</h1>
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Dropdown
@@ -83,24 +84,24 @@ export function Competitions() {
               const first = tierLevels.find((level) => level.tier === tier)?.divisions.sort((a, b) => a.groupIndex - b.groupIndex)[0];
               if (first) setSelectedDiv(first.id);
             }}
-            placeholder="Division"
+            placeholder={t("competitions.divisionPlaceholder")}
             style={{ minWidth: 150 }}
-            aria-label="Division"
+            aria-label={t("competitions.divisionPlaceholder")}
           />
           <Dropdown
             value={selectedDiv}
             options={groupOptions}
             onChange={(e) => setSelectedDiv(e.value)}
-            placeholder="Group"
+            placeholder={t("competitions.groupPlaceholder")}
             style={{ minWidth: 150 }}
             disabled={groupsInTier.length === 0}
-            aria-label="Group"
+            aria-label={t("competitions.groupPlaceholder")}
           />
         </div>
       </div>
 
       <TabView activeIndex={tab} onTabChange={(e) => setTab(e.index)}>
-        <TabPanel header="Standings">
+        <TabPanel header={t("competitions.standingsTab")}>
           <div className="card" style={{ padding: 20 }}>
             <StandingsTable
               rows={table}
@@ -111,12 +112,12 @@ export function Competitions() {
           </div>
         </TabPanel>
 
-        <TabPanel header={strings.competitions.fixtures}>
+        <TabPanel header={t("competitions.fixtures")}>
           <FixturesList
             fixtures={fixtures}
             contextBuilder={(f) => ({
-              label: `S${seasonNumber} · D${selected?.tier ?? "?"} · G${selected ? groupLabel(selected.groupIndex) : "?"} · R${f.round + 1}`,
-              tooltip: `Season ${seasonNumber} · Division ${selected?.tier ?? "?"} · Group ${selected ? groupLabel(selected.groupIndex) : "?"} · Round ${f.round + 1}`,
+              label: t("competitions.fixtureContext", { season: seasonNumber, tier: selected?.tier ?? "?", group: selected ? groupLabel(selected.groupIndex) : "?", round: f.round + 1 }),
+              tooltip: t("competitions.fixtureTooltip", { season: seasonNumber, tier: selected?.tier ?? "?", group: selected ? groupLabel(selected.groupIndex) : "?", round: f.round + 1 }),
             })}
             onOpenResult={openResult}
           />
@@ -126,9 +127,9 @@ export function Competitions() {
       <MatchResultDialog fixture={resultFixture} onClose={() => setResultFixture(null)} />
 
       <div style={{ marginTop: 14, display: "flex", gap: 12, flexWrap: "wrap", color: "var(--text-3)", fontSize: "0.85rem" }}>
-        {!isTopDivision && <span className="chip"><ArrowUp size={12} style={{ color: "var(--gold-2)" }} /> Possible promotion · dotted line</span>}
-        {!isTopDivision && <span className="chip"><ArrowUp size={12} style={{ color: "var(--grass-2)" }} /> Promoted</span>}
-        <span className="chip"><ArrowDown size={12} style={{ color: "#ff6b6b" }} /> Relegation</span>
+        {!isTopDivision && <span className="chip"><ArrowUp size={12} style={{ color: "var(--gold-2)" }} /> {t("competitions.possiblePromotion")}</span>}
+        {!isTopDivision && <span className="chip"><ArrowUp size={12} style={{ color: "var(--grass-2)" }} /> {t("competitions.promoted")}</span>}
+        <span className="chip"><ArrowDown size={12} style={{ color: "#ff6b6b" }} /> {t("competitions.relegation")}</span>
       </div>
     </div>
   );

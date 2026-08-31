@@ -17,6 +17,7 @@ import { newClubSellLockError } from "./league";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 import { ensureClubSquadNumbers } from "./squadNumbers";
 import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 
 /**
  * Shared marketplace infrastructure (transfer-market-overhaul Phase 2).
@@ -713,11 +714,13 @@ export function settleTransferAuction(
     kind: "auction",
     subject: NEWS_SUBJECTS.transfers,
     clubId: winner.id,
-    headline: "Transfer completed",
+    headline: "news.headline.transfer",
     entries: [{
       key: `auction:${listing.id}`,
       label: player.name,
-      detail: `${winner.name} won the auction for ${formatMoney(finalPrice)}${tax > 0 ? ` (includes ${formatMoney(tax)} sales tax)` : ""}`,
+      detail: tax > 0
+        ? msg("news.detail.auctionWonTax", { winner: winner.name, price: finalPrice, tax })
+        : msg("news.detail.auctionWon", { winner: winner.name, price: finalPrice }),
     }],
   });
 
@@ -737,7 +740,7 @@ export function cancelUnsettleableAuction(world: World, listing: TransferAuction
   if (player) player.onSale = false;
   publishNews(world, {
     kind: "auction",
-    text: `The auction for ${player?.name ?? "a player"} was cancelled (${reason})`,
+    body: msg("news.auctionCancelled", { player: player?.name ?? "—", reason }),
   });
 }
 

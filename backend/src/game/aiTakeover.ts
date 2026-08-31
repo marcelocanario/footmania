@@ -10,6 +10,7 @@ import { FEATURED_COUNTRIES } from "./countries";
 import { deriveAiKits } from "./kits";
 import { generateName } from "./names";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 
 /**
  * Admin account deletion: a deleted player's ACTIVE club is replaced in place
@@ -162,8 +163,8 @@ export function replaceActiveClubWithAi(world: World, club: Club, now: number): 
     kind: "mp",
     subject: NEWS_SUBJECTS.clubStatus,
     clubId: club.id,
-    headline: "Pyramid standing",
-    entries: [{ key: `ai-takeover:${club.id}:${now}`, label: club.name, detail: "the manager's account was deleted; an AI team now holds this place" }],
+    headline: "news.headline.pyramid",
+    entries: [{ key: `ai-takeover:${club.id}:${now}`, label: club.name, detail: msg("news.detail.aiTakeover") }],
   });
 
   return { converted: true, removedPlayers: removed, addedPlayers: added, listings: market.listings, bids: market.bids };

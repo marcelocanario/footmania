@@ -1,4 +1,5 @@
 import type { MatchStats } from "../api/client";
+import { useTranslation } from "react-i18next";
 
 function share(home: number, away: number): [number, number] {
   const total = home + away;
@@ -8,6 +9,7 @@ function share(home: number, away: number): [number, number] {
 }
 
 export function MatchStatsPanel({ stats, usedSubs, mvp }: { stats: MatchStats; usedSubs?: [number, number]; mvp?: { name: string | null; clubName?: string | null } | null }) {
+  const { t } = useTranslation();
   const possession = share(stats.home.controlledBallSeconds, stats.away.controlledBallSeconds);
   const fieldTilt = share(stats.home.attackingThirdControlledSeconds, stats.away.attackingThirdControlledSeconds);
   const bar = (label: string, home: number, away: number) => {
@@ -27,33 +29,33 @@ export function MatchStatsPanel({ stats, usedSubs, mvp }: { stats: MatchStats; u
     <div className="match-stats-panel live-stats">
       {mvp?.name ? (
         <div className="mvp-line">
-          <span className="bar-label">🏆 Man of the match</span>
+          <span className="bar-label">{t("stats.manOfMatch")}</span>
           <span className="mvp-name">{mvp.name}{mvp.clubName ? ` · ${mvp.clubName}` : ""}</span>
         </div>
       ) : null}
-      {bar("Possession", possession[0], possession[1])}
-      {bar("Shots", stats.home.shots, stats.away.shots)}
-      {bar("Shots on target", stats.home.shotsOnTarget, stats.away.shotsOnTarget)}
-      {bar("xG", Number(stats.home.xG.toFixed(2)), Number(stats.away.xG.toFixed(2)))}
-      {bar("Field tilt", fieldTilt[0], fieldTilt[1])}
-      {bar("Passes", stats.home.passes, stats.away.passes)}
-      {bar("Crosses", stats.home.crosses, stats.away.crosses)}
-      {bar("Carries", stats.home.carries, stats.away.carries)}
-      {bar("Dribbles", stats.home.dribbles, stats.away.dribbles)}
-      {bar("Box entries", stats.home.boxEntries, stats.away.boxEntries)}
-      {bar("Counterattacks", stats.home.counterattacks, stats.away.counterattacks)}
-      {bar("Counter shots", stats.home.counterattackShots, stats.away.counterattackShots)}
-      {bar("High recoveries", stats.home.highRecoveries, stats.away.highRecoveries)}
-      {bar("Turnovers", stats.home.turnovers, stats.away.turnovers)}
-      {bar("Corners", stats.home.corners, stats.away.corners)}
-      {bar("Fouls", stats.home.fouls, stats.away.fouls)}
-      {bar("Offsides", stats.home.offsides, stats.away.offsides)}
-      {bar("Penalties", stats.home.penalties, stats.away.penalties)}
+      {bar(t("stats.possession"), possession[0], possession[1])}
+      {bar(t("stats.shots"), stats.home.shots, stats.away.shots)}
+      {bar(t("stats.shotsOnTarget"), stats.home.shotsOnTarget, stats.away.shotsOnTarget)}
+      {bar(t("stats.xG"), Number(stats.home.xG.toFixed(2)), Number(stats.away.xG.toFixed(2)))}
+      {bar(t("stats.fieldTilt"), fieldTilt[0], fieldTilt[1])}
+      {bar(t("stats.passes"), stats.home.passes, stats.away.passes)}
+      {bar(t("stats.crosses"), stats.home.crosses, stats.away.crosses)}
+      {bar(t("stats.carries"), stats.home.carries, stats.away.carries)}
+      {bar(t("stats.dribbles"), stats.home.dribbles, stats.away.dribbles)}
+      {bar(t("stats.boxEntries"), stats.home.boxEntries, stats.away.boxEntries)}
+      {bar(t("stats.counterattacks"), stats.home.counterattacks, stats.away.counterattacks)}
+      {bar(t("stats.counterShots"), stats.home.counterattackShots, stats.away.counterattackShots)}
+      {bar(t("stats.highRecoveries"), stats.home.highRecoveries, stats.away.highRecoveries)}
+      {bar(t("stats.turnovers"), stats.home.turnovers, stats.away.turnovers)}
+      {bar(t("stats.corners"), stats.home.corners, stats.away.corners)}
+      {bar(t("stats.fouls"), stats.home.fouls, stats.away.fouls)}
+      {bar(t("stats.offsides"), stats.home.offsides, stats.away.offsides)}
+      {bar(t("stats.penalties"), stats.home.penalties, stats.away.penalties)}
       <div className="live-stat-chips">
         <span className="chip">🟨 {stats.home.yellows} : {stats.away.yellows}</span>
         <span className="chip">🟥 {stats.home.reds} : {stats.away.reds}</span>
-        <span className="chip">Injuries {stats.home.injuries} : {stats.away.injuries}</span>
-        {usedSubs && <span className="chip">Subs {usedSubs[0]} : {usedSubs[1]}</span>}
+        <span className="chip">{t("stats.injuries")} {stats.home.injuries} : {stats.away.injuries}</span>
+        {usedSubs && <span className="chip">{t("stats.subs")} {usedSubs[0]} : {usedSubs[1]}</span>}
       </div>
     </div>
   );

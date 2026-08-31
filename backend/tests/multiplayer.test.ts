@@ -29,6 +29,7 @@ import { recomputeProxyState } from "../src/game/market";
 import type { Club, Competition, Player, TransferAuction, World } from "../src/game/types";
 import { advanceLiveMatches, startLiveMatch } from "../src/game/world";
 import { MP_CONFIG } from "../src/config";
+import { isMessageRef } from "../src/i18n/catalog";
 import { contractCycle } from "../src/game/season";
 import { settlePlayerPayroll } from "../src/game/payroll";
 import { issueAllocation } from "../src/services/mpService";
@@ -1212,7 +1213,7 @@ describe("filler retirement market reconciliation", () => {
     expect(world.players.some((p) => p.id === player.id)).toBe(true);
     expect(bidder.cash).toBe(cashBefore - listing.finalPrice!);
     expect(world.clubs.some((c) => c.id === aiId)).toBe(false);
-    expect(world.news.some((n) => n.entries?.some((entry) => entry.detail?.includes("won the auction")))).toBe(true);
+    expect(world.news.some((n) => n.entries?.some((entry) => isMessageRef(entry.detail) && (entry.detail.k === "news.detail.auctionWon" || entry.detail.k === "news.detail.auctionWonTax")))).toBe(true);
   });
 
   it("settles competing bidders at the proxy clearing price and releases every reservation", () => {

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { useTranslation } from "react-i18next";
 
 /**
  * Tactical familiarity meter (plans/6 §17). Renders the drilled familiarity of
@@ -7,13 +8,14 @@ import type { CSSProperties } from "react";
  * red below 30, gold to 69, green from 70.
  */
 export function FamiliarityBar({ value, projected, style, customTooltips = false }: { value: number; projected?: number | null; style?: CSSProperties; customTooltips?: boolean }) {
+  const { t } = useTranslation();
   const clamped = Math.max(0, Math.min(100, value));
   const color = clamped < 30 ? "var(--red)" : clamped < 70 ? "var(--gold-2)" : "var(--grass-2)";
   const showProjection = typeof projected === "number" && Math.round(projected) !== Math.round(clamped);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, ...style }}>
       <div
-        aria-label={`Tactical familiarity ${Math.round(clamped)}%`}
+        aria-label={t("familiarity.aria", { value: Math.round(clamped) })}
         style={{
           flex: 1,
           height: 10,
@@ -35,7 +37,7 @@ export function FamiliarityBar({ value, projected, style, customTooltips = false
         {showProjection && (
           <div
             className={customTooltips ? "squad-tooltip-trigger" : undefined}
-            {...(customTooltips ? { "data-pr-tooltip": "Familiarity if you adopt this setup" } : { title: "Familiarity if you adopt this setup" })}
+            {...(customTooltips ? { "data-pr-tooltip": t("familiarity.projectionTip") } : { title: t("familiarity.projectionTip") })}
             style={{
               position: "absolute",
               top: -1,

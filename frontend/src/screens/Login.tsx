@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { Toast } from "primereact/toast";
 import { authClient } from "../lib/auth-client";
-import { strings } from "../strings";
 import { RotatingJersey } from "../components/RotatingJersey";
 import { api, type PublicSeasonStatus } from "../api/client";
+import { LanguagePicker } from "../components/LanguagePicker";
 
 const DUST = [
   { left: "12%", delay: "0s", duration: "15s", drift: "26px" },
@@ -15,39 +17,40 @@ const DUST = [
   { left: "88%", delay: "6.3s", duration: "19s", drift: "-16px" },
 ];
 
-const STATIC_TAG = { label: "One world. One season.", live: false };
+const STATIC_TAG = (): { label: string; live: boolean } => ({ label: i18n.t("login.staticTag"), live: false });
 
 /** Map the public world-clock snapshot to a scoreboard "live status" tag. */
 function seasonTag(status: PublicSeasonStatus | null): { label: string; live: boolean } {
-  if (!status?.ready) return STATIC_TAG;
+  if (!status?.ready) return STATIC_TAG();
 
   const { paused, season } = status;
   // Admin freeze: the match is stopped mid-flight. Frame it as a stoppage in
   // the game, never as "closed" — the season picks back up.
   if (paused) {
-    return { label: "Season paused · resumes shortly", live: false };
+    return { label: i18n.t("login.pausedTag"), live: false };
   }
 
   // After the final round the calendar moves through the post-match buffer and
   // the pre-season window. New managers are still placed for the next season.
   if (season.phase === "INTERSEASON") {
-    return { label: "Pre-season · next season forming", live: false };
+    return { label: i18n.t("login.preSeasonTag"), live: false };
   }
   if (season.phase === "POST_MATCH") {
-    return { label: "Season wrapping up · next campaign forming", live: false };
+    return { label: i18n.t("login.wrappingTag"), live: false };
   }
 
   // Active season, past the join cutoff: a new club would have to wait for the
   // next season — but they can still build while they wait. Say so warmly.
   if (season.joinState === "LOCKED") {
-    return { label: "Season in full swing · new clubs can prep now", live: true };
+    return { label: i18n.t("login.lockedTag"), live: true };
   }
 
   // Active season and still open: the most inviting state.
-  return { label: `Season ${season.seasonNumber} · joining open`, live: true };
+  return { label: i18n.t("login.joiningTag", { n: season.seasonNumber }), live: true };
 }
 
 export function Login() {
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<PublicSeasonStatus | null>(null);
   const location = useLocation();
@@ -81,7 +84,7 @@ export function Login() {
     });
     if (res.error) {
       setBusy(false);
-      toast.current?.show({ severity: "error", summary: "Error", detail: res.error.message ?? "Google sign-in failed" });
+      toast.current?.show({ severity: "error", summary: t("auth.error"), detail: res.error.message ?? t("auth.googleFailed") });
     }
     // On success the browser redirects to Google; nothing else to do here.
   };
@@ -108,7 +111,7 @@ export function Login() {
             <img src="/footmania-logo.svg" alt="Footmania" className="logo-img" />
             <div className="landing-masthead-name">
               <b>Footmania<sup className="logo-alpha">ALPHA</sup></b>
-              <span>{strings.app.tagline}</span>
+              <span>{t("app.tagline")}</span>
             </div>
           </div>
           <div className={`landing-masthead-tag${tag.live ? " live" : ""}`}>
@@ -120,18 +123,15 @@ export function Login() {
         <main>
           {/* Opening story */}
           <section className="landing-story">
-            <h1 className="landing-headline">
-              One club. One <span className="hl-grass">world</span>.
-              <br />
-              Write your <span className="hl-gold">legend</span>.
-            </h1>
+            <h1 className="landing-headline">{t("login.headline")}</h1>
             <p className="landing-lede">
-              Footmania is a single, living universe. Hundreds of managers own a club and compete in one
-              shared pyramid — every match matters, every signing shifts the balance, and every season becomes part of a 
-              <b> shared history</b>.
+              {t("login.lede")}
             </p>
-            <div className="landing-eyebrow">Pick your colors, your own club starts here</div>
+            <div className="landing-eyebrow">{t("login.pickColors")}</div>
             <RotatingJersey />
+            <div style={{ display: "flex", justifyContent: "center" }}>
+              <LanguagePicker compact />
+            </div>
             <div className="landing-cta-row">
               <button className="btn google" onClick={() => void startGoogle()} disabled={busy}>
                 <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden>
@@ -140,15 +140,15 @@ export function Login() {
                   <path fill="#FBBC05" d="M5.29 14.28a7.2 7.2 0 0 1 0-4.56V6.62H1.27a12.02 12.02 0 0 0 0 10.76l4.02-3.1Z" />
                   <path fill="#EA4335" d="M12 4.77c1.76 0 3.34.6 4.58 1.79l3.44-3.44A11.97 11.97 0 0 0 12 0 11.99 11.99 0 0 0 1.27 6.62l4.02 3.1C6.23 6.88 8.88 4.77 12 4.77Z" />
                 </svg>
-                {busy ? strings.common.loading : "Continue with Google"}
+                {busy ? t("common.loading") : t("auth.continueGoogle")}
               </button>
             </div>
           </section>
         </main>
 
         <footer className="landing-footer">
-          <div>© {new Date().getFullYear()} {strings.app.name}. All rights reserved.</div>
-          <Link to="/privacy" className="landing-privacy">Privacy Policy</Link>
+          <div>© {new Date().getFullYear()} {t("app.name")}. {t("login.rights")}</div>
+          <Link to="/privacy" className="landing-privacy">{t("login.privacy")}</Link>
         </footer>
       </div>
     </div>

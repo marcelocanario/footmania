@@ -176,6 +176,29 @@ Rules:
   loan cancellation, shared financial validator, AI never promoted) live in
   the domain services, not the config.
 
+### Keep every language in sync
+
+The UI ships in English, French and Brazilian Portuguese. Locale files are
+separate, one per language:
+
+- `frontend/src/i18n/locales/en.ts` is the source of truth for every key;
+- `frontend/src/i18n/locales/fr.ts` and `pt-BR.ts` mirror it exactly.
+
+Rules:
+
+- Adding, renaming, or removing a key means editing all three files in the
+  same change. `en.ts` types the others (`LocaleShape`), so a missing key
+  fails `tsc -b` — never satisfy the typecheck by copying the English string
+  across.
+- No user-facing string is hard-coded in a component. Text reaches the UI
+  through `t()`, and server payloads carry codes or message keys, never
+  prose.
+- News subjects and notification types are stable persisted keys. Never
+  rename one; add a new key and leave the old one translated.
+- The admin console (`frontend/src/screens/admin/`) is intentionally
+  English-only, and the privacy policy ships as whole per-locale documents
+  rather than keys. These are the only exceptions.
+
 ### One cause, one effect
 
 The match engine and economy must not double-count an effect. Each causal
@@ -222,4 +245,5 @@ defined pathway.
 - Add comments, specially if they capture a non-obvious rule or domain
   invariant.
 - Never expose or log secrets/keys; never commit credentials.
+- User-facing strings go through `t()`; update `en`, `fr` and `pt-BR` together.
 - Do not commit unless explicitly asked.

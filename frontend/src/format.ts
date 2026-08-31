@@ -1,11 +1,40 @@
+import { useLang } from "./i18n/store";
+
+// Intl formatters are cached per language: squad tables call money() dozens of
+// times a frame and constructing a NumberFormat each call is not cheap.
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
+const numberFormatters = new Map<string, Intl.NumberFormat>();
+
+function currencyFormatter(lang: string): Intl.NumberFormat {
+  let f = currencyFormatters.get(lang);
+  if (!f) {
+    f = new Intl.NumberFormat(lang, {
+      style: "currency",
+      currency: "USD",
+      currencyDisplay: "narrowSymbol",
+      notation: "compact",
+      maximumFractionDigits: 1,
+    });
+    currencyFormatters.set(lang, f);
+  }
+  return f;
+}
+
+function numberFormatter(lang: string): Intl.NumberFormat {
+  let f = numberFormatters.get(lang);
+  if (!f) {
+    f = new Intl.NumberFormat(lang);
+    numberFormatters.set(lang, f);
+  }
+  return f;
+}
+
 export function money(v: number): string {
-  const abs = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (abs >= 1000000) return `${sign}$${(abs / 1000000).toFixed(abs >= 10000000 ? 0 : 1)}M`;
-  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(0)}K`;
-  return `${sign}$${abs}`;
+  const lang = useLang.getState().lang;
+  return currencyFormatter(lang).format(v);
 }
 
 export function num(v: number): string {
-  return v.toLocaleString("en-US");
+  const lang = useLang.getState().lang;
+  return numberFormatter(lang).format(v);
 }

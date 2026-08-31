@@ -1,11 +1,19 @@
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Trophy, PartyPopper, Medal } from "lucide-react";
 import { useGame } from "../store/game";
-import { strings } from "../strings";
 import { ClubNameLink } from "../components/ClubNameLink";
-import { bestXiEntries } from "../utils/awards";
+import { bestXiEntries, individualAwardDetail } from "../utils/awards";
+
+const AWARD_CATEGORY: Record<string, string> = {
+  top_scorer: "awards.categoryTopScorer",
+  top_assists: "awards.categoryTopAssists",
+  player_of_season: "awards.categoryPlayerOfSeason",
+  best_xi: "awards.categoryBestXi",
+};
 
 export function SeasonEnd() {
+  const { t } = useTranslation();
   const { snapshot } = useGame();
   const navigate = useNavigate();
   const summary = snapshot?.seasonSummary;
@@ -16,13 +24,13 @@ export function SeasonEnd() {
       <div>
         <div className="page-head">
           <div>
-            <div className="kicker">{strings.seasonEnd.title}</div>
-            <h1>{strings.seasonEnd.title}</h1>
+            <div className="kicker">{t("seasonEnd.title")}</div>
+            <h1>{t("seasonEnd.title")}</h1>
           </div>
         </div>
         <div className="card empty-state">
           <button className="btn" onClick={() => navigate("/dashboard")}>
-            {strings.dashboard.continue}
+            {t("dashboard.continue")}
           </button>
         </div>
       </div>
@@ -30,18 +38,18 @@ export function SeasonEnd() {
   }
 
   const champions = [
-    { label: strings.seasonEnd.champion, value: summary.leagueChampion, clubId: summary.leagueChampionId ?? null, icon: <Trophy size={18} /> },
-    { label: strings.seasonEnd.runnerUp, value: summary.leagueRunnerUp, clubId: summary.leagueRunnerUpId ?? null, icon: <Medal size={18} /> },
+    { label: t("seasonEnd.champion"), value: summary.leagueChampion, clubId: summary.leagueChampionId ?? null, icon: <Trophy size={18} /> },
+    { label: t("seasonEnd.runnerUp"), value: summary.leagueRunnerUp, clubId: summary.leagueRunnerUpId ?? null, icon: <Medal size={18} /> },
   ];
 
   return (
     <div>
       <div className="page-head">
         <div>
-          <div className="kicker">{strings.seasonEnd.title}</div>
+          <div className="kicker">{t("seasonEnd.title")}</div>
           <h1>
             <PartyPopper size={24} style={{ verticalAlign: "middle", color: "var(--gold-2)" }} />{" "}
-            {snapshot && snapshot.save.year > 1 ? `Season ${snapshot.save.year - 1} Complete` : "Season Complete"}
+            {snapshot && snapshot.save.year > 1 ? t("seasonEnd.seasonCompleteYear", { year: snapshot.save.year - 1 }) : t("seasonEnd.seasonComplete")}
           </h1>
         </div>
       </div>
@@ -62,8 +70,8 @@ export function SeasonEnd() {
         </div>
         <div style={{ color: "var(--text-2)", fontSize: "0.92rem", marginTop: 12 }}>
           {summary.leagueChampion === clubName
-            ? "You are the National Champions!"
-            : "Another year in the books. See you next season, manager."}
+            ? t("seasonEnd.champions")
+            : t("seasonEnd.seeYouNext")}
         </div>
       </div>
 
@@ -83,14 +91,14 @@ export function SeasonEnd() {
 
       {snapshot?.seasonAwards && snapshot.seasonAwards.length > 0 && (
         <div className="card" style={{ marginTop: 16 }}>
-          <h2 className="card-title"><Medal size={17} /> Season awards</h2>
+          <h2 className="card-title"><Medal size={17} /> {t("seasonEnd.awards")}</h2>
           <div className="news-list">
             {snapshot.seasonAwards.slice(0, 12).map((award, i) => (
               <div className="news-item" key={`${award.category}-${award.competitionId}-${i}`}>
-                <span className="day">{award.category.replaceAll("_", " ")}</span>
-                <span>{award.playerNameSnapshot ?? "Club award"}</span>
+                <span className="day">{(t as unknown as (k: string) => string)(AWARD_CATEGORY[award.category] ?? award.category.replaceAll("_", " "))}</span>
+                <span>{award.playerNameSnapshot ?? t("seasonEnd.clubAward")}</span>
                 <span style={{ marginLeft: "auto", color: "var(--text-3)" }}>
-                  {bestXiEntries(award)?.map((entry) => entry.name).join(" · ") ?? award.detail}
+                  {bestXiEntries(award)?.map((entry) => entry.name).join(" · ") ?? individualAwardDetail(award)}
                 </span>
               </div>
             ))}
@@ -100,7 +108,7 @@ export function SeasonEnd() {
 
       <div style={{ marginTop: 24, textAlign: "center" }}>
         <button className="btn gold" style={{ fontSize: "1.1rem", minHeight: 52, padding: "14px 40px" }} onClick={() => navigate("/dashboard")}>
-          <Trophy size={18} /> {strings.seasonEnd.newYear}
+          <Trophy size={18} /> {t("seasonEnd.newYear")}
         </button>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import type { NewsEntry, NewsItem, World } from "./types";
+import { msg, isMessageRef, type MessageKey, type MessageRef } from "../i18n/catalog";
 
 /**
  * Central dashboard news service.
@@ -9,17 +10,20 @@ import type { NewsEntry, NewsItem, World } from "./types";
  * a new feed row (contract expiries, academy moves, injuries…). Items without
  * a subject never merge — MOTDs, one-off reports and legacy rows.
  *
- * Visibility rule: `recipientClubId` restricts visibility to that club's
- * manager. Public items with a `clubId` are shown only to that club; items
- * without either attribution are global broadcasts.
+ * Localization: a grouped item's `body` is a FRAME key (e.g. `news.injuries`)
+ * and the client composes `t(k.lead) + Intl.ListFormat(entries) + t(k.tail)`.
+ * Each entry's `label`/`detail` is a `Displayable` — a proper name (passed
+ * through untranslated) or a `MessageRef` with raw params the client formats.
+ * Ungrouped text items carry a direct `MessageRef` in `body`. The legacy
+ * English `text` column stays populated only where it is still the fallback
+ * (MOTD, the pre-season report, and historical rows); key-native items store
+ * an empty string and the client renders from `body`.
  *
  * Grouping is a domain invariant and therefore lives here, not in config; no
- * balance tunables exist in this module. Body copy for grouped subjects is
- * regenerated from the accumulated entries so counts stay truthful after
- * merges, deterministically — gameplay RNG is never consumed here.
+ * balance tunables exist in this module.
  */
 
-/** Compact currency formatter shared by every news text builder. */
+/** Compact currency formatter, kept for the (still English) pre-season report. */
 export function formatMoney(amount: number): string {
   if (amount >= 1_000_000) return `$${(amount / 1_000_000).toFixed(amount % 1_000_000 === 0 ? 0 : 2)}M`;
   if (amount >= 1_000) return `$${(amount / 1_000).toFixed(0)}K`;
@@ -43,11 +47,41 @@ export const NEWS_SUBJECTS = {
   preseasonReport: "preseason-report",
 } as const;
 
+/** Frame key selected for a grouped subject. */
+const FRAME_BY_SUBJECT: Record<string, MessageKey> = {
+  [NEWS_SUBJECTS.contractWarning]: "news.contract.warning",
+  [NEWS_SUBJECTS.contractExpiry]: "news.contract.expiry",
+  [NEWS_SUBJECTS.contractRenewal]: "news.contract.renewal",
+  [NEWS_SUBJECTS.academy]: "news.academy",
+  [NEWS_SUBJECTS.injuries]: "news.injuries",
+  [NEWS_SUBJECTS.loans]: "news.loans",
+  [NEWS_SUBJECTS.transfers]: "news.transfers",
+  [NEWS_SUBJECTS.finance]: "news.finance",
+  [NEWS_SUBJECTS.tribunal]: "news.tribunal",
+  [NEWS_SUBJECTS.retirement]: "news.retirement",
+  [NEWS_SUBJECTS.clubStatus]: "news.clubStatus",
+};
+
+/** Which frame a subject's body uses, re-evaluated after every merge. */
+function frameFor(subject: string, entries: NewsEntry[]): MessageRef | undefined {
+  if (subject === NEWS_SUBJECTS.tactics) {
+    // Branch on a STABLE message key, not on English prose: the lineup frame
+    // applies when every entry is a lineup confirmation, otherwise the orders
+    // frame. This keys a domain decision on the key, not the rendered text.
+    const lineup = entries.length > 0 && entries.every((e) => isMessageRef(e.detail) && e.detail.k === "news.detail.tacticsLineup");
+    return msg(lineup ? "news.tacticsLineup" : "news.tacticsOrders");
+  }
+  const frame = FRAME_BY_SUBJECT[subject];
+  return frame ? msg(frame) : undefined;
+}
+
 export interface PublishNewsInput {
   kind: string;
-  /** Required for unsubjected items; ignored for grouped subjects whose body
-   *  is rendered from the accumulated entries. */
+  /** Required for unsubjected text items (MOTDs, the pre-season report);
+   *  ignored for key-native grouped subjects whose body is the frame key. */
   text?: string;
+  /** Locale-independent body for ungrouped text items (or any item). */
+  body?: MessageRef;
   headline?: string;
   clubId?: number;
   recipientClubId?: number;
@@ -58,10 +92,11 @@ export interface PublishNewsInput {
 
 /**
  * Publish one news event. Same-day same-subject publishes for the same
- * audience merge into a single message; the body is re-rendered from all
- * accumulated entries so prose always matches the facts.
+ * audience merge into a single message; the frame body is recomputed from all
+ * accumulated entries so the client always composes truthful copy.
  */
 export function publishNews(world: World, input: PublishNewsInput): void {
+  const hasEntries = input.entries !== undefined && input.entries.length > 0;
   const item: NewsItem = {
     dayIndex: input.dayIndex ?? world.dayIndex,
     text: input.text ?? "",
@@ -70,8 +105,14 @@ export function publishNews(world: World, input: PublishNewsInput): void {
     ...(input.recipientClubId !== undefined ? { recipientClubId: input.recipientClubId } : {}),
     ...(input.headline !== undefined ? { headline: input.headline } : {}),
     ...(input.subject !== undefined ? { subject: input.subject, seasonId: world.mp.seasonId } : {}),
-    ...(input.entries !== undefined && input.entries.length > 0 ? { entries: dedupeEntries(input.entries) } : {}),
+    ...(hasEntries ? { entries: dedupeEntries(input.entries!) } : {}),
   };
+  if (input.body) {
+    item.body = input.body;
+  } else if (item.subject !== undefined) {
+    const frame = frameFor(item.subject, item.entries ?? []);
+    if (frame) item.body = frame;
+  }
   if (item.subject === undefined) {
     world.news.push(item);
     return;
@@ -92,7 +133,6 @@ export function publishNews(world: World, input: PublishNewsInput): void {
       return;
     }
   }
-  renderGroupedBody(item);
   world.news.push(item);
 }
 
@@ -100,7 +140,10 @@ function mergeInto(target: NewsItem, incoming: NewsItem): void {
   const merged = dedupeEntries([...(target.entries ?? []), ...(incoming.entries ?? [])]);
   if (merged.length > 0) target.entries = merged;
   if (incoming.headline !== undefined) target.headline = incoming.headline;
-  renderGroupedBody(target);
+  if (target.subject !== undefined) {
+    const frame = frameFor(target.subject, target.entries ?? []);
+    if (frame) target.body = frame;
+  }
 }
 
 function dedupeEntries(entries: NewsEntry[]): NewsEntry[] {
@@ -114,69 +157,6 @@ function dedupeEntries(entries: NewsEntry[]): NewsEntry[] {
   }
   return result;
 }
-
-function renderGroupedBody(item: NewsItem): void {
-  const renderer = SUBJECT_RENDERERS[item.subject ?? ""];
-  if (!renderer) return;
-  item.text = renderer(item.entries ?? []);
-}
-
-type SubjectRenderer = (entries: NewsEntry[]) => string;
-
-function listFacts(entries: NewsEntry[]): string {
-  const seen = new Set<string>();
-  const facts = entries
-    .filter((entry) => {
-      const key = `${entry.label ?? ""}\u0000${entry.detail ?? ""}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .map((entry) => ({ label: entry.label ?? entry.detail ?? "", detail: entry.detail }))
-    .filter((entry) => entry.label);
-  const details = [...new Set(facts.map((entry) => entry.detail).filter(Boolean))];
-  if (details.length === 1) return formatList(facts.map((entry) => entry.label));
-  const rendered = facts.map((entry) => entry.detail ? `${entry.label} (${entry.detail})` : entry.label);
-  return formatList(rendered);
-}
-
-function formatList(values: string[]): string {
-  if (values.length <= 1) return values[0] ?? "";
-  return `${values.slice(0, -1).join(", ")} and ${values[values.length - 1]}`;
-}
-
-/**
- * Per-subject body copy. The text is deliberately complete: the dashboard
- * renders one natural-language message, while entries remain persisted for
- * deterministic merging and auditability.
- */
-const SUBJECT_RENDERERS: Record<string, SubjectRenderer> = {
-  [NEWS_SUBJECTS.contractWarning]: (entries) =>
-    `Player contracts expiring soon: ${listFacts(entries)}. These deals have entered their renewal window, and the clock is running down before the players reach the open market.`,
-  [NEWS_SUBJECTS.contractExpiry]: (entries) =>
-    `Contract departures: ${listFacts(entries)}. The players have left as free agents, and the open market is now their next destination.`,
-  [NEWS_SUBJECTS.contractRenewal]: (entries) =>
-    `New deals signed: ${listFacts(entries)}. The paperwork is complete and the squad's future is secured for the agreed term.`,
-  [NEWS_SUBJECTS.academy]: (entries) =>
-    `Academy report: ${listFacts(entries)}. Another chapter has been written in the club's youth pathway.`,
-  [NEWS_SUBJECTS.injuries]: (entries) =>
-    `Medical report: ${listFacts(entries)}. The treatment room has the latest recovery timetable, and the coaching staff must plan around it.`,
-  [NEWS_SUBJECTS.loans]: (entries) =>
-    `Loan update: ${listFacts(entries)}. The club can now decide what role comes next.`,
-  [NEWS_SUBJECTS.transfers]: (entries) =>
-    `Transfer desk: ${listFacts(entries)}. The deal is complete and the market ledger has been updated.`,
-  [NEWS_SUBJECTS.finance]: (entries) =>
-    `The board has stepped in: ${listFacts(entries)}. The financial pressure is now part of the manager's matchday reality.`,
-  [NEWS_SUBJECTS.tribunal]: (entries) =>
-    `Disciplinary verdict: ${listFacts(entries)}. The suspension must now be accounted for in the next team selection.`,
-  [NEWS_SUBJECTS.retirement]: (entries) =>
-    `Farewell on the horizon: ${listFacts(entries)}. One final campaign now lies between these veterans and the end of their playing days.`,
-  [NEWS_SUBJECTS.tactics]: (entries) => entries.every((entry) => entry.detail === "confirmed the lineup")
-    ? `Matchday call: ${listFacts(entries)}. The starting lineup is set, and the team now has its orders for the opening whistle.`
-    : `Tactical room: ${listFacts(entries)}. The new instructions will shape the team's next passage of play.`,
-  [NEWS_SUBJECTS.clubStatus]: (entries) =>
-    `Club bulletin: ${listFacts(entries)}. The club's place in the pyramid has changed, and the campaign moves on.`,
-};
 
 /** Dashboard visibility: own-club items and global broadcasts only. */
 export function newsVisibleTo(item: Pick<NewsItem, "recipientClubId" | "clubId">, viewerClubId: number | null | undefined): boolean {

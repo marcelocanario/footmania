@@ -49,7 +49,11 @@ describe("releasePlayer", () => {
     expect(club.ledger.expense.filter((e) => e.code === 2 && e.label.includes(player.name))).toHaveLength(1);
     expect(player.clubId).toBeNull();
     expect(player.onSale).toBe(false);
-    expect(world.news.some((n) => n.text.includes(`${player.name} was released`))).toBe(true);
+    const releaseNews = world.news.find((n) => n.body?.k === "news.releasePaid");
+    const params = (releaseNews?.body as { p?: { player?: string; cost?: number } } | undefined)?.p;
+    expect(params?.player).toBe(player.name);
+    // Money params are raw integers — the client formats them (never a "$X" string).
+    expect(params?.cost).toBe(1_000_000);
   });
 
   it("rejects a release the club cannot afford", () => {

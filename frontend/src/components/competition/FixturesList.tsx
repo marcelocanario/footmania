@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import type { FixtureView } from "../../api/client";
 import { ClubNameLink } from "../ClubNameLink";
 import { formatKickoff as kickoffLabel } from "../../utils/time";
@@ -19,6 +20,7 @@ export function FixturesList({
   onOpenResult?: (f: FixtureView) => void;
 }) {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   return (
     <div className="card">
       <div className="table-wrap">
@@ -49,7 +51,7 @@ export function FixturesList({
                 {context && <span className="chip" title={context.tooltip} style={{ minWidth: 160, justifyContent: "center" }}>{context.label}</span>}
                 {isLive && (
                   <span className="live-tag" style={{ fontSize: "0.68rem", padding: "2px 8px" }}>
-                    <span className="pulse-dot" /> LIVE
+                    <span className="pulse-dot" /> {t("fixtures.live")}
                   </span>
                 )}
               </div>
@@ -59,7 +61,7 @@ export function FixturesList({
                     <ClubNameLink clubId={f.homeClubId} name={f.home} kit={f.homeKit} hasCustomLogo={f.homeHasCustomLogo} size={24} />
                   </div>
                   <div className="score">
-                    {isLive || f.played ? `${f.homeScore ?? 0} - ${f.awayScore ?? 0}` : "vs"}
+                    {isLive || f.played ? `${f.homeScore ?? 0} - ${f.awayScore ?? 0}` : t("fixtures.vs")}
                   </div>
                   <div className="side right">
                     <ClubNameLink clubId={f.awayClubId} name={f.away} kit={f.awayKit} hasCustomLogo={f.awayHasCustomLogo} size={24} />
@@ -75,7 +77,7 @@ export function FixturesList({
             </div>
           );
         })}
-        {fixtures.length === 0 && <div className="empty-state" style={{ padding: 20 }}>No fixtures yet.</div>}
+        {fixtures.length === 0 && <div className="empty-state" style={{ padding: 20 }}>{t("fixtures.none")}</div>}
       </div>
     </div>
   );

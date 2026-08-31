@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog } from "primereact/dialog";
 import { TabView, TabPanel } from "primereact/tabview";
 import { Crown } from "lucide-react";
@@ -14,6 +15,7 @@ import { PlayerDetailsDialog } from "../PlayerDetailsDialog";
  * drill-down. Loads the event history for the clicked fixture.
  */
 export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView | null; onClose: () => void }) {
+  const { t } = useTranslation();
   const user = useGame((s) => s.user);
   const [resultData, setResultData] = useState<MatchEvents | null>(null);
   const [busy, setBusy] = useState(false);
@@ -50,33 +52,33 @@ export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView |
         style={{ width: 540 }}
       >
         {!resultData ? (
-          <div className="empty-state" style={{ padding: 20 }}>{busy ? "Loading…" : "No data"}</div>
+          <div className="empty-state" style={{ padding: 20 }}>{busy ? t("matchResult.loading") : t("matchResult.noData")}</div>
         ) : (
           <TabView>
-            <TabPanel header="Events">
+            <TabPanel header={t("matchResult.events")}>
               <MatchHistory
                 events={resultData.events}
                 homeClubId={fixture?.homeClubId ?? 0}
                 homeName={resultData.match.home}
                 awayName={resultData.match.away}
-                emptyText="No goals, cards or injuries to report."
+                emptyText={t("matchResult.noEvents")}
                 onPlayerClick={(id, name) => setPlayerTarget({ id, name })}
               />
             </TabPanel>
-            <TabPanel header="Scores">
+            <TabPanel header={t("matchResult.scores")}>
               <PlayerScoresTable
                 scores={resultData.scores ?? []}
                 homeClubId={fixture?.homeClubId ?? 0}
                 onPlayerClick={(id, name) => setPlayerTarget({ id, name })}
-                emptyText="No player scores recorded."
+                emptyText={t("matchResult.noScores")}
               />
             </TabPanel>
             <TabPanel
-              header={isPro ? "Stats" : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Crown size={12} /> Stats</span>}
+              header={isPro ? t("matchResult.stats") : <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><Crown size={12} /> {t("matchResult.stats")}</span>}
             >
               {!isPro ? (
                 <div className="empty-state" style={{ padding: 20 }}>
-                  Detailed match stats are a <b>Pro</b> feature.
+                  {t("matchResult.statsPro")}
                 </div>
               ) : resultData.match.stats ? (
                 <MatchStatsPanel
@@ -84,7 +86,7 @@ export function MatchResultDialog({ fixture, onClose }: { fixture: FixtureView |
                   mvp={{ name: resultData.match.mvpPlayerName ?? null, clubName: null }}
                 />
               ) : (
-                <div className="empty-state" style={{ padding: 14 }}>No stats available.</div>
+                <div className="empty-state" style={{ padding: 14 }}>{t("matchResult.noStats")}</div>
               )}
             </TabPanel>
           </TabView>

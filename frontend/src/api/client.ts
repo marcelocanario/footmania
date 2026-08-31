@@ -6,6 +6,7 @@ export interface User {
   email: string;
   isAdmin?: boolean;
   isPro?: boolean;
+  locale?: "en" | "fr" | "pt-BR" | null;
   bannedAt?: string | null;
   banReason?: string | null;
 }
@@ -55,7 +56,6 @@ export interface PlayerView {
   country: string;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   slotIndex?: number | null;
   deployedRole?: string | null;
   rolePenalty?: number | null;
@@ -592,8 +592,8 @@ export interface PyramidResponse { seasonKey: string | null; tiers: PyramidTier[
 /** One structured fact inside a grouped news message. */
 export interface NewsEntryView {
   key?: string;
-  label?: string;
-  detail?: string;
+  label?: string | import("@server-i18n/catalog").MessageRef;
+  detail?: string | import("@server-i18n/catalog").MessageRef;
 }
 
 /** News item as served by the dashboard snapshot. */
@@ -603,6 +603,8 @@ export interface NewsItemView {
   dayLabel: string;
   text: string;
   kind: string;
+  /** Locale-independent body (frame key or direct ref); absent on legacy rows. */
+  body?: import("@server-i18n/catalog").MessageRef;
   headline?: string;
   subject?: string;
   entries?: NewsEntryView[];
@@ -665,7 +667,6 @@ export interface TeamPlayerRow {
   nickname: string | null;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   overall: number;
   age: number;
   country: string;
@@ -789,7 +790,6 @@ export interface AuctionView {
   overall: number;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   age: number;
   salary: number;
   skills: SkillSet;
@@ -820,7 +820,6 @@ export interface FreeAgentView {
   overall: number;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   age: number;
   salary: number;
   contractDays: number;
@@ -848,7 +847,6 @@ export interface LivePlayer {
   nickname?: string | null;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   slotIndex: number | null;
   deployedRole: string | null;
   /** Squad shirt number shown on the pitch marker. */
@@ -1096,7 +1094,6 @@ export interface LineupPlayer {
   name: string;
   naturalPosition: string;
   positionGroup: string;
-  positionName: string;
   overall: number;
   energy: number;
   injuryDays: number;
@@ -1119,7 +1116,7 @@ export interface LineupView {
   subs: (LineupPlayer | null)[];
   penaltyTakerId: number | null;
   freeKickTakerId: number | null;
-  squad: { id: number; name: string; naturalPosition: string; positionGroup: string; positionName: string; overall: number; energy: number; slotIndex?: number | null; deployedRole?: string | null; injuryDays: number; suspended: boolean; number?: number | null }[];
+  squad: { id: number; name: string; naturalPosition: string; positionGroup: string; overall: number; energy: number; slotIndex?: number | null; deployedRole?: string | null; injuryDays: number; suspended: boolean; number?: number | null }[];
   slotPreviews?: Array<{ slotIndex: number; deployedRole: string; rolePenalty: number | null; suitabilityLabel: string; adjustedTacticalRating: number | null }>;
   previewPlayerId?: number | null;
 }
@@ -1371,6 +1368,8 @@ export const api = {
   mpWsUrl: () =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/mp/ws`,
   me: () => request<{ user: User }>("/api/account/me"),
+  updateLocale: (locale: NonNullable<User["locale"]>) =>
+    request<{ ok: boolean; locale: NonNullable<User["locale"]> }>("/api/account/me/locale", { method: "PUT", body: JSON.stringify({ locale }) }),
   logout: () => request<{ ok: boolean }>("/api/account/logout", { method: "POST" }),
   acceptInvite: (token: string) =>
     request<{ ok: boolean }>("/api/account/invite/accept", { method: "POST", body: JSON.stringify({ token }) }),

@@ -9,7 +9,8 @@ import { prepareFreeAgentListing } from "./freeAgents";
 import { settlePlayerPayroll, resetPayrollPeriod } from "./payroll";
 import { ensureClubSquadNumbers } from "./squadNumbers";
 import { bumpSkillsVersion } from "./skillsVersion";
-import { formatMoney, NEWS_SUBJECTS, publishNews } from "./news";
+import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 
 /**
  * Financial system (plans/5. financial-control.md).
@@ -667,20 +668,20 @@ export function runFinancialIntervention(
 
   const departedEntries = entries.filter((entry) => entry.kind === "FORCED_AUCTION" || entry.kind === "SYSTEM_LIQUIDATION");
   if (departedEntries.length > 0 || unableToFullyRecover) {
-    const interventionEntries = liquidated.map((item) => ({
+    const interventionEntries: import("./types").NewsEntry[] = liquidated.map((item) => ({
       key: `liquidation:${item.id}`,
       label: item.name,
-      detail: `left ${club.name} due to unpaid wages and is now a free agent (sold for ${formatMoney(item.price)})`,
+      detail: msg("news.detail.liquidation", { club: club.name, price: item.price }),
     }));
     if (unableToFullyRecover) {
-      interventionEntries.push({ key: "status", label: "Outlook", detail: "the club remains in financial difficulty despite the forced sale of players" });
+      interventionEntries.push({ key: "status", label: msg("news.headline.outlook"), detail: msg("news.detail.outlook") });
     }
     // One private grouped message per club per day instead of one row per fact.
     publishNews(world, {
       kind: "finance",
       subject: NEWS_SUBJECTS.finance,
       recipientClubId: club.id,
-      headline: "Financial intervention",
+      headline: "news.headline.finance",
       entries: interventionEntries,
     });
   }

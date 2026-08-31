@@ -5,6 +5,7 @@ import { playerHasActiveListing } from "./market";
 import { prepareFreeAgentListing } from "./freeAgents";
 import { getImmediateAvailableCash } from "./finance";
 import { publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 
 /** Release a player into the normalized free-agent market lifecycle. */
 export function releasePlayer(world: World, player: Player, club: Club): { ok: boolean; error?: string; cost: number } {
@@ -39,8 +40,10 @@ export function releasePlayer(world: World, player: Player, club: Club): { ok: b
   publishNews(world, {
     kind: "contract",
     recipientClubId: club.id,
-    headline: "Squad update",
-    text: `${player.name} was released by ${club.name} as a free agent. The release clause was settled at ${cost > 0 ? `$${cost}` : "no cost"} and the player is available on the open market immediately.`,
+    headline: "news.headline.squadUpdate",
+    body: cost > 0
+      ? msg("news.releasePaid", { player: player.name, club: club.name, cost })
+      : msg("news.releaseFree", { player: player.name, club: club.name }),
   });
   return { ok: true, cost };
 }

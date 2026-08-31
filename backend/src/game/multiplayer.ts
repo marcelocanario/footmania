@@ -16,6 +16,7 @@ import { releaseAllReservations, purgeClubBids, settleTransferAuction } from "./
 import { generateFillerRoster, totalDivisionsForGeneration } from "./clubGenerator";
 import { deriveAiKits } from "./kits";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 import { recordActiveClubBoundaryChange } from "./population";
 
 export const CLUBS_PER_DIVISION = gameConfig.league.teams;
@@ -634,7 +635,7 @@ function retireFillerClub(world: World, clubId: number, now: number): void {
     if (hasBids) {
       publishNews(world, {
         kind: "auction",
-        text: `The auction for ${player?.name ?? "a player"} was cancelled because it could not be settled`,
+        body: msg("news.auctionCancelledUnsettled", { player: player?.name ?? "—" }),
       });
     }
   }
@@ -729,8 +730,8 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
     kind: "mp",
     subject: NEWS_SUBJECTS.clubStatus,
     clubId: club.id,
-    headline: "Pyramid standing",
-    entries: [{ key: `join:${club.id}`, label: club.name, detail: `joined ${division.name}` }],
+    headline: "news.headline.pyramid",
+    entries: [{ key: `join:${club.id}`, label: club.name, detail: msg("news.detail.join", { division: division.name }) }],
   });
   return { kind: "active", divisionId: division.id, tier: tierOf(division), position, replacedClubId: aiId };
 }
@@ -798,8 +799,8 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
     kind: "mp",
     subject: NEWS_SUBJECTS.clubStatus,
     clubId: club.id,
-    headline: "Pyramid standing",
-    entries: [{ key: `return:${club.id}`, label: club.name, detail: `returned to the pyramid in ${division.name}` }],
+    headline: "news.headline.pyramid",
+    entries: [{ key: `return:${club.id}`, label: club.name, detail: msg("news.detail.return", { division: division.name }) }],
   });
   return { kind: "active", divisionId: division.id, tier: tierOf(division), position, replacedClubId: aiId };
 }
@@ -889,8 +890,8 @@ export function evaluateInactivity(world: World, now: number): void {
           kind: "mp",
           subject: NEWS_SUBJECTS.clubStatus,
           recipientClubId: club.id,
-          headline: "Inactivity warning",
-          entries: [{ key: `inactive:${club.id}`, label: club.name, detail: "has been inactive and may be removed at season end" }],
+          headline: "news.headline.inactivity",
+          entries: [{ key: `inactive:${club.id}`, label: club.name, detail: msg("news.detail.inactive") }],
         });
       }
     } else {

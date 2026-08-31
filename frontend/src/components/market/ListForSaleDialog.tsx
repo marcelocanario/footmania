@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { Dialog } from "primereact/dialog";
 import { InputNumber } from "primereact/inputnumber";
 import { api, type PlayerView } from "../../api/client";
 import { useGame } from "../../store/game";
-import { strings } from "../../strings";
 import { money } from "../../format";
 import { auctionOpeningRange } from "../../market";
+import { useLang } from "../../i18n/store";
 
-const SEASON_PAUSED_TITLE = "The season is paused by an administrator — bids, listings and loans are frozen.";
+const SEASON_PAUSED_TITLE = (): string => i18n.t("market.seasonPaused");
 
 interface SellPreview {
   value: number;
@@ -33,7 +35,9 @@ export function ListForSaleDialog({
   onListed: () => void;
   customTooltips?: boolean;
 }) {
+  const { t } = useTranslation();
   const status = useGame((s) => s.status);
+  const lang = useLang((s) => s.lang);
   const [preview, setPreview] = useState<SellPreview | null>(null);
   const [price, setPrice] = useState(0);
 
@@ -78,7 +82,7 @@ export function ListForSaleDialog({
 
   return (
     <Dialog
-      header={`${strings.transfers.sell} — ${player?.name ?? ""}`}
+      header={`${t("transfers.sell")} — ${player?.name ?? ""}`}
       visible={player !== null}
       onHide={onClose}
       dismissableMask
@@ -87,13 +91,13 @@ export function ListForSaleDialog({
       <div style={{ display: "grid", gap: 6, color: "var(--text-2)", marginBottom: 16 }}>
         {preview ? (
           <>
-            <span>Value: <b style={{ color: "var(--gold-2)" }}>{money(preview.value)}</b></span>
-            <span>Opening price base: <b style={{ color: "var(--gold-2)" }}>{money(preview.baseValue)}</b></span>
+            <span>{t("market.valueLabel")}: <b style={{ color: "var(--gold-2)" }}>{money(preview.value)}</b></span>
+            <span>{t("market.openingBaseLabel")}: <b style={{ color: "var(--gold-2)" }}>{money(preview.baseValue)}</b></span>
             <span>
-              Allowed range: <b style={{ color: "var(--gold-2)" }}>{money(preview.openingPriceRange.min)} – {money(preview.openingPriceRange.max)}</b>
+              {t("market.allowedRangeLabel")}: <b style={{ color: "var(--gold-2)" }}>{money(preview.openingPriceRange.min)} – {money(preview.openingPriceRange.max)}</b>
             </span>
             <span style={{ fontSize: "0.86rem", color: "var(--text-3)" }}>
-              Choose the opening asking price inside the allowed range. Bidding may go above it up to the market cap.
+              {t("market.chooseOpening")}
             </span>
             <div style={{ marginTop: 8 }}>
               <InputNumber
@@ -103,12 +107,12 @@ export function ListForSaleDialog({
                 max={preview.openingPriceRange.max}
                 mode="currency"
                 currency="USD"
-                locale="en-US"
+                locale={lang}
               />
             </div>
           </>
         ) : (
-          <span>Loading listing preview…</span>
+          <span>{t("market.loadingPreview")}</span>
         )}
       </div>
       {preview?.cooldownError && (
@@ -118,11 +122,11 @@ export function ListForSaleDialog({
       )}
       {preview?.alreadyListed && (
         <div className="card" style={{ marginBottom: 12, padding: 12, fontSize: "0.9rem", color: "var(--text-3)" }}>
-          This player already has an active listing.
+          {t("market.alreadyListed")}
         </div>
       )}
       <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>{strings.common.cancel}</button>
+        <button className="btn ghost" style={{ flex: 1 }} onClick={onClose}>{t("common.cancel")}</button>
         <button
           style={{ flex: 1 }}
           disabled={
@@ -134,10 +138,10 @@ export function ListForSaleDialog({
             price > preview.openingPriceRange.max
           }
           className={`btn${customTooltips && status?.paused ? " squad-tooltip-trigger" : ""}`}
-          {...(customTooltips ? { "data-pr-tooltip": status?.paused ? SEASON_PAUSED_TITLE : undefined } : { title: status?.paused ? SEASON_PAUSED_TITLE : undefined })}
+          {...(customTooltips ? { "data-pr-tooltip": status?.paused ? SEASON_PAUSED_TITLE() : undefined } : { title: status?.paused ? SEASON_PAUSED_TITLE() : undefined })}
           onClick={() => void sell()}
         >
-          {strings.common.confirm}
+          {t("common.confirm")}
         </button>
       </div>
     </Dialog>

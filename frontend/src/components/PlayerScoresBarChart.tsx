@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 /**
  * Compact line chart for a player's performance ratings (this season or
  * per-season averages). Rendered as inline SVG; points with a null value are
@@ -12,7 +14,7 @@
 export function PlayerScoresBarChart({
   label,
   points,
-  unit: _unit = "score",
+  unit = "score",
   maxScore = 10,
   sideValue,
 }: {
@@ -23,6 +25,7 @@ export function PlayerScoresBarChart({
   /** Value shown on the right (season average). When provided, it overrides the last-point value. */
   sideValue?: number | null;
 }) {
+  const { t } = useTranslation();
   const valid = points.filter((p): p is { key: string; value: number; title?: string } => p.value !== null && Number.isFinite(p.value));
   // Both match ratings and season averages are now shown with 1 decimal (user request).
   const fmt = (v: number) => v.toFixed(1);
@@ -31,14 +34,16 @@ export function PlayerScoresBarChart({
     return (
       <div className="player-trend player-trend-empty">
         <span className="player-trend-label">{label}</span>
-        <span className="player-trend-note">No data yet</span>
+        <span className="player-trend-note">{t("playerScores.noData")}</span>
       </div>
     );
   }
 
   const width = 220;
   const chartHeight = 56;
-  const isThisSeason = label.toLowerCase().includes("this season");
+  // The "this season" mode (match-sequence ratings) reserves vertical space
+  // for match-number labels under the chart; per-season averages do not.
+  const isThisSeason = unit === "score";
   // Reserve extra vertical space for match-number labels under the chart.
   const xLabelHeight = isThisSeason ? 14 : 0;
   const height = chartHeight + xLabelHeight;

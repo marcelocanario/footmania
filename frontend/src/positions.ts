@@ -1,11 +1,15 @@
 /**
  * Frontend presentation for the nine natural positions (§16.1).
  *
- * This module owns CSS classes and display order ONLY. Full names come from
- * each API view's `positionName`; semantic role/group data comes from the API.
- * There is no numeric position anywhere in the API any more, so there is no
- * numeric fallback here either — an unexpected value is surfaced, not guessed.
+ * This module owns CSS classes, display order, and the localized full-name
+ * label (rendered from `positions.<CODE>` in the locale bundles). The API
+ * carries only the stable position CODE (`naturalPosition`), never a rendered
+ * name; semantic role/group data comes from the API. There is no numeric
+ * position anywhere in the API any more, so there is no numeric fallback here
+ * either — an unexpected value is surfaced, not guessed.
  */
+import i18n from "i18next";
+
 export const NATURAL_POSITIONS = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"] as const;
 export type NaturalPosition = (typeof NATURAL_POSITIONS)[number];
 
@@ -53,4 +57,11 @@ export function positionLetter(pos: NaturalPosition | string | undefined): strin
   if (isNaturalPosition(pos)) return POSITION_LETTER[pos];
   if (pos !== undefined) console.warn(`[positions] unknown position value for letter: ${String(pos)}`);
   return "?";
+}
+
+/** Localized full name for a position code (e.g. "CB" → "Center back"). */
+export function positionLabel(pos: NaturalPosition | string | undefined): string {
+  if (isNaturalPosition(pos)) return i18n.t(`positions.${pos}`);
+  if (pos !== undefined) console.warn(`[positions] unknown position value for label: ${String(pos)}`);
+  return pos ?? "?";
 }

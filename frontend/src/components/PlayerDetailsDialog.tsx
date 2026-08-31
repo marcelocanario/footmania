@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { Dialog } from "primereact/dialog";
 import { CalendarDays, Handshake, HeartPulse, History, Landmark, ShieldAlert, Sparkles, Square, Target, Trophy, Wallet, Zap } from "lucide-react";
 import { api, type PlayerHistorySeason, type PlayerHistoryView, type PlayerMatchScoreView } from "../api/client";
@@ -8,7 +10,8 @@ import { ClubNameLink } from "./ClubNameLink";
 import { PlayerSkillsRadar } from "./PlayerSkillsRadar";
 import { PlayerTrendSparkline } from "./PlayerTrendSparkline";
 import { PlayerScoresBarChart } from "./PlayerScoresBarChart";
-import { positionClass, positionLetter } from "../positions";
+import { positionClass, positionLabel, positionLetter } from "../positions";
+import { conditionLabel as conditionText } from "../condition";
 import { money } from "../format";
 
 /** Refresh the card while it is open so a goal scored mid-match (or the
@@ -18,12 +21,13 @@ import { money } from "../format";
 const CARD_REFRESH_MS = 10_000;
 
 const seasonsOf = (days: number, seasonDays: number): string => {
-  if (seasonDays <= 0) return `${days}d`;
+  if (seasonDays <= 0) return i18n.t("playerDetails.days", { days });
   const s = Math.round(days / seasonDays);
-  return `${s} season${s === 1 ? "" : "s"}`;
+  return i18n.t("playerDetails.seasons", { count: s });
 };
 
 export function PlayerDetailsDialog({ target, onClose }: { target: { id: number; name: string } | null; onClose: () => void }) {
+  const { t } = useTranslation();
   const [player, setPlayer] = useState<PlayerHistoryView | null>(null);
   const [historySeasons, setHistorySeasons] = useState<PlayerHistorySeason[]>([]);
   const [matchScores, setMatchScores] = useState<PlayerMatchScoreView[]>([]);
@@ -95,63 +99,63 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
     : trendSeasons.map((s) => s.value);
 
   return (
-    <Dialog header="Player details" visible={target !== null} onHide={onClose} dismissableMask style={{ width: 520 }}>
+    <Dialog header={t("playerDetails.title")} visible={target !== null} onHide={onClose} dismissableMask style={{ width: 520 }}>
       {!player ? (
-        <div className="empty-state" style={{ padding: 20 }}>{busy ? "Loading…" : "Player details unavailable."}</div>
+        <div className="empty-state" style={{ padding: 20 }}>{busy ? t("playerDetails.loading") : t("playerDetails.unavailable")}</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <div className="card" style={{ padding: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span className={`pos-tag ${positionClass(player.naturalPosition)}`} title={player.positionName}>{positionLetter(player.naturalPosition)}</span>
+                  <span className={`pos-tag ${positionClass(player.naturalPosition)}`} title={positionLabel(player.naturalPosition)}>{positionLetter(player.naturalPosition)}</span>
                   <span style={{ fontWeight: 800, fontSize: "1.1rem" }}>{player.displayName ?? player.name}</span>
                   {player.nickname && <span className="flag-chip" style={{ borderColor: "var(--gold-2)", color: "var(--gold-2)" }}>“{player.nickname}”</span>}
-                  {player.onSale && <span className="flag-chip fc-accent" title="Listed on the transfer market">Listed</span>}
-                  {player.onLoan && <span className="flag-chip fc-loan" title={`On loan from ${player.loanFromName ?? "another club"}`}>LOAN</span>}
-                  {player.onLoanOut && <span className="flag-chip fc-loan" title={`On loan at ${player.loanClubName ?? "another club"}`}>LOAN OUT</span>}
+                  {player.onSale && <span className="flag-chip fc-accent" title={t("playerDetails.listedTip")}>{t("playerDetails.listed")}</span>}
+                  {player.onLoan && <span className="flag-chip fc-loan" title={t("playerDetails.loanFromTip", { club: player.loanFromName ?? t("playerDetails.anotherClub") })}>{t("playerDetails.loan")}</span>}
+                  {player.onLoanOut && <span className="flag-chip fc-loan" title={t("playerDetails.loanAtTip", { club: player.loanClubName ?? t("playerDetails.anotherClub") })}>{t("playerDetails.loanOut")}</span>}
                 </div>
                 <div style={{ color: "var(--text-2)", fontSize: "0.84rem", marginTop: 3 }}>
                   {player.clubId != null
                     ? <ClubNameLink clubId={player.clubId} name={player.clubName ?? ""} showCrest={false} />
-                    : player.clubName ?? "Free agent"}
+                    : player.clubName ?? t("playerDetails.freeAgent")}
                 </div>
                 <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 2 }}>
-                  <span title={player.country} aria-label={`Country: ${player.country}`}>{country ? `${country} ` : ""}{player.country}</span> · {player.age} yrs · <span title={player.positionName}>{player.naturalPosition}</span>
+                  <span title={player.country} aria-label={t("playerDetails.countryAria", { country: player.country })}>{country ? `${country} ` : ""}{player.country}</span> · {t("playerDetails.yrs", { age: player.age })} · <span title={positionLabel(player.naturalPosition)}>{player.naturalPosition}</span>
                 </div>
               </div>
               <strong style={{ fontSize: "1.5rem", fontFamily: "var(--font-display)", color: "var(--grass-2)" }}>{player.overall}</strong>
             </div>
 
             <div className="player-card-section" style={{ marginTop: 14 }}>
-              <div className="section-label">Contract & market</div>
+              <div className="section-label">{t("playerDetails.contractMarket")}</div>
               <div className="player-facts-grid player-facts-finance">
                 <div className="player-fact">
                   <span className="player-fact-icon"><Landmark size={15} /></span>
-                  <span><span className="player-fact-label">Market value</span><strong>{money(player.value)}</strong></span>
+                  <span><span className="player-fact-label">{t("playerDetails.marketValue")}</span><strong>{money(player.value)}</strong></span>
                 </div>
                 <div className="player-fact">
                   <span className="player-fact-icon"><Wallet size={15} /></span>
-                  <span><span className="player-fact-label">Salary / season</span><strong>{money(player.salary)}</strong></span>
+                  <span><span className="player-fact-label">{t("playerDetails.salarySeason")}</span><strong>{money(player.salary)}</strong></span>
                 </div>
                 <div className="player-fact">
                   <span className="player-fact-icon"><CalendarDays size={15} /></span>
-                  <span><span className="player-fact-label">Contract</span><strong>{seasonsOf(player.contractDays, seasonDays)}</strong></span>
+                  <span><span className="player-fact-label">{t("playerDetails.contract")}</span><strong>{seasonsOf(player.contractDays, seasonDays)}</strong></span>
                 </div>
               </div>
             </div>
 
             <div className="player-card-section" style={{ marginTop: 12 }}>
-              <div className="section-label">Performance</div>
-              <div className="segmented player-performance-tabs" role="tablist" aria-label="Player details">
+              <div className="section-label">{t("playerDetails.performance")}</div>
+              <div className="segmented player-performance-tabs" role="tablist" aria-label={t("playerDetails.detailsAria")}>
                 <button type="button" role="tab" aria-selected={activeTab === "season"} className={activeTab === "season" ? "active" : ""} onClick={() => setActiveTab("season")}>
-                  <Trophy size={14} /> This season
+                  <Trophy size={14} /> {t("playerDetails.thisSeason")}
                 </button>
                 <button type="button" role="tab" aria-selected={activeTab === "career"} className={activeTab === "career" ? "active" : ""} onClick={() => setActiveTab("career")}>
-                  <History size={14} /> Career <span className="pro-tab-pill">PRO</span>
+                  <History size={14} /> {t("playerDetails.career")} <span className="pro-tab-pill">{t("playerDetails.proPill")}</span>
                 </button>
                 <button type="button" role="tab" aria-selected={activeTab === "skills"} className={activeTab === "skills" ? "active" : ""} onClick={() => setActiveTab("skills")}>
-                  <Sparkles size={14} /> Skills {!ownTeam && <span className="pro-tab-pill">PRO</span>}
+                  <Sparkles size={14} /> {t("playerDetails.skills")} {!ownTeam && <span className="pro-tab-pill">{t("playerDetails.proPill")}</span>}
                 </button>
               </div>
               {activeTab === "season" ? (
@@ -159,36 +163,36 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                   <div className="player-facts-grid player-facts-performance">
                     <div className="player-fact">
                       <span className="player-fact-icon"><Zap size={15} /></span>
-                      <span><span className="player-fact-label">Energy now</span><strong>{Math.round(player.energy)}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.energyNow")}</span><strong>{Math.round(player.energy)}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><CalendarDays size={15} /></span>
-                      <span><span className="player-fact-label">Appearances</span><strong>{player.seasonAppearances ?? 0}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.appearances")}</span><strong>{player.seasonAppearances ?? 0}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><Target size={15} /></span>
-                      <span><span className="player-fact-label">Goals</span><strong>{player.seasonGoals}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.goals")}</span><strong>{player.seasonGoals}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><Handshake size={15} /></span>
-                      <span><span className="player-fact-label">Assists</span><strong>{player.seasonAssists}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.assists")}</span><strong>{player.seasonAssists}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><Trophy size={15} /></span>
-                      <span><span className="player-fact-label">MVP</span><strong>{player.seasonMvps ?? 0}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.mvp")}</span><strong>{player.seasonMvps ?? 0}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><ShieldAlert size={15} /></span>
-                      <span><span className="player-fact-label">Discipline</span><span className="player-stat-pair"><span className="player-card-yellow"><Square size={11} fill="currentColor" /> {player.yellows} yellow</span><span className="player-card-red"><Square size={11} fill="currentColor" /> {player.reds} red</span></span></span>
+                      <span><span className="player-fact-label">{t("playerDetails.discipline")}</span><span className="player-stat-pair"><span className="player-card-yellow"><Square size={11} fill="currentColor" /> {t("playerDetails.yellow", { count: player.yellows })}</span><span className="player-card-red"><Square size={11} fill="currentColor" /> {t("playerDetails.red", { count: player.reds })}</span></span></span>
                     </div>
                   </div>
                   <div className="player-trend-grid">
                     <PlayerScoresBarChart
-                      label="Avg rating · this season"
+                      label={t("playerDetails.avgRatingThisSeason")}
                       points={thisSeasonScores.map((m) => ({
                         key: `m${m.matchId}`,
                         value: m.rating,
-                        title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
+                        title: t("playerDetails.ratingTitle", { result: m.result ?? "", minutes: m.minutesPlayed ?? "?", rating: m.rating != null ? m.rating.toFixed(1) : t("playerScores.nr") }),
                       }))}
                       maxScore={10}
                       sideValue={currentSeasonAvg}
@@ -196,13 +200,13 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                   </div>
                   <div className="player-current-status">
                     {player.conditionLabel && (
-                      <span className="chip"><Zap size={12} /> {player.conditionLabel}</span>
+                      <span className="chip"><Zap size={12} /> {conditionText(player.conditionLabel)}</span>
                     )}
                     {player.injuryDays > 0 && (
-                      <span className="chip player-status-danger"><HeartPulse size={12} /> Injured · {player.injuryDays}d</span>
+                      <span className="chip player-status-danger"><HeartPulse size={12} /> {t("playerDetails.injured", { days: player.injuryDays })}</span>
                     )}
                     {player.suspended && (
-                      <span className="chip player-status-danger"><ShieldAlert size={12} /> Suspended {player.suspendedGames}</span>
+                      <span className="chip player-status-danger"><ShieldAlert size={12} /> {t("playerDetails.suspended", { count: player.suspendedGames })}</span>
                     )}
                   </div>
                 </>
@@ -210,8 +214,8 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
                 !canSeeSkills || !player.skills ? (
                   <div className="player-pro-gate">
                     <Sparkles size={22} />
-                    <strong>Player skills are a Pro feature</strong>
-                    <span>Skill profiles of other clubs' players are available to Pro managers.</span>
+                    <strong>{t("playerDetails.skillsProTitle")}</strong>
+                    <span>{t("playerDetails.skillsProBody")}</span>
                   </div>
                 ) : (
                   <PlayerSkillsRadar skills={player.skills} />
@@ -219,49 +223,49 @@ export function PlayerDetailsDialog({ target, onClose }: { target: { id: number;
               ) : !isPro ? (
                 <div className="player-pro-gate">
                   <History size={22} />
-                  <strong>Career performance is a Pro feature</strong>
-                  <span>Historical season records, career totals, and discipline history are available to Pro managers.</span>
+                  <strong>{t("playerDetails.careerProTitle")}</strong>
+                  <span>{t("playerDetails.careerProBody")}</span>
                 </div>
               ) : (
                 <>
                   <div className="player-facts-grid player-facts-career">
                     <div className="player-fact">
                       <span className="player-fact-icon"><Target size={15} /></span>
-                      <span><span className="player-fact-label">Career goals</span><strong>{player.careerGoals}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.careerGoals")}</span><strong>{player.careerGoals}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><Handshake size={15} /></span>
-                      <span><span className="player-fact-label">Career assists</span><strong>{player.careerAssists}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.careerAssists")}</span><strong>{player.careerAssists}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><Trophy size={15} /></span>
-                      <span><span className="player-fact-label">Career MVP</span><strong>{player.careerMvps ?? 0}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.careerMvp")}</span><strong>{player.careerMvps ?? 0}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><Landmark size={15} /></span>
-                      <span><span className="player-fact-label">Clubs represented</span><strong>{careerClubs.size}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.clubsRepresented")}</span><strong>{careerClubs.size}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><CalendarDays size={15} /></span>
-                      <span><span className="player-fact-label">Seasons</span><strong>{historySeasons.length + 1}</strong></span>
+                      <span><span className="player-fact-label">{t("playerDetails.seasonsCount")}</span><strong>{historySeasons.length + 1}</strong></span>
                     </div>
                     <div className="player-fact">
                       <span className="player-fact-icon"><ShieldAlert size={15} /></span>
-                      <span><span className="player-fact-label">Career discipline</span><span className="player-stat-pair"><span className="player-card-yellow"><Square size={11} fill="currentColor" /> {careerYellows} yellow</span><span className="player-card-red"><Square size={11} fill="currentColor" /> {careerReds} red</span></span></span>
+                      <span><span className="player-fact-label">{t("playerDetails.careerDiscipline")}</span><span className="player-stat-pair"><span className="player-card-yellow"><Square size={11} fill="currentColor" /> {t("playerDetails.yellow", { count: careerYellows })}</span><span className="player-card-red"><Square size={11} fill="currentColor" /> {t("playerDetails.red", { count: careerReds })}</span></span></span>
                     </div>
                   </div>
                   <div className="player-trend-grid">
-                    <PlayerTrendSparkline label="Overall per season" values={overallTrend} />
-                    <PlayerTrendSparkline label="Market value per season" values={valueTrend} unit="money" />
+                    <PlayerTrendSparkline label={t("playerDetails.overallPerSeason")} values={overallTrend} />
+                    <PlayerTrendSparkline label={t("playerDetails.valuePerSeason")} values={valueTrend} unit="money" />
                     <PlayerScoresBarChart
-                      label="Avg rating per season"
+                      label={t("playerDetails.avgRatingPerSeason")}
                       unit="avg"
                       points={trendSeasons.map((s) => ({
                         key: s.seasonKey,
                         value: s.avgScore ?? null,
-                        title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(1)}`,
+                        title: t("playerDetails.avgTitle", { key: s.seasonKey, avg: (s.avgScore ?? 0).toFixed(1) }) as string,
                       })).concat(
-                        currentSeasonAvg != null ? [{ key: "current", value: currentSeasonAvg, title: `This season · avg ${currentSeasonAvg.toFixed(1)}` }] : []
+                        currentSeasonAvg != null ? [{ key: "current", value: currentSeasonAvg, title: t("playerDetails.thisSeasonAvgTitle", { avg: currentSeasonAvg.toFixed(1) }) as string }] : []
                       )}
                       maxScore={10}
                     />

@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   plugins: [
@@ -11,7 +12,9 @@ export default defineConfig({
       manifest: {
         name: "Footmania",
         short_name: "Footmania",
-        description: "Football manager simulation game",
+         description: "Football manager simulation game",
+         lang: "en",
+         dir: "ltr",
         theme_color: "#050e09",
         background_color: "#050e09",
         display: "standalone",
@@ -49,18 +52,25 @@ export default defineConfig({
         manualChunks: {
           react: ["react", "react-dom", "react-router-dom"],
           icons: ["lucide-react"],
+          i18n: ["i18next", "react-i18next"],
         },
       },
     },
   },
   server: {
     port: 3000,
+    fs: { allow: [".", ".."] },
     proxy: {
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,
         ws: true,
       },
+    },
+  },
+  resolve: {
+    alias: {
+      "@server-i18n": fileURLToPath(new URL("../backend/src/i18n", import.meta.url)),
     },
   },
 });

@@ -24,6 +24,7 @@ import { recordActiveClubBoundaryChange } from "../game/population";
 import { applySeasonalEloRegression, eloRatings } from "../game/elo";
 import { revokeUnclaimedLoans } from "../game/loans";
 import { NEWS_SUBJECTS, publishNews } from "../game/news";
+import { msg } from "../i18n/catalog";
 import { generatePreseasonReports } from "../game/preseasonReport";
 import { ensureSeasonRow, issueAllocation, removeFillerClubs } from "./mpService";
 import { nextUint } from "../game/rng";
@@ -271,8 +272,8 @@ export async function executeRolloverStep(
         kind: "mp",
         subject: NEWS_SUBJECTS.clubStatus,
         recipientClubId: club.id,
-        headline: "Pyramid standing",
-        entries: [{ key: `dormant:${club.id}`, label: club.name, detail: "was moved to dormant status and will re-enter at the lowest tier if you return" }],
+        headline: "news.headline.pyramid",
+        entries: [{ key: `dormant:${club.id}`, label: club.name, detail: msg("news.detail.dormant") }],
       });
     }
     world.mp.rolloverPhase = "MOVEMENTS_CALCULATED";

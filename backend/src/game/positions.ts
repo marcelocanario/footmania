@@ -84,18 +84,6 @@ const CODE_TO_POSITION: Record<number, NaturalPosition> = {
   8: "RW",
 };
 
-const FULL_NAMES: Record<NaturalPosition, string> = {
-  GK: "Goalkeeper",
-  LB: "Left back",
-  RB: "Right back",
-  CB: "Center back",
-  DM: "Defensive midfielder",
-  AM: "Attacking midfielder",
-  LW: "Left winger",
-  RW: "Right winger",
-  ST: "Striker",
-};
-
 export const NATURAL_POSITION_ORDER: NaturalPosition[] = ["GK", "LB", "RB", "CB", "DM", "AM", "LW", "RW", "ST"];
 
 export function positionGroup(pos: NaturalPosition): PositionGroup {
@@ -126,10 +114,6 @@ export function positionFromV2Code(code: number): NaturalPosition {
   const pos = CODE_TO_POSITION[code];
   if (!pos) throw new Error(`Invalid position code ${code}`);
   return pos;
-}
-
-export function positionName(pos: NaturalPosition): string {
-  return FULL_NAMES[pos];
 }
 
 /**

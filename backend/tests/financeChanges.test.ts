@@ -5,6 +5,7 @@ import { applyMatchToPlayers } from "../src/game/match";
 import { EVENT_CODES } from "../src/game/constants";
 import { generatePlayer } from "../src/game/player";
 import { createRng } from "../src/game/rng";
+import { isMessageRef } from "../src/i18n/catalog";
 import type { Match } from "../src/game/types";
 import { makeClub, makeWorld } from "./helpers";
 
@@ -43,6 +44,6 @@ describe("red-card finance", () => {
     expect(player.suspendedGames).toBeGreaterThan(0);
     expect(club.cash).toBe(100_000);
     expect(club.ledger.income).toHaveLength(0);
-    expect(world.news[0]?.text).not.toContain("fine");
+    expect(world.news[0]?.entries?.some((e) => isMessageRef(e.detail) && e.detail.k === "news.detail.tribunal")).toBe(true);
   });
 });

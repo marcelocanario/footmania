@@ -1,4 +1,5 @@
 import { positionClass, positionLetter } from "../../positions";
+import { useTranslation } from "react-i18next";
 
 /**
  * Compact market listing row shared by every transfers tab. `name` renders as
@@ -32,6 +33,7 @@ export function TransferPlayerRow({
   onClick?: () => void;
   sub?: React.ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <div className={`card hoverable transfer-row${muted ? " transfer-row-muted" : ""}`} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
       <div style={{ flex: 1, minWidth: 200 }}>
@@ -41,7 +43,7 @@ export function TransferPlayerRow({
           <span style={{ fontFamily: "var(--font-display)", fontWeight: 800, fontSize: "1.15rem", color: "var(--grass-2)" }}>{overall}</span>
         </div>
         <div style={{ color: "var(--text-3)", fontSize: "0.86rem", marginTop: 5 }}>
-          {age} yrs{country ? ` · ${country}` : ""}
+          {t("market.yrs", { age })}{country ? ` · ${country}` : ""}
           {meta != null && <> · {meta}</>}
         </div>
         {sub != null && <div style={{ color: "var(--text-3)", fontSize: "0.8rem", marginTop: 2 }}>{sub}</div>}

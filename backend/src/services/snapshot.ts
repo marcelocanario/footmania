@@ -5,7 +5,7 @@ import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
 import { MOTD_NEWS_KIND, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
 import { formationById } from "../game/formations";
-import { positionGroup, positionName } from "../game/positions";
+import { positionGroup } from "../game/positions";
 import { formationOptions } from "../game/formations";
 import { gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
@@ -31,6 +31,7 @@ export function newsItemView(n: World["news"][number], dayLabelText: string) {
     dayLabel: dayLabelText,
     text: n.text,
     kind: n.kind,
+    ...(n.body !== undefined ? { body: n.body } : {}),
     ...(n.headline !== undefined ? { headline: n.headline } : {}),
     ...(n.subject !== undefined ? { subject: n.subject } : {}),
     ...(n.entries && n.entries.length > 0 ? { entries: n.entries } : {}),
@@ -94,7 +95,6 @@ export function playerView(
     (p.turnYellows ?? 0) >= turnYellowLimit - 1;
   const naturalPos = p.position as unknown as import("../game/positions").NaturalPosition;
   const group = positionGroup(naturalPos);
-  const fullName = positionName(naturalPos);
   return {
     id: p.id,
     name: p.name,
@@ -104,7 +104,6 @@ export function playerView(
     country: p.country,
     naturalPosition: p.position,
     positionGroup: group,
-    positionName: fullName,
     squadNumber: p.squadNumber ?? null,
     overall: p.overall,
     skills: p.skills,
@@ -300,7 +299,6 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
       const myBid = clubId !== null ? listingBids.find((b) => b.clubId === clubId) : undefined;
       const natPos = p?.position as unknown as import("../game/positions").NaturalPosition | undefined;
       const grp = natPos ? positionGroup(natPos) : undefined;
-      const full = natPos ? positionName(natPos) : "";
       return {
         id: a.id,
         playerId: a.playerId,
@@ -308,7 +306,6 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
         overall: p?.overall ?? 0,
         naturalPosition: p?.position ?? null,
         positionGroup: grp ?? null,
-        positionName: full,
         age: p?.age ?? 0,
         salary: p?.salary ?? 0,
         skills: p?.skills ?? { gol: 0, pace: 0, tec: 0, pas: 0, des: 0, playmaking: 0, fin: 0 },

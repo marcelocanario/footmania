@@ -7,7 +7,30 @@
  * auto-detected timezone so all site-wide rendering stays local.
  */
 
+import { useLang } from "../i18n/store";
+
 const SLOTS_PER_DAY = 48;
+
+const kickoffFormatters = new Map<string, Intl.DateTimeFormat>();
+const relativeFormatters = new Map<string, Intl.RelativeTimeFormat>();
+
+function kickoffFormatter(lang: string): Intl.DateTimeFormat {
+  let f = kickoffFormatters.get(lang);
+  if (!f) {
+    f = new Intl.DateTimeFormat(lang, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    kickoffFormatters.set(lang, f);
+  }
+  return f;
+}
+
+function relativeFormatter(lang: string): Intl.RelativeTimeFormat {
+  let f = relativeFormatters.get(lang);
+  if (!f) {
+    f = new Intl.RelativeTimeFormat(lang, { numeric: "auto" });
+    relativeFormatters.set(lang, f);
+  }
+  return f;
+}
 
 /** IANA name of the browser's timezone, e.g. "Europe/Berlin". */
 export function userTimeZone(): string {
@@ -72,5 +95,18 @@ export function utcSlotsToLocal(slots: number[]): number[] {
  */
 export function formatKickoff(kickoffAt: number | null | undefined): string {
   if (!kickoffAt) return "";
-  return new Date(kickoffAt).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return kickoffFormatter(useLang.getState().lang).format(new Date(kickoffAt));
+}
+
+/** Relative "3m ago" / "yesterday" label, localized. */
+export function relativeTime(iso: string | number, now = Date.now()): string {
+  const lang = useLang.getState().lang;
+  const delta = Math.round((now - new Date(iso).getTime()) / 1000);
+  const abs = Math.abs(delta);
+  const formatter = relativeFormatter(lang);
+  if (abs < 60) return formatter.format(delta, "second");
+  if (abs < 3600) return formatter.format(Math.round(delta / 60), "minute");
+  if (abs < 86400) return formatter.format(Math.round(delta / 3600), "hour");
+  if (abs < 604800) return formatter.format(Math.round(delta / 86400), "day");
+  return new Date(iso).toLocaleDateString(lang, { month: "short", day: "numeric" });
 }

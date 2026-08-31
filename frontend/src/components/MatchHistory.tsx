@@ -1,25 +1,10 @@
 import type { LiveEvent } from "../api/client";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 
-const EVENT_LABELS: Record<number, string> = {
-  1: "Goal!",
-  2: "Yellow card",
-  3: "Red card",
-  4: "Second yellow — sent off",
-  5: "Injury",
-  6: "Substitution",
-  7: "Missed penalty",
-  9: "Coin toss",
-  10: "Half-time",
-  11: "Second half",
-  12: "Full time",
-  13: "To penalties",
-  14: "Corner taken by",
-  15: "Saved shot by",
-  16: "Off the post!",
-  17: "Shot off target",
-  18: "Shot blocked",
-  19: "Man of the match",
-};
+function eventLabel(type: number): string {
+  return (i18n.t as unknown as (k: string) => string)(`matchHistory.${type}`);
+}
 
 function EventIcon({ type, subtype }: { type: number; subtype: number }) {
   let cls = "event-ico event-miss";
@@ -75,7 +60,7 @@ export function MatchHistory({
   homeClubId,
   homeName,
   awayName,
-  emptyText = "The match is about to start...",
+  emptyText,
   onPlayerClick,
 }: {
   events: LiveEvent[];
@@ -85,6 +70,8 @@ export function MatchHistory({
   emptyText?: string;
   onPlayerClick?: (id: number, name: string) => void;
 }) {
+  const { t } = useTranslation();
+  const empty = emptyText ?? t("matchHistory.defaultEmpty");
   const orderedEvents = events
     .filter((event) => event.type !== 8)
     .slice()
@@ -93,7 +80,7 @@ export function MatchHistory({
 
   return (
     <div className="event-feed">
-      {orderedEvents.length === 0 && <div className="empty-state" style={{ padding: 14 }}>{emptyText}</div>}
+      {orderedEvents.length === 0 && <div className="empty-state" style={{ padding: 14 }}>{empty}</div>}
       {orderedEvents.map((event, index) => {
         const coinWinner = event.type === 9 ? (event.clubId === homeClubId ? homeName : awayName) : "";
         const score = scoreAt.get(event);
@@ -103,25 +90,25 @@ export function MatchHistory({
             <span className="min">{formatMinute(event)}</span>
             <EventIcon type={event.type} subtype={event.subtype} />
             {event.type === 9 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><span className="ev-name">{coinWinner} won toss — kicks off</span></>
+              <><span className="ev-label">{eventLabel(event.type)}</span><span className="ev-name">{coinWinner} {t("matchHistory.wonToss")}</span></>
             ) : event.type === 1 && event.subtype !== 2 && event.player2 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">assist</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
+              <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">{t("matchHistory.assist")}</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 5 ? (
-              <><span className="ev-label">Injury</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} />{event.goalType != null && event.goalType > 0 && <span className="ev-label">· ~{event.goalType}d out</span>}</>
+              <><span className="ev-label">{t("matchHistory.5")}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} />{event.goalType != null && event.goalType > 0 && <span className="ev-label">{t("matchHistory.injuryOut", { days: event.goalType })}</span>}</>
             ) : event.type === 6 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /><span className="ev-label">replaces</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
+              <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /><span className="ev-label">{t("matchHistory.replaces")}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 10 || event.type === 12 || event.type === 13 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span>{scoreTag}</>
+              <><span className="ev-label">{eventLabel(event.type)}</span>{scoreTag}</>
             ) : event.type === 14 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
+              <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 15 ? (
-              <><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">saved shot by</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
+              <><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">{t("matchHistory.savedShotBy")}</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 18 && event.player2 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">blocked by</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
+              <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">{t("matchHistory.blockedBy")}</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 19 ? (
-              <><span className="ev-label">{EVENT_LABELS[event.type]}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
+              <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             ) : (
-              <><span className="ev-label">{EVENT_LABELS[event.type] ?? "Event"}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
+              <><span className="ev-label">{eventLabel(event.type) ?? t("matchHistory.fallbackEvent")}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             )}
           </div>
         );

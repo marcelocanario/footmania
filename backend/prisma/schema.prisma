@@ -20,6 +20,11 @@ model User {
   emailVerified Boolean @default(false)
   image        String?
   timezone     String?
+  // Player-facing UI language (en | fr | pt-BR). Cross-device preference
+  // sync ONLY: the server never renders localized text, so nothing server-side
+  // reads this for output. Unlike the vestigial `timezone`, this is written by
+  // PUT /api/account/me/locale and surfaced through /me for reconciliation.
+  locale       String?
   isAdmin      Boolean  @default(false)
   isPro        Boolean  @default(false)
   bannedAt     DateTime?
@@ -595,6 +600,9 @@ model NewsItem {
   subject         String?
   headline        String?
   entriesJson     String?
+  // Locale-independent message body (frame key or direct ref). NULL = legacy
+  // row: render `text`. Written by publishNews, read by the snapshot.
+  bodyJson        String?
   // Privacy: when set, only that club's manager sees the item in snapshots.
   recipientClubId Int?
 

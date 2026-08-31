@@ -21,6 +21,8 @@ import { leagueTurnKey } from "../src/services/seasonCalendar";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { NEWS_SUBJECTS, publishNews } from "../src/game/news";
+import { msg, isMessageRef } from "../src/i18n/catalog";
 
 const prisma = new PrismaClient();
 
@@ -815,6 +817,50 @@ describe("global multiplayer world persistence", () => {
     expect(rw.marketBids.some((b) => b.clubId === aiId)).toBe(false);
     expect(rw.marketReservations.some((r) => r.clubId === aiId && r.releasedAt === null)).toBe(false);
     expect(rw.marketReservations.filter((r) => r.listingId === listing.id).every((r) => r.releasedAt !== null)).toBe(true);
+  });
+});
+
+describe("news body persistence round-trip", () => {
+  it("round-trips a key-native frame body and keeps legacy text rows untouched", async () => {
+    const { saveId, world } = await freshGlobalWorld(4311);
+    // publishNews does not validate club existence; a synthetic id suffices.
+    const clubId = 501;
+    world.mp.seasonId = 777;
+
+    // Key-native grouped item: frame body, empty text, message-ref detail.
+    publishNews(world, {
+      kind: "injury",
+      subject: NEWS_SUBJECTS.injuries,
+      recipientClubId: clubId,
+      headline: "news.headline.injuries",
+      entries: [{ key: "injury:1", label: "Player A", detail: msg("news.detail.injury", { count: 3 }) }],
+    });
+    await persistWorld(prisma, saveId, saveId, world);
+
+    // Insert a legacy-style row directly (English text, no body) so both paths
+    // are exercised and history is never rewritten.
+    await prisma.newsItem.create({
+      data: { saveId, dayIndex: 4, text: "plain legacy item", kind: "mp" },
+    });
+
+    let reloaded = await loadGlobalWorld(prisma);
+    const grouped = reloaded!.world.news.find((n) => n.subject === NEWS_SUBJECTS.injuries)!;
+    expect(grouped.body?.k).toBe("news.injuries");
+    expect(grouped.text).toBe("");
+    expect(isMessageRef(grouped.entries?.[0].detail)).toBe(true);
+    expect(grouped.entries?.[0].detail).toEqual(msg("news.detail.injury", { count: 3 }));
+    const legacy = reloaded!.world.news.find((n) => n.text === "plain legacy item")!;
+    expect(legacy.body).toBeUndefined();
+
+    // Persist again with NO changes: the key-order trap would rewrite every
+    // news row here; assert zero rows were written.
+    const before = await prisma.newsItem.count({ where: { saveId } });
+    await persistWorld(prisma, saveId, saveId, reloaded!.world);
+    const after = await prisma.newsItem.count({ where: { saveId } });
+    expect(after).toBe(before);
+    // And the legacy row's bodyJson is still NULL (history not rewritten).
+    const legacyRow = await prisma.newsItem.findFirst({ where: { saveId, text: "plain legacy item" }, select: { bodyJson: true } });
+    expect(legacyRow?.bodyJson).toBeNull();
   });
 });
 

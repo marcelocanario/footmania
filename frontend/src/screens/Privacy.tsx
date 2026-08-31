@@ -1,16 +1,31 @@
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { PrivacyFr } from "./privacy/Privacy-fr";
+import { PrivacyPtBR } from "./privacy/Privacy-pt-BR";
 
 export function Privacy() {
+  const { t, i18n } = useTranslation();
+  const lang = i18n.language ?? "en";
   return (
     <div className="privacy-page">
       <div className="privacy-inner">
         <Link to="/login" className="privacy-back">
-          <ArrowLeft size={14} /> Back to Footmania
+          <ArrowLeft size={14} /> {t("login.backToFootmania")}
         </Link>
 
         <article className="card privacy-card">
-          <h1>Privacy Policy</h1>
+          {lang === "fr" ? <PrivacyFr /> : lang === "pt-BR" ? <PrivacyPtBR /> : <PrivacyEn />}
+        </article>
+      </div>
+    </div>
+  );
+}
+
+function PrivacyEn() {
+  return (
+    <>
+      <h1>Privacy Policy</h1>
 
           <p>
             <strong>Last Updated: August 25, 2026</strong>
@@ -433,8 +448,6 @@ export function Privacy() {
           <p><strong>Operator:</strong> Marcelo V. N. M. Canario, operating Footmania</p>
           <p><strong>Jurisdiction:</strong> New Brunswick, Canada</p>
           <p><strong>Email:</strong> contact@footmania.app</p>
-        </article>
-      </div>
-    </div>
+    </>
   );
 }

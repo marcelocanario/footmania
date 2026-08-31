@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DataTable } from "primereact/datatable";
 import { Column } from "primereact/column";
 import { Dialog } from "primereact/dialog";
@@ -10,9 +11,10 @@ import { Activity, AlertTriangle, BatteryLow, BatteryMedium, CalendarDays, Clapp
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
-import { strings } from "../strings";
+import i18n from "i18next";
 import { PlayerName } from "../components/PlayerName";
-import { DISPLAY_ORDER, positionClass, positionLetter } from "../positions";
+import { DISPLAY_ORDER, positionClass, positionLabel, positionLetter } from "../positions";
+import { conditionLabel as conditionTextKey } from "../condition";
 import { RatingBar } from "../components/RatingBar";
 import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { PlayerTrendSparkline } from "../components/PlayerTrendSparkline";
@@ -21,7 +23,7 @@ import { Segmented } from "../components/Segmented";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { AutomationPanel } from "../components/AutomationPanel";
 import { FamiliarityBar } from "../components/FamiliarityBar";
-import { DIRECTIONS, PRESSING, STYLES, type TacticOption } from "../tacticsOptions";
+import { directionOptions, pressingOptions, styleOptions, type TacticOption } from "../tacticsOptions";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
@@ -52,11 +54,11 @@ function energyColor(value: number): string {
 
 function conditionIcon(condition: string) {
   switch (condition) {
-    case "Injured": return HeartPulse;
-    case "Needs rest": return BatteryLow;
-    case "Tired": return BatteryMedium;
-    case "Heavy recent workload": return Dumbbell;
-    case "Fresh": return Sparkles;
+    case "injured": return HeartPulse;
+    case "needsRest": return BatteryLow;
+    case "tired": return BatteryMedium;
+    case "heavyLoad": return Dumbbell;
+    case "fresh": return Sparkles;
     default: return Activity;
   }
 }
@@ -65,7 +67,7 @@ function conditionIcon(condition: string) {
 // parameter (plus other module-level helpers/components), so a fresh closure
 // per render (and per row) buys nothing and only adds allocation churn.
 function positionBody(p: PlayerView) {
-  return <span className={`pos-tag ${positionClass(p.naturalPosition)} squad-tooltip-trigger`} data-pr-tooltip={p.positionName}>{positionLetter(p.naturalPosition)}</span>;
+  return <span className={`pos-tag ${positionClass(p.naturalPosition)} squad-tooltip-trigger`} data-pr-tooltip={positionLabel(p.naturalPosition)}>{positionLetter(p.naturalPosition)}</span>;
 }
 
 /** Dropdown menu item for tactic options: label plus optional one-line description. */
@@ -99,13 +101,13 @@ function energyBody(p: PlayerView) {
 }
 
 function conditionBody(p: PlayerView) {
-  const condition = p.conditionLabel ?? "Normal workload";
+  const condition = p.conditionLabel ?? "normal";
   const injuryDays = p.injuryDaysRemaining ?? p.injuryDays;
-  const conditionText = condition === "Injured"
-    ? `${condition} · returns in ${injuryDays} day${injuryDays === 1 ? "" : "s"}`
-    : `${condition}${(p.injuryDaysRemaining ?? 0) > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}`;
-  const suspensionText = `Suspended for ${p.suspendedGames} match${p.suspendedGames === 1 ? "" : "es"}`;
-  const yellowWarningText = strings.squad.yellowCardWarning;
+  const conditionText = condition === "injured"
+    ? `${conditionTextKey(condition)} · ${i18n.t("squad.returnsIn", { count: injuryDays })}`
+    : `${conditionTextKey(condition)}${(p.injuryDaysRemaining ?? 0) > 0 ? ` · ${p.injuryDaysRemaining}d` : ""}`;
+  const suspensionText = i18n.t("squad.suspendedFor", { count: p.suspendedGames });
+  const yellowWarningText = i18n.t("squad.yellowCardWarning");
   const Icon = conditionIcon(condition);
   return (
     <span className="squad-condition-icons">
@@ -114,11 +116,11 @@ function conditionBody(p: PlayerView) {
         className="squad-condition squad-tooltip-trigger"
         data-pr-tooltip={conditionText}
         aria-label={conditionText}
-        style={{ color: condition === "Needs rest" || condition === "Injured" ? "var(--red-2)" : "var(--text-2)" }}
+        style={{ color: condition === "needsRest" || condition === "injured" ? "var(--red-2)" : "var(--text-2)" }}
       >
         <span className="squad-condition-icon">
           <Icon size={16} aria-hidden="true" />
-          {condition === "Injured" && injuryDays > 0 && <span className="squad-injury-days" aria-hidden="true">{injuryDays}</span>}
+          {condition === "injured" && injuryDays > 0 && <span className="squad-injury-days" aria-hidden="true">{injuryDays}</span>}
         </span>
       </button>
       {p.yellowWarning && (
@@ -201,6 +203,7 @@ function historyEventTone(type: number): string {
 void historyEventLabel; void historyEventIcon; void historyEventTone;
 
 export function Squad() {
+  const { t } = useTranslation();
   const snapshot = useGame((s) => s.snapshot);
   const refresh = useGame((s) => s.refresh);
   const isMobile = useIsMobile();
@@ -349,11 +352,11 @@ export function Squad() {
     if (!selected) return;
     try {
       await api.renewContract(selected.id, renewSeasons);
-      toast.current?.show({ severity: "success", summary: strings.squad.contractDone });
+      toast.current?.show({ severity: "success", summary: t("squad.contractDone") });
       setShowRenew(false);
       refresh();
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     }
   };
 
@@ -368,10 +371,10 @@ export function Squad() {
     try {
       await api.setTrainingFocus(focus);
       setTrainingFocus(focus);
-      toast.current?.show({ severity: "success", summary: "Training focus saved" });
+      toast.current?.show({ severity: "success", summary: t("squad.trainingFocusSaved") });
       await refresh();
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     }
   };
 
@@ -379,12 +382,12 @@ export function Squad() {
     if (false) return;
     try {
       await api.setTactics({ style: tactics.style, pressing: tactics.pressing, direction: tactics.direction });
-      toast.current?.show({ severity: "success", summary: "Tactics saved" });
+      toast.current?.show({ severity: "success", summary: t("squad.tacticsSaved") });
       setTacticsJustSaved(true);
       window.setTimeout(() => setTacticsJustSaved(false), 3000);
       refresh();
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     }
   };
 
@@ -394,10 +397,10 @@ export function Squad() {
     try {
       if (action === "offer") await api.offerLoan(p.id);
       else if (p.loanId !== null) await api.cancelLoan(p.loanId);
-      toast.current?.show({ severity: "success", summary: action === "offer" ? "Player listed for loan" : "Player recalled" });
+      toast.current?.show({ severity: "success", summary: action === "offer" ? t("squad.listedForLoan") : t("squad.playerRecalled") });
       await refresh();
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     }
   };
 
@@ -412,7 +415,7 @@ export function Squad() {
       await confirmAction.onConfirm();
       setConfirmAction(null);
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     } finally {
       setConfirmBusy(false);
     }
@@ -421,11 +424,11 @@ export function Squad() {
   const academyAction = async (p: PlayerView, action: "promote" | "dismiss") => {
     if (action === "dismiss") {
       confirm(
-        "Release from academy",
-        `Release ${p.name} from the youth academy?`,
+        t("squad.releaseFromAcademy"),
+        t("squad.releaseFromAcademyConfirm", { name: p.name }),
         async () => {
           await api.academyAction(p.id, "dismiss");
-          toast.current?.show({ severity: "success", summary: "Player released" });
+          toast.current?.show({ severity: "success", summary: t("squad.releaseDone") });
           await refresh();
         },
       );
@@ -437,29 +440,27 @@ export function Squad() {
     try {
       preview = await api.academyPromotionPreview(p.id);
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
       return;
     }
     if (!preview.eligibleForVoluntaryPromotion) {
       toast.current?.show({
         severity: "warn",
-        summary: "Not yet eligible",
-        detail: `${p.name} can be promoted from age ${preview.voluntaryPromotionAge}. Every academy player is promoted automatically at ${preview.automaticPromotionAge}.`,
+        summary: t("squad.notYetEligible"),
+        detail: t("squad.promotionEligibility", { name: p.name, age: preview.voluntaryPromotionAge, autoAge: preview.automaticPromotionAge }),
       });
       return;
     }
     if (preview.seniorRosterError) {
-      toast.current?.show({ severity: "warn", summary: "No senior slot", detail: preview.seniorRosterError });
+      toast.current?.show({ severity: "warn", summary: t("squad.noSeniorSlot"), detail: preview.seniorRosterError });
       return;
     }
     confirm(
-      "Promote player",
-      `Promote ${p.name} to the senior squad? He keeps his current deal exactly: ${money(preview.retainedSalary)}/season `
-      + `with ${seasonsOf(preview.retainedContractDays)} remaining, ending at age ${preview.contractEndAge}. `
-      + "Neither the salary nor the expiry date changes on promotion.",
+      t("squad.promotePlayer"),
+      t("squad.promoteConfirm", { name: p.name, salary: money(preview.retainedSalary), seasons: seasonsOf(preview.retainedContractDays), age: preview.contractEndAge }),
       async () => {
         await api.academyAction(p.id, "promote");
-        toast.current?.show({ severity: "success", summary: "Player promoted" });
+        toast.current?.show({ severity: "success", summary: t("squad.playerPromoted") });
         await refresh();
       },
     );
@@ -471,17 +472,17 @@ export function Squad() {
       ? club.finance.financialCushion - p.releaseClause + p.salary * club.finance.remainingSeasonFraction
       : null;
     const warning = projectedCushion !== null && projectedCushion < 0
-      ? ` This would reduce your financial cushion to ${money(projectedCushion)} and may put future payroll at risk.`
+      ? ` ${t("squad.releaseCushionWarning", { amount: money(projectedCushion) })}`
       : "";
     confirm(
-      strings.squad.release,
-      `${strings.squad.releaseConfirm.replace("{{name}}", p.name)}${warning}`,
+      t("squad.release"),
+      `${t("squad.releaseConfirm", { name: p.name })}${warning}`,
       async () => {
         const res = await api.releasePlayer(p.id);
         toast.current?.show({
           severity: "success",
-          summary: strings.squad.releaseDone,
-          detail: res.cost > 0 ? `Paid ${money(res.cost)} release clause` : undefined,
+          summary: t("squad.releaseDone"),
+          detail: res.cost > 0 ? t("squad.paidReleaseClause", { amount: money(res.cost) }) : undefined,
         });
         await refresh();
       }
@@ -527,12 +528,12 @@ export function Squad() {
       const res = await api.setPlayerNumber(selectedPlayer.id, numberInput);
       toast.current?.show({
         severity: "success",
-        summary: "Shirt number saved",
-        detail: res.swappedWithName ? `Swapped with ${res.swappedWithName}.` : `${selectedPlayer.name} now wears #${res.number}.`,
+        summary: t("squad.numberSaved"),
+        detail: res.swappedWithName ? t("squad.numberSwapped", { name: res.swappedWithName }) : t("squad.nowWears", { name: selectedPlayer.name, number: res.number ?? "" }),
       });
       await refresh();
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     } finally {
       setNumberBusy(false);
     }
@@ -541,17 +542,17 @@ export function Squad() {
   const saveNickname = async () => {
     if (!selectedPlayer) return;
     if (!user?.isPro) {
-      toast.current?.show({ severity: "warn", summary: "Pro required", detail: "Only Pro managers can nickname players." });
+      toast.current?.show({ severity: "warn", summary: t("squad.proRequired"), detail: t("squad.proRequiredDetail") });
       return;
     }
     setNicknameBusy(true);
     try {
       const raw = nicknameInput.trim();
       await api.nicknamePlayer(selectedPlayer.id, raw.length === 0 ? null : raw);
-      toast.current?.show({ severity: "success", summary: "Nickname saved", detail: raw ? `"${raw}" is now visible to everyone.` : "Nickname cleared." });
+      toast.current?.show({ severity: "success", summary: t("squad.nicknameSaved"), detail: raw ? t("squad.nicknameVisible", { name: raw }) : t("squad.nicknameCleared") });
       await refresh();
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "Error", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
     } finally {
       setNicknameBusy(false);
     }
@@ -567,7 +568,7 @@ export function Squad() {
       const data = await api.playerHistory(p.id);
       setHistoryData(data as unknown as SquadHistoryData);
     } catch (e) {
-      toast.current?.show({ severity: "error", summary: "History", detail: (e as Error).message });
+      toast.current?.show({ severity: "error", summary: t("squad.history"), detail: (e as Error).message });
       setHistoryError((e as Error).message);
     } finally {
       setHistoryBusy(false);
@@ -580,26 +581,23 @@ export function Squad() {
       <Tooltip ref={tooltipRef} position="top" className="squad-tooltip" />
       <div className="page-head">
         <div>
-          <div className="kicker">{club?.name ?? strings.squad.title}</div>
-          <h1>{tab === "juniors" ? strings.squad.juniors : tab === "tactics" ? strings.squad.tactics : strings.squad.seniors}</h1>
+          <div className="kicker">{club?.name ?? t("squad.title")}</div>
+          <h1>{tab === "juniors" ? t("squad.juniors") : tab === "tactics" ? t("squad.tactics") : t("squad.seniors")}</h1>
         </div>
         <Segmented<Tab>
           value={tab}
           onChange={setTab}
           items={[
-            { value: "seniors", label: strings.squad.seniors, icon: <Users size={14} />, count: seniors.length },
-            { value: "juniors", label: strings.squad.juniors, icon: <Dumbbell size={14} />, count: juniors.length },
-            { value: "tactics", label: strings.squad.tactics, icon: <ShieldCheck size={14} /> },
+            { value: "seniors", label: t("squad.seniors"), icon: <Users size={14} />, count: seniors.length },
+            { value: "juniors", label: t("squad.juniors"), icon: <Dumbbell size={14} />, count: juniors.length },
+            { value: "tactics", label: t("squad.tactics"), icon: <ShieldCheck size={14} /> },
           ]}
         />
       </div>
 
       {seniors.length > seniorSquadLimit && (
         <div className="card" style={{ marginBottom: 12, padding: 12, borderColor: "var(--gold-2)", color: "var(--gold-2)" }}>
-          <b>Squad over the limit ({seniors.length}/{seniorSquadLimit}).</b> An academy player reaching
-          age {academyAutomaticPromotionAge} is always promoted, even into a full squad — nobody is ever
-          released to make room. Until you are back at the limit you cannot bid, sign, borrow, promote
-          another youth player, or renew a contract. Selling, loaning out and releasing all still work.
+          <b>{t("squad.overLimit", { count: seniors.length, limit: seniorSquadLimit, age: academyAutomaticPromotionAge })}</b>
         </div>
       )}
 
@@ -607,51 +605,51 @@ export function Squad() {
         <>
           <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)", alignItems: "start", gap: 16 }}>
             <div className="card">
-              <h2 className="card-title"><ShieldCheck size={17} /> {strings.squad.tactics}</h2>
+              <h2 className="card-title"><ShieldCheck size={17} /> {t("squad.tactics")}</h2>
               <TacticsBoard mode="club" onFormationChange={setBoardFormation} customTooltips />
             </div>
           <div className="card">
-            <h2 className="card-title"><Clapperboard size={17} /> Match Strategy</h2>
+            <h2 className="card-title"><Clapperboard size={17} /> {t("squad.matchStrategy")}</h2>
             <div className="form-group">
-              <label htmlFor="tac-style">{strings.squad.style}</label>
-              <Dropdown id="tac-style" value={tactics.style} options={STYLES} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, style: e.value })} style={{ width: "100%" }} />
+              <label htmlFor="tac-style">{t("squad.style")}</label>
+              <Dropdown id="tac-style" value={tactics.style} options={styleOptions()} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, style: e.value })} style={{ width: "100%" }} />
             </div>
             <div className="form-group">
-              <label htmlFor="tac-press">{strings.squad.pressing}</label>
-              <Dropdown id="tac-press" value={tactics.pressing} options={PRESSING} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, pressing: e.value })} style={{ width: "100%" }} />
+              <label htmlFor="tac-press">{t("squad.pressing")}</label>
+              <Dropdown id="tac-press" value={tactics.pressing} options={pressingOptions()} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, pressing: e.value })} style={{ width: "100%" }} />
             </div>
             <div className="form-group">
-              <label htmlFor="tac-dir">{strings.squad.direction}</label>
-              <Dropdown id="tac-dir" value={tactics.direction} options={DIRECTIONS} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, direction: e.value })} style={{ width: "100%" }} />
+              <label htmlFor="tac-dir">{t("squad.direction")}</label>
+              <Dropdown id="tac-dir" value={tactics.direction} options={directionOptions()} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, direction: e.value })} style={{ width: "100%" }} />
             </div>
             {clubTactics?.familiarity !== undefined && (
               <div className="form-group">
-                <label>Tactical familiarity</label>
+                <label>{t("squad.tacticalFamiliarity")}</label>
                 <FamiliarityBar value={shownFamiliarity ?? clubTactics.familiarity} projected={draftMatchesSaved ? null : formationSaved ? draftProjection : null} customTooltips />
                 <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
-                  Familiarity grows with every match played in a setup and fades when unused. Switching setups keeps only part of it — similar setups carry more over.
+                  {t("squad.familiarityHint")}
                 </div>
               </div>
             )}
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <button className="btn" onClick={saveTactics} style={{ flex: 1 }}>
-                {strings.common.save}
+                {t("common.save")}
               </button>
               {tacticsJustSaved && (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--grass-2)", fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap" }}>
-                  <ShieldCheck size={15} /> Saved
+                  <ShieldCheck size={15} /> {t("squad.saved")}
                 </span>
               )}
             </div>
             <div className="form-group" style={{ marginTop: 18 }}>
-              <label htmlFor="training-focus">{strings.squad.trainingFocus}</label>
+              <label htmlFor="training-focus">{t("squad.trainingFocus")}</label>
               <Dropdown
                 id="training-focus"
                 value={trainingFocus}
                 options={[
-                  { label: strings.squad.trainingAssistant, desc: strings.squad.trainingAssistantDesc, value: "assistant" },
-                  { label: strings.squad.trainingPrimary, desc: strings.squad.trainingPrimaryDesc, value: "primary" },
-                  { label: strings.squad.trainingSecondary, desc: strings.squad.trainingSecondaryDesc, value: "secondary" },
+                  { label: t("squad.trainingAssistant"), desc: t("squad.trainingAssistantDesc"), value: "assistant" },
+                  { label: t("squad.trainingPrimary"), desc: t("squad.trainingPrimaryDesc"), value: "primary" },
+                  { label: t("squad.trainingSecondary"), desc: t("squad.trainingSecondaryDesc"), value: "secondary" },
                 ]}
                 itemTemplate={(option) => (
                   <div>
@@ -663,11 +661,11 @@ export function Squad() {
                 style={{ width: "100%" }}
               />
               <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
-                {strings.squad.trainingHint}
+                {t("squad.trainingHint")}
               </div>
             </div>
             <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 12, lineHeight: 1.5 }}>
-              {strings.squad.tacticsHint}
+              {t("squad.tacticsHint")}
             </div>
           </div>
           </div>
@@ -697,8 +695,8 @@ export function Squad() {
                     <InputText
                       value={filter}
                       onChange={(e) => setFilter(e.target.value)}
-                      placeholder="Search player name"
-                      aria-label="Search player name"
+                      placeholder={t("squad.searchPlayer")}
+                      aria-label={t("squad.searchPlayer")}
                     />
                     <MultiSelect
                       value={positionFilter}
@@ -706,30 +704,30 @@ export function Squad() {
                       onChange={(e) => setPositionFilter(e.value as string[])}
                       optionLabel="label"
                       optionValue="value"
-                      placeholder="All positions"
+                      placeholder={t("squad.allPositions")}
                       maxSelectedLabels={2}
-                      selectedItemsLabel="{0} positions"
+                      selectedItemsLabel={t("squad.nPositions")}
                       scrollHeight="320px"
-                      aria-label="Filter by position"
+                      aria-label={t("squad.filterByPosition")}
                     />
                   </div>
                 }
               >
-                <Column field="position" header="Pos" body={positionBody} sortable style={{ width: isMobile ? "10%" : "7%" }} />
+                <Column field="position" header={t("squad.pos")} body={positionBody} sortable style={{ width: isMobile ? "10%" : "7%" }} />
                 <Column field="squadNumber" header="#" body={squadNumberBody} sortable style={{ width: "7%" }} />
-                <Column field="name" header={strings.squad.player} body={nameBody} sortable style={isMobile ? { width: "25%" } : { width: "18%" }} />
-                <Column field="overall" header={strings.squad.overall} body={ratingBody} sortable style={{ width: isMobile ? "9%" : "7%" }} />
-                <Column field="age" header={strings.squad.age} sortable style={{ width: isMobile ? "8%" : "6%" }} />
-                <Column field="energy" header={strings.squad.energy} body={energyBody} sortable style={{ width: isMobile ? "15%" : "11%" }} />
+                <Column field="name" header={t("squad.player")} body={nameBody} sortable style={isMobile ? { width: "25%" } : { width: "18%" }} />
+                <Column field="overall" header={t("squad.overall")} body={ratingBody} sortable style={{ width: isMobile ? "9%" : "7%" }} />
+                <Column field="age" header={t("squad.age")} sortable style={{ width: isMobile ? "8%" : "6%" }} />
+                <Column field="energy" header={t("squad.energy")} body={energyBody} sortable style={{ width: isMobile ? "15%" : "11%" }} />
                 <Column
                   field="conditionLabel"
-                  header={strings.squad.condition}
+                  header={t("squad.condition")}
                   body={conditionBody}
                   style={{ width: isMobile ? "10%" : "10%" }}
                 />
-                {!isMobile && <Column field="value" header={strings.squad.value} body={valueBody} sortable style={{ width: "9%" }} />}
-                {!isMobile && <Column field="salary" header={strings.squad.salary} body={salaryBody} sortable style={{ width: "9%" }} />}
-                <Column field="contractSeasons" header={strings.squad.contract} body={contractBody} sortable style={{ width: "16%" }} />
+                {!isMobile && <Column field="value" header={t("squad.value")} body={valueBody} sortable style={{ width: "9%" }} />}
+                {!isMobile && <Column field="salary" header={t("squad.salary")} body={salaryBody} sortable style={{ width: "9%" }} />}
+                <Column field="contractSeasons" header={t("squad.contract")} body={contractBody} sortable style={{ width: "16%" }} />
               </DataTable>
             </div>
           </div>
@@ -739,59 +737,59 @@ export function Squad() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
                 <div style={{ minWidth: 0 }}>
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
-                  {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>Real name: {selectedPlayer.name}</div>}
+                  {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>{t("squad.realName", { name: selectedPlayer.name })}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
-                    <span className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.positionName}>{selectedPlayer.naturalPosition}</span> · {selectedPlayer.age} yrs ·{" "}
+                    <span className="squad-tooltip-trigger" data-pr-tooltip={positionLabel(selectedPlayer.naturalPosition)}>{selectedPlayer.naturalPosition}</span> · {selectedPlayer.age} yrs ·{" "}
                     <span className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
                       {selectedCountryFlag && <span aria-hidden="true">{selectedCountryFlag} </span>}
                       {selectedCountryName}
                     </span>
-                    {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>Suspended {selectedPlayer.suspendedGames}</span>}
+                    {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>{t("squad.suspendedChip", { count: selectedPlayer.suspendedGames })}</span>}
                     {!!selectedPlayer.injuryDaysRemaining && selectedPlayer.injuryDaysRemaining > 0 && (
-                      <span className="flag-chip squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`${strings.squad.injuryCause}: ${selectedPlayer.injuryCause ?? "—"}`}>
-                        Injured · {strings.squad.injuredReturn.replace("{{day}}", String((selectedPlayer.injuryUntilAbsoluteGameDay ?? 0) + 1))}
+                      <span className="flag-chip squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`${t("squad.injuryCause")}: ${selectedPlayer.injuryCause ?? "—"}`}>
+                        {t("squad.injuredChip", { returnDay: t("squad.injuredReturn", { day: (selectedPlayer.injuryUntilAbsoluteGameDay ?? 0) + 1 }) })}
                       </span>
                     )}
-                    {selectedPlayer.onLoan && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`On loan from ${selectedPlayer.loanFromName ?? "another club"}`}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
-                    {selectedPlayer.onLoanOut && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`On loan at ${selectedPlayer.loanClubName ?? "another club"}`}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
+                    {selectedPlayer.onLoan && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={t("squad.onLoanFrom", { club: selectedPlayer.loanFromName ?? t("squad.anotherClub") })}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
+                    {selectedPlayer.onLoanOut && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={t("squad.onLoanAt", { club: selectedPlayer.loanClubName ?? t("squad.anotherClub") })}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
                   </div>
                 </div>
               </div>
 
-              <div className="segmented squad-player-tabs" role="tablist" aria-label="Player panel">
+              <div className="segmented squad-player-tabs" role="tablist" aria-label={t("squad.playerPanel")}>
                 <button type="button" role="tab" aria-selected={playerPanelTab === "customization"} className={playerPanelTab === "customization" ? "active" : ""} onClick={() => setPlayerPanelTab("customization")}>
-                  <Pencil size={14} /> Customize
+                  <Pencil size={14} /> {t("squad.customize")}
                 </button>
                 <button type="button" role="tab" aria-selected={playerPanelTab === "history"} className={playerPanelTab === "history" ? "active" : ""} onClick={() => { if (!historyBusy) void openHistory(selectedPlayer); }}>
-                  <HistoryIcon size={14} /> History {historyBusy && "…"}
+                  <HistoryIcon size={14} /> {t("squad.history")} {historyBusy && "…"}
                 </button>
               </div>
 
               {playerPanelTab === "customization" ? (
                 <>
                   <div style={{ marginTop: 14, padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 12, background: "rgba(228,245,235,0.03)" }}>
-                    <div className="section-label">Nickname</div>
+                    <div className="section-label">{t("squad.nickname")}</div>
                     <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
                       <InputText
                         value={nicknameInput}
                         onChange={(e) => setNicknameInput(e.target.value)}
-                        placeholder={selectedPlayer.nickname ?? "Add a nickname"}
+                        placeholder={selectedPlayer.nickname ?? t("squad.addNickname")}
                         maxLength={24}
                         style={{ flex: 1 }}
                         disabled={!user?.isPro}
                         onKeyDown={(e) => { if (e.key === "Enter") void saveNickname(); }}
                       />
-                      <button className={`btn${!user?.isPro ? " squad-tooltip-trigger" : ""}`} onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} data-pr-tooltip={!user?.isPro ? "Pro required" : undefined} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{nicknameBusy ? "Saving…" : "Save nick"}</button>
+                      <button className={`btn${!user?.isPro ? " squad-tooltip-trigger" : ""}`} onClick={() => void saveNickname()} disabled={nicknameBusy || !user?.isPro} data-pr-tooltip={!user?.isPro ? t("squad.proRequired") : undefined} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{nicknameBusy ? t("squad.savingDots") : t("squad.saveNick")}</button>
                     </div>
                     <div style={{ color: "var(--text-3)", fontSize: "0.78rem", marginTop: 6 }}>
                       {user?.isPro
-                        ? `Shown everywhere instead of “${selectedPlayer.name}”. Leave empty to clear it.`
-                        : "Only Pro managers can set nicknames."}
+                        ? t("squad.nicknameShown", { name: selectedPlayer.name })
+                        : t("squad.proOnlyNicknames")}
                     </div>
                   </div>
 
                   <div style={{ marginTop: 10, padding: "12px 14px", border: "1px solid var(--line)", borderRadius: 12, background: "rgba(228,245,235,0.03)" }}>
-                    <div className="section-label">Shirt number</div>
+                    <div className="section-label">{t("squad.shirtNumber")}</div>
                     <div style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "center" }}>
                       <Dropdown
                         value={numberInput}
@@ -799,35 +797,35 @@ export function Squad() {
                         onChange={(e) => setNumberInput(e.value as number)}
                         filter
                         style={{ width: 140 }}
-                        aria-label="Shirt number"
+                        aria-label={t("squad.shirtNumber")}
                       />
-                      <button className="btn" onClick={() => void saveNumber()} disabled={numberBusy || numberInput === selectedPlayer.squadNumber} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{numberBusy ? "Saving…" : "Save number"}</button>
-                      {numberSwapHint && <div style={{ color: "var(--gold-2)", fontSize: "0.8rem" }}>Swaps with the current wearer.</div>}
+                      <button className="btn" onClick={() => void saveNumber()} disabled={numberBusy || numberInput === selectedPlayer.squadNumber} style={{ whiteSpace: "nowrap", minWidth: 96 }}>{numberBusy ? t("squad.savingDots") : t("squad.saveNumber")}</button>
+                      {numberSwapHint && <div style={{ color: "var(--gold-2)", fontSize: "0.8rem" }}>{t("squad.swapsWithWearer")}</div>}
                     </div>
                   </div>
                 </>
               ) : (
                 <div className="squad-history-panel">
                   {!historyData ? (
-                    <div className="squad-history-empty">{historyError ? "Could not load player history." : historyBusy ? "Loading history…" : "No history available."}</div>
+                    <div className="squad-history-empty">{historyError ? t("squad.noHistory") : historyBusy ? t("squad.loadingHistory") : t("squad.noHistoryAvailable")}</div>
                   ) : (
                     <>
                       <div className="squad-history-summary">
-                        <div className="squad-history-stat"><Target size={14} /><span><small>Career goals</small><strong>{historyData.player.careerGoals}</strong></span></div>
-                        <div className="squad-history-stat"><Handshake size={14} /><span><small>Career assists</small><strong>{historyData.player.careerAssists}</strong></span></div>
-                        <div className="squad-history-stat"><CalendarDays size={14} /><span><small>Seasons</small><strong>{historyData.seasons.length + 1}</strong></span></div>
-                        <div className="squad-history-stat"><ShieldAlert size={14} /><span><small>Cards</small><strong>{historyData.player.yellows}Y · {historyData.player.reds}R</strong></span></div>
-                        <div className="squad-history-stat"><Trophy size={14} /><span><small>Career MVP</small><strong>{historyData.player.careerMvps ?? 0}</strong></span></div>
+                        <div className="squad-history-stat"><Target size={14} /><span><small>{t("squad.careerGoals")}</small><strong>{historyData.player.careerGoals}</strong></span></div>
+                        <div className="squad-history-stat"><Handshake size={14} /><span><small>{t("squad.careerAssists")}</small><strong>{historyData.player.careerAssists}</strong></span></div>
+                        <div className="squad-history-stat"><CalendarDays size={14} /><span><small>{t("squad.seasons")}</small><strong>{historyData.seasons.length + 1}</strong></span></div>
+                        <div className="squad-history-stat"><ShieldAlert size={14} /><span><small>{t("squad.cards")}</small><strong>{historyData.player.yellows}Y · {historyData.player.reds}R</strong></span></div>
+                        <div className="squad-history-stat"><Trophy size={14} /><span><small>{t("squad.careerMvp")}</small><strong>{historyData.player.careerMvps ?? 0}</strong></span></div>
                       </div>
-                      <div className="segmented squad-history-tabs" role="tablist" aria-label="History section">
+                      <div className="segmented squad-history-tabs" role="tablist" aria-label={t("squad.historySection")}>
                         <button type="button" role="tab" aria-selected={historySectionTab === "seasons"} className={historySectionTab === "seasons" ? "active" : ""} onClick={() => setHistorySectionTab("seasons")}>
-                          <CalendarDays size={13} /> Season records <span className="count">{historyData.seasons.length}</span>
+                          <CalendarDays size={13} /> {t("squad.seasonRecords")} <span className="count">{historyData.seasons.length}</span>
                         </button>
                         <button type="button" role="tab" aria-selected={historySectionTab === "transfers"} className={historySectionTab === "transfers" ? "active" : ""} onClick={() => setHistorySectionTab("transfers")}>
-                          <Tag size={13} /> Transfers <span className="count">{historyData.transfers.length}</span>
+                          <Tag size={13} /> {t("transfers.title")} <span className="count">{historyData.transfers.length}</span>
                         </button>
                         <button type="button" role="tab" aria-selected={historySectionTab === "evolution"} className={historySectionTab === "evolution" ? "active" : ""} onClick={() => setHistorySectionTab("evolution")}>
-                          <TrendingUp size={13} /> Evolution
+                          <TrendingUp size={13} /> {t("squad.evolution")}
                         </button>
                       </div>
 
@@ -835,13 +833,13 @@ export function Squad() {
                         {historySectionTab === "seasons" && (
                           <div className="squad-history-section">
                             {historyData.seasons.length === 0 ? (
-                              <div className="squad-history-empty">No past seasons archived yet.</div>
+                              <div className="squad-history-empty">{t("squad.noPastSeasons")}</div>
                             ) : (
                               <div className="squad-history-list">
                                 {historyData.seasons.map((season) => (
                                   <div className="squad-history-row squad-tooltip-trigger" key={season.seasonKey} data-pr-tooltip={`${season.seasonKey} · ${season.clubName}`}>
                                     <strong>{season.seasonKey}</strong>
-                                    <span className="squad-history-row-detail">{season.clubName} · {season.appearances} apps · {season.goals}G · {season.assists}A · {season.yellows}Y · {season.reds}R{(season.mvps ?? 0) > 0 ? ` · ${season.mvps} MVP` : ""}</span>
+                                    <span className="squad-history-row-detail">{season.clubName} · {season.appearances} {t("squad.apps")} · {season.goals}G · {season.assists}A · {season.yellows}Y · {season.reds}R{(season.mvps ?? 0) > 0 ? ` · ${season.mvps} ${t("squad.mvpsShort")}` : ""}</span>
                                   </div>
                                 ))}
                               </div>
@@ -852,7 +850,7 @@ export function Squad() {
                         {historySectionTab === "transfers" && (
                           <div className="squad-history-section">
                             {historyData.transfers.length === 0 ? (
-                              <div className="squad-history-empty">No market moves.</div>
+                              <div className="squad-history-empty">{t("squad.noMarketMoves")}</div>
                             ) : (
                               <div className="squad-history-list">
                                 {historyData.transfers.map((transfer, index) => (
@@ -871,43 +869,43 @@ export function Squad() {
                           <div className="squad-history-section">
                             <div className="squad-history-trends">
                               <PlayerTrendSparkline
-                                label="Overall per season"
+                                label={t("squad.overallPerSeason")}
                                 values={[...historyData.seasons.map((s) => s.overall), selectedPlayer.overall]}
                               />
                               <PlayerTrendSparkline
-                                label="Market value per season"
+                                label={t("squad.marketValuePerSeason")}
                                 values={[...historyData.seasons.map((s) => s.value), selectedPlayer.value]}
                                 unit="money"
                               />
                               <PlayerScoresBarChart
-                                label="Avg rating · this season"
+                                label={t("squad.avgRatingThisSeason")}
                                 points={(historyData.matchScores ?? [])
                                   .filter((m) => m.currentSeason)
                                   .map((m) => ({
                                     key: `m${m.matchId}`,
                                     value: m.rating,
-                                    title: `${m.result ?? ""} · ${m.minutesPlayed ?? "?"}' · rating ${m.rating != null ? m.rating.toFixed(1) : "NR"}`,
+                                    title: t("squad.ratingTitle", { result: m.result ?? "", minutes: m.minutesPlayed ?? "?", rating: m.rating != null ? m.rating.toFixed(1) : "NR" }),
                                   }))}
                                 maxScore={10}
                                 sideValue={historyData.currentSeasonAvg ?? null}
                               />
                               {user?.isPro ? (
                                 <PlayerScoresBarChart
-                                  label="Avg rating per season"
+                                  label={t("squad.avgRatingPerSeason")}
                                   unit="avg"
                                   points={historyData.seasons.map((s) => ({
                                     key: s.seasonKey,
                                     value: s.avgScore ?? null,
-                                    title: `${s.seasonKey} · avg ${(s.avgScore ?? 0).toFixed(1)}`,
+                                    title: `${s.seasonKey} · ${t("squad.avgValue", { value: (s.avgScore ?? 0).toFixed(1) })}`,
                                   })).concat(
-                                    historyData.currentSeasonAvg != null ? [{ key: "current", value: historyData.currentSeasonAvg, title: `This season · avg ${historyData.currentSeasonAvg.toFixed(1)}` }] : []
+                                    historyData.currentSeasonAvg != null ? [{ key: "current", value: historyData.currentSeasonAvg, title: `${t("squad.thisSeason")} · ${t("squad.avgValue", { value: historyData.currentSeasonAvg.toFixed(1) })}` }] : []
                                   )}
                                   maxScore={10}
                                 />
                               ) : (
                                 <div className="player-trend player-trend-empty">
-                                  <span className="player-trend-label">Avg rating per season</span>
-                                  <span className="player-trend-note">Pro required</span>
+                                  <span className="player-trend-label">{t("squad.avgRatingPerSeason")}</span>
+                                  <span className="player-trend-note">{t("squad.proRequiredNote")}</span>
                                 </div>
                               )}
                             </div>
@@ -929,29 +927,29 @@ export function Squad() {
               </div>
 
               <div style={{ margin: "14px 0", padding: "12px 0", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
-                <div className="section-label" style={{ marginBottom: 2 }}>Skill profile</div>
+                <div className="section-label" style={{ marginBottom: 2 }}>{t("squad.skillProfile")}</div>
                 <PlayerSkillsRadar skills={selectedPlayer.skills} />
               </div>
 
               <div className="stats-row">
-                <div className="stat">
-                  <div className="label">{strings.squad.value}</div>
-                  <div className="value" style={{ fontSize: "1.15rem" }}>{money(selectedPlayer.value)}</div>
+<div className="stat">
+                  <div className="label">{t("squad.overall")}</div>
+                  <div className="value" style={{ fontSize: "1.15rem" }}>{selectedPlayer.overall}</div>
                 </div>
                 <div className="stat">
-                  <div className="label">Release clause</div>
+                  <div className="label">{t("squad.releaseClause")}</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{money(selectedPlayer.isYouth ? 0 : selectedPlayer.releaseClause)}</div>
                 </div>
                 <div className="stat">
-                  <div className="label">{strings.squad.contract}</div>
+                  <div className="label">{t("squad.contract")}</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{seasonsOf(selectedPlayer.contractDays)}</div>
                 </div>
                 <div className="stat">
-                  <div className="label">Season</div>
+                  <div className="label">{t("squad.season")}</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{selectedPlayer.seasonGoals}G {selectedPlayer.seasonAssists}A</div>
                 </div>
                 <div className="stat">
-                  <div className="label">Season MVP</div>
+                  <div className="label">{t("squad.seasonMvp")}</div>
                   <div className="value" style={{ fontSize: "1.15rem" }}>{selectedPlayer.seasonMvps ?? 0}</div>
                 </div>
               </div>
@@ -962,25 +960,25 @@ export function Squad() {
                   if (a.senior) {
                     return <>
                       <button className="btn squad-action squad-tooltip-trigger" disabled={a.renew.disabled} data-pr-tooltip={a.renew.reason} onClick={() => openRenew(selectedPlayer)}>
-                        <FileSignature size={13} /> {strings.squad.renew}
+                        <FileSignature size={13} /> {t("squad.renew")}
                       </button>
-                      <button className="btn ghost squad-action squad-tooltip-trigger" data-pr-tooltip={a.onLoanOut ? undefined : a.loan.reason ?? strings.transfers.lendLoanHint} disabled={a.onLoanOut ? a.recall.disabled : a.loan.disabled} onClick={() => loanAction(selectedPlayer)}>
-                        <Handshake size={13} /> {a.onLoanOut ? "Recall from loan" : selectedPlayer.loanId === null ? "Offer loan" : "Recall"}
+                      <button className="btn ghost squad-action squad-tooltip-trigger" data-pr-tooltip={a.onLoanOut ? undefined : a.loan.reason ?? t("transfers.lendLoanHint")} disabled={a.onLoanOut ? a.recall.disabled : a.loan.disabled} onClick={() => loanAction(selectedPlayer)}>
+                        <Handshake size={13} /> {a.onLoanOut ? t("squad.recallFromLoan") : selectedPlayer.loanId === null ? t("squad.offerLoan") : t("squad.recall")}
                       </button>
-                      <button className="btn ghost squad-action squad-tooltip-trigger" disabled={a.listed} data-pr-tooltip={a.listed ? "This player is already on the market" : undefined} onClick={() => setSellTarget(selectedPlayer)}>
-                        <Tag size={13} /> List for sale
+                      <button className="btn ghost squad-action squad-tooltip-trigger" disabled={a.listed} data-pr-tooltip={a.listed ? t("squad.alreadyOnMarket") : undefined} onClick={() => setSellTarget(selectedPlayer)}>
+                        <Tag size={13} /> {t("squad.listForSale")}
                       </button>
                       <button className="btn ghost danger squad-action squad-tooltip-trigger" disabled={a.release.disabled} data-pr-tooltip={a.release.reason} onClick={() => releasePlayer(selectedPlayer)}>
-                        <Trash2 size={13} /> {strings.squad.release} <span className="squad-action-price">({money(selectedPlayer.releaseClause ?? 0)})</span>
+                        <Trash2 size={13} /> {t("squad.release")} <span className="squad-action-price">({money(selectedPlayer.releaseClause ?? 0)})</span>
                       </button>
                     </>;
                   }
                   return <>
                     <button className="btn squad-action squad-tooltip-trigger" disabled={a.promote.disabled} data-pr-tooltip={a.promote.reason} onClick={() => academyAction(selectedPlayer, "promote")}>
-                      <TrendingUp size={13} /> {strings.squad.promoteYouth}
+                      <TrendingUp size={13} /> {t("squad.promoteYouth")}
                     </button>
                     <button className="btn ghost danger squad-action squad-tooltip-trigger" disabled={a.dismiss.disabled} data-pr-tooltip={a.dismiss.reason} onClick={() => academyAction(selectedPlayer, "dismiss")}>
-                      <UserMinus size={13} /> {strings.squad.dismissYouth}
+                      <UserMinus size={13} /> {t("squad.dismissYouth")}
                     </button>
                   </>;
                 })()}
@@ -992,19 +990,19 @@ export function Squad() {
 
       <ListForSaleDialog player={sellTarget} onClose={() => setSellTarget(null)} onListed={() => { setSellTarget(null); refresh(); }} customTooltips />
 
-      <Dialog header={strings.squad.renew} visible={showRenew} onHide={() => setShowRenew(false)} dismissableMask style={{ width: 400 }}>
+      <Dialog header={t("squad.renew")} visible={showRenew} onHide={() => setShowRenew(false)} dismissableMask style={{ width: 400 }}>
         {selectedPlayer && (
           <>
             <h3 style={{ marginBottom: 4 }}>{selectedPlayer.name}</h3>
             <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 16 }}>
-              Current salary {money(selectedPlayer.salary)}/season · Demand {money(renewDemand)}/season · Contract {seasonsOf(selectedPlayer.contractDays)} left
+              {t("squad.currentSalaryDemand", { salary: money(selectedPlayer.salary), demand: money(renewDemand), contract: seasonsOf(selectedPlayer.contractDays) })}
             </div>
             <div className="form-group">
-              <label htmlFor="renew-seasons">{strings.squad.contractAdditionalSeasons}</label>
+              <label htmlFor="renew-seasons">{t("squad.contractAdditionalSeasons")}</label>
               <Dropdown
                 id="renew-seasons"
                 value={renewSeasons}
-                 options={Array.from({ length: maxContractSeasons }, (_, i) => i + 1).map((s) => ({ label: `${s === 1 ? "1 season" : `${s} seasons`} - ${money(renewDemandsBySeason[s] ?? renewDemand)}/season`, value: s }))}
+                 options={Array.from({ length: maxContractSeasons }, (_, i) => i + 1).map((s) => ({ label: `${s === 1 ? t("squad.oneSeason") : t("squad.nSeasons", { count: s })} - ${money(renewDemandsBySeason[s] ?? renewDemand)}/season`, value: s }))}
                 onChange={(e) => {
                   const v = e.value as number;
                   setRenewSeasons(v);
@@ -1016,13 +1014,12 @@ export function Squad() {
             </div>
             {renewalCushion !== null && renewalCushion < 0 && (
               <div className="card" style={{ marginBottom: 10, padding: 10, fontSize: "0.88rem", color: "var(--gold-2)", borderColor: "var(--gold-2)" }}>
-                This renewal would reduce your financial cushion from <b>{money(finance?.financialCushion ?? 0)}</b> to <b style={{ color: "var(--red-2)" }}>{money(renewalCushion)}</b>.
-                You may continue, but future payroll could require financial intervention.
+                {t("squad.renewalCushionWarn", { from: money(finance?.financialCushion ?? 0), to: money(renewalCushion) })}
               </div>
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-              <button className="btn ghost" style={{ flex: 1 }} onClick={() => setShowRenew(false)}>{strings.common.cancel}</button>
-              <button className="btn" style={{ flex: 1 }} onClick={renew}>{strings.common.confirm}</button>
+              <button className="btn ghost" style={{ flex: 1 }} onClick={() => setShowRenew(false)}>{t("common.cancel")}</button>
+              <button className="btn" style={{ flex: 1 }} onClick={renew}>{t("common.confirm")}</button>
             </div>
           </>
         )}
@@ -1033,8 +1030,8 @@ export function Squad() {
           <>
             <div style={{ color: "var(--text-2)", lineHeight: 1.5 }}>{confirmAction.message}</div>
             <div style={{ display: "flex", gap: 8, marginTop: 18 }}>
-              <button className="btn ghost" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => setConfirmAction(null)}>{strings.common.cancel}</button>
-              <button className="btn red" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => void runConfirm()}>{strings.common.confirm}</button>
+              <button className="btn ghost" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => setConfirmAction(null)}>{t("common.cancel")}</button>
+              <button className="btn red" style={{ flex: 1 }} disabled={confirmBusy} onClick={() => void runConfirm()}>{t("common.confirm")}</button>
             </div>
           </>
         )}

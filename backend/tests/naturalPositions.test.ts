@@ -9,7 +9,6 @@ import {
   naturalDefaultRole,
   positionFromV2Code,
   positionGroup,
-  positionName,
   positionToCode,
   ratingRoleForPosition,
   type DeployedRole,
@@ -79,10 +78,8 @@ describe("natural positions", () => {
     }
   });
 
-  it("names every position and keeps the display order stable", () => {
+  it("keeps the display order stable", () => {
     expect(NATURAL_POSITION_ORDER).toEqual([...NATURAL_POSITIONS]);
-    expect(positionName("DM")).toBe("Defensive midfielder");
-    expect(new Set(NATURAL_POSITIONS.map(positionName)).size).toBe(9);
   });
 
   it("maps every fine deployed role to its prescribed coarse rating role (§20.26)", () => {

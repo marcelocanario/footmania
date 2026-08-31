@@ -1,7 +1,10 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import type { KitDesign, LiveBall, LiveEvent, LiveMissingPlayer, LivePlayer } from "../api/client";
 import { FootballKit } from "./kit/FootballKit";
 import { ClubNameLink } from "./ClubNameLink";
+import { positionLabel } from "../positions";
 import {
   BALL_CENTER_POINT,
   bendSignFor,
@@ -60,12 +63,12 @@ export interface MatchPitchProps {
 }
 
 const EVENT_COPY: Record<string, string> = {
-  goal: "Goal",
-  miss: "Penalty missed",
-  yellow: "Yellow card",
-  red: "Red card",
-  injury: "Injury",
-  sub: "Substitution",
+  goal: "pitch.goal",
+  miss: "pitch.miss",
+  yellow: "pitch.yellow",
+  red: "pitch.red",
+  injury: "pitch.injury",
+  sub: "pitch.sub",
 };
 
 /** Kinds loud enough to earn the bottom banner; detail cues (corner/save/post) flash their pitch icon only. */
@@ -157,7 +160,7 @@ const PlayerMarker = memo(function PlayerMarker({ player, point, kit, highlighte
     "--kit": kit.primary,
     "--kit-2": kit.secondary,
   } as CSSProperties;
-  const posLabel = player.positionName ?? player.naturalPosition ?? "PLAYER";
+  const posLabel = positionLabel(player.naturalPosition) || i18n.t("pitch.playerFallback");
   return (
     <button
       type="button"
@@ -230,6 +233,7 @@ const CueOverlay = memo(function CueOverlay({ cue, active, reducedMotion }: { cu
 });
 
 function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reducedMotion = false, ball = null, onEventRevealed, onPlayerClick }: MatchPitchProps) {
+  const { t } = useTranslation();
   const [activeEvent, setActiveEvent] = useState<LiveEvent | null>(null);
   const [queue, setQueue] = useState<LiveEvent[]>([]);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
@@ -271,7 +275,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   const shortSuffix = (sideMissing: LiveMissingPlayer[]) => {
     if (sideMissing.length === 0) return "";
     const icons = sideMissing.map((entry) => (entry.kind === "RED" ? "🟥" : "✚")).join("");
-    return ` · ${icons} ${sideMissing.length === 1 ? "1 man short" : `${sideMissing.length} men short`}`;
+    return ` · ${icons} ${sideMissing.length === 1 ? t("pitch.manShort") : t("pitch.menShort", { count: sideMissing.length })}`;
   };
   useEffect(() => {
     for (const player of players) {
@@ -705,10 +709,10 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
   const surfaceStyle = { "--ball-glide-ms": `${glideMs}ms` } as CSSProperties;
 
   return (
-    <section className="match-pitch-card" aria-label="Live match pitch">
+    <section className="match-pitch-card" aria-label={t("pitch.pitchAria")}>
       <div className="match-pitch-head">
         <div>
-          <div className="card-title">Live pitch</div>
+          <div className="card-title">{t("pitch.live")}</div>
         </div>
         <div className="match-pitch-teams">
           <span className="match-pitch-team">
@@ -722,7 +726,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
         </div>
       </div>
       <div ref={pitchSurfaceRef} style={surfaceStyle} className={`pitch-surface${cue && activeEvent ? ` pitch-${cue.kind}-active` : ""}${motionReduced ? " pitch-reduced-motion" : ""}`}>
-        <svg className="pitch-lines" viewBox="0 0 100 64" role="img" aria-label={`${home.name} versus ${away.name} formation pitch`}>
+        <svg className="pitch-lines" viewBox="0 0 100 64" role="img" aria-label={t("pitch.formationsAria", { home: home.name, away: away.name })}>
           <defs>
             <linearGradient id="pitchGrass" x1="0" x2="1">
               <stop offset="0" stopColor="#176b3c" />
@@ -794,7 +798,7 @@ function MatchPitchImpl({ home, away, missing = [], events, phase, minute, reduc
           {homePitchPlayers.map((player) => <PlayerMarker key={`home-${player.id}`} player={player} point={homePoints.get(player.id) ?? { x: 50, y: 50 }} side="home" kit={player.deployedRole === "GK" ? home.gkKit : home.kit} highlighted={homeHighlighted === player.id || homeSecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
           {awayPitchPlayers.map((player) => <PlayerMarker key={`away-${player.id}`} player={player} point={awayPoints.get(player.id) ?? { x: 50, y: 50 }} side="away" kit={player.deployedRole === "GK" ? away.gkKit : away.kit} highlighted={awayHighlighted === player.id || awaySecondaryHighlighted === player.id} onPlayerClick={onPlayerClick} />)}
         </div>
-        {cue && activeEvent && BANNER_KINDS.has(cue.kind) && <div className="pitch-event-banner"><b>{EVENT_COPY[cue.kind]}</b><span>{cue.event.player || cue.event.player2}</span></div>}
+        {cue && activeEvent && BANNER_KINDS.has(cue.kind) && <div className="pitch-event-banner"><b>{(t as unknown as (k: string) => string)(EVENT_COPY[cue.kind])}</b><span>{cue.event.player || cue.event.player2}</span></div>}
       </div>
     </section>
   );

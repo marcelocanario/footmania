@@ -1,15 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { AlarmClock, ArrowRight, ClipboardList, ShieldCheck } from "lucide-react";
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { ClubNameLink } from "../components/ClubNameLink";
-import { DIRECTIONS, PRESSING, STYLES } from "../tacticsOptions";
+import { directionOptions, pressingOptions, styleOptions } from "../tacticsOptions";
 import { formatKickoff } from "../utils/time";
 import { useIsMobile } from "../hooks/useIsMobile";
-import { strings } from "../strings";
 
 function formatCountdown(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -21,6 +21,7 @@ function formatCountdown(ms: number): string {
 }
 
 export function PreGame() {
+  const { t } = useTranslation();
   const { snapshot, liveMatchId, refresh, setLiveMatch, status } = useGame();
   const pregameWindowMinutes = useSettings((s) => s.pregameWindowMinutes);
   const navigate = useNavigate();
@@ -109,7 +110,7 @@ export function PreGame() {
   };
 
   if (!snapshot || !club) {
-    return <div className="empty-state" style={{ paddingTop: 80 }}>Loading...</div>;
+    return <div className="empty-state" style={{ paddingTop: 80 }}>{t("pregame.loading")}</div>;
   }
 
   // Outside the window (or no scheduled kickoff): explain when prep opens.
@@ -118,28 +119,28 @@ export function PreGame() {
       <div>
         <div className="page-head">
           <div>
-            <div className="kicker">Pre-game prep</div>
-            <h1>Pre-game prep</h1>
+            <div className="kicker">{t("pregame.title")}</div>
+            <h1>{t("pregame.title")}</h1>
           </div>
         </div>
         <div className="card" style={{ padding: "28px 22px" }}>
           <div className="empty-state" style={{ padding: "12px 8px" }}>
             {paused && fixture && kickoffAt !== null
-              ? "The season is currently paused — kick-off is frozen until an administrator resumes the world."
+              ? t("pregame.pausedFrozen")
               : pregameWindowMinutes <= 0
-                ? "Pre-game preparation is currently disabled."
+                ? t("pregame.disabled")
                 : !fixture || kickoffAt === null
-                  ? "No scheduled match ahead."
-                  : `Pre-game prep opens ${pregameWindowMinutes} minutes before kick-off.`}
+                  ? t("pregame.noFixture")
+                  : t("pregame.opensIn", { count: pregameWindowMinutes })}
           </div>
           {fixture && kickoffAt !== null && (
             <div style={{ textAlign: "center", color: "var(--text-3)", fontSize: "0.9rem" }}>
-              Next match: <b style={{ color: "var(--text-2)" }}>{fixture.home} vs {fixture.away}</b> · {formatKickoff(kickoffAt)}
+              {t("pregame.nextMatch", { home: fixture.home, away: fixture.away })} · {formatKickoff(kickoffAt)}
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 16 }}>
-            <button className="btn" onClick={() => navigate("/squad")}><ClipboardList size={15} /> Squad &amp; tactics</button>
-            <button className="btn ghost" onClick={() => navigate("/dashboard")}>Dashboard <ArrowRight size={14} /></button>
+            <button className="btn" onClick={() => navigate("/squad")}><ClipboardList size={15} /> {t("pregame.squadTactics")}</button>
+            <button className="btn ghost" onClick={() => navigate("/dashboard")}>{t("pregame.dashboard")} <ArrowRight size={14} /></button>
           </div>
         </div>
       </div>
@@ -148,7 +149,7 @@ export function PreGame() {
 
   const badge = (
     <span className="pregame-tag">
-      <ClipboardList size={11} /> Pre-game prep
+      <ClipboardList size={11} /> {t("pregame.title")}
     </span>
   );
 
@@ -157,8 +158,8 @@ export function PreGame() {
       <div className="page-head">
         <div>
           <div className="kicker">
-            Pre-game prep · {fixture.dayLabel}
-            {fixture.isHome ? " · Home" : " · Away"}
+            {t("pregame.title")} · {fixture.dayLabel}
+            {fixture.isHome ? ` ${t("pregame.home")}` : ` ${t("pregame.away")}`}
           </div>
           <h1>
             <ClubNameLink clubId={fixture.homeClubId} name={fixture.home} showCrest={false} />
@@ -173,13 +174,12 @@ export function PreGame() {
           <div>
             <h2 className="card-title" style={{ marginBottom: 4 }}>{badge}</h2>
             <div style={{ color: "var(--text-3)", fontSize: "0.88rem" }}>
-              Prepare your starting eleven, bench and tactics. Changes are saved instantly and applied automatically at kick-off
-              ({formatKickoff(kickoffAt)}).
+              {t("pregame.readyHint", { kickoff: formatKickoff(kickoffAt) })}
             </div>
           </div>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 7, color: "var(--gold-2)", fontWeight: 700, whiteSpace: "nowrap" }}>
             <AlarmClock size={16} />
-            {awaitingKickoff ? "Waiting for kick-off…" : `Kick-off in ${formatCountdown(msToKickoff ?? 0)}`}
+            {awaitingKickoff ? t("pregame.waitingKickoff") : t("pregame.kickoffIn", { time: formatCountdown(msToKickoff ?? 0) })}
           </span>
         </div>
       </div>
@@ -189,35 +189,35 @@ export function PreGame() {
           <TacticsBoard mode="club" />
         </div>
         <div className="card">
-          <h2 className="card-title"><ShieldCheck size={17} /> Match strategy</h2>
+          <h2 className="card-title"><ShieldCheck size={17} /> {t("pregame.matchStrategy")}</h2>
           <div className="form-group">
-            <label htmlFor="pregame-style">{strings.squad.style}</label>
+            <label htmlFor="pregame-style">{t("squad.style")}</label>
             <select id="pregame-style" className="select" value={tactics.style} disabled={tacticsBusy} onChange={(e) => setTactics({ ...tactics, style: Number(e.target.value) })}>
-              {STYLES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              {styleOptions().map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{STYLES[tactics.style]?.desc}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{styleOptions()[tactics.style]?.desc}</div>
           </div>
           <div className="form-group">
-            <label htmlFor="pregame-press">{strings.squad.pressing}</label>
+            <label htmlFor="pregame-press">{t("squad.pressing")}</label>
             <select id="pregame-press" className="select" value={tactics.pressing} disabled={tacticsBusy} onChange={(e) => setTactics({ ...tactics, pressing: Number(e.target.value) })}>
-              {PRESSING.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              {pressingOptions().map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{PRESSING[tactics.pressing]?.desc}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{pressingOptions()[tactics.pressing]?.desc}</div>
           </div>
           <div className="form-group">
-            <label htmlFor="pregame-dir">{strings.squad.direction}</label>
+            <label htmlFor="pregame-dir">{t("squad.direction")}</label>
             <select id="pregame-dir" className="select" value={tactics.direction} disabled={tacticsBusy} onChange={(e) => setTactics({ ...tactics, direction: Number(e.target.value) })}>
-              {DIRECTIONS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+              {directionOptions().map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
             </select>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{DIRECTIONS[tactics.direction]?.desc}</div>
+            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 5, lineHeight: 1.5 }}>{directionOptions()[tactics.direction]?.desc}</div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button className="btn" onClick={() => void saveTactics()} disabled={tacticsBusy} style={{ flex: 1 }}>
-              {strings.common.save}
+              {t("common.save")}
             </button>
             {tacticsStatus === "saved" && (
               <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--grass-2)", fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap" }}>
-                <ShieldCheck size={15} /> Saved
+                <ShieldCheck size={15} /> {t("pregame.saved")}
               </span>
             )}
             {tacticsStatus !== "" && tacticsStatus !== "saved" && (
@@ -225,7 +225,7 @@ export function PreGame() {
             )}
           </div>
           <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 10, lineHeight: 1.5 }}>
-            Strategy applies to every match and is locked in once the game kicks off — in-match changes follow the live tactics rules.
+            {t("pregame.strategyNote")}
           </div>
         </div>
       </div>
