@@ -11,6 +11,7 @@ import { clubKitsSchema } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
 import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
+import { divisionHistoryChunkInput, scheduleEvent } from "../services/scheduler";
 import { applyArchivedIdentity, resolveArchiveRow } from "../game/identityArchive";
 import { COUNTRIES, FEATURED_COUNTRIES } from "../game/countries";
 import type { World } from "../game/types";
@@ -180,6 +181,16 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       syncMemberships(loaded.world, seasonId);
       syncClubSeasons(loaded.world, seasonId);
       await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      // If placeNewClub created a brand-new division mid-season, its history
+      // backfill is a background chunked job (plan Item 2), not part of this
+      // request -- see divisionHistoryChunkInput's doc comment. The join
+      // itself is already complete regardless: the club was placed above.
+      if (result.kind === "active") {
+        const division = world.competitions.find((c) => c.id === result.divisionId);
+        if (division?.status === "SIMULATING_HISTORY") {
+          await scheduleEvent(app.prisma, divisionHistoryChunkInput(loaded.save.id, division.id, 1, world.mp.completedRounds));
+        }
+      }
       // Consume the preserved identity: it has been re-applied to the club.
       if (archiveRow) {
         await app.prisma.clubIdentityArchive.delete({ where: { userId: user.id } });
@@ -217,6 +228,14 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       syncMemberships(world, seasonId);
       syncClubSeasons(world, seasonId);
       await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+      // See the identical comment on POST /mp/join: a brand-new division's
+      // history backfill runs as a background chunked job, not inline here.
+      if (result.kind === "active") {
+        const division = world.competitions.find((c) => c.id === result.divisionId);
+        if (division?.status === "SIMULATING_HISTORY") {
+          await scheduleEvent(app.prisma, divisionHistoryChunkInput(loaded.save.id, division.id, 1, world.mp.completedRounds));
+        }
+      }
       publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
       publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
       return { value: { ok: true, result } };

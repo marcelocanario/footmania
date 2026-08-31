@@ -196,6 +196,16 @@ export function lowestActiveTier(world: World, seasonId: number): number {
 export function firstReplaceableAIDivision(world: World, seasonId: number, tier: number): Competition | null {
   const divs = divisionsInTier(world, seasonId, tier);
   for (const d of divs) {
+    // A division still backfilling its history (plan Item 2) has its
+    // finalRound fixed to whatever world.mp.completedRounds was when its
+    // FIRST chunk was scheduled. Placing a second concurrent joiner into it
+    // would skip scheduling a backfill of its own (this function is only
+    // reached when an EXISTING division is found, not a new one) and, if
+    // completedRounds has since advanced further, permanently strand that
+    // division a few rounds behind the rest of the season. Skip it -- a
+    // second joiner gets its own fresh division with its own correctly
+    // fixed finalRound instead.
+    if (d.status === "SIMULATING_HISTORY") continue;
     if (highestRankedReplaceableAI(world, d) !== null) return d;
   }
   return null;
@@ -447,10 +457,26 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
 }
 
 /** Simulate a division through the current global round (used when creating it mid-season). */
-export function simulateDivisionThroughRound(world: World, comp: Competition, throughRound: number, now: number) {
+export function simulateDivisionThroughRound(
+  world: World,
+  comp: Competition,
+  throughRound: number,
+  now: number,
+  opts?: { bypassKickoffGate?: boolean },
+) {
   if (comp.status === "CREATING") comp.status = "SIMULATING_HISTORY";
   const fixtures = world.fixtures.filter((f) => f.competitionId === comp.id && !f.played);
   const target = Math.min(throughRound, ROUNDS_PER_SEASON);
+  // Admin's manual clock (simulateThroughRound) is the historical way to
+  // bypass real-time kickoffs; the chunked backfill handler (scheduler.ts's
+  // DIVISION_HISTORY_SIMULATE) is a second, unrelated reason to bypass it --
+  // it is by definition catching a division up to rounds already completed
+  // elsewhere in the season, so those fixtures' nominal real-time kickoffs
+  // (generated relative to the season's start, not to "now") are irrelevant.
+  // Prefer the explicit opt over the global manualRound flag so the backfill
+  // never has to mutate that season-wide, admin-visible field to get this
+  // behaviour.
+  const bypassKickoffGate = opts?.bypassKickoffGate ?? world.mp.manualRound !== null;
   // Accumulate this call's rating rows locally and merge into
   // world.playerMatchRatings ONCE at the end instead of filtering the whole
   // (global, ever-growing) array once PER MATCH inside the loop below — that
@@ -460,8 +486,13 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
   const newMatchIds = new Set<number>();
   for (const f of fixtures) {
     const round = f.round + 1;
-    if (round > target) break;
-    if (world.mp.manualRound === null && f.kickoffAt !== undefined && f.kickoffAt > now) continue;
+    // NOT a `break`: fixtures are round-robin-generated in pairing order,
+    // not round-ascending order (a club's fixtures against every opponent
+    // are grouped together across many rounds), so the array can and does
+    // interleave rounds. Skipping past the first out-of-target fixture would
+    // silently strand later, in-range fixtures unplayed.
+    if (round > target) continue;
+    if (!bypassKickoffGate && f.kickoffAt !== undefined && f.kickoffAt > now) continue;
     const home = clubById(world, f.homeClubId);
     const away = clubById(world, f.awayClubId);
     if (!home || !away) continue;
@@ -724,7 +755,25 @@ export function placeNewClub(world: World, clubId: number, now: number, seasonId
     ensureDivisionFull(world, division);
     const fixtures = generateDivisionFixtures(world, division, ref);
     world.fixtures.push(...fixtures);
-    simulateDivisionThroughRound(world, division, world.mp.completedRounds, now);
+    if (world.mp.completedRounds > 0) {
+      // Backfilling missed rounds can take seconds for a full division
+      // (simulateDivisionThroughRound below is a synchronous, in-lock
+      // operation). Rather than pay that inside the join request -- holding
+      // the global lock for everyone else the whole time -- the caller
+      // (routes/multiplayer.ts, once this join is persisted) schedules the
+      // history as a background chunked scheduler job
+      // (ScheduledEventType.DIVISION_HISTORY_SIMULATE) instead. The division
+      // stays SIMULATING_HISTORY -- and materializeSeasonEvents skips its
+      // fixtures meanwhile, so the normal live-match scheduler cannot race
+      // the backfill for a fixture whose kickoff already passed while the
+      // division was still being created -- until the last chunk catches it
+      // up to world.mp.completedRounds and flips it back to ACTIVE.
+      division.status = "SIMULATING_HISTORY";
+    } else if (division.status === "CREATING") {
+      // Nothing to backfill: this division is being created at the very
+      // start of the season, before any round has been played anywhere.
+      division.status = "ACTIVE";
+    }
   }
 
   const aiId = highestRankedReplaceableAI(world, division);
@@ -799,7 +848,25 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
     ensureDivisionFull(world, division);
     const fixtures = generateDivisionFixtures(world, division, ref);
     world.fixtures.push(...fixtures);
-    simulateDivisionThroughRound(world, division, world.mp.completedRounds, now);
+    if (world.mp.completedRounds > 0) {
+      // Backfilling missed rounds can take seconds for a full division
+      // (simulateDivisionThroughRound below is a synchronous, in-lock
+      // operation). Rather than pay that inside the join request -- holding
+      // the global lock for everyone else the whole time -- the caller
+      // (routes/multiplayer.ts, once this join is persisted) schedules the
+      // history as a background chunked scheduler job
+      // (ScheduledEventType.DIVISION_HISTORY_SIMULATE) instead. The division
+      // stays SIMULATING_HISTORY -- and materializeSeasonEvents skips its
+      // fixtures meanwhile, so the normal live-match scheduler cannot race
+      // the backfill for a fixture whose kickoff already passed while the
+      // division was still being created -- until the last chunk catches it
+      // up to world.mp.completedRounds and flips it back to ACTIVE.
+      division.status = "SIMULATING_HISTORY";
+    } else if (division.status === "CREATING") {
+      // Nothing to backfill: this division is being created at the very
+      // start of the season, before any round has been played anywhere.
+      division.status = "ACTIVE";
+    }
   }
 
   const aiId = highestRankedReplaceableAI(world, division);

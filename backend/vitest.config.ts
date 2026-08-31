@@ -15,6 +15,7 @@ export default defineConfig({
       "tests/worldCache.test.ts",
       "tests/playerSeasonHistoryTrend.test.ts",
       "tests/scheduler.test.ts",
+      "tests/divisionHistoryBackfill.test.ts",
       "tests/worker.test.ts",
       "tests/seasonArchive.test.ts",
       "tests/worldControls.integration.test.ts",

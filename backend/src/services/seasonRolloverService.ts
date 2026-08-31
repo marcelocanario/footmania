@@ -230,6 +230,23 @@ export async function executeRolloverStep(
   if (stepDone(context, step)) return;
 
   if (step === "SEASON_RESULTS_FINALIZE") {
+    // A division still catching up on a chunked history backfill (plan
+    // Item 2 -- see game/multiplayer.ts's placeNewClub/returnDormantClub and
+    // scheduler.ts's DIVISION_HISTORY_SIMULATE) has unplayed fixtures and an
+    // incomplete standings table by design. Archiving it now would freeze
+    // that incompleteness into the season's permanent history. Throwing
+    // here fails this step (and, via ROLLOVER_PREREQUISITES, every step
+    // after it) so the rollover retries later -- the same durable-retry
+    // pattern every other scheduled event already relies on -- instead of
+    // silently archiving a half-simulated division. In practice a backfill
+    // drains within moments of being scheduled, so this is expected to
+    // resolve on the rollover's next retry.
+    const stillBackfilling = world.competitions.filter((c) => c.status === "SIMULATING_HISTORY");
+    if (stillBackfilling.length > 0) {
+      throw new Error(
+        `SEASON_RESULTS_FINALIZE: ${stillBackfilling.length} division(s) still backfilling history (ids: ${stillBackfilling.map((c) => c.id).join(", ")}) -- retry once their DIVISION_HISTORY_SIMULATE chunks complete`,
+      );
+    }
     // Loan-market freeze (review C7): the last league game day has passed, so
     // every unclaimed listing is revoked. Claimed loans keep running until the
     // rollover reconcile returns their players. Idempotent via `recalled`.

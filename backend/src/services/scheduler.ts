@@ -8,6 +8,7 @@ import { gameConfig } from "../config";
 import { calendarValues, payrollDayIndices } from "./seasonCalendar";
 import { MP_CONFIG } from "../config";
 import { startLiveMatch, advanceLiveMatches } from "../game/world";
+import { simulateDivisionThroughRound } from "../game/multiplayer";
 import { settleTransferAuction, cancelUnsettleableAuction, releaseAllReservations } from "../game/market";
 import { processDueFreeAgentListing } from "../game/freeAgents";
 import { processGameDayPayroll, processGameDayStart, processGameDayWeekly } from "../game/daily";
@@ -42,6 +43,7 @@ export enum ScheduledEventType {
   NEXT_SEASON_PREPARATION_OPEN = "NEXT_SEASON_PREPARATION_OPEN",
   SEASON_ROLLOVER = "SEASON_ROLLOVER",
   SEASON_ROLLOVER_COMMIT = "SEASON_ROLLOVER_COMMIT",
+  DIVISION_HISTORY_SIMULATE = "DIVISION_HISTORY_SIMULATE",
 }
 
 export type ScheduledEventStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
@@ -80,6 +82,7 @@ export const SCHEDULED_EVENT_PRIORITIES: Record<string, number> = {
   LOAN_END: 400,
   WEEKLY_SIM_UPDATE: 600,
   AI_TRANSFER_TICK: 700,
+  DIVISION_HISTORY_SIMULATE: 750,
   PAYROLL_RUN: 800,
   INTERSEASON_START: 2000,
   SEASON_RESULTS_FINALIZE: 2100,
@@ -150,6 +153,32 @@ async function assertRolloverPrerequisites(
 
 function priorityFor(type: string, priority?: number): number {
   return priority ?? SCHEDULED_EVENT_PRIORITIES[type] ?? 5000;
+}
+
+/**
+ * One chunk of a division's history backfill (plan Item 2): simulates round
+ * `round` only via `simulateDivisionThroughRound`, then -- from inside the
+ * DIVISION_HISTORY_SIMULATE handler -- re-enqueues itself for `round + 1` if
+ * more remain, up to `finalRound` (the world.mp.completedRounds value in
+ * effect when the FIRST chunk was scheduled, fixed for the whole backfill so
+ * a season boundary crossing mid-backfill cannot move the goalposts).
+ * Idempotent by (divisionId, round): a retry after a crash reschedules the
+ * SAME chunk rather than skipping or duplicating it. Returns the event input
+ * for the caller to pass to `scheduleEvent` -- this stays a pure, DB-free
+ * helper so both the join/return routes (the first chunk) and the handler
+ * itself (later chunks) build the exact same shape.
+ */
+export function divisionHistoryChunkInput(saveId: number, divisionId: number, round: number, finalRound: number): ScheduleEventInput {
+  return {
+    saveId,
+    type: ScheduledEventType.DIVISION_HISTORY_SIMULATE,
+    timeBasis: "REAL_TIME",
+    dueAt: new Date(),
+    entityType: "DIVISION",
+    entityId: String(divisionId),
+    payload: { divisionId, round, finalRound },
+    idempotencyKey: `DIVISION_HISTORY_SIMULATE:${divisionId}:${round}`,
+  };
 }
 
 /** Create an event once. Retries return the original row by idempotency key. */
@@ -294,8 +323,19 @@ export async function materializeSeasonEvents(prisma: PrismaClient, saveId: numb
       }
     }
   }
+  // A division still catching up on missed history (its history backfill is
+  // chunked across DIVISION_HISTORY_SIMULATE events, plan Item 2) owns its
+  // own unplayed fixtures exclusively until the last chunk catches it up: a
+  // fixture generated for an already-past round has a kickoffAt already in
+  // the past, so without this guard the normal MATCH_START materialization
+  // below would race the backfill chunker and turn it into a live match
+  // playing out in real time instead of an instant history result.
+  const simulatingHistoryDivisionIds = new Set(
+    world.competitions.filter((c) => c.status === "SIMULATING_HISTORY").map((c) => c.id),
+  );
   for (const fixture of world.fixtures) {
     if (fixture.played || fixture.kickoffAt === undefined) continue;
+    if (simulatingHistoryDivisionIds.has(fixture.competitionId)) continue;
     queue({
       saveId,
       type: ScheduledEventType.MATCH_START,
@@ -756,6 +796,36 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       // market participation (invariant #28). Handled as a no-op so rows
       // persisted before the removal complete instead of erroring forever.
       return;
+    case ScheduledEventType.DIVISION_HISTORY_SIMULATE: {
+      // One round of a division's history backfill (plan Item 2), kept off
+      // the synchronous join/return path precisely so it never holds the
+      // global lock for the whole backfill in one go -- see the comment on
+      // placeNewClub's call site and divisionHistoryChunkInput's doc comment.
+      const divisionId = Number(payload.divisionId ?? entityId);
+      const round = Number(payload.round);
+      const finalRound = Number(payload.finalRound);
+      const division = world.competitions.find((candidate) => candidate.id === divisionId);
+      // Division gone (e.g. archived by a season rollover that ran before
+      // this chunk did) or a malformed payload: nothing left to do.
+      if (!division || !Number.isFinite(round) || !Number.isFinite(finalRound)) return;
+      // Backfilling history for rounds already completed elsewhere in the
+      // season -- these fixtures' nominal real-time kickoffs (generated
+      // relative to the season's start) are not "the future" in any sense
+      // that should block instant simulation. See simulateDivisionThroughRound's
+      // bypassKickoffGate doc comment.
+      simulateDivisionThroughRound(world, division, round, now.getTime(), { bypassKickoffGate: true });
+      if (round < finalRound) {
+        // More rounds remain: simulateDivisionThroughRound's own bookkeeping
+        // just flipped status back to ACTIVE (it always does once it stops
+        // finding due, unplayed fixtures at THIS round) -- undo that here,
+        // since the backfill as a whole is not done, and the normal
+        // live-match scheduler must keep treating this division's fixtures
+        // as backfill-owned until the LAST chunk completes.
+        division.status = "SIMULATING_HISTORY";
+        await scheduleEvent(prisma, divisionHistoryChunkInput(saveId, divisionId, round + 1, finalRound));
+      }
+      return { userEvents: invalidateHumanUsers(world, "mp") };
+    }
     case ScheduledEventType.INTERSEASON_START:
     case ScheduledEventType.PROMOTION_RELEGATION:
     case ScheduledEventType.DIVISION_RESTRUCTURE:
