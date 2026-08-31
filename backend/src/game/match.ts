@@ -7,7 +7,7 @@ import { leagueTurnKey } from "./calendar";
 
 import {
   advancePossessionMatch,
-  computeAttributeCenters,
+  cachedAttributeCenters,
   engineDirection,
   enginePressing,
   engineStyle,
@@ -31,6 +31,7 @@ import { buildRoleBenchmarks, type RoleBenchmarks } from "./player-rating";
 import { createRatingObserver, type RatingObserver } from "./ratingObserver";
 import { tryDeployedRoleForSlot } from "./matchSim";
 import { naturalDefaultRole } from "./positions";
+import { playerIndexFor } from "./playerIndex";
 
 // ---------------------------------------------------------------------------
 // Public match-engine facade (plans/6. match-simulator-overhaul.md).
@@ -376,7 +377,7 @@ export interface LiveTickResult {
  *  world has no ratings enabled this returns null (engine stays byte-identical). */
 export function ratingObserverFor(st: LiveMatchState, allPlayers: Player[]): RatingObserver | null {
   if (!allPlayers || allPlayers.length === 0) return null;
-  const byId = new Map(allPlayers.map((p) => [p.id, p]));
+  const byId = playerIndexFor(allPlayers);
   // Roles are derived from the LIVE slot maps (st.homeSlotByPlayerId /
   // st.awaySlotByPlayerId) because the engine resolves deployed roles from the
   // formation + live assignment; Player rows never store deployed state.
@@ -416,26 +417,10 @@ export function ratingObserverFor(st: LiveMatchState, allPlayers: Player[]): Rat
 
 // centersFor is called on every live-match tick (and once per instant
 // simulation) with the same `world.players` array reference across an entire
-// advanceLiveMatches() batch. Every mutation site that changes a skill
-// computeAttributeCenters reads, or the world.players population via push,
-// calls bumpSkillsVersion() (array *reassignment*, e.g. a retiree filter,
-// already changes the array reference and self-invalidates below). Caching
-// on (array identity, version) reuses the same centers across that whole
-// batch instead of re-sorting the entire player pool on every tick.
-let cachedCentersPlayers: Player[] | null = null;
-let cachedCentersVersion = -1;
-let cachedCenters: AttributeCenters | null = null;
-
-function centersFor(players: Player[]): AttributeCenters {
-  const version = currentSkillsVersion();
-  if (cachedCenters && cachedCentersPlayers === players && cachedCentersVersion === version) {
-    return cachedCenters;
-  }
-  cachedCenters = computeAttributeCenters(players);
-  cachedCentersPlayers = players;
-  cachedCentersVersion = version;
-  return cachedCenters;
-}
+// advanceLiveMatches() batch. The cache lives in matchSim so the rating
+// benchmarks share the identical snapshot instead of re-sorting the whole
+// player pool a second time per match.
+const centersFor = cachedAttributeCenters;
 
 /** True when the match is paused at half-time (no clock running). */
 export function isHalftime(st: LiveMatchState): boolean {

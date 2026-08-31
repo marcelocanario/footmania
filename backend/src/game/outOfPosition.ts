@@ -73,11 +73,19 @@ export function adjustedSkills(skills: SkillSet, natural: NaturalPosition, role:
   const penalty = rolePenalty(natural, role);
   if (penalty === null) return null;
   if (penalty === 0) return { ...skills };
-  const out = { ...skills };
-  for (const key of Object.keys(out) as (keyof SkillSet)[]) {
-    out[key] = Math.max(1, Math.min(100, out[key] - penalty));
-  }
-  return out;
+  // Written out field by field: this runs for every (player, role) pair the
+  // lineup DP scores and for every engine rebuild, and the `Object.keys` walk
+  // it replaces allocated a key array on each of those calls.
+  const clampSkill = (value: number): number => Math.max(1, Math.min(100, value - penalty));
+  return {
+    gol: clampSkill(skills.gol),
+    pace: clampSkill(skills.pace),
+    tec: clampSkill(skills.tec),
+    pas: clampSkill(skills.pas),
+    des: clampSkill(skills.des),
+    playmaking: clampSkill(skills.playmaking),
+    fin: clampSkill(skills.fin),
+  };
 }
 
 /** Every skill floored to 1: the engine's clamp for corrupt/impossible state. */

@@ -6,7 +6,7 @@ import { gameConfig } from "../config";
 import { MATCH_SIMULATOR_CONFIG } from "../matchSimulatorConfig";
 import { SENIOR_SQUAD_LIMIT } from "./constants";
 import type { DeployedRole } from "./positions";
-import { positionGroup } from "./positions";
+import { DEPLOYED_ROLES, positionGroup } from "./positions";
 import { adjustedSkills, adjustedTacticalRating as adjustedRoleRating, isEligible } from "./outOfPosition";
 import { FORMATIONS, formationById } from "./formations";
 
@@ -101,18 +101,29 @@ export interface BestXiResult {
  */
 const NO_PLAYER = -1;
 
-/** Popcount of every 11-bit mask, and those masks bucketed by it. Built once. */
-const POPCOUNT11 = new Uint8Array(1 << 11);
-const MASKS_BY_POPCOUNT: number[][] = (() => {
-  const buckets: number[][] = Array.from({ length: 12 }, () => []);
-  for (let mask = 0; mask < 1 << 11; mask++) {
-    let n = 0;
-    for (let i = 0; i < 11; i++) if ((mask & (1 << i)) !== 0) n++;
-    POPCOUNT11[mask] = n;
-    buckets[n].push(mask);
-  }
-  return buckets;
-})();
+/** Widest slot list the DP supports: a formation's eleven slots. The bench
+ *  archetype list is shorter, so every table below is indexed by slot count. */
+const MAX_SLOTS = 11;
+
+/** Popcount of every 11-bit mask. Valid for any narrower mask too. */
+const POPCOUNT11 = new Uint8Array(1 << MAX_SLOTS);
+for (let mask = 0; mask < 1 << MAX_SLOTS; mask++) {
+  let n = 0;
+  for (let i = 0; i < MAX_SLOTS; i++) if ((mask & (1 << i)) !== 0) n++;
+  POPCOUNT11[mask] = n;
+}
+
+/** Masks of a given width bucketed by popcount, built on first use per width. */
+const MASK_BUCKETS_BY_WIDTH: (Int32Array[] | undefined)[] = new Array(MAX_SLOTS + 1);
+function masksByPopcount(width: number): Int32Array[] {
+  const cached = MASK_BUCKETS_BY_WIDTH[width];
+  if (cached) return cached;
+  const buckets: number[][] = Array.from({ length: width + 2 }, () => []);
+  for (let mask = 0; mask < 1 << width; mask++) buckets[POPCOUNT11[mask]].push(mask);
+  const built = buckets.map((bucket) => Int32Array.from(bucket));
+  MASK_BUCKETS_BY_WIDTH[width] = built;
+  return built;
+}
 
 interface AssignmentDp {
   score: Float64Array;
@@ -122,41 +133,73 @@ interface AssignmentDp {
   byId: Map<number, Player>;
 }
 
+/** Shared DP tables. Not reentrant: a caller must finish reading the returned
+ *  view before starting another assignment run. All three call sites
+ *  (assignBestXI, assignOnPitchToSlots, buildBench) do exactly that. */
+const _dpScore = new Float64Array(1 << MAX_SLOTS);
+const _dpReachable = new Uint8Array(1 << MAX_SLOTS);
+const _dpAssign = new Int32Array((1 << MAX_SLOTS) * MAX_SLOTS);
+
 function runAssignmentDp<T extends { id: number }>(
   available: T[],
   roles: readonly DeployedRole[],
   scoreOf: (p: T, role: DeployedRole) => number | null,
-): (Omit<AssignmentDp, "byId" | "roles"> & { byId: Map<number, T>; roles: readonly DeployedRole[] }) | null {
-  if (roles.length !== 11) return null;
-  const size = 1 << 11;
+): (Omit<AssignmentDp, "byId" | "roles"> & { byId: Map<number, T>; roles: readonly DeployedRole[]; slotCount: number }) | null {
+  const slotCount = roles.length;
+  if (slotCount < 1 || slotCount > MAX_SLOTS) return null;
+  const size = 1 << slotCount;
 
   // Deterministic candidate order by id: the DP is exhaustive, so ordering
   // affects only tie-break determinism.
   const candidates = [...available].sort((a, b) => a.id - b.id);
   const byId = new Map<number, T>();
-  // Per-candidate slot scores, computed once.
-  const slotScoresOf = new Map<number, Float64Array>();
+  // Per-candidate slot scores, computed once into one flat table indexed by
+  // (usable index * 11 + slot) so the relaxation below needs no per-player
+  // allocation and no id lookup.
+  const slotScores = new Float64Array(candidates.length * slotCount);
   const usable: T[] = [];
   for (const p of candidates) {
-    const scores = new Float64Array(11);
+    const offset = usable.length * slotCount;
     let any = false;
-    for (let slot = 0; slot < 11; slot++) {
+    for (let slot = 0; slot < slotCount; slot++) {
       const s = scoreOf(p, roles[slot]);
-      scores[slot] = s ?? -Infinity;
+      slotScores[offset + slot] = s ?? -Infinity;
       if (s !== null) any = true;
     }
     if (!any) continue;
-    slotScoresOf.set(p.id, scores);
     usable.push(p);
     byId.set(p.id, p);
   }
 
-  const score = new Float64Array(size).fill(-Infinity);
-  const reachable = new Uint8Array(size);
-  const assign = new Int32Array(size * 11).fill(NO_PLAYER);
+  // Reusable scratch: the three tables total ~110 KB and this DP runs ~30
+  // times per simulated match (thirteen-plus formations per side). Every caller
+  // consumes the returned view synchronously before the next run, so one shared
+  // set of buffers is enough — see the contract note on runAssignmentDp.
+  const score = _dpScore;
+  const reachable = _dpReachable;
+  const assign = _dpAssign;
+  score.fill(-Infinity, 0, size);
+  reachable.fill(0, 0, size);
+  // Only the empty state's row needs clearing: a state's row is written in full
+  // (parent row + the newly filled slot) at the moment it becomes reachable, so
+  // no stale row can ever be read.
+  assign.fill(NO_PLAYER, 0, slotCount);
   score[0] = 0;
   reachable[0] = 1;
-  const candidate = new Int32Array(11);
+  // Per-candidate bitmask of the slots he is eligible for. Iterating only the
+  // set bits of `eligible & ~mask` visits exactly the slots the scan used to
+  // reach after two rejected tests each, in the same ascending order — a
+  // goalkeeper now costs one transition per state instead of eleven.
+  const eligibleSlots = new Int32Array(usable.length);
+  for (let pi = 0; pi < usable.length; pi++) {
+    let bits = 0;
+    for (let slot = 0; slot < slotCount; slot++) {
+      if (slotScores[pi * slotCount + slot] !== -Infinity) bits |= 1 << slot;
+    }
+    eligibleSlots[pi] = bits;
+  }
+  const buckets = masksByPopcount(slotCount);
+  const topLayer = slotCount - 1;
 
   // In-place 0/1 relaxation. A transition always moves a state from popcount k
   // to k+1, so visiting popcount layers in DESCENDING order guarantees a state
@@ -164,45 +207,62 @@ function runAssignmentDp<T extends { id: number }>(
   // exactly the "each item used at most once" property, without copying the
   // whole DP layer per player (which dominated the cost of the 13-formation
   // AI search).
-  for (const p of usable) {
-    const scores = slotScoresOf.get(p.id)!;
-    for (let k = 10; k >= 0; k--) {
-      for (const mask of MASKS_BY_POPCOUNT[k]) {
+  for (let pi = 0; pi < usable.length; pi++) {
+    const pid = usable[pi].id;
+    const scoreBase = pi * slotCount;
+    const eligible = eligibleSlots[pi];
+    // After `pi` players have been relaxed no mask above popcount `pi` can be
+    // reachable, so the higher layers are pure iteration over dead states.
+    for (let k = pi < topLayer ? pi : topLayer; k >= 0; k--) {
+      const bucket = buckets[k];
+      for (let bi = 0; bi < bucket.length; bi++) {
+        const mask = bucket[bi];
         if (!reachable[mask]) continue;
+        let bits = eligible & ~mask;
+        if (bits === 0) continue;
         const base = score[mask];
-        const rowStart = mask * 11;
-        for (let slot = 0; slot < 11; slot++) {
-          if ((mask & (1 << slot)) !== 0) continue;
-          const s = scores[slot];
-          if (s === -Infinity) continue;
-          const newMask = mask | (1 << slot);
-          const newScore = base + s;
-          const target = newMask * 11;
+        const rowStart = mask * slotCount;
+        while (bits !== 0) {
+          const bit = bits & -bits;
+          bits ^= bit;
+          const slot = 31 - Math.clz32(bit);
+          const newMask = mask | bit;
+          const newScore = base + slotScores[scoreBase + slot];
+          const target = newMask * slotCount;
           if (!reachable[newMask] || newScore > score[newMask] + 1e-9) {
             score[newMask] = newScore;
             reachable[newMask] = 1;
-            assign.copyWithin(target, rowStart, rowStart + 11);
-            assign[target + slot] = p.id;
+            assign.copyWithin(target, rowStart, rowStart + slotCount);
+            assign[target + slot] = pid;
           } else if (Math.abs(newScore - score[newMask]) <= 1e-9) {
             // §9.2 tie-break: lexicographically smaller player-ID array in slot
-            // order, with an empty slot sorting after every real id.
-            for (let i = 0; i < 11; i++) candidate[i] = assign[rowStart + i];
-            candidate[slot] = p.id;
-            if (lexAssignSmallerFlat(candidate, 0, assign, target)) {
-              assign.copyWithin(target, rowStart, rowStart + 11);
-              assign[target + slot] = p.id;
+            // order, with an empty slot sorting after every real id. Compared
+            // element by element against the stored row so the candidate row
+            // never has to be materialized (ties are common — scores are often
+            // exactly equal — so this path is hot).
+            let smaller = false;
+            for (let i = 0; i < slotCount; i++) {
+              const rawA = i === slot ? pid : assign[rowStart + i];
+              const rawB = assign[target + i];
+              const av = rawA === NO_PLAYER ? Number.MAX_SAFE_INTEGER : rawA;
+              const bv = rawB === NO_PLAYER ? Number.MAX_SAFE_INTEGER : rawB;
+              if (av !== bv) { smaller = av < bv; break; }
+            }
+            if (smaller) {
+              assign.copyWithin(target, rowStart, rowStart + slotCount);
+              assign[target + slot] = pid;
             }
           }
         }
       }
     }
   }
-  return { score, assign, reachable, roles, byId };
+  return { score, assign, reachable, roles, byId, slotCount };
 }
 
-/** Lexicographic compare of two flat 11-slot assignment rows; -1 sorts last. */
-function lexAssignSmallerFlat(a: Int32Array, aOff: number, b: Int32Array, bOff: number): boolean {
-  for (let i = 0; i < 11; i++) {
+/** Lexicographic compare of two flat assignment rows; -1 sorts last. */
+function lexAssignSmallerFlat(a: Int32Array, aOff: number, b: Int32Array, bOff: number, count: number): boolean {
+  for (let i = 0; i < count; i++) {
     const av = a[aOff + i] === NO_PLAYER ? Number.MAX_SAFE_INTEGER : a[aOff + i];
     const bv = b[bOff + i] === NO_PLAYER ? Number.MAX_SAFE_INTEGER : b[bOff + i];
     if (av !== bv) return av < bv;
@@ -219,12 +279,12 @@ export function assignBestXI(
   if (!def) return null;
   const dp = runAssignmentDp(available, def.slots.map((slot) => slot.role), scoreOf);
   if (!dp) return null;
-  const full = (1 << 11) - 1;
+  const full = (1 << dp.slotCount) - 1;
   if (!dp.reachable[full]) return null;
-  const base = full * 11;
+  const base = full * dp.slotCount;
   const slots: AssignedSlot[] = [];
   const seen = new Set<number>();
-  for (let slot = 0; slot < 11; slot++) {
+  for (let slot = 0; slot < dp.slotCount; slot++) {
     const pid = dp.assign[base + slot];
     const player = pid === NO_PLAYER ? undefined : dp.byId.get(pid);
     if (!player || seen.has(pid)) return null;
@@ -256,7 +316,7 @@ export function assignOnPitchToSlots<T extends { id: number }>(
   if (!def) return null;
   const dp = runAssignmentDp(onPitch, def.slots.map((slot) => slot.role), scoreOf);
   if (!dp) return null;
-  const size = 1 << 11;
+  const size = 1 << dp.slotCount;
   let bestMask = -1;
   let bestCount = -1;
   for (let mask = 0; mask < size; mask++) {
@@ -271,11 +331,11 @@ export function assignOnPitchToSlots<T extends { id: number }>(
     const diff = dp.score[mask] - dp.score[bestMask];
     if (diff > 1e-9) { bestMask = mask; continue; }
     if (diff < -1e-9) continue;
-    if (lexAssignSmallerFlat(dp.assign, mask * 11, dp.assign, bestMask * 11)) bestMask = mask;
+    if (lexAssignSmallerFlat(dp.assign, mask * dp.slotCount, dp.assign, bestMask * dp.slotCount, dp.slotCount)) bestMask = mask;
   }
   if (bestMask === -1) return null;
-  const base = bestMask * 11;
-  return Array.from({ length: 11 }, (_, slot) =>
+  const base = bestMask * dp.slotCount;
+  return Array.from({ length: dp.slotCount }, (_, slot) =>
     dp.assign[base + slot] === NO_PLAYER ? null : dp.assign[base + slot]);
 }
 
@@ -321,15 +381,21 @@ export function aiSelectionValue(player: Player, role: DeployedRole, pressing = 
 function aiScoreOf(pressing: number) {
   // The value depends only on (player, role) — never on the formation or slot —
   // and each call runs two multi-day energy projections, so memoize across the
-  // formations aiBestXI evaluates.
-  const cache = new Map<string, number | null>();
+  // formations aiBestXI evaluates. The per-player row is keyed by role index so
+  // a lookup costs no string concatenation.
+  const cache = new Map<number, (number | null)[]>();
   return (p: Player, role: DeployedRole): number | null => {
-    const key = `${p.id}:${role}`;
-    const hit = cache.get(key);
+    let row = cache.get(p.id);
+    if (row === undefined) {
+      row = new Array<number | null>(DEPLOYED_ROLES.length);
+      cache.set(p.id, row);
+    }
+    const index = DEPLOYED_ROLES.indexOf(role);
+    const hit = row[index];
     if (hit !== undefined) return hit;
     const v = aiSelectionValue(p, role, pressing);
     const out = Number.isFinite(v) ? v : null;
-    cache.set(key, out);
+    row[index] = out;
     return out;
   };
 }
@@ -392,9 +458,13 @@ export function buildLineup(club: Club, allPlayers: Player[], options: { futureF
  * Bench construction (§9.4): partial DP against the archetype order
  * GK, LB, RB, CB, DM, AM, LW, RW, ST. A state may skip an archetype.
  * Compare final states by: more archetypes filled; lexicographically larger
- * 11-bit filled-archetype mask read GK→ST (earlier archetype wins at equal
- * counts); larger total current score; lexicographically smaller player-ID
- * array in archetype order (Number.MAX_SAFE_INTEGER for unfilled).
+ * filled-archetype mask read GK→ST (earlier archetype wins at equal counts);
+ * larger total current score; lexicographically smaller player-ID array in
+ * archetype order (Number.MAX_SAFE_INTEGER for unfilled).
+ *
+ * The plan text lists eleven archetypes because it predates the removal of the
+ * LM/RM sub-roles; the list is now the nine deployed roles, and the mask is
+ * nine bits wide. The comparison tuple is unchanged.
  * Append any still-unfilled places by adjusted best-role rating desc, energy
  * desc, overall desc, player ID asc.
  */
@@ -411,7 +481,7 @@ function buildBench(available: Player[], excluded: Set<number>, scoreOf: (p: Pla
     // archetype wins at equal counts), then total score, then the smaller
     // player-ID array in archetype order.
     let bestMask = -1;
-    for (let mask = 0; mask < 1 << 11; mask++) {
+    for (let mask = 0; mask < 1 << dp.slotCount; mask++) {
       if (!dp.reachable[mask]) continue;
       if (bestMask === -1) { bestMask = mask; continue; }
       const count = POPCOUNT11[mask];
@@ -419,16 +489,16 @@ function buildBench(available: Player[], excluded: Set<number>, scoreOf: (p: Pla
       if (count !== bestCount) { if (count > bestCount) bestMask = mask; continue; }
       // BENCH_ARCHETYPES[0] = GK is bit 0 (least significant), the opposite of
       // lexicographic significance, so compare the bit-reversed masks.
-      const rev = reverseMask11(mask);
-      const bestRev = reverseMask11(bestMask);
+      const rev = reverseMask(mask, dp.slotCount);
+      const bestRev = reverseMask(bestMask, dp.slotCount);
       if (rev !== bestRev) { if (rev > bestRev) bestMask = mask; continue; }
       const diff = dp.score[mask] - dp.score[bestMask];
       if (Math.abs(diff) > 1e-9) { if (diff > 0) bestMask = mask; continue; }
-      if (lexAssignSmallerFlat(dp.assign, mask * 11, dp.assign, bestMask * 11)) bestMask = mask;
+      if (lexAssignSmallerFlat(dp.assign, mask * dp.slotCount, dp.assign, bestMask * dp.slotCount, dp.slotCount)) bestMask = mask;
     }
     if (bestMask !== -1) {
-      const base = bestMask * 11;
-      for (let arch = 0; arch < 11; arch++) {
+      const base = bestMask * dp.slotCount;
+      for (let arch = 0; arch < dp.slotCount; arch++) {
         const id = dp.assign[base + arch];
         if (id === NO_PLAYER) continue;
         const player = dp.byId.get(id);
@@ -465,10 +535,10 @@ function buildBench(available: Player[], excluded: Set<number>, scoreOf: (p: Pla
   return bench;
 }
 
-function reverseMask11(mask: number): number {
+function reverseMask(mask: number, width: number): number {
   let rev = 0;
-  for (let i = 0; i < 11; i++) {
-    if ((mask & (1 << i)) !== 0) rev |= 1 << (10 - i);
+  for (let i = 0; i < width; i++) {
+    if ((mask & (1 << i)) !== 0) rev |= 1 << (width - 1 - i);
   }
   return rev;
 }
