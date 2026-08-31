@@ -10,11 +10,15 @@ import {
   invalidateWorldCache,
   loadGlobalWorld,
   loadGlobalWorldMutable,
+  loadGlobalWorldMutableForLiveTick,
   loadGlobalWorldReadOnly,
   persistWorld,
 } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
 import { initSeason } from "../src/game/multiplayer";
+import { startLiveMatch } from "../src/game/world";
+import { liveMatchProcessor } from "../src/services/jobs/liveMatchProcessor";
+import { MP_CONFIG } from "../src/config";
 
 const prisma = new PrismaClient();
 
@@ -150,6 +154,160 @@ describe("world cache sharing (buildCacheWorld)", () => {
       if (!readBack) throw new Error("world did not load");
       expect(readBack.world.mp.seasonId).toBe(season.seasonId);
       expect(readBack.world.clubs.length).toBe(loaded.world.clubs.length);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+});
+
+/** Age a live match by `minutes` match-minutes so the next worker tick has a
+ *  non-zero minute budget to advance (mirrors tests/live.test.ts's
+ *  ageLiveMatch, duplicated locally rather than shared since it is a small,
+ *  single-purpose DB-round-trip helper -- see that file's own copy). */
+async function ageLiveMatch(matchId: number, minutes: number): Promise<void> {
+  const loaded = await loadGlobalWorldMutable(prisma);
+  if (!loaded) throw new Error("world did not load");
+  const st = loaded.world.liveMatches.find((candidate) => candidate.matchId === matchId);
+  if (!st) throw new Error("no live match");
+  const elapsed = (MP_CONFIG.matchDurationMinutes * 60 * 1000 * minutes) / 90;
+  st.lastAdvancedAt = Date.now() - elapsed;
+  await persistWorld(prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+}
+
+describe("live-match tick fast path (loadGlobalWorldMutableForLiveTick)", () => {
+  it("narrows players to only the clubs playing, and refuses to narrow a match close to full time", async () => {
+    const { saveId } = await freshGlobalWorld(90021);
+    const { world } = await withSeason(saveId);
+    const fixture = world.fixtures.find((f) => !f.played)!;
+    startLiveMatch(world, fixture);
+    const st = world.liveMatches.find((s) => s.fixtureId === fixture.id)!;
+    await persistWorld(prisma, saveId, saveId, world, undefined);
+    const matchClubIds = new Set([st.homeClubId, st.awayClubId]);
+    const totalPlayers = world.players.length;
+    const matchPlayers = world.players.filter((p) => p.clubId !== null && matchClubIds.has(p.clubId)).length;
+    // Sanity: this world has other clubs' players the narrow path must
+    // exclude (a filler-AI division fills to 8 clubs, only 2 of which play
+    // this fixture).
+    expect(matchPlayers).toBeLessThan(totalPlayers);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const loaded0 = await loadGlobalWorldMutable(prisma);
+      if (!loaded0) throw new Error("world did not load");
+      await persistWorld(prisma, loaded0.save.id, loaded0.save.id, loaded0.world, loaded0.save.revision);
+      await ageLiveMatch(st.matchId, 3);
+
+      const narrow = await loadGlobalWorldMutableForLiveTick(prisma, Date.now());
+      expect(narrow).not.toBeNull();
+      expect(narrow!.world.players.length).toBe(matchPlayers);
+      expect(narrow!.world.players.every((p) => p.clubId !== null && matchClubIds.has(p.clubId))).toBe(true);
+      // clubs is shared by reference (never mutated by a non-finishing tick),
+      // never narrowed to just the two match clubs.
+      expect(narrow!.world.clubs.length).toBe(world.clubs.length);
+
+      // Force the SAME match to look close to full time: the predicate must
+      // then refuse to narrow, regardless of how far the clock actually is,
+      // since `st.ended` alone is enough to require the full path.
+      const loaded1 = await loadGlobalWorldMutable(prisma);
+      if (!loaded1) throw new Error("world did not load");
+      const st1 = loaded1.world.liveMatches.find((s) => s.matchId === st.matchId)!;
+      st1.ended = true;
+      await persistWorld(prisma, loaded1.save.id, loaded1.save.id, loaded1.world, loaded1.save.revision);
+
+      const shouldBeNull = await loadGlobalWorldMutableForLiveTick(prisma, Date.now());
+      expect(shouldBeNull).toBeNull();
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+
+  it("returns null while NODE_ENV=test, matching the rest of the world cache", async () => {
+    const { saveId } = await freshGlobalWorld(90022);
+    const { world } = await withSeason(saveId);
+    const fixture = world.fixtures.find((f) => !f.played)!;
+    startLiveMatch(world, fixture);
+    await persistWorld(prisma, saveId, saveId, world, undefined);
+    const narrow = await loadGlobalWorldMutableForLiveTick(prisma, Date.now());
+    expect(narrow).toBeNull();
+  });
+});
+
+describe("liveMatchProcessor with the fast path enabled", () => {
+  it("advances an ongoing match via the narrow path without touching the cached clubs/players references", async () => {
+    const { saveId } = await freshGlobalWorld(90023);
+    const { world } = await withSeason(saveId);
+    const fixture = world.fixtures.find((f) => !f.played)!;
+    startLiveMatch(world, fixture);
+    const st = world.liveMatches.find((s) => s.fixtureId === fixture.id)!;
+    await persistWorld(prisma, saveId, saveId, world, undefined);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const loaded0 = await loadGlobalWorldMutable(prisma);
+      if (!loaded0) throw new Error("world did not load");
+      await persistWorld(prisma, loaded0.save.id, loaded0.save.id, loaded0.world, loaded0.save.revision);
+      await ageLiveMatch(st.matchId, 3);
+
+      const before = await loadGlobalWorldReadOnly(prisma);
+      if (!before) throw new Error("world did not load");
+      const minuteBefore = before.world.liveMatches.find((s) => s.matchId === st.matchId)!.minute;
+
+      const result = await liveMatchProcessor(prisma);
+      expect(result.changed).toBe(true);
+
+      const after = await loadGlobalWorldReadOnly(prisma);
+      if (!after) throw new Error("world did not load");
+      // The match actually progressed -- the narrow world was correctly
+      // wired into a real simulation, not a no-op.
+      const stAfter = after.world.liveMatches.find((s) => s.matchId === st.matchId)!;
+      expect(stAfter.ended || stAfter.minute > minuteBefore || stAfter.matchClockSeconds > 0).toBe(true);
+      // Every collection a non-finishing tick never touches stayed the exact
+      // same reference: proof the narrow path's isolated player mutations
+      // never leaked into the shared cache.
+      expect(after.world.clubs).toBe(before.world.clubs);
+      expect(after.world.players).toBe(before.world.players);
+      expect(after.world.competitions).toBe(before.world.competitions);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+
+  it("finishes a match whose clock has already ended, correctly falling back off the narrow path", async () => {
+    const { saveId } = await freshGlobalWorld(90024);
+    const { world } = await withSeason(saveId);
+    const fixture = world.fixtures.find((f) => !f.played)!;
+    startLiveMatch(world, fixture);
+    const st = world.liveMatches.find((s) => s.fixtureId === fixture.id)!;
+    await persistWorld(prisma, saveId, saveId, world, undefined);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const loaded0 = await loadGlobalWorldMutable(prisma);
+      if (!loaded0) throw new Error("world did not load");
+      const st0 = loaded0.world.liveMatches.find((s) => s.matchId === st.matchId)!;
+      st0.ended = true;
+      await persistWorld(prisma, loaded0.save.id, loaded0.save.id, loaded0.world, loaded0.save.revision);
+
+      const result = await liveMatchProcessor(prisma);
+      expect(result.changed).toBe(true);
+
+      const after = await loadGlobalWorldReadOnly(prisma);
+      if (!after) throw new Error("world did not load");
+      expect(after.world.liveMatches.some((s) => s.matchId === st.matchId)).toBe(false);
+      const finishedMatch = after.world.matches.find((m) => m.fixtureId === fixture.id);
+      expect(finishedMatch).toBeDefined();
+      const comp = after.world.competitions.find((c) => c.id === fixture.competitionId)!;
+      const homeRow = comp.standings[fixture.homeClubId];
+      expect(homeRow?.played).toBeGreaterThan(0);
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
       invalidateWorldCache(prisma);

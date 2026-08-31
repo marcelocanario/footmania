@@ -437,6 +437,97 @@ export async function loadGlobalWorldMutable(prisma: PrismaClient): Promise<Load
 }
 
 /**
+ * Conservative "could this live match finish within this tick" check, used
+ * only to decide whether `loadGlobalWorldMutableForLiveTick` may take its
+ * narrow path. MUST err toward true whenever there is genuine doubt: the
+ * caller's safety net (discard-and-redo on the full path, see
+ * `liveMatchProcessor`) makes a false positive here merely a missed
+ * optimization, but a false negative would let a match finish against a
+ * world that is missing everything `finalizeLiveMatch` needs to write
+ * (standings, ratings, Elo, news, ...).
+ *
+ * Two independent reasons a tick could finish a match, both handled
+ * pessimistically:
+ *  - The match is already flagged `ended` (needs finalizing regardless).
+ *  - The clock is close enough to full time that this tick's minute budget
+ *    could cover it. "Close enough" uses the WORST CASE added time for any
+ *    half not yet stamped (`MS.timing.stoppage.maxMinutesPerHalf`) rather
+ *    than the current (possibly still-zero, not-yet-discovered) value —
+ *    using the current value would UNDERSTATE how much time remains and
+ *    could miss a match that resolves stoppage time and finishes mid-tick.
+ *  - After worker downtime, one tick's real-elapsed-time budget can cover
+ *    many match-minutes (`advanceLiveMatches`'s own catch-up loop), which
+ *    can power through to full time regardless of how far the clock looked
+ *    from finishing at tick start; folded into the margin below.
+ */
+function couldFinishLiveTick(st: LiveMatchState, now: number): boolean {
+  if (st.ended) return true;
+  const realMsPerMatchMinute = (MP_CONFIG.matchDurationMinutes * 60 * 1000) / 90;
+  const elapsedMs = Math.max(0, now - (st.lastAdvancedAt ?? now));
+  const wholeMinutes = Math.floor(elapsedMs / realMsPerMatchMinute);
+  const clockSeconds = typeof st.matchClockSeconds === "number"
+    ? st.matchClockSeconds
+    : ((st.half === 1 ? st.firstHalfLen : 0) + st.minute) * 60;
+  const maxAddedPerHalf = MS.timing.stoppage?.maxMinutesPerHalf ?? 12;
+  const firstAdded = st.firstHalfAddedMinutes && st.firstHalfAddedMinutes > 0 ? st.firstHalfAddedMinutes : maxAddedPerHalf;
+  const secondAdded = st.secondHalfAddedMinutes && st.secondHalfAddedMinutes > 0 ? st.secondHalfAddedMinutes : maxAddedPerHalf;
+  const worstCaseTotalRegulation = MS.timing.regulationSeconds + firstAdded * 60 + secondAdded * 60;
+  const remainingMinutes = Math.max(0, (worstCaseTotalRegulation - clockSeconds) / 60);
+  // Generous margin over the normal ~1-match-minute-per-tick cadence, plus
+  // this tick's actual elapsed-time budget (covers downtime catch-up).
+  const marginMinutes = 3 + wholeMinutes;
+  return remainingMinutes <= marginMinutes;
+}
+
+/**
+ * Narrow variant of `loadGlobalWorldMutable` for the live-match worker tick's
+ * common case. `advanceLiveMatches` on a tick that finishes no match only
+ * ever mutates `liveMatches`, `rng`, and the Player objects belonging to
+ * clubs currently in a live match (energy/injury bookkeeping the tick
+ * discards regardless once it's over — `persistLiveMatchState`, the only
+ * writer on this path, patches just `liveMatches`/`rng` onto the cache and
+ * never reads back Player mutations from a non-finishing tick). Every other
+ * collection — including `clubs`, which a non-finishing tick never mutates —
+ * is shared BY REFERENCE from the cache instead of the usual full
+ * `structuredClone`, which is the expensive part precisely because `players`
+ * can be orders of magnitude larger than the couple of clubs actually
+ * playing.
+ *
+ * Returns `null` whenever there is no safe narrow path to take — no usable
+ * cache entry (fresh boot, revision mismatch, `NODE_ENV=test` caching
+ * disabled), or any live match that `couldFinishLiveTick` — so callers must
+ * fall back to `loadGlobalWorldMutable`.
+ *
+ * Safe to leave the cache entry itself untouched (no eviction, no
+ * `mutationBaselines` bookkeeping): the only persist path reachable from the
+ * world this returns is `persistLiveMatchState`, which reads its own patch
+ * target straight from `worldCaches`/`mutationBaselines`, never from the
+ * `world` handed back here.
+ */
+export async function loadGlobalWorldMutableForLiveTick(prisma: PrismaClient, now: number): Promise<LoadedWorld | null> {
+  if (process.env.NODE_ENV === "test") return null;
+  const save = await prisma.save.findFirst({ where: { isGlobal: true } });
+  if (!save) return null;
+  const cached = worldCaches.get(prisma)?.get(save.id);
+  if (!cached || cached.revision !== save.revision) return null;
+  const world = cached.world;
+  if (world.liveMatches.length === 0) return null;
+  if (world.liveMatches.some((st) => couldFinishLiveTick(st, now))) return null;
+  const liveMatchClubIds = new Set<number>();
+  for (const st of world.liveMatches) {
+    liveMatchClubIds.add(st.homeClubId);
+    liveMatchClubIds.add(st.awayClubId);
+  }
+  const narrowed: World = {
+    ...world,
+    liveMatches: structuredClone(world.liveMatches),
+    rng: structuredClone(world.rng),
+    players: structuredClone(world.players.filter((p) => p.clubId !== null && liveMatchClubIds.has(p.clubId))),
+  };
+  return { save: { id: save.id, name: save.name, revision: save.revision }, world: narrowed };
+}
+
+/**
  * Load the global world, apply a mutation, and persist it with optimistic
  * concurrency. On a stale write (another process mutated the world between
  * load and persist), the world is reloaded and the mutation re-run.

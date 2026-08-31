@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@prisma/client";
 import { advanceLiveMatches } from "../../game/world";
 import { notifyMatchGoal } from "../notifications";
-import { loadGlobalWorldMutable, persistLiveMatchState, persistWorld } from "../saveService";
+import { loadGlobalWorldMutable, loadGlobalWorldMutableForLiveTick, persistLiveMatchState, persistWorld } from "../saveService";
 import { withGlobalLease, withGlobalLock } from "../lock";
 import { notifyFinishedMatches } from "../matchNotifications";
 import { publishLiveMatchUpdates } from "../liveMatchEvents";
@@ -18,15 +18,38 @@ export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ change
   if (!active) return { changed: false };
 
   return withGlobalLock(() => withGlobalLease(prisma, async () => {
-    const loaded = await loadGlobalWorldMutable(prisma);
-    if (!loaded || loaded.world.liveMatches.length === 0) return { changed: false };
-    // Belt-and-braces inside the lock: another process may have paused between
-    // the cheap pre-check above and this load.
-    if (isPaused(loaded.world)) return { changed: false };
-    const before = snapshotLiveMatches(loaded.world.liveMatches);
-
     const advancedAt = Date.now();
-    const finished = advanceLiveMatches(loaded.world, advancedAt);
+    // Fast path: skip the whole-world clone (dominated by `players`, which
+    // can be orders of magnitude larger than the couple of clubs actually
+    // playing) when no live match could possibly finish this tick.
+    // loadGlobalWorldMutableForLiveTick returns null whenever there's genuine
+    // doubt, falling back to the full clone below. And even after taking the
+    // narrow path, if a match unexpectedly finishes anyway, the narrow
+    // world's players/clubs are insufficient for finalizeLiveMatch's full
+    // write (standings, ratings, Elo, news, ...) -- discard it (nothing has
+    // been persisted yet) and redo the tick, deterministically, on a freshly
+    // loaded full world. Bounded at two attempts: the second always uses the
+    // full path, which can never hit this retry condition again.
+    let loaded = await loadGlobalWorldMutableForLiveTick(prisma, advancedAt);
+    let usedNarrowPath = loaded !== null;
+    let before: ReturnType<typeof snapshotLiveMatches> | undefined;
+    let finished: ReturnType<typeof advanceLiveMatches> | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (!loaded) loaded = await loadGlobalWorldMutable(prisma);
+      if (!loaded || loaded.world.liveMatches.length === 0) return { changed: false };
+      // Belt-and-braces inside the lock: another process may have paused
+      // between the cheap pre-check above and this load.
+      if (isPaused(loaded.world)) return { changed: false };
+      before = snapshotLiveMatches(loaded.world.liveMatches);
+      finished = advanceLiveMatches(loaded.world, advancedAt);
+      if (usedNarrowPath && finished.length > 0) {
+        loaded = null;
+        usedNarrowPath = false;
+        continue;
+      }
+      break;
+    }
+    if (!loaded || !before || !finished) return { changed: false };
     const { updates, changedStates, goals } = diffLiveMatchAdvances(before, loaded.world.liveMatches, finished);
 
     if (finished.length > 0) {
