@@ -85,6 +85,87 @@ function rememberWorldOwned(prisma: PrismaClient, saveId: number, revision: numb
   cache.set(saveId, { revision, world });
 }
 
+/**
+ * Per-mutation-cycle tracking for `makeLazyMutableWorld`: which top-level
+ * `World` fields a lazy world has actually been read from or written to.
+ * Keyed by the lazy world (Proxy) object itself. `touchedFieldsOf` returns
+ * `undefined` for an ordinary, non-lazy World (built by `cloneWorld`, or
+ * handed in directly by a test) — every caller below MUST treat `undefined`
+ * as "everything may have changed" (compare unconditionally, the existing
+ * always-correct behavior), never as "nothing changed".
+ */
+const WORLD_TOUCHED = new WeakMap<World, Set<keyof World>>();
+
+function touchedFieldsOf(world: World): Set<keyof World> | undefined {
+  return WORLD_TOUCHED.get(world);
+}
+
+/**
+ * Wrap a pristine, shared `cached` World in a Proxy that clones each
+ * top-level field on first access — read OR write, since ordinary JS
+ * mutation (`world.players.find(...).energy -= 1`, `world.news.push(x)`)
+ * reads a collection before mutating it in place, so there is no way to
+ * tell "reading to inspect" from "reading in order to mutate" at the
+ * property-access level; every access is treated as "this field may end up
+ * different, so it needs to stop being shared with the pristine cache."
+ *
+ * Once a field is cloned, the SAME clone is returned on every later access
+ * to that field (so `world.players.push(a); world.players.push(b);`
+ * correctly accumulates on one array, not a fresh clone per statement), and
+ * the field name is recorded in the touched set `touchedFieldsOf` exposes.
+ * A never-touched field is never read from `cached` at all, so it is
+ * definitionally identical to it — that is what lets `persistWorld`'s diff
+ * logic skip comparing (and thereby skip cloning) whatever a given mutation
+ * never went near, without needing to know in advance what that will be.
+ *
+ * SAFETY-CRITICAL CONTRACT for every caller of the returned world: never
+ * enumerate its properties as a whole (`{...world}`, `Object.keys(world)`,
+ * `Object.entries(world)`, `JSON.stringify(world)`, `for...in`). Enumeration
+ * is an inherently eager operation — it reads every field by definition —
+ * so it would silently clone the ENTIRE world through this Proxy, with no
+ * error to signal the mistake, just quietly erasing the whole optimization.
+ * Verified nothing outside `saveService.ts` does this to a World; within
+ * this file, every reader of a possibly-lazy world (`changedWorldCollections`,
+ * `buildCacheWorld`, the standalone mp/mpQueue/etc checks in `persistWorld`)
+ * is written to only ever touch fields already confirmed to be in `touched`.
+ */
+function makeLazyMutableWorld(cached: World): World {
+  const touched = new Set<keyof World>();
+  const materialized = new Map<keyof World, unknown>();
+  const proxy = new Proxy({} as World, {
+    get(_target, prop) {
+      if (typeof prop !== "string") return undefined;
+      const key = prop as keyof World;
+      if (materialized.has(key)) return materialized.get(key);
+      const raw = (cached as unknown as Record<string, unknown>)[key];
+      if (PRIMITIVE_WORLD_FIELDS.has(key)) {
+        // Primitives have no shared identity to alias-corrupt, and
+        // persistWorld's Save-row write reads several of them
+        // unconditionally on every persist regardless of touched-ness, so
+        // there is nothing to gain by tracking them as "touched" too.
+        materialized.set(key, raw);
+        return raw;
+      }
+      const cloned = structuredClone(raw);
+      materialized.set(key, cloned);
+      touched.add(key);
+      return cloned;
+    },
+    set(_target, prop, value) {
+      if (typeof prop !== "string") return false;
+      const key = prop as keyof World;
+      materialized.set(key, value);
+      if (!PRIMITIVE_WORLD_FIELDS.has(key)) touched.add(key);
+      return true;
+    },
+    has(_target, prop) {
+      return typeof prop === "string";
+    },
+  }) as World;
+  WORLD_TOUCHED.set(proxy, touched);
+  return proxy;
+}
+
 function changedWorldCollections(previous: World | undefined, world: World): Set<string> {
   if (!previous) return new Set(TABLE_NAMES);
   // See deepEqual.ts for why this is a safe, behavior-preserving swap for the
@@ -93,14 +174,25 @@ function changedWorldCollections(previous: World | undefined, world: World): Set
   // can hold, without paying to serialize the whole (possibly enormous)
   // world to strings first, and with a free fast path when a caller has
   // structurally shared an untouched collection between two World snapshots.
-  const changed = <K extends keyof World>(key: K): boolean => !deepEqual(previous[key], world[key]);
+  //
+  // `touched` gates every comparison below on whether the field was ever
+  // read from or written to during this mutation (see makeLazyMutableWorld):
+  // an untouched field cannot have changed, so it is skipped WITHOUT ever
+  // reading `world[key]` -- reading it would be exactly the access that
+  // clones it through the lazy Proxy, defeating the point. `touched` is
+  // `undefined` for an ordinary (non-lazy) world, in which case every field
+  // is compared, matching this function's behavior before laziness existed.
+  const touched = touchedFieldsOf(world);
+  const isTouched = <K extends keyof World>(key: K): boolean => !touched || touched.has(key);
+  const changed = <K extends keyof World>(key: K): boolean => isTouched(key) && !deepEqual(previous[key], world[key]);
   const clubCore = (club: Club) => {
     const { ledger: _ledger, trophies: _trophies, ...core } = club;
     return core;
   };
-  const clubsCoreChanged = !deepEqual(previous.clubs.map(clubCore), world.clubs.map(clubCore));
-  const ledgersChanged = previous.clubs.some((club, index) => !deepEqual(club.ledger, world.clubs[index]?.ledger));
-  const trophiesChanged = previous.clubs.some((club, index) => !deepEqual(club.trophies, world.clubs[index]?.trophies));
+  const clubsTouched = isTouched("clubs");
+  const clubsCoreChanged = clubsTouched && !deepEqual(previous.clubs.map(clubCore), world.clubs.map(clubCore));
+  const ledgersChanged = clubsTouched && previous.clubs.some((club, index) => !deepEqual(club.ledger, world.clubs[index]?.ledger));
+  const trophiesChanged = clubsTouched && previous.clubs.some((club, index) => !deepEqual(club.trophies, world.clubs[index]?.trophies));
   const tables = new Set<string>();
   if (clubsCoreChanged) tables.add("club");
   if (ledgersChanged) {
@@ -171,12 +263,31 @@ const PRIMITIVE_WORLD_FIELDS = new Set<keyof World>(["seed", "year", "dayIndex",
  */
 function buildCacheWorld(previous: World | undefined, world: World): World {
   if (!previous) return cloneWorld(world);
-  const next = { ...world } as World;
-  for (const key of Object.keys(world) as (keyof World)[]) {
+  // Base on `previous` (always a plain, pristine object -- never the
+  // caller's possibly-lazy `world`), so this shallow copy is always an
+  // ordinary, safe operation; the loop below overwrites only fields that
+  // might actually differ. Using `world` as the base (as this used to)
+  // would spread it if it happened to be a lazy world (see
+  // makeLazyMutableWorld), which reads -- and so clones -- every field.
+  const next = { ...previous } as World;
+  // `touched` narrows which fields are even worth a deepEqual call, exactly
+  // as in changedWorldCollections above; see that function's comment. A
+  // `world` this function has already fully cloned before caching (i.e. the
+  // usual case, from a plain object) has no `touched` tracking, so every
+  // field is considered, matching prior behavior.
+  const touched = touchedFieldsOf(world);
+  const keysToConsider = touched ? [...touched] : (Object.keys(world) as (keyof World)[]);
+  for (const key of keysToConsider) {
     if (PRIMITIVE_WORLD_FIELDS.has(key)) continue;
     (next as unknown as Record<string, unknown>)[key] = deepEqual(previous[key], world[key])
       ? previous[key]
       : structuredClone(world[key]);
+  }
+  // Primitive scalars: always take the current value directly (cheap, no
+  // cloning needed, and persistWorld's own Save-row write reads several of
+  // them unconditionally on every persist regardless of touched-ness).
+  for (const key of PRIMITIVE_WORLD_FIELDS) {
+    (next as unknown as Record<string, unknown>)[key] = world[key];
   }
   return next;
 }
@@ -437,6 +548,55 @@ export async function loadGlobalWorldMutable(prisma: PrismaClient): Promise<Load
 }
 
 /**
+ * Same contract as `loadGlobalWorldMutable`, but returns a lazily-cloning
+ * world (see `makeLazyMutableWorld`) whenever a usable cache entry exists to
+ * build one from, transparently falling back to `loadGlobalWorldMutable`'s
+ * ordinary full-clone behavior otherwise (no cache yet, a revision
+ * mismatch, or `NODE_ENV=test` disabling the cache entirely) — callers get
+ * the same `LoadedWorld` shape either way and never need to know which path
+ * was taken, unlike `loadGlobalWorldMutableForLiveTick`, whose narrow world
+ * is missing enough state that its callers must handle a `null` fallback
+ * themselves.
+ *
+ * Intended for mutation call sites that read/write only a modest subset of
+ * `World`'s ~30 top-level collections per call — the common case for a
+ * single player action — so collections that action never touches
+ * (accumulated match history, news, season records, market history, ...)
+ * are never cloned at all. Collections a given action DOES read or write —
+ * almost always including `clubs`, and `players` for anything involving a
+ * specific player — still clone, same as `loadGlobalWorldMutable`; there is
+ * no way to distinguish "read to inspect" from "read in order to mutate"
+ * for the nested-mutation idioms this codebase uses (see
+ * `makeLazyMutableWorld`'s own comment). That is the documented, accepted
+ * limit of this optimization — the live-match tick's own far larger and far
+ * more frequent `players` cost needed the narrower, more targeted treatment
+ * in `loadGlobalWorldMutableForLiveTick` instead.
+ */
+export async function loadGlobalWorldMutableLazy(prisma: PrismaClient): Promise<LoadedWorld | null> {
+  if (process.env.NODE_ENV === "test") return loadGlobalWorldMutable(prisma);
+  const loaded = await loadGlobalWorldInternal(prisma, false);
+  if (!loaded) return null;
+  const cache = worldCaches.get(prisma);
+  const cached = cache?.get(loaded.save.id);
+  if (cached?.revision !== loaded.save.revision) {
+    // No usable baseline to build a lazy world from (should not happen given
+    // the NODE_ENV guard above, since loadGlobalWorldInternal populates the
+    // cache itself on a miss — kept as a defensive fallback all the same).
+    loaded.world = cloneWorld(loaded.world);
+    return loaded;
+  }
+  let baselines = mutationBaselines.get(prisma);
+  if (!baselines) {
+    baselines = new Map<number, CachedWorld>();
+    mutationBaselines.set(prisma, baselines);
+  }
+  baselines.set(loaded.save.id, cached);
+  cache?.delete(loaded.save.id);
+  loaded.world = makeLazyMutableWorld(cached.world);
+  return loaded;
+}
+
+/**
  * Conservative "could this live match finish within this tick" check, used
  * only to decide whether `loadGlobalWorldMutableForLiveTick` may take its
  * narrow path. MUST err toward true whenever there is genuine doubt: the
@@ -576,6 +736,12 @@ export async function persistWorld(
   const rewriteTables = changedWorldCollections(previous, world);
   const previousClubById = new Map((previous?.clubs ?? []).map((club) => [club.id, club]));
   const previousPlayerById = new Map((previous?.players ?? []).map((player) => [player.id, player]));
+  // Same touched-gating as changedWorldCollections above, for the handful of
+  // mp/mpQueue/etc change checks further below that are NOT part of
+  // rewriteTables (so they are not already protected the way every
+  // `if (rewriteTables.has(...))` block is by construction).
+  const touchedFields = touchedFieldsOf(world);
+  const isWorldFieldTouched = <K extends keyof World>(key: K): boolean => !touchedFields || touchedFields.has(key);
   await prisma.$transaction(async (tx) => {
     const target = await tx.save.findUnique({ where: { id: saveId }, select: { userId: true, isGlobal: true } });
     if (!target || (!target.isGlobal && target.userId !== userId)) {
@@ -981,7 +1147,7 @@ export async function persistWorld(
           })),
         );
       }
-      if (world.mp.seasonId !== 0 && (!previous || !deepEqual(previous.mp, world.mp))) {
+      if (world.mp.seasonId !== 0 && (!previous || (isWorldFieldTouched("mp") && !deepEqual(previous.mp, world.mp)))) {
        await tx.mpSeason.updateMany({
         where: { id: world.mp.seasonId },
         data: {
@@ -993,11 +1159,11 @@ export async function persistWorld(
         },
       });
     }
-    const mpQueueChanged = !previous || !deepEqual(previous.mpQueue, world.mpQueue);
-    const allocationsChanged = !previous || !deepEqual(previous.seasonAllocations, world.seasonAllocations);
-    const membershipsChanged = !previous || !deepEqual(previous.mpMemberships, world.mpMemberships);
-    const clubSeasonsChanged = !previous || !deepEqual(previous.mpClubSeasons, world.mpClubSeasons);
-    const activitiesChanged = !previous || !deepEqual(previous.mpActivities, world.mpActivities);
+    const mpQueueChanged = !previous || (isWorldFieldTouched("mpQueue") && !deepEqual(previous.mpQueue, world.mpQueue));
+    const allocationsChanged = !previous || (isWorldFieldTouched("seasonAllocations") && !deepEqual(previous.seasonAllocations, world.seasonAllocations));
+    const membershipsChanged = !previous || (isWorldFieldTouched("mpMemberships") && !deepEqual(previous.mpMemberships, world.mpMemberships));
+    const clubSeasonsChanged = !previous || (isWorldFieldTouched("mpClubSeasons") && !deepEqual(previous.mpClubSeasons, world.mpClubSeasons));
+    const activitiesChanged = !previous || (isWorldFieldTouched("mpActivities") && !deepEqual(previous.mpActivities, world.mpActivities));
 
     // Multiplayer queue + allocations (idempotent unique constraints).
     if (mpQueueChanged) await tx.mpQueue.deleteMany({});

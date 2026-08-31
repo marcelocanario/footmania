@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
+import { loadGlobalWorldMutableLazy, loadGlobalWorldReadOnly, persistWorld, StaleWorldError } from "../services/saveService";
 import { playerView, seasonAwardsView } from "../services/snapshot";
 import { liveStateView } from "../services/liveView";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
@@ -105,7 +105,7 @@ async function withWorld(
 ) {
   return withGlobalLock(() => withGlobalLease(app.prisma, async () => {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const loaded = await loadGlobalWorldMutable(app.prisma);
+      const loaded = await loadGlobalWorldMutableLazy(app.prisma);
       if (!loaded) return { error: { code: 404, body: { error: "World not found" } } };
       const club = userClub(loaded.world, userId);
       if (!club) return { error: { code: 400, body: { error: "You have no club" } } };

@@ -11,6 +11,7 @@ import {
   loadGlobalWorld,
   loadGlobalWorldMutable,
   loadGlobalWorldMutableForLiveTick,
+  loadGlobalWorldMutableLazy,
   loadGlobalWorldReadOnly,
   persistWorld,
 } from "../src/services/saveService";
@@ -311,6 +312,232 @@ describe("liveMatchProcessor with the fast path enabled", () => {
     } finally {
       process.env.NODE_ENV = previousNodeEnv;
       invalidateWorldCache(prisma);
+    }
+  });
+});
+
+describe("lazy mutable world (loadGlobalWorldMutableLazy)", () => {
+  it("shares an untouched collection by reference and clones only what was read or written", async () => {
+    const { saveId } = await freshGlobalWorld(90031);
+    const { world } = await withSeason(saveId);
+    const clubId = world.clubs[0].id;
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const loaded0 = await loadGlobalWorldMutable(prisma);
+      if (!loaded0) throw new Error("world did not load");
+      await persistWorld(prisma, loaded0.save.id, loaded0.save.id, loaded0.world, loaded0.save.revision);
+
+      const before = await loadGlobalWorldReadOnly(prisma);
+      if (!before) throw new Error("world did not load");
+
+      const loaded1 = await loadGlobalWorldMutableLazy(prisma);
+      if (!loaded1) throw new Error("world did not load");
+      // Touch (read+write) only `clubs`; every other collection is left
+      // completely alone by this mutation.
+      const club = loaded1.world.clubs.find((c) => c.id === clubId)!;
+      const newCash = club.cash + 555;
+      club.cash = newCash;
+      await persistWorld(prisma, loaded1.save.id, loaded1.save.id, loaded1.world, loaded1.save.revision);
+
+      const after = await loadGlobalWorldReadOnly(prisma);
+      if (!after) throw new Error("world did not load");
+      // Never touched by this mutation: shared by reference, proving the
+      // lazy proxy never cloned them just because they exist.
+      expect(after.world.players).toBe(before.world.players);
+      expect(after.world.competitions).toBe(before.world.competitions);
+      expect(after.world.matches).toBe(before.world.matches);
+      expect(after.world.fixtures).toBe(before.world.fixtures);
+      expect(after.world.news).toBe(before.world.news);
+      // The one touched collection: a fresh reference with the new value.
+      expect(after.world.clubs).not.toBe(before.world.clubs);
+      expect(after.world.clubs.find((c) => c.id === clubId)?.cash).toBe(newCash);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+
+  it("returns the same materialized reference on repeated access, so mutations accumulate across statements", async () => {
+    const { saveId } = await freshGlobalWorld(90032);
+    await withSeason(saveId);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const loaded0 = await loadGlobalWorldMutable(prisma);
+      if (!loaded0) throw new Error("world did not load");
+      await persistWorld(prisma, loaded0.save.id, loaded0.save.id, loaded0.world, loaded0.save.revision);
+
+      const loaded = await loadGlobalWorldMutableLazy(prisma);
+      if (!loaded) throw new Error("world did not load");
+      const before = loaded.world.players.length;
+      const firstRead = loaded.world.players;
+      // A second, independent top-level access to the SAME field must return
+      // the SAME array object, not a fresh clone -- otherwise a mutation
+      // handler's second statement referencing `world.players` would lose
+      // whatever the first statement did to it.
+      expect(loaded.world.players).toBe(firstRead);
+      const template = loaded.world.players[0];
+      loaded.world.players.push({ ...template, id: template.id + 999999 });
+      expect(loaded.world.players.length).toBe(before + 1);
+      expect(loaded.world.players).toBe(firstRead);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+
+  it("is not corrupted by the caller mutating its working copy after persistWorld returns", async () => {
+    const { saveId } = await freshGlobalWorld(90033);
+    const { world } = await withSeason(saveId);
+    const clubId = world.clubs[0].id;
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const loaded0 = await loadGlobalWorldMutable(prisma);
+      if (!loaded0) throw new Error("world did not load");
+      await persistWorld(prisma, loaded0.save.id, loaded0.save.id, loaded0.world, loaded0.save.revision);
+
+      const loaded = await loadGlobalWorldMutableLazy(prisma);
+      if (!loaded) throw new Error("world did not load");
+      const originalCash = loaded.world.clubs.find((c) => c.id === clubId)!.cash;
+      await persistWorld(prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
+
+      // Mutate the CALLER's own lazy world AFTER persisting -- must never
+      // reach the cache. Mirrors withWorld calling materializeSeasonEvents
+      // on loaded.world after persistWorld already ran.
+      loaded.world.clubs.find((c) => c.id === clubId)!.cash += 424242;
+
+      const readBack = await loadGlobalWorldReadOnly(prisma);
+      if (!readBack) throw new Error("world did not load");
+      expect(readBack.world.clubs.find((c) => c.id === clubId)?.cash).toBe(originalCash);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+
+  it("falls back to a full clone correctly on the very first persist (no cache yet)", async () => {
+    const { saveId } = await freshGlobalWorld(90034);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      invalidateWorldCache(prisma);
+      const season = await ensureSeasonRow(prisma, { year: 2026, month: 1 });
+      const loaded = await loadGlobalWorldMutableLazy(prisma);
+      if (!loaded) throw new Error("world did not load");
+      initSeason(loaded.world, { year: 2026, month: 1 }, season.seasonId);
+      loaded.world.mp.seasonId = season.seasonId;
+      await persistWorld(prisma, saveId, saveId, loaded.world, loaded.save.revision);
+
+      const readBack = await loadGlobalWorldReadOnly(prisma);
+      if (!readBack) throw new Error("world did not load");
+      expect(readBack.world.mp.seasonId).toBe(season.seasonId);
+      expect(readBack.world.clubs.length).toBe(loaded.world.clubs.length);
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+      invalidateWorldCache(prisma);
+    }
+  });
+
+  it("falls back to loadGlobalWorldMutable while NODE_ENV=test", async () => {
+    const { saveId } = await freshGlobalWorld(90035);
+    await withSeason(saveId);
+    const loaded = await loadGlobalWorldMutableLazy(prisma);
+    if (!loaded) throw new Error("world did not load");
+    // Under NODE_ENV=test the cache is disabled entirely, so this must be an
+    // ordinary plain world: mutating a whole collection outright (not just
+    // one element) has to work exactly like loadGlobalWorldMutable's.
+    loaded.world.clubs = loaded.world.clubs.slice(0, 1);
+    expect(loaded.world.clubs.length).toBe(1);
+    await persistWorld(prisma, saveId, saveId, loaded.world, undefined);
+    const readBack = await loadGlobalWorld(prisma);
+    if (!readBack) throw new Error("world did not load");
+    expect(readBack.world.clubs.length).toBe(1);
+  });
+});
+
+describe("withWorld routes under the lazy world (real domain code through the proxy)", () => {
+  it("tactics and training changes persist correctly and share every other collection by reference", async () => {
+    const { buildServer } = await import("../src/server");
+    const { createTestSessionCookie } = await import("./testAuth");
+    const app = await buildServer();
+    try {
+      const { cookie, userId } = await createTestSessionCookie(app, { name: "lazyworldtester", email: "lazyworldtester@test.dev" });
+      const { ensureCurrentSeason } = await import("../src/services/mpService");
+      await ensureCurrentSeason(app.prisma);
+      const clock = await loadGlobalWorld(app.prisma);
+      if (!clock) throw new Error("no global world");
+      clock.world.mp.manualRound = 0;
+      clock.world.mp.completedRounds = 0;
+      clock.world.mp.joinState = "OPEN";
+      clock.world.mp.seasonStatus = "ACTIVE";
+      await persistWorld(app.prisma, clock.save.id, clock.save.id, clock.world, clock.save.revision);
+
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = "production";
+      try {
+        invalidateWorldCache(app.prisma);
+        const join = await app.inject({
+          method: "POST",
+          url: "/api/mp/join",
+          headers: { cookie },
+          payload: { clubName: "Lazy World FC", country: "BRA", stadiumName: "Lazy Stadium", coachName: "Lazy Coach", preferredHours: Array.from({ length: 16 }, (_, i) => i) },
+        });
+        expect(join.statusCode).toBe(200);
+        const clubId = join.json().clubId as number;
+
+        const before = await loadGlobalWorldReadOnly(app.prisma);
+        if (!before) throw new Error("world did not load");
+
+        // Two different withWorld-wrapped routes in a row, exercising real
+        // domain code (including publishNews, which mutates world.news) on
+        // the lazy world, not a hand-rolled mutation.
+        const tactics = await app.inject({
+          method: "POST",
+          url: "/api/club/tactics",
+          headers: { cookie },
+          payload: { style: 1, pressing: 2, direction: 1 },
+        });
+        expect(tactics.statusCode).toBe(200);
+
+        const training = await app.inject({
+          method: "POST",
+          url: "/api/club/training",
+          headers: { cookie },
+          payload: { focus: "primary" },
+        });
+        expect(training.statusCode).toBe(200);
+
+        const after = await loadGlobalWorldReadOnly(app.prisma);
+        if (!after) throw new Error("world did not load");
+        const club = after.world.clubs.find((c) => c.id === clubId)!;
+        expect(club.tactics.style).toBe(1);
+        expect(club.tactics.pressing).toBe(2);
+        expect(club.tactics.direction).toBe(1);
+        expect(club.trainingFocus).toBe("primary");
+        // The tactics route published a news item, so world.news correctly
+        // diverges; collections neither route touches must still be shared.
+        expect(after.world.matches).toBe(before.world.matches);
+        expect(after.world.fixtures).toBe(before.world.fixtures);
+        expect(after.world.competitions).toBe(before.world.competitions);
+        expect(after.world.marketBids).toBe(before.world.marketBids);
+        expect(after.world.transferAuctions).toBe(before.world.transferAuctions);
+        expect(after.world.seasonHistory).toBe(before.world.seasonHistory);
+        expect(userId).toBeGreaterThan(0);
+      } finally {
+        process.env.NODE_ENV = previousNodeEnv;
+        invalidateWorldCache(app.prisma);
+      }
+    } finally {
+      await app.close();
     }
   });
 });
