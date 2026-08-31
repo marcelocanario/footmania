@@ -26,6 +26,7 @@ import {
 } from "./familiarity";
 import { currentSkillsVersion } from "./skillsVersion";
 import { NEWS_SUBJECTS, publishNews } from "./news";
+import { msg } from "../i18n/catalog";
 import { buildRoleBenchmarks, type RoleBenchmarks } from "./player-rating";
 import { createRatingObserver, type RatingObserver } from "./ratingObserver";
 import { tryDeployedRoleForSlot } from "./matchSim";
@@ -983,13 +984,13 @@ export function applyMatchToPlayers(match: Match, world: World) {
       p.suspendedGames = Math.max(p.suspendedGames, games);
       const club = world.clubs.find((c) => c.id === ev.clubId);
       if (club) {
-        const flavor = games >= 5 ? "after a violent challenge" : games >= 3 ? "for a serious foul" : "for foul play";
+        const flavor = games >= 5 ? "violent" : games >= 3 ? "serious" : "foul";
         publishNews(world, {
           kind: "tribunal",
           subject: NEWS_SUBJECTS.tribunal,
           clubId: club.id,
-          headline: "Disciplinary verdicts",
-          entries: [{ key: `ban:${p.id}`, label: p.name, detail: `(${club.name}) suspended for ${games} game${games > 1 ? "s" : ""} ${flavor}` }],
+          headline: "news.headline.tribunal",
+          entries: [{ key: `ban:${p.id}`, label: p.name, detail: msg("news.detail.tribunal", { club: club.name, count: games, context: flavor }) }],
         });
       }
     }
