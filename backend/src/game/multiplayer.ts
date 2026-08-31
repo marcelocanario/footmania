@@ -451,6 +451,13 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
   if (comp.status === "CREATING") comp.status = "SIMULATING_HISTORY";
   const fixtures = world.fixtures.filter((f) => f.competitionId === comp.id && !f.played);
   const target = Math.min(throughRound, ROUNDS_PER_SEASON);
+  // Accumulate this call's rating rows locally and merge into
+  // world.playerMatchRatings ONCE at the end instead of filtering the whole
+  // (global, ever-growing) array once PER MATCH inside the loop below — that
+  // was O(matches^2) over a division backfill (56 matches worst case) and
+  // grows with the save's entire rating history, not just this call's rows.
+  const newRatingRows: ReturnType<typeof computeMatchRatingRows> = [];
+  const newMatchIds = new Set<number>();
   for (const f of fixtures) {
     const round = f.round + 1;
     if (round > target) break;
@@ -461,7 +468,16 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
     // Reserve the durable match ID before simulation. Ratings must reference
     // the same ID as Match/MatchEvent, never the fixture ID.
     const matchId = world.nextId++;
-    const sim = simulateMatch(world.rng, home, away, world.players, {
+    // Seeded from the fixture's own stable identity, never the shared world
+    // RNG stream: a division backfill chunked across scheduled events (see
+    // services/scheduler.ts's DIVISION_HISTORY_SIMULATE) must produce the
+    // SAME result no matter how the chunks interleave with other RNG
+    // consumers between worker ticks, and a retry after a crash mid-chunk
+    // must reproduce the exact same outcome. Mirrors the existing
+    // stableHash(...) seeding this file already uses for fixture ordering
+    // (createDivisionFixtures, below) for exactly the same reason.
+    const matchRng = createRng(stableHash(`${comp.seasonId}:${comp.id}:${f.id}`));
+    const sim = simulateMatch(matchRng, home, away, world.players, {
       competitionId: comp.id,
       fixtureId: f.id,
       matchId,
@@ -485,8 +501,8 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
       accum: sim.match.ratingAccum,
       players: world.players,
     });
-    world.playerMatchRatings ??= [];
-    world.playerMatchRatings = [...world.playerMatchRatings.filter((r) => r.matchId !== sim.match.id), ...ratingRows];
+    newRatingRows.push(...ratingRows);
+    newMatchIds.add(sim.match.id);
     const mvp = mvpFromRatings(ratingRows, sim.match);
     if (mvp && !sim.match.events.some((e) => e.type === EVENT_CODES.MVP)) {
       sim.match.events.push({
@@ -522,6 +538,14 @@ export function simulateDivisionThroughRound(world: World, comp: Competition, th
     applyMatchMvpToPlayers(sim.match.mvpPlayerId, world.players);
     applyMatchElo(world, world.matches[world.matches.length - 1]);
     updateStandings(comp, f.homeClubId, f.awayClubId, sim.homeGoals, sim.awayGoals);
+  }
+  if (newRatingRows.length > 0) {
+    world.playerMatchRatings ??= [];
+    // Idempotent: replace any prior rows for one of this call's match ids
+    // (a retried event after a crash reserves the same ids again, since
+    // world.nextId's in-memory advance from the failed attempt was never
+    // persisted). One filter over the whole array, not one per match.
+    world.playerMatchRatings = [...world.playerMatchRatings.filter((r) => !newMatchIds.has(r.matchId)), ...newRatingRows];
   }
   if (comp.status === "SIMULATING_HISTORY") comp.status = "ACTIVE";
 }

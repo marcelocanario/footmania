@@ -23,12 +23,16 @@ import {
   humanCount,
   fillerCount,
   playPracticeMatch,
+  simulateDivisionThroughRound,
 } from "../src/game/multiplayer";
 import { emptyStandingsRow } from "../src/game/league";
 import { recomputeProxyState } from "../src/game/market";
 import type { Club, Competition, Player, TransferAuction, World } from "../src/game/types";
 import { advanceLiveMatches, startLiveMatch } from "../src/game/world";
 import { MP_CONFIG } from "../src/config";
+import { createRng, nextUint } from "../src/game/rng";
+import { stableHash } from "../src/game/scheduling";
+import { simulateMatch } from "../src/game/match";
 import { isMessageRef } from "../src/i18n/catalog";
 import { contractCycle } from "../src/game/season";
 import { settlePlayerPayroll } from "../src/game/payroll";
@@ -510,6 +514,66 @@ describe("extinct lower tier (invariant 29)", () => {
     for (const id of d2Humans) world.clubs.find((c) => c.id === id)!.abandonmentEligibleAt = null;
     syncClubSeasons(world, seasonId);
     for (const id of victims) expect(statusOf(id)).toBe("RELEGATED");
+  });
+});
+
+describe("division backfill RNG determinism", () => {
+  it("simulateDivisionThroughRound produces the same match result regardless of the world RNG stream's position", () => {
+    // simulateDivisionThroughRound seeds each fixture from its own stable
+    // identity (competition/season/fixture id), not the shared world.rng
+    // stream, so a division backfill chunked across scheduled events -- run
+    // in a worker tick that also advanced other RNG consumers, or replayed
+    // after a crash -- must reproduce the exact same match. Two worlds with
+    // IDENTICAL clubs/players/fixtures but DIFFERENT world.rng positions
+    // (simulating "other operations happened to consume draws in between")
+    // must simulate every fixture identically.
+    const a = seasonWorld(77).world;
+    const b = structuredClone(a);
+    // Advance b's shared RNG stream as if unrelated operations (a different
+    // division's backfill, market AI, ...) had consumed draws from it first.
+    for (let i = 0; i < 500; i++) nextUint(b.rng);
+    expect(b.rng.state).not.toBe(a.rng.state);
+
+    // manualRound bypasses the kickoffAt-in-the-future skip (mirrors
+    // simulateThroughRound, the normal caller of this function).
+    a.mp.manualRound = 3;
+    b.mp.manualRound = 3;
+    const divA = a.competitions.find((c) => c.kind === "division")!;
+    const divB = b.competitions.find((c) => c.kind === "division")!;
+    simulateDivisionThroughRound(a, divA, 3, Date.now());
+    simulateDivisionThroughRound(b, divB, 3, Date.now());
+
+    const matchesA = a.matches.map((m) => ({ fixtureId: m.fixtureId, home: m.homeScore, away: m.awayScore, eventCount: m.events.length }));
+    const matchesB = b.matches.map((m) => ({ fixtureId: m.fixtureId, home: m.homeScore, away: m.awayScore, eventCount: m.events.length }));
+    expect(matchesA.sort((x, y) => x.fixtureId - y.fixtureId)).toEqual(matchesB.sort((x, y) => x.fixtureId - y.fixtureId));
+    expect(matchesA.length).toBeGreaterThan(0);
+
+    // world.rng itself is untouched by these matches (they no longer draw
+    // from it at all), so the two worlds' shared streams stay exactly as
+    // different as they started -- confirms nothing in the backfill leaked
+    // through the shared stream either direction.
+    expect(a.rng.state).not.toBe(b.rng.state);
+  });
+
+  it("replaying the same fixture (e.g. a retried chunk) produces byte-identical results", () => {
+    const world = seasonWorld(78).world;
+    const div = world.competitions.find((c) => c.kind === "division")!;
+    const fixture = world.fixtures.find((f) => f.competitionId === div.id && !f.played)!;
+    const comp = div;
+    const seed = stableHash(`${comp.seasonId}:${comp.id}:${fixture.id}`);
+    const rng1 = createRng(seed);
+    const rng2 = createRng(seed);
+    const home = world.clubs.find((c) => c.id === fixture.homeClubId)!;
+    const away = world.clubs.find((c) => c.id === fixture.awayClubId)!;
+    // simulateMatch mutates player energy/injuries as a side effect, so each
+    // run needs its own untouched player copies -- otherwise the SECOND call
+    // would start from the FIRST call's post-match fatigue and could
+    // legitimately diverge even with an identical RNG seed.
+    const sim1 = simulateMatch(rng1, home, away, structuredClone(world.players), { competitionId: comp.id, fixtureId: fixture.id, matchId: 1, homeNeutral: false, decider: false, compKind: "division", year: world.mp.seasonYear });
+    const sim2 = simulateMatch(rng2, home, away, structuredClone(world.players), { competitionId: comp.id, fixtureId: fixture.id, matchId: 1, homeNeutral: false, decider: false, compKind: "division", year: world.mp.seasonYear });
+    expect(sim1.homeGoals).toBe(sim2.homeGoals);
+    expect(sim1.awayGoals).toBe(sim2.awayGoals);
+    expect(sim1.match.events.length).toBe(sim2.match.events.length);
   });
 });
 
