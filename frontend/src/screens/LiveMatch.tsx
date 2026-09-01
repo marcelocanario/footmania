@@ -15,7 +15,7 @@ import { PlayerScoresTable } from "../components/PlayerScoresTable";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 import { FamiliarityBar } from "../components/FamiliarityBar";
-import { positionLabel } from "../positions";
+import { NaturalPosition, POSITION_ORDER, positionLabel } from "../positions";
 import { directionOptions, pressingOptions, styleOptions } from "../tacticsOptions";
 
 /** Natural (squad) position label: what position the player actually plays
@@ -763,6 +763,7 @@ export function LiveMatch() {
                         <span>EN {Math.round(p.energy)}</span>
                         <span className="sub-energy-track"><span className="sub-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} /></span>
                       </span>
+                      <strong className="sub-rating">{p.overall}</strong>
                     </button>
                   ))}
                 </div>
@@ -770,7 +771,9 @@ export function LiveMatch() {
               <div>
                 <div className="card-title" style={{ marginBottom: 6 }}>{t("live.bench")}</div>
                 <div className="sub-list">
-                  {bench.map((p) => (
+                  {[...bench]
+                    .sort((a, b) => (POSITION_ORDER[a.naturalPosition as NaturalPosition] ?? Number.MAX_SAFE_INTEGER) - (POSITION_ORDER[b.naturalPosition as NaturalPosition] ?? Number.MAX_SAFE_INTEGER) || b.overall - a.overall)
+                    .map((p) => (
                     <button
                       key={p.id}
                       className={`sub-row${subIn?.id === p.id ? " sel" : ""}`}

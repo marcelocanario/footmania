@@ -45,11 +45,11 @@ const DEFAULT_SECONDARY = "#ffffff";
 
 type TabId = "identity" | "style" | "schedule";
 
-const TABS: { id: TabId; label: string; icon: React.ReactNode }[] = [
+const TABS = [
   { id: "identity", label: "join.tabClub", icon: <Shield size={16} /> },
   { id: "style", label: "join.tabKit", icon: <Shirt size={16} /> },
   { id: "schedule", label: "join.tabSchedule", icon: <CalendarClock size={16} /> },
-];
+] as const;
 
 function FieldHelp({ text }: { text: string }) {
   return (
@@ -440,26 +440,26 @@ if (activeTab === "identity") {
       {/* TABS */}
       <div className="jm-shell">
         <div className="jm-tabs" role="tablist" aria-label={t("join.createTeamSteps")}>
-          {TABS.map((t, idx) => {
-            const valid = t.id === "identity" ? identityValid : t.id === "schedule" ? scheduleValid : true;
-            const active = t.id === activeTab;
+          {TABS.map((tab, idx) => {
+            const valid = tab.id === "identity" ? identityValid : tab.id === "schedule" ? scheduleValid : true;
+            const active = tab.id === activeTab;
             const done = valid && idx < tabIdx;
             const locked = idx > tabIdx;
             return (
               <button
-                key={t.id}
+                key={tab.id}
                 role="tab"
                 aria-selected={active}
-                aria-controls={`panel-${t.id}`}
-                id={`tab-${t.id}`}
+                aria-controls={`panel-${tab.id}`}
+                id={`tab-${tab.id}`}
                 className={`jm-tab ${active ? "active" : ""} ${done ? "done" : ""} ${locked ? "locked" : ""}`}
                 onClick={() => {
-                  if (!locked) setActiveTab(t.id);
+                  if (!locked) setActiveTab(tab.id);
                 }}
                 disabled={locked}
               >
-                <span className="jm-tab-icon">{done ? <Check size={14} /> : t.icon}</span>
-                <span className="jm-tab-text"><b>{(t as unknown as (k: string) => string)(t.label)}</b></span>
+                <span className="jm-tab-icon">{done ? <Check size={14} /> : tab.icon}</span>
+                <span className="jm-tab-text"><b>{t(tab.label)}</b></span>
               </button>
             );
           })}
