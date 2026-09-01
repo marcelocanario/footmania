@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applySavedLineup } from "../src/game/club";
+import { applySavedLineup, lineupForMatch } from "../src/game/club";
 import { EVENT_CODES } from "../src/game/constants";
 import { setupKey } from "../src/game/familiarity";
 import { createLiveMatchState, performLiveSub, simulateMatch, tickLiveMatch } from "../src/game/match";
@@ -12,6 +12,8 @@ import { createRng } from "../src/game/rng";
 import type { Club, LiveMatchState, Match, MatchSimulationDiagnostics, Player, Tactics } from "../src/game/types";
 import { NATURAL_POSITIONS, positionGroup, type DeployedRole, type NaturalPosition } from "../src/game/positions";
 import { tryDeployedRoleForSlot } from "../src/game/matchSim";
+import { isEligible, rolePenalty } from "../src/game/outOfPosition";
+import { formationById } from "../src/game/formations";
 import { gameConfig } from "../src/config";
 import { MATCH_SIMULATOR_CONFIG } from "../src/matchSimulatorConfig";
 
@@ -376,6 +378,47 @@ function generatedClubForStrength(strength: number, offset = 0): Club {
   return ordered[(target + offset + ordered.length) % ordered.length];
 }
 
+/**
+ * Build a valid production lineup first, then deliberately cross-deploy two
+ * outfield players. The old fixture started from roster order (which begins
+ * with three goalkeepers), so applySavedLineup rejected it and the engine
+ * silently rebuilt the normal XI. Calibration must fail loudly if the
+ * requested OOP lineup cannot be saved.
+ */
+function applyOutOfPositionLineup(club: Club, roster: Player[]): void {
+  const base = lineupForMatch(club, roster);
+  if (!base || base.starters.length !== 11) throw new Error("OOP calibration could not build a production lineup");
+  const formation = formationById(base.formation);
+  if (!formation) throw new Error(`OOP calibration has unknown formation ${base.formation}`);
+  let first = -1;
+  let second = -1;
+  for (let i = 1; i < base.starters.length && first < 0; i++) {
+    for (let j = i + 1; j < base.starters.length; j++) {
+      const a = base.starters[i];
+      const b = base.starters[j];
+      const roleA = formation.slots[i].role;
+      const roleB = formation.slots[j].role;
+      if (a.position === b.position) continue;
+      if (!isEligible(a.position, roleB) || !isEligible(b.position, roleA)) continue;
+      if (rolePenalty(a.position, roleB) === 0 && rolePenalty(b.position, roleA) === 0) continue;
+      first = i;
+      second = j;
+      break;
+    }
+  }
+  if (first < 0 || second < 0) throw new Error("OOP calibration could not find a valid cross-position swap");
+  const starters = base.starters.map((player) => player.id);
+  [starters[first], starters[second]] = [starters[second], starters[first]];
+  const error = applySavedLineup(club, roster, {
+    formation: base.formation,
+    starters,
+    subs: base.subs.map((player) => player.id),
+    penaltyTakerId: null,
+    freeKickTakerId: null,
+  });
+  if (error) throw new Error(`OOP calibration lineup rejected: ${error}`);
+}
+
 function seedFamiliarity(target: Club, value: number): void {
   target.tacticFamiliarity = {
     [setupKey(target.tactics)]: { familiarity: value, lastUsedAbsoluteGameDay: null },
@@ -421,19 +464,7 @@ function pair(
         .map((player) => ({ ...player, id: player.id + 90_000_000, clubId: away.id }));
       players.push(...clonedHomePlayers);
     }
-    if (outOfPosition) {
-      const homePlayers = players.filter((player) => player.clubId === home.id);
-      const ids = homePlayers.slice(0, 11).map((player) => player.id);
-      [ids[1], ids[2]] = [ids[2], ids[1]];
-      [ids[3], ids[9]] = [ids[9], ids[3]];
-      applySavedLineup(home, homePlayers, {
-        formation: 4,
-        starters: ids,
-        subs: homePlayers.slice(11, 23).map((player) => player.id),
-        penaltyTakerId: null,
-        freeKickTakerId: null,
-      });
-    }
+    if (outOfPosition) applyOutOfPositionLineup(home, players.filter((player) => player.clubId === home.id));
     return { home, away, players, seed: SEED + index * 7919 };
   }
   const home = club(1, homeTactics);
@@ -446,18 +477,7 @@ function pair(
   seedFamiliarity(away, awayFamiliarity);
   const homePlayers = squad(1, homeStrength, energy, 1000);
   const awayPlayers = squad(2, awayStrength, energy, 2000);
-  if (outOfPosition) {
-    const ids = homePlayers.slice(0, 11).map((player) => player.id);
-    [ids[1], ids[2]] = [ids[2], ids[1]];
-    [ids[3], ids[9]] = [ids[9], ids[3]];
-    applySavedLineup(home, homePlayers, {
-      formation: 4,
-      starters: ids,
-      subs: homePlayers.slice(11, 23).map((player) => player.id),
-      penaltyTakerId: null,
-      freeKickTakerId: null,
-    });
-  }
+  if (outOfPosition) applyOutOfPositionLineup(home, homePlayers);
   return { home, away, players: [...homePlayers, ...awayPlayers], seed: SEED + index * 7919 };
 }
 
@@ -745,7 +765,7 @@ function run(name: string, index: number): CalibrationRun {
   }
 
   if (name.startsWith("energy-")) return full(index, 55, 55, tactics(0), tactics(0), Number(name.slice(7)));
-  if (name === "out-of-position") return full(index, 55, 55, tactics(0), tactics(0), 100, true, true);
+  if (name === "out-of-position") return full(index, 55, 55, tactics(0), tactics(0), 100, true, true, 50, 50, true, false);
   if (name === "minute-60-substitution") return segmentedAvailability(index, 60, 0, "AVERAGE", true);
 
   const zeroLoss = /^player-loss-0-minute-(\d+)$/.exec(name);

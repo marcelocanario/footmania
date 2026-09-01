@@ -3073,10 +3073,13 @@
             "probability": 0.09721512028602669
           }
         ],
-        "foulProbabilityCalibrationMultiplier": 2,
+        // Rebalanced after the natural-position transition: the production
+        // action path otherwise under-produces neutral fouls while the
+        // empirical restart table remains unchanged.
+        "foulProbabilityCalibrationMultiplier": 2.4,
         // Keep the empirical restart table fixed; this coefficient calibrates
         // the aggregate corner rate after the natural-position transition.
-        "cornerRateCalibrationMultiplier": 1.4
+        "cornerRateCalibrationMultiplier": 1.58
       },
       "phaseWindows": {
         "setPieceMaxAgeSeconds": 8,
@@ -4158,8 +4161,13 @@
         "qualityCompensation": {
           "referenceOverall": 71,
           "highOverall": 80,
-          "highQualityPassIntentScale": 1.30,
-          "highQualityTempoScale": 0.52
+          // Keeps the higher generated OVR population inside the accepted
+          // pass/shot volume bands after natural-position role assignment.
+          "highQualityPassIntentScale": 1.5,
+          // The post-transition synthetic benchmark otherwise falls just
+          // below the established lower goal floor. This small endpoint
+          // increase adds action opportunity while retaining volume headroom.
+          "highQualityTempoScale": 0.525
         }
       },
       "actionQuality": {
@@ -4328,7 +4336,10 @@
           "CROSS": -0.15,
           "CARRY": 0.25,
           "DRIBBLE": 0.1,
-          "SHOT": -0.35,
+          // The post-transition action path over-selected shots in asymmetric
+          // regimes; this remains an action-utility correction, not an outcome
+          // or win-probability modifier.
+          "SHOT": -0.55,
           "CLEARANCE": 0
         }
       },
@@ -4359,18 +4370,22 @@
       },
       "fouls": {
         "disciplineRiskLogitCoefficient": 0.35,
-        "pressIntensityLogitCoefficient": 0.2,
+        // Pressing already raises contact exposure through the action/foul
+        // pathway; remove the duplicated residual press term.
+        "pressIntensityLogitCoefficient": 0,
         "fatigueLogitCoefficient": 0.2,
         "lowOrganisationLogitCoefficient": 0.15
       },
       "cards": {
         "yellowTargetPerMatch": 3.95,
-        "redTargetPerMatch": 0.003,
-        "secondYellowLogitPenalty": 2.5,
+        "redTargetPerMatch": 0.018,
+        "secondYellowLogitPenalty": 3,
         "disciplineRiskLogitCoefficient": 0.6,
         "fatigueLogitCoefficient": 0.25,
-        "pressIntensityLogitCoefficient": 0.2,
-        "highThreatLogitCoefficient": 0.2
+        // Preserve the causal pressing-to-card relationship while the larger
+        // second-yellow penalty prevents the post-transition red spike.
+        "pressIntensityLogitCoefficient": 0.03,
+        "highThreatLogitCoefficient": 0.15
       },
       "substitutionAi": {
         "needWeights": {
