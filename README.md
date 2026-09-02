@@ -43,6 +43,16 @@ cd frontend
 npm run dev
 ```
 
+### Local git hooks (required once per clone)
+
+The repository ships hooks in `.githooks/`. The pre-push hook runs the
+calibration suite and **blocks any push to `main` until it passes**; without
+the hooks configured, pushes to `main` are not gated locally.
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Google Sign-In setup
 
 Authentication is handled by [better-auth](https://www.better-auth.com) with
@@ -78,7 +88,7 @@ From `backend/`:
 | `npm run build` | TypeScript build; must be zero-error |
 | `npm test` | Fast default unit suite — run for every backend change |
 | `npm run test:integration` | DB/server/worker/scheduler/persistence tests — run when those boundaries are touched |
-| `npm run test:calibration` | Statistical/Monte Carlo balance tests — run on demand for RNG/generation/match/economy changes |
+| `npm run test:calibration` | Statistical/Monte Carlo balance tests — run locally, enforced by the pre-push hook before any push to `main`; never runs in CI |
 | `npm run test:all` | Everything above — release validation |
 
 From `frontend/`:

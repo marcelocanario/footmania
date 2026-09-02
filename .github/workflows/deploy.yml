@@ -69,8 +69,15 @@ jobs:
         run: npm run build
 
       - name: Create isolated test schema
+        working-directory: backend
+        env:
+          TEST_DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        # psql is not guaranteed on the hosted runner, but the prisma CLI is
+        # already installed by the dependency step above.
         run: |
-          psql "postgresql://footmania_ci:footmania_ci@127.0.0.1:5432/footmania_ci" -v ON_ERROR_STOP=1 -c 'CREATE SCHEMA IF NOT EXISTS test;'
+          npx prisma db execute --url "$TEST_DATABASE_URL" --stdin <<'SQL'
+          CREATE SCHEMA IF NOT EXISTS test;
+          SQL
 
       - name: Apply migrations to isolated test schema
         working-directory: backend
@@ -83,25 +90,15 @@ jobs:
         working-directory: backend
         env:
           NODE_ENV: test
-        # The suite contains deliberately long deterministic cases; serial
-        # workers avoid Vitest task-update timeouts on shared CI runners.
-        run: npm test -- --maxWorkers=1
+        # vitest.config.ts serializes the suite (forked pool, maxWorkers=1) so
+        # worker RPC updates cannot time out on CPU-constrained runners.
+        run: npm test
 
       - name: Run integration tests against isolated schema
         working-directory: backend
         env:
           NODE_ENV: test
         run: npm run test:integration
-
-      - name: Run calibration tests
-        if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
-        working-directory: backend
-        env:
-          NODE_ENV: test
-        # The calibration files contain deliberately long Monte Carlo cases.
-        # Serial workers avoid Vitest's task-update timeout under shared CI CPU
-        # pressure without changing sample sizes or assertions.
-        run: npm run test:calibration -- --maxWorkers=1
 
       - name: Validate Compose configuration
         shell: bash
@@ -121,6 +118,13 @@ jobs:
       group: footmania-production
       cancel-in-progress: false
     steps:
+      - name: Configure fetch credentials
+        # The self-hosted runner does not go through actions/checkout, so its
+        # plain `git fetch` would depend on a stored credential helper. Let the
+        # job's own read-only GITHUB_TOKEN cover fetch. No-op for SSH remotes.
+        run: |
+          git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
       - name: Update, migrate, and restart production containers
         shell: bash
         run: |

@@ -111,7 +111,11 @@ in the default suite whenever they provide useful regression coverage.
 Calibration tests must preserve their assertions and sample sizes. Run
 `cd backend && npm run test:calibration` only on demand when changing related
 RNG, player-generation, development, match, economy, or balance logic, and
-before release or full validation. Use `cd backend && npm run test:all` only for
+before release or full validation. Calibration is enforced locally, not in CI:
+the pre-push hook `.githooks/pre-push` (activate once per clone with
+`git config core.hooksPath .githooks`) runs the calibration suite and blocks
+any push to `main` until it passes; CI never runs it. Use
+`cd backend && npm run test:all` only for
 release validation, broad cross-cutting changes, or when explicitly requested;
 it runs the unit, integration, and calibration suites together. Do not add
 future exhaustive, database-backed, server-backed, or long-running tests

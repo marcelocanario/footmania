@@ -1,5 +1,13 @@
 import { defineConfig } from "vitest/config";
 
+// GitHub Actions sets CI=true. On CPU-constrained shared runners the default
+// worker-threads pool lets parallel CPU-bound workers starve the main
+// process, tripping the worker RPC ack timeout ("[vitest-worker]: Timeout
+// calling 'onTaskUpdate'"). Serialize (forked pool, one worker at a time)
+// only there; local runs keep the faster parallel default. Scheduling only —
+// no test, assertion, or sample size changes.
+const ci = Boolean(process.env.CI);
+
 export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
@@ -25,7 +33,9 @@ export default defineConfig({
     ],
     environment: "node",
     testTimeout: 60000,
-    fileParallelism: true,
+    // Serialize on CI runners only (see the note at the top of this file).
+    fileParallelism: !ci,
+    ...(ci && { pool: "forks", maxWorkers: 1 }),
     setupFiles: ["tests/setup.ts"],
     testNamePattern: /^(?!.*\[calibration\])/,
   },

@@ -16,6 +16,9 @@ export default defineConfig({
     testNamePattern: /\[calibration\]/,
     environment: "node",
     testTimeout: 60000,
+    // This suite runs only locally, enforced by .githooks/pre-push before any
+    // push to main — never in CI. Local machines are not CPU-starved like the
+    // 2-vCPU GitHub runners, so it keeps the parallel default.
     fileParallelism: true,
     setupFiles: ["tests/setup.ts"],
   },

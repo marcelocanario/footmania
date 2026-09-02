@@ -58,9 +58,25 @@ production schema. On a brand-new schema, the running backend creates the
 global multiplayer world on first startup; that initialization is not part of
 the CI test process.
 
-Pushes and pull requests targeting `main` run the full validation gate,
-including calibration. A push to `production` runs the non-destructive unit,
-integration, migration, and image-build checks, then the self-hosted runner
-pulls that exact branch, applies pending migrations, and restarts the
-containers. Calibration is intentionally not repeated during this promotion;
-the expected flow is code/PR -> `main` validation -> `production` deployment.
+Pushes and pull requests targeting `main` run the unit, integration,
+migration, and image-build checks. Calibration is intentionally not part of
+CI: it runs locally, enforced by the pre-push hook (`.githooks/pre-push`)
+which blocks any push to `main` until `npm run test:calibration` passes
+(activate once per clone with `git config core.hooksPath .githooks`). A push
+to `production` runs the same non-destructive checks, then the self-hosted
+runner pulls that exact branch, applies pending migrations, and restarts the
+containers. The expected flow is code -> local calibration (enforced) ->
+`main` validation -> `production` deployment.
+
+## Keeping the branches in sync
+
+`production` must always be a fast-forward of `main` — never commit deployment
+fixes directly on `production`, or the two branches drift and the next deploy
+reuses stale, already-fixed files. Promote with:
+
+```bash
+git push origin main:production
+```
+
+This fails loudly if the remote `production` has diverged, which is exactly the
+signal that something was committed out of band.

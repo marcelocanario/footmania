@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Pre-push hook — runs the calibration suite before any push to `main`.
+#
+# Activation (one-time per clone):
+#   git config core.hooksPath .githooks
+#
+# Deliberate bypass (documented, not recommended):
+#   git push --no-verify
+#
+# Hook arguments: <remote name> <remote url>. Pushed refs arrive on stdin as
+# "<local ref> <local sha> <remote ref> <remote sha>" lines.
+set -euo pipefail
+
+pushing_to_main=0
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  if [[ "$remote_ref" == "refs/heads/main" ]]; then
+    pushing_to_main=1
+  fi
+done
+
+if [[ "$pushing_to_main" -eq 0 ]]; then
+  exit 0
+fi
+
+root="$(git rev-parse --show-toplevel)"
+echo "Push to main: running the calibration suite first (can take a long time)..."
+(
+  cd "$root/backend" && npm run test:calibration
+)
+echo "Calibration suite passed — push to main proceeds."
