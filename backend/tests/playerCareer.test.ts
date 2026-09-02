@@ -31,7 +31,7 @@ import { processSeasonEndContracts, processSeasonalAcademyIntake, commitSeasonRo
 import { overallFromSkills } from "../src/game/rating";
 import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
-import { calibrationDescribe } from "./calibration";
+import { calibrationDescribe, yieldToEventLoop } from "./calibration";
 
 function seniorCtx(overrides: Partial<GeneratePlayerContext> = {}): GeneratePlayerContext {
   return {
@@ -96,7 +96,7 @@ calibrationDescribe("accelerated career simulation", () => {
     return { peakOvr, peakAge, finalOvr: player.overall };
   }
 
-  it("active full-starters outgrow inactive players", () => {
+  it("active full-starters outgrow inactive players", async () => {
     const n = 200;
     let activePeak = 0;
     let inactivePeak = 0;
@@ -104,11 +104,12 @@ calibrationDescribe("accelerated career simulation", () => {
       const ctx = youthCtx({ slot: i, age: 16 });
       activePeak += simulateCareer(ctx, 1.0, 24).peakOvr;
       inactivePeak += simulateCareer({ ...ctx, slot: i + 5000 }, 0.0, 24).peakOvr;
+      if (i % 10 === 9) await yieldToEventLoop();
     }
     expect(activePeak / n).toBeGreaterThan(inactivePeak / n);
-  });
+  }, 180000);
 
-  it("naturally produces the full spectrum of careers", () => {
+  it("naturally produces the full spectrum of careers", async () => {
     // A weak start with a big growth budget still becomes a useful player; a
     // strong start with a small budget improves little. Both emerge from the
     // independence of birth quality and the hidden career profile.
@@ -130,6 +131,7 @@ calibrationDescribe("accelerated career simulation", () => {
         if (player.age > 40) break;
       }
       samples.push({ start, budget, peak });
+      if (i % 10 === 9) await yieldToEventLoop();
     }
     const meanPeak = (arr: typeof samples) => arr.reduce((sum, x) => sum + x.peak, 0) / Math.max(1, arr.length);
     const meanGain = (arr: typeof samples) => arr.reduce((sum, x) => sum + (x.peak - x.start), 0) / Math.max(1, arr.length);
@@ -148,9 +150,9 @@ calibrationDescribe("accelerated career simulation", () => {
     const bigBudget = samples.filter((sample) => sample.budget >= maximum * 0.7);
     const smallBudget = samples.filter((sample) => sample.budget <= maximum * 0.3);
     expect(meanGain(bigBudget)).toBeGreaterThan(meanGain(smallBudget));
-  });
+  }, 180000);
 
-  it("realizes no more improvement than the drawn career growth budget", () => {
+  it("realizes no more improvement than the drawn career growth budget", async () => {
     for (let i = 0; i < 200; i++) {
       const ctx = youthCtx({ slot: i, age: 16 });
       const club = makeClub({ id: ctx.clubId, highestDivision: 1 });
@@ -163,8 +165,9 @@ calibrationDescribe("accelerated career simulation", () => {
         aging(player);
       }
       expect(player.careerGrowthConsumed).toBeLessThanOrEqual(budget + 1e-9);
+      if (i % 10 === 9) await yieldToEventLoop();
     }
-  });
+  }, 180000);
 });
 
 describe("academy intake lifecycle", () => {

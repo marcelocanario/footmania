@@ -9,9 +9,8 @@ import type { Club, Player, Position } from "../src/game/types";
 import type { RngState } from "../src/game/rng";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../src/matchSimulatorConfig";
 import { EVENT_CODES } from "../src/game/constants";
-import { calibrationDescribe } from "./calibration";
+import { calibrationDescribe, yieldToEventLoop } from "./calibration";
 
-const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 let clubIdCounter = 1;
 function makeClub(overall: number, overrides: Partial<Club> = {}): Club {

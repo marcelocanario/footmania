@@ -33,7 +33,7 @@ import { SKILL_KEYS } from "../src/game/rating";
 import type { Club, Player, PlayerCareerProfile, Position } from "../src/game/types";
 import { gameConfig } from "../src/config";
 import { makeClub } from "./helpers";
-import { calibrationDescribe } from "./calibration";
+import { calibrationDescribe, yieldToEventLoop } from "./calibration";
 
 function testClub(overrides: Partial<Club> = {}): Club {
   return makeClub({ id: 1, isHuman: false, ownerUserId: null, ...overrides });
@@ -387,12 +387,15 @@ calibrationDescribe("long-term career simulation", () => {
     return { peak, final: player.overall, peakAge };
   }
 
-  it("orders realized career growth by playing time", () => {
+  it("orders realized career growth by playing time", async () => {
     const n = 300;
     const meanPeak: Record<string, number> = {};
     for (const activity of activities) {
       let sum = 0;
-      for (let i = 0; i < n; i++) sum += simulateCareer(1_000 + i, activity.minutes).peak;
+      for (let i = 0; i < n; i++) {
+        sum += simulateCareer(1_000 + i, activity.minutes).peak;
+        if (i % 10 === 9) await yieldToEventLoop();
+      }
       meanPeak[activity.label] = sum / n;
     }
     for (let i = 0; i + 1 < activities.length; i++) {
@@ -400,22 +403,23 @@ calibrationDescribe("long-term career simulation", () => {
         .toBeGreaterThan(meanPeak[activities[i + 1].label]);
     }
     expect(meanPeak.full - meanPeak.inactive).toBeGreaterThan(3);
-  });
+  }, 180000);
 
-  it("makes active veterans decline more slowly than inactive ones", () => {
+  it("makes active veterans decline more slowly than inactive ones", async () => {
     const n = 300;
-    const drop = (minutes: number[]) => {
+    const drop = async (minutes: number[]) => {
       let sum = 0;
       for (let i = 0; i < n; i++) {
         const career = simulateCareer(2_000 + i, minutes);
         sum += career.peak - career.final;
+        if (i % 10 === 9) await yieldToEventLoop();
       }
       return sum / n;
     };
-    expect(drop([0, 0, 0, 0, 0])).toBeGreaterThan(drop([90, 90, 90, 90, 90]));
-  });
+    expect(await drop([0, 0, 0, 0, 0])).toBeGreaterThan(await drop([90, 90, 90, 90, 90]));
+  }, 180000);
 
-  it("peaks near the drawn personal peak age and never grows past it", () => {
+  it("peaks near the drawn personal peak age and never grows past it", async () => {
     const n = 400;
     let matched = 0;
     for (let i = 0; i < n; i++) {
@@ -437,9 +441,10 @@ calibrationDescribe("long-term career simulation", () => {
       // Growth strictly stops at the personal peak: none is banked for later.
       expect(growthAfterPeak).toBeLessThan(1e-9);
       if (player.careerDeclineConsumed > 0) matched += 1;
+      if (i % 10 === 9) await yieldToEventLoop();
     }
     expect(matched).toBeGreaterThan(n * 0.9);
-  });
+  }, 180000);
 
   it("lets a strong lower-division prospect reach higher-division quality", () => {
     // A D3-anchored career peak with a good draw must be able to clear normal

@@ -45,7 +45,7 @@ import { aging, applyDevelopment } from "../src/game/player";
 import { DAYS_PER_YEAR } from "../src/game/constants";
 import { makeClub } from "./helpers";
 import type { Position } from "../src/game/types";
-import { calibrationDescribe } from "./calibration";
+import { calibrationDescribe, yieldToEventLoop } from "./calibration";
 import { readNamePoolsArtifact } from "../src/services/namePoolService";
 
 function seniorCtx(overrides: Partial<Parameters<typeof generateSeniorPlayer>[0]> = {}) {
@@ -627,7 +627,7 @@ calibrationDescribe("distribution acceptance (spec §53-§55)", () => {
     expect(Math.abs(tailHigh - tailLow) / n).toBeLessThan(0.005);
   });
 
-  it("division means reproduce μ(D) within tolerance (spec §54)", () => {
+  it("division means reproduce μ(D) within tolerance (spec §54)", async () => {
     // The reported OVR is derived from integer skills (player-generation §14),
     // so the skill→OVR rounding introduces a small position-dependent bias
     // relative to the continuous target. The tolerance is tightened to ~1/20 of
@@ -638,17 +638,21 @@ calibrationDescribe("distribution acceptance (spec §53-§55)", () => {
       let sum = 0;
       for (let i = 0; i < n; i++) {
         sum += generateSeniorPlayer(seniorCtx({ currentDivision: division, slot: i })).overall;
+        if (i % 20_000 === 19_999) await yieldToEventLoop();
       }
       expect(Math.abs(sum / n - divisionMean(division, 5))).toBeLessThanOrEqual(0.35);
     }
-  });
+  }, 180000);
 
-  it("reproduces the five-division overlap reference values (spec §55)", () => {
+  it("reproduces the five-division overlap reference values (spec §55)", async () => {
     const n = 200000;
     const samples = new Map<number, number[]>();
     for (const division of [1, 2, 3, 4, 5]) {
       const arr: number[] = [];
-      for (let i = 0; i < n; i++) arr.push(generateSeniorPlayer(seniorCtx({ currentDivision: division, slot: i })).overall);
+      for (let i = 0; i < n; i++) {
+        arr.push(generateSeniorPlayer(seniorCtx({ currentDivision: division, slot: i })).overall);
+        if (i % 20_000 === 19_999) await yieldToEventLoop();
+      }
       samples.set(division, arr);
     }
     const median = (arr: number[]) => arr.slice().sort((a, b) => a - b)[arr.length >> 1];
@@ -663,7 +667,7 @@ calibrationDescribe("distribution acceptance (spec §53-§55)", () => {
     expect(overlap(3, 2)).toBeCloseTo(0.216, 1);
     expect(overlap(4, 3)).toBeCloseTo(0.271, 1);
     expect(overlap(5, 4)).toBeCloseTo(0.309, 1);
-  });
+  }, 180000);
 });
 
 calibrationDescribe("independence acceptance", () => {

@@ -4,9 +4,8 @@ import { simulateMatch, createLiveMatchState, tickLiveMatch } from "../src/game/
 import { makeClub } from "./helpers";
 import { generatePlayer } from "../src/game/player";
 import type { Club, Player, Position, RngState } from "../src/game/types";
-import { calibrationDescribe } from "./calibration";
+import { calibrationDescribe, yieldToEventLoop } from "./calibration";
 
-const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 let clubIdCounter = 1;
 function makeClub2(overrides: Partial<Club> = {}): Club {
