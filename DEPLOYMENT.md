@@ -5,7 +5,7 @@ Cloudflare Tunnel:
 
 - backend: `127.0.0.1:18085`
 - frontend/reverse proxy: `127.0.0.1:8084`
-- Cloudflare public hostname: `https://footmania.dev`
+- Cloudflare public hostname: `https://footmania.app`
 
 PostgreSQL remains external to Compose. The live backend must use the dedicated
 `footmania_prod` role and the `production` schema. The CI workflow uses a
@@ -19,7 +19,7 @@ any schema other than `test`.
 2. Copy `deploy/production.env.example` to `.env` in that directory. Replace
    every `REPLACE_WITH_...` value. Do not commit `.env`.
 3. In Cloudflare, create a remotely managed tunnel and configure the public
-   hostname `footmania.dev` to the service `http://127.0.0.1:8084`. Put the
+   hostname `footmania.app` to the service `http://127.0.0.1:8084`. Put the
    tunnel token in `CLOUDFLARE_TUNNEL_TOKEN`.
 4. Register the homelab GitHub Actions runner with labels `self-hosted` and
    `footmania`.
@@ -31,13 +31,13 @@ any schema other than `test`.
 The Google OAuth application must have this authorized JavaScript origin:
 
 ```text
-https://footmania.dev
+https://footmania.app
 ```
 
 and this authorized redirect URI:
 
 ```text
-https://footmania.dev/api/auth/callback/google
+https://footmania.app/api/auth/callback/google
 ```
 
 ## Manual first deployment
