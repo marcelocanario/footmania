@@ -48,7 +48,10 @@ COPY --from=backend-build /build/backend/scripts/db-upgrade.mjs ./scripts/db-upg
 
 EXPOSE 18085
 
-CMD ["node", "dist/src/server.js"]
+# The tsconfig emits bundler-style extensionless relative imports, which
+# plain Node ESM cannot resolve (see CLAUDE.md and scripts/db-upgrade.mjs).
+# Run the compiled server through tsx, exactly like the data migrations.
+CMD ["npx", "--no-install", "tsx", "dist/src/server.js"]
 
 
 FROM nginx:1.27-alpine AS frontend
