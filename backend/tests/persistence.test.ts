@@ -7,6 +7,7 @@ process.env.NODE_ENV = "test";
 import { PrismaClient } from "@prisma/client";
 import { createLiveMatchState, tickLiveMatch } from "../src/game/match";
 import { EVENT_CODES } from "../src/game/constants";
+import { createRng } from "../src/game/rng";
 import { createHumanClub } from "../src/game/worldgen";
 import { loadGlobalWorld, loadGlobalWorldMutable, persistLiveMatchState, persistWorld, ensureGlobalSave, invalidateWorldCache, StaleWorldError } from "../src/services/saveService";
 import { ensureSeasonRow } from "../src/services/mpService";
@@ -32,6 +33,10 @@ async function freshGlobalWorld(seed: number) {
   const save = await ensureGlobalSave(prisma);
   const loaded = await loadGlobalWorld(prisma);
   if (!loaded) throw new Error("world did not load");
+  // Keep persistence scenarios reproducible. The helper's seed is part of
+  // the fixture contract; without applying it, match-level assertions depend
+  // on the random seed used by ensureGlobalSave.
+  loaded.world.rng = createRng(seed);
   return { saveId: save.id, world: loaded.world };
 }
 
