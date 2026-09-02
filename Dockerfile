@@ -15,7 +15,7 @@ FROM node:20-bookworm-slim AS backend-build
 
 WORKDIR /build/backend
 
-COPY backend/package.json backend/package-lock.json ./
+COPY backend/package.json backend/package-lock.json backend/.npmrc ./
 RUN npm ci
 
 COPY backend/ ./
