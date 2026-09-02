@@ -2004,9 +2004,9 @@ function evaluateAiSubstitutions(eng: Engine): void {
 // Every term below comes purely from config and the versioned energy/injury
 // model, yet the hazard runs once per resolved action (~950 a match). They are
 // derived once on first use instead of on every action.
-let _hazardConstants: { meanRawActionRisk: number; baseHazardPerAction: number } | null = null;
+let _hazardConstants: { matchTargetPerMatch: number; meanRawActionRisk: number; baseHazardPerAction: number } | null = null;
 function hazardConstants(): { meanRawActionRisk: number; baseHazardPerAction: number } {
-  if (_hazardConstants) return _hazardConstants;
+  if (_hazardConstants && _hazardConstants.matchTargetPerMatch === gameConfig.injuries.matchTargetPerMatch) return _hazardConstants;
   const expectedActionsPerMatch = 2 * (MS.validation.reference["TEAM_MATCH.modeledActions"]?.mean ?? 956);
   const rawActions = ENERGY_INJURY_MODEL.injuryRisk.actionRiskRaw;
   // Spec §13.5 normalizes with the neutral empirical action distribution from
@@ -2015,6 +2015,7 @@ function hazardConstants(): { meanRawActionRisk: number; baseHazardPerAction: nu
   const meanRawActionRisk = Object.values(rawActions).reduce((sum, value) => sum + value, 0) / Object.values(rawActions).length;
   const referenceRisk = injuryRiskMultiplier(ENERGY_INJURY_MODEL.injuryRisk.referenceEnergy, ENERGY_INJURY_MODEL.injuryRisk.referenceRecentLoad, ENERGY_INJURY_MODEL.injuryRisk.ageReference);
   _hazardConstants = {
+    matchTargetPerMatch: gameConfig.injuries.matchTargetPerMatch,
     meanRawActionRisk,
     baseHazardPerAction: gameConfig.injuries.matchTargetPerMatch / Math.max(1, expectedActionsPerMatch * referenceRisk),
   };

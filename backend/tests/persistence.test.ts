@@ -36,7 +36,9 @@ async function freshGlobalWorld(seed: number) {
   // Keep persistence scenarios reproducible. The helper's seed is part of
   // the fixture contract; without applying it, match-level assertions depend
   // on the random seed used by ensureGlobalSave.
+  loaded.world.seed = seed;
   loaded.world.rng = createRng(seed);
+  await persistWorld(prisma, save.id, save.id, loaded.world);
   return { saveId: save.id, world: loaded.world };
 }
 
