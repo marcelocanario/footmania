@@ -19,3 +19,25 @@ if (!existsSync(source)) {
 mkdirSync(dirname(target), { recursive: true });
 cpSync(source, target, { recursive: true });
 console.log(`copy-game-data: ${source} -> ${target}`);
+
+// Runtime configuration is loaded relative to the compiled `dist/src` files,
+// so the JSONC files must be present beside the compiled output as well.
+const configSource = join(root, "config");
+const configTarget = join(root, "dist", "config");
+if (!existsSync(configSource)) {
+  console.error(`copy-game-data: missing config directory ${configSource}`);
+  process.exit(1);
+}
+mkdirSync(configTarget, { recursive: true });
+cpSync(configSource, configTarget, { recursive: true });
+console.log(`copy-game-data: ${configSource} -> ${configTarget}`);
+
+const assetsSource = join(root, "assets");
+const assetsTarget = join(root, "dist", "assets");
+if (!existsSync(assetsSource)) {
+  console.error(`copy-game-data: missing assets directory ${assetsSource}`);
+  process.exit(1);
+}
+mkdirSync(assetsTarget, { recursive: true });
+cpSync(assetsSource, assetsTarget, { recursive: true });
+console.log(`copy-game-data: ${assetsSource} -> ${assetsTarget}`);
