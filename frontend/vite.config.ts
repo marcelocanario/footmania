@@ -26,6 +26,12 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,svg,png}"],
+        // The SPA navigateFallback must never answer API navigations: the
+        // Google OAuth callback (/api/auth/callback/google) is a top-level
+        // navigation, and if the service worker serves index.html instead of
+        // letting it reach the backend, no session is ever created and every
+        // /api/account/me call fails with 401 after login.
+        navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           // Reference data that is safe to cache across users/sessions:
           // country list is global and rarely changes.
