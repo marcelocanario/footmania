@@ -715,7 +715,11 @@ export interface SavedLineupInput {
   starters: number[];
   subs: number[];
   penaltyTakerId: number | null;
-  freeKickTakerId: number | null;
+  /** Retired control (no direct-free-kick shot resolution exists in the
+   *  engine, plan §11/§14): omit to carry the club's previously stored value
+   *  forward unchanged. Only validated against the XI when explicitly given,
+   *  so a client that no longer sends this field can never wipe it. */
+  freeKickTakerId?: number | null;
 }
 
 export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedLineupInput): string | null {
@@ -748,12 +752,16 @@ export function applySavedLineup(club: Club, allPlayers: Player[], input: SavedL
   if (input.penaltyTakerId !== null && !input.starters.includes(input.penaltyTakerId)) {
     return "Penalty taker must be in the starting eleven";
   }
-  if (input.freeKickTakerId !== null && !input.starters.includes(input.freeKickTakerId)) {
+  // Absent (undefined) means "leave as stored" — the free-kick taker control
+  // was retired from the UI (no engine consumer exists), so a client that
+  // never sends this field must not silently null out an existing value.
+  const freeKickTakerId = input.freeKickTakerId === undefined ? (club.savedLineup?.freeKickTakerId ?? null) : input.freeKickTakerId;
+  if (freeKickTakerId !== null && !input.starters.includes(freeKickTakerId)) {
     return "Free kick taker must be in the starting eleven";
   }
   club.tactics.formation = input.formation;
   club.penaltyTakerId = input.penaltyTakerId;
-  club.savedLineup = { starters: input.starters, subs: input.subs, freeKickTakerId: input.freeKickTakerId };
+  club.savedLineup = { starters: input.starters, subs: input.subs, freeKickTakerId };
   return null;
 }
 

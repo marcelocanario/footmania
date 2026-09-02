@@ -1,9 +1,17 @@
 import type { LiveEvent } from "../api/client";
 import { useTranslation } from "react-i18next";
 import i18n from "i18next";
+import { automationSubtypeKey } from "../automation";
 
 function eventLabel(type: number): string {
   return (i18n.t as unknown as (k: string) => string)(`matchHistory.${type}`);
+}
+
+/** i18next's t() is typed against the literal key union derived from en.ts;
+ *  a runtime-computed key (e.g. automationSubtypeKey's result) needs the same
+ *  escape hatch eventLabel uses above. */
+function tDynamic(key: string): string {
+  return (i18n.t as unknown as (k: string) => string)(key);
 }
 
 function EventIcon({ type, subtype }: { type: number; subtype: number }) {
@@ -26,6 +34,7 @@ function EventIcon({ type, subtype }: { type: number; subtype: number }) {
   else if (type === 17) { cls = "event-ico event-detail"; glyph = "↗"; }
   else if (type === 18) { cls = "event-ico event-detail"; glyph = "🛡️"; }
   else if (type === 19) { cls = "event-ico event-mvp"; glyph = "🏆"; }
+  else if (type === 20) { cls = "event-ico event-auto"; glyph = "🤖"; }
   return <span className={cls}>{glyph}</span>;
 }
 
@@ -107,6 +116,22 @@ export function MatchHistory({
               <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">{t("matchHistory.blockedBy")}</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
             ) : event.type === 19 ? (
               <><span className="ev-label">{eventLabel(event.type)}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
+            ) : event.type === 20 ? (
+              // Automation fired (plan §11): subtype distinguishes what the
+              // rule actually did. SUB (1) and SWAP_SLOTS (5) name two
+              // players; SET_TAKER (4) names one; TACTICS (2) and FORMATION
+              // (3) change nothing player-specific, so no PlayerLink.
+              <>
+                <span className="ev-label">{t("matchHistory.20")}</span>
+                <span className="ev-label" style={{ opacity: 0.85 }}>{tDynamic(automationSubtypeKey(event.subtype))}</span>
+                {event.subtype === 1 && (
+                  <><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /><span className="ev-label">{t("matchHistory.replaces")}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
+                )}
+                {event.subtype === 4 && <PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} />}
+                {event.subtype === 5 && (
+                  <><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /><span className="ev-label">⇄</span><PlayerLink playerId={event.player2Id} name={event.player2} onPlayerClick={onPlayerClick} /></>
+                )}
+              </>
             ) : (
               <><span className="ev-label">{eventLabel(event.type) ?? t("matchHistory.fallbackEvent")}</span><PlayerLink playerId={event.playerId} name={event.player} onPlayerClick={onPlayerClick} /></>
             )}

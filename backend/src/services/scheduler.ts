@@ -17,6 +17,7 @@ import { executeRolloverStep, ROLLOVER_WORKFLOW_STEPS } from "./seasonRolloverSe
 import { notifyMatchStarted } from "./notifications";
 import { notifyFinishedMatches } from "./matchNotifications";
 import { publishLiveMatchUpdates } from "./liveMatchEvents";
+import { loadPresetsForClubs } from "./automationPresetService";
 
 export enum ScheduledEventType {
   GAME_DAY_ADVANCE = "GAME_DAY_ADVANCE",
@@ -651,7 +652,13 @@ async function executeDomainEvent(prisma: PrismaClient, saveId: number, world: i
       // An administrator executing a completion event early means "complete
       // now", not "pretend the clock has reached the future due time".
       const advanceAt = context.ignoreDueTime ? now.getTime() : Math.max(now.getTime(), completionAt);
-      const finished = advanceLiveMatches(world, advanceAt, { forceFinish: context.ignoreDueTime });
+      // This is the downtime catch-up path (a MATCH_COMPLETE event executed at
+      // or after its due time, not via an admin's early "resolve now") — it
+      // must still run automation, so hydrate presets for just this fixture's
+      // two clubs (plan §11 Part 4: never held in memory for every club).
+      const liveNow = world.liveMatches.find((match) => match.fixtureId === fixtureId);
+      const automationPresets = liveNow ? await loadPresetsForClubs(prisma, saveId, [liveNow.homeClubId, liveNow.awayClubId]) : undefined;
+      const finished = advanceLiveMatches(world, advanceAt, { forceFinish: context.ignoreDueTime, automationPresets });
       if (finished.length > 0) {
         publishLiveMatchUpdates(world, finished.map((match) => ({ matchId: match.id, homeClubId: match.homeClubId, awayClubId: match.awayClubId, eventStart: 0, phaseChanged: true, finished: true })));
       }

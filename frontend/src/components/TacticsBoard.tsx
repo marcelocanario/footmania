@@ -643,17 +643,17 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
 
           <section className="tb-side-panel tb-takers" aria-label={t("tactics.setPiecesAria")}>
             <div className="section-label">{t("tactics.setPieces")}</div>
-            <div className="tb-taker-grid">
+            {/* Free-kick taker control retired (plan §11/§14): no direct
+                free-kick shot resolution exists in the engine, so a select
+                that visibly did nothing sat next to the one that now works
+                (penalty taker is wired into resolveShot/doShootout). The
+                stored freeKickTakerId keeps round-tripping via Ed/cleanTakers
+                below so no data is lost — only the control is gone; the field
+                is passed back unchanged on every save. */}
+            <div className="tb-taker-grid tb-taker-grid-single">
               <label>
                 <span><Target size={12} /> {t("tactics.penaltyTaker")}</span>
                 <select className="select" value={ed.penaltyTakerId ?? ""} disabled={saving} onChange={(event) => setTaker("penaltyTakerId", event.target.value ? Number(event.target.value) : null)}>
-                  <option value="">{t("tactics.choose")}</option>
-                  {takerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                </select>
-              </label>
-              <label>
-                <span>{t("tactics.freeKickTaker")}</span>
-                <select className="select" value={ed.freeKickTakerId ?? ""} disabled={saving} onChange={(event) => setTaker("freeKickTakerId", event.target.value ? Number(event.target.value) : null)}>
                   <option value="">{t("tactics.choose")}</option>
                   {takerOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                 </select>

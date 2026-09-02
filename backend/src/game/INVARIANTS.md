@@ -311,3 +311,17 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     entries. Legacy rows (non-null `text`, null `bodyJson`) are never backfilled
     or migrated to keys — they keep rendering from `text` forever.
 
+46. **Automation presets are club-scoped configuration, deliberately kept
+    outside the World object and outside `Save.revision`'s transaction**
+    (`services/automationPresetService.ts`; `Club.automationPresetsJson`).
+    They are loaded on demand for only the clubs whose matches are actually
+    being advanced, never held in memory for every club on every world load.
+    Do not reintroduce an `automationPresets` field on the in-memory `Club`
+    type or route its reads/writes through `persistWorld`/`loadGlobalWorld*` —
+    that was the exact bug this invariant guards against: `clubRow` intentionally
+    omits the column so an unrelated per-club UPDATE (or the no-previous-baseline
+    upsert path in `persistWorld`) can never reset it to null. A concurrent
+    preset edit and a concurrent world mutation are therefore never in
+    contention with each other; at worst a rule edit lands a moment later than
+    the request that made it.
+

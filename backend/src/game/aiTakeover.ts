@@ -129,7 +129,9 @@ export function replaceActiveClubWithAi(world: World, club: Club, now: number): 
   club.cash = 0;
   club.ledger = { income: [], expense: [] };
   club.trophies = {};
-  club.automationPresets = [];
+  // Automation presets are club-scoped configuration stored outside the World
+  // object (plan §11 Part 4) — the caller (routes/admin.ts, which holds the
+  // prisma handle this pure domain function doesn't) clears them separately.
   club.tacticFamiliarity = null;
   club.savedLineup = null;
   club.captainId = null;

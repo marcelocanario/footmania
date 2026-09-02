@@ -1578,7 +1578,7 @@ interface ShotResult {
 }
 
 function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
-  const shooter = shooterSelection(eng, side);
+  let shooter = shooterSelection(eng, side);
   const { x, y } = shotLocationForZone(eng, eng.zone);
   const { distance, angle } = shotGeometry(x, y);
   const situation = situationLabel(eng);
@@ -1590,6 +1590,17 @@ function resolveShot(eng: Engine, side: Side, def: Side): ShotResult {
   if (situation === "PENALTY") {
     const penaltyXg = MS.shotModel.xgLookup.EXACT["D6_12.A30_45.PENALTY.FOOT.false"] ?? 0.77;
     baselineXg = penaltyXg;
+    // Honour a designated penalty taker (Club.penaltyTakerId, or a live-only
+    // override set by a SET_TAKER automation rule, plan §11) if he's on the
+    // pitch. This OVERRIDES who shoots, applied after shooterSelection has
+    // already consumed its RNG draw above — the draw count, and therefore
+    // every downstream RNG-derived outcome, is identical whether or not a
+    // taker is designated, so this cannot shift calibration or determinism.
+    const takerId = eng.st.livePenaltyTakerId?.[side.idx] ?? side.club.penaltyTakerId ?? null;
+    if (takerId !== null) {
+      const designated = side.on.find((ps) => ps.id === takerId && ps.deployedRole !== "GK");
+      if (designated) shooter = designated;
+    }
   }
 
   const zFinish = shooter.zFinishing;
@@ -2789,8 +2800,30 @@ function runMatch(eng: Engine, targetClockSeconds?: number, opts?: { pauseAtHalf
   }
 }
 
+/** Move the designated taker (if he's on the pitch) to the front of the
+ *  kicking order — real-world convention is the best/preferred taker goes
+ *  first. Draw count per kick is unchanged (still one nextDouble each), so
+ *  this reorder cannot shift the RNG stream or calibration. */
+function orderedShootoutTakers(outfielders: LivePlayerState[], designatedId: number | null): LivePlayerState[] {
+  if (designatedId === null) return outfielders;
+  const idx = outfielders.findIndex((ps) => ps.id === designatedId);
+  if (idx <= 0) return outfielders;
+  const reordered = outfielders.slice();
+  const [taker] = reordered.splice(idx, 1);
+  reordered.unshift(taker);
+  return reordered;
+}
+
 function doShootout(eng: Engine): void {
-  const takers: LivePlayerState[][] = [eng.home.on.filter((ps) => ps.deployedRole !== "GK"), eng.away.on.filter((ps) => ps.deployedRole !== "GK")];
+  // Honour a designated penalty taker (Club.penaltyTakerId, or a live-only
+  // SET_TAKER automation override, plan §11) the same way in-play penalties
+  // do — see resolveShot's PENALTY branch.
+  const homeTakerId = eng.st.livePenaltyTakerId?.[0] ?? eng.home.club.penaltyTakerId ?? null;
+  const awayTakerId = eng.st.livePenaltyTakerId?.[1] ?? eng.away.club.penaltyTakerId ?? null;
+  const takers: LivePlayerState[][] = [
+    orderedShootoutTakers(eng.home.on.filter((ps) => ps.deployedRole !== "GK"), homeTakerId),
+    orderedShootoutTakers(eng.away.on.filter((ps) => ps.deployedRole !== "GK"), awayTakerId),
+  ];
   const scores = [0, 0];
   const doKick = (side: 0 | 1, kick: number) => {
     const list = takers[side];

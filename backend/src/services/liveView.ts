@@ -235,6 +235,7 @@ export interface LiveStateView {
   awayTacticsCooldownMinutes: number;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
+  automationLog?: AutomationLogEntryView[];
   // New: match progress + halftime + added time
   progressPct: number;
   coinTossWinner: 0 | 1;
@@ -282,6 +283,7 @@ export interface LiveStateDeltaView {
    *  the live Scores tab updates as goals/assists happen). */
   scores: LivePlayerScoreView[];
   automationFiredCount: number;
+  automationLog: AutomationLogEntryView[];
   progressPct: number;
   currentAddedTime: number | null;
   homeTacticsCooldownMinutes: number;
@@ -322,6 +324,42 @@ export function viewerFieldsFor(world: World, st: LiveMatchState, viewerUserId?:
     humanSide: humanClubId !== null ? (st.homeClubId === humanClubId ? 0 : 1) : 1,
     isParticipant: humanClubId !== null && (st.homeClubId === humanClubId || st.awayClubId === humanClubId),
   };
+}
+
+/** One entry of the private per-side automation outcome log (plan §11).
+ *  `reason` is an AUTOMATION_REASON code (game/constants.ts) resolved to a
+ *  message client-side via i18n — never prose over the wire. Deliberately
+ *  carries no rule name/preset name: presets are loaded on demand and never
+ *  held by this read-only view layer (Part 4), so the log identifies a rule
+ *  only by its opaque (presetId, ruleId) pair. */
+export interface AutomationLogEntryView {
+  presetId: string;
+  ruleId: string;
+  /** Which action within the rule this entry reports on (a rule may now
+   *  queue several). Absent for a RETIRED entry, which speaks for the whole
+   *  rule. */
+  actionIndex?: number;
+  minute: number;
+  status: "APPLIED" | "SKIPPED" | "RETIRED";
+  reason?: number;
+}
+
+/** Automation log filtered to the viewer's own side — never exposed to an
+ *  opponent or spectator, the same privacy footing as hidden player quality. */
+export function automationLogViewFor(st: LiveMatchState, humanSide: 0 | 1, isParticipant: boolean): AutomationLogEntryView[] {
+  if (!isParticipant) return [];
+  return (st.automationLog ?? [])
+    .filter((e) => e.side === humanSide)
+    .map((e) => ({ presetId: e.presetId, ruleId: e.ruleId, actionIndex: e.actionIndex, minute: e.minute, status: e.status, reason: e.reason }));
+}
+
+/** Count of successfully applied rules for the viewer's own side — the
+ *  automationFiredCount field predates per-rule logging and is kept for
+ *  compatibility; it now derives from the log rather than the legacy
+ *  fired-id set (which stops growing once maxFires ships new matches). */
+export function automationFiredCountFor(st: LiveMatchState, humanSide: 0 | 1, isParticipant: boolean): number {
+  if (!isParticipant) return 0;
+  return (st.automationLog ?? []).filter((e) => e.side === humanSide && e.status === "APPLIED").length;
 }
 
 function livePlayerView(world: World, st: LiveMatchState, byId: Map<number, Player>, id: number): LivePlayerView | null {
@@ -483,7 +521,8 @@ export function liveStateView(world: World, st: LiveMatchState, viewerUserId?: n
     homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),
     awayTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 1),
     automationDisabled: st.automationDisabled ?? [false, false],
-    automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
+    automationFiredCount: automationFiredCountFor(st, humanSide, isParticipant),
+    automationLog: automationLogViewFor(st, humanSide, isParticipant),
     progressPct,
     coinTossWinner: (st.coinTossWinner ?? 0) as 0 | 1,
     firstHalfAddedMinutes: st.firstHalfAddedMinutes ?? 0,
@@ -687,7 +726,13 @@ export function liveStateDeltaView(
     stats: st.stats,
     newEvents,
     scores,
-    automationFiredCount: st.automationFiredRuleIds?.length ?? 0,
+    // Placeholders — automation is per-side private data and this delta is
+    // computed once and broadcast identically to every socket (unlike the
+    // full liveStateView, which is patched per-viewer below). ws.ts's
+    // broadcastLiveMatchUpdates overwrites both fields per socket using
+    // automationFiredCountFor/automationLogViewFor before sending.
+    automationFiredCount: 0,
+    automationLog: [],
     progressPct,
     currentAddedTime,
     homeTacticsCooldownMinutes: tacticsCooldownMinutesRemaining(st, 0),

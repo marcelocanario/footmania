@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError, invalidateWorldCache, ensureGlobalSave } from "../services/saveService";
+import { clearPresetsForClub } from "../services/automationPresetService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
 import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures, enterWaitingForFirstHuman } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
@@ -939,6 +940,12 @@ export async function adminRoutes(app: FastifyInstance) {
         if (club.competitionState === "ACTIVE") {
           worldOutcome = replaceActiveClubWithAi(world, club, now);
           syncMemberships(world, world.mp.seasonId);
+          // Automation presets live outside the World object (plan §11 Part
+          // 4); replaceActiveClubWithAi is a pure domain function with no
+          // prisma handle, so the reset it performs on every other per-club
+          // container (ledger, trophies, saved lineup, ...) can't reach this
+          // one — clear it here instead.
+          await clearPresetsForClub(app.prisma, loaded.save.id, club.id);
         } else {
           worldOutcome = removeNonActiveClub(world, club, now);
         }

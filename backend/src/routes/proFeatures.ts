@@ -4,7 +4,9 @@ import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld } from ".
 import { withGlobalLock } from "../services/lock";
 import { hasPro, canViewPlayerPerformance } from "../services/pro";
 import { AUTOMATION_CONFIG, LOGO_CONFIG } from "../config";
-import { presetsSchema, validatePresetQuotas } from "../game/automation";
+import { presetsSchema, validatePayloadSize, validatePresetQuotas } from "../game/automation";
+import { loadPresetsForClub, savePresetsForClub } from "../services/automationPresetService";
+import type { AutomationPreset } from "../game/types";
 import { validateNickname, normalizeNickname, nicknameSchema } from "../game/nickname";
 import { validateLogoVariant, validateCustomLogo } from "../game/logo";
 import { logoVariantSchema } from "../game/logo";
@@ -414,15 +416,19 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     };
   });
 
-  // ---- Automation presets -----------------------------------------------
+  // ---- Automation presets -------------------------------------------------
+  // Presets are club-scoped configuration stored outside the World object and
+  // outside Save.revision's transaction (plan §11 Part 4) — neither route
+  // below needs a full world load, the global lock, or persistWorld.
   app.get("/mp/automation", async (req, reply) => {
     await app.authenticate(req, reply);
     if (!req.user) return;
-     const loaded = await loadGlobalWorldReadOnly(app.prisma);
-    if (!loaded) return reply.code(500).send({ error: "World unavailable" });
-    const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
+    const save = await app.prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
+    if (!save) return reply.code(500).send({ error: "World unavailable" });
+    const club = await app.prisma.club.findFirst({ where: { saveId: save.id, ownerUserId: req.user.id }, select: { id: true } });
     if (!club) return reply.code(404).send({ error: "No club" });
-    return { presets: club.automationPresets ?? [] };
+    const presets = await loadPresetsForClub(app.prisma, save.id, club.id);
+    return { presets };
   });
 
   app.put("/mp/automation", async (req, reply) => {
@@ -430,7 +436,7 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     if (!req.user) return;
     const parsed = automationBodySchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "Invalid presets", details: parsed.error.flatten() });
-    const presets = parsed.data.presets as import("../game/types").AutomationPreset[];
+    const presets = parsed.data.presets as AutomationPreset[];
     // Validate IDs unique
     const ids = presets.map((p) => p.id);
     if (new Set(ids).size !== ids.length) return reply.code(400).send({ error: "Duplicate preset ids" });
@@ -441,34 +447,41 @@ export async function proFeaturesRoutes(app: FastifyInstance) {
     const pro = hasPro(req.user);
     const quotaErr = validatePresetQuotas(presets, pro);
     if (quotaErr) return reply.code(403).send({ error: quotaErr });
+    const sizeErr = validatePayloadSize(presets);
+    if (sizeErr) return reply.code(400).send({ error: sizeErr });
 
-    const res = await withGlobalLock(async () => {
-       const loaded = await loadGlobalWorldMutable(app.prisma);
-      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
-      const club = loaded.world.clubs.find((c) => c.ownerUserId === req.user!.id);
-      if (!club) return { error: { code: 404, body: { error: "No club" } } };
-      // Validate SUB player ids exist (but not necessarily on club; they may be on bench)
-      for (const p of presets) {
-        for (const r of p.rules) {
-          if (r.action.kind === "SUB") {
-            const outExists = loaded.world.players.some((pl) => pl.id === r.action.outPlayerId);
-            const inExists = loaded.world.players.some((pl) => pl.id === r.action.inPlayerId);
-            if (!outExists || !inExists) return { error: { code: 400, body: { error: `SUB rule ${r.id} references unknown player` } } };
+    const save = await app.prisma.save.findFirst({ where: { isGlobal: true }, select: { id: true } });
+    if (!save) return reply.code(500).send({ error: "World unavailable" });
+    const club = await app.prisma.club.findFirst({ where: { saveId: save.id, ownerUserId: req.user.id }, select: { id: true } });
+    if (!club) return reply.code(404).send({ error: "No club" });
+
+    // Every referenced player must belong to the CALLER'S OWN club — not
+    // merely exist somewhere in the world (the old, weaker check). A rule
+    // naming a foreign player could never legally act on him anyway (the
+    // runtime engine only ever touches this club's own pitch/bench), but
+    // rejecting it at save time is a clearer signal than a silent SKIPPED
+    // log entry every time the rule tries to fire.
+    const referencedIds = new Set<number>();
+    for (const p of presets) {
+      for (const r of p.rules) {
+        for (const a of r.actions) {
+          for (const id of [a.outPlayerId, a.inPlayerId, a.swapPlayerAId, a.swapPlayerBId, a.takerPlayerId]) {
+            if (id !== undefined) referencedIds.add(id);
           }
         }
       }
-      club.automationPresets = presets;
-      try {
-        await persistWorld(app.prisma, loaded.save.id, loaded.save.id, loaded.world, loaded.save.revision);
-      } catch (e) {
-        if (e instanceof StaleWorldError) return { error: { code: 409, body: { error: "Concurrent update, retry" } } };
-        throw e;
+    }
+    if (referencedIds.size > 0) {
+      const ownRows = await app.prisma.player.findMany({ where: { saveId: save.id, clubId: club.id, id: { in: [...referencedIds] } }, select: { id: true } });
+      const ownIds = new Set(ownRows.map((r) => r.id));
+      for (const id of referencedIds) {
+        if (!ownIds.has(id)) return reply.code(400).send({ error: `Automation rule references a player (${id}) not in your squad` });
       }
-      return { value: { ok: true, presets: club.automationPresets } };
-     });
-     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
-     publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
-     return res.value;
+    }
+
+    await savePresetsForClub(app.prisma, save.id, club.id, presets);
+    publishUserWorldEvent(req.user.id, { type: "invalidate", scope: "club" });
+    return { ok: true, presets };
   });
 
   // ---- Notifications (in-app inbox) -------------------------------------

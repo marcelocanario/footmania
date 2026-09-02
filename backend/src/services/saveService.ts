@@ -29,7 +29,6 @@ import { createRng } from "../game/rng";
 import { overallFromSkills } from "../game/player";
 import { emptyPopulationLedger } from "../game/population";
 import { DEVELOPMENT } from "../game/constants";
-import { parseStoredPresets } from "../game/automation";
 import type { TacticFamiliarityMap } from "../game/familiarity";
 import { deserializeClubKits, serializeClubKits } from "../game/kits";
 import { MATCH_SIMULATOR_CONFIG as MS } from "../matchSimulatorConfig";
@@ -954,11 +953,36 @@ export async function persistWorld(
       }
     }
     for (const t of rewriteTables) {
-      if (previous && (t === "club" || t === "player" || stableDeltaTables.has(t))) continue;
+      // "club" is never blanket-deleted here, with or without a previous
+      // baseline: it carries out-of-band columns (automationPresetsJson —
+      // deliberately not part of clubRow/the in-memory Club, plan §11 Part 4)
+      // that a delete-then-recreate-from-clubRow cycle would silently reset
+      // to their column default. The `!previous` branch below upserts
+      // per-row instead, exactly so an existing row is UPDATEd (leaving
+      // unlisted columns untouched) rather than dropped and rebuilt.
+      if (t === "club" || (previous && (t === "player" || stableDeltaTables.has(t)))) continue;
       await (tx as unknown as Record<string, { deleteMany: (args: { where: { saveId: number } }) => Promise<unknown> }>)[t].deleteMany({ where: { saveId } });
     }
-    if (rewriteTables.has("club") && !previous && world.clubs.length > 0) {
-      await createManyChunked(tx.club, world.clubs.map((c) => clubRow(c, saveId)));
+    if (rewriteTables.has("club") && !previous) {
+      // Unconditional cleanup (mirrors the `if (previous)` branch's own
+      // currentIds-based delete above): a reset to zero clubs must still
+      // clear every existing row for this save, not just skip because
+      // world.clubs happens to be empty.
+      const currentIds = world.clubs.map((c) => c.id);
+      if (currentIds.length > 0) await tx.club.deleteMany({ where: { saveId, id: { notIn: currentIds } } });
+      else await tx.club.deleteMany({ where: { saveId } });
+      const existingIds = currentIds.length > 0
+        ? new Set((await tx.club.findMany({ where: { saveId, id: { in: currentIds } }, select: { id: true } })).map((r) => r.id))
+        : new Set<number>();
+      const creates: ReturnType<typeof clubRow>[] = [];
+      for (const club of world.clubs) {
+        if (existingIds.has(club.id)) {
+          await tx.club.update({ where: { saveId_id: { saveId, id: club.id } }, data: clubRow(club, saveId) });
+        } else {
+          creates.push(clubRow(club, saveId));
+        }
+      }
+      if (creates.length > 0) await createManyChunked(tx.club, creates);
     }
     if (rewriteTables.has("player") && !previous && world.players.length > 0) {
       await createManyChunked(tx.player, world.players.map((p) => playerRow(p, saveId)));
@@ -1328,7 +1352,12 @@ function clubRow(c: Club, saveId: number) {
        customLogoMime: c.customLogo?.mime ?? null,
        customLogoData: c.customLogo?.data ?? null,
        customLogoStatus: c.customLogo?.status ?? "ACTIVE",
-        automationPresetsJson: c.automationPresets ? JSON.stringify(c.automationPresets) : null,
+        // automationPresetsJson is deliberately NOT written here: automation
+        // presets are club-scoped configuration managed independently by
+        // services/automationPresetService.ts, outside the World object and
+        // outside Save.revision's transaction (plan §11 Part 4). Omitting the
+        // field from this partial-update payload leaves the column untouched
+        // on UPDATE; Prisma defaults it to null on CREATE (nullable column).
         coachName: c.coachName,
         coachNameChangedSeasonKey: c.coachNameChangedSeasonKey ?? null,
       isHuman: c.isHuman,
@@ -1871,7 +1900,6 @@ async function rebuildWorld(
        customLogoMime: string | null;
        customLogoData: string | null;
        customLogoStatus: string | null;
-       automationPresetsJson: string | null;
      };
      const customLogo =
        r2.customLogoData && r2.customLogoMime
@@ -1904,7 +1932,10 @@ async function rebuildWorld(
        kits: deserializeClubKits((r as unknown as { kitJson?: string | null }).kitJson),
        logoVariant: r2.logoVariant ?? 0,
        customLogo,
-        automationPresets: parseStoredPresets(jsonOr<unknown>(r2.automationPresetsJson, null), r.tacticsFormation),
+        // automationPresetsJson is intentionally NOT hydrated here — automation
+        // presets are loaded on demand for the clubs that actually need them
+        // (services/automationPresetService.ts), not held in memory for every
+        // club on every world load (plan §11 Part 4).
         coachName: r.coachName,
         coachNameChangedSeasonKey: (r2 as unknown as { coachNameChangedSeasonKey?: string | null }).coachNameChangedSeasonKey ?? null,
         tactics: { formation: r.tacticsFormation, style: r.tacticsStyle, pressing: r.tacticsPressing, direction: r.tacticsDirection },
@@ -2423,7 +2454,10 @@ function hydrateLiveMatchState(st: LiveMatchState, world: World): void {
   st.pendingRestart ??= null;
   st.possessionFirstAction ??= null;
   st.automationFiredRuleIds ??= [];
+  st.automationFireCounts ??= {};
   st.automationDisabled ??= [false, false];
+  st.automationLog ??= [];
+  st.livePenaltyTakerId ??= [null, null];
   st.withBall ??= 0;
   st.coinTossWinner ??= (st.withBall as 0 | 1) ?? 0;
   st.firstHalfAddedMinutes ??= 0;

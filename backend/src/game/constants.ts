@@ -54,6 +54,30 @@ export const EVENT_CODES = {
   // Post-final-whistle award: best performer on the winning team. Appended to
   // the event feed at finalization (no RNG, no simulation feedback).
   MVP: 19,
+  // Automation "fired" feedback (plan §11): a rule successfully applied its
+  // action. Failures are never broadcast publicly (see AUTOMATION_REASON);
+  // they live only in the private per-side automation log. RNG-free and
+  // idempotent, following the same contract as the boundary events above.
+  AUTOMATION: 20,
+};
+
+/**
+ * Automation per-rule outcome reasons (plan §11). Codes, not prose — server
+ * payloads carry codes/message keys only (AGENTS.md); the client resolves the
+ * user-facing string via i18n. Distinct from EVENT_CODES: these describe why
+ * a rule was skipped/retired and are never broadcast to an opponent.
+ */
+export const AUTOMATION_REASON = {
+  NO_SUBS_LEFT: 1,
+  OUT_NOT_ON_PITCH: 2,
+  IN_NOT_ON_BENCH: 3,
+  GK_MISMATCH: 4,
+  TACTICS_COOLDOWN: 5,
+  FORMATION_WINDOW_CLOSED: 6,
+  IN_UNAVAILABLE: 7,
+  NO_CANDIDATE: 8,
+  MATCH_ENDED: 9,
+  INVALID_CONFIG: 10,
 };
 
 export const GOAL_SUBTYPES = {
@@ -63,6 +87,15 @@ export const GOAL_SUBTYPES = {
   FREE_KICK: 4,
   OLYMPIC: 5,
   CORNER: 6,
+};
+
+/** Subtype for EVENT_CODES.AUTOMATION: which action kind the fired rule applied. */
+export const AUTOMATION_SUBTYPES = {
+  SUB: 1,
+  TACTICS: 2,
+  FORMATION: 3,
+  SET_TAKER: 4,
+  SWAP_SLOTS: 5,
 };
 
 // Player development & decay system. The career shape itself (growth/decline

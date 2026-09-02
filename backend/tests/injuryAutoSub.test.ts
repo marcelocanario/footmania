@@ -14,7 +14,7 @@ import { gameConfig, MP_CONFIG } from "../src/config";
 import { liveStateDeltaView, liveStateView } from "../src/services/liveView";
 import { evaluateAutomationForMatch } from "../src/game/automation";
 import { createHumanClub, generateWorld } from "../src/game/worldgen";
-import type { Club, LiveMatchState, Player, Position } from "../src/game/types";
+import type { AutomationPreset, Club, LiveMatchState, Player, Position } from "../src/game/types";
 import type { RngState } from "../src/game/rng";
 
 let clubIdCounter = 500;
@@ -412,28 +412,29 @@ describe("automation SUB-rule invalidation", () => {
       playerMinutes: {},
       playerRecentLoad: {},
     } as unknown as LiveMatchState;
-    club.automationPresets = [
+    const presets: AutomationPreset[] = [
       {
         id: "p1",
         name: "Preset",
         formationId: club.tactics.formation,
         enabled: true,
         rules: [
-          { id: "r_ok", trigger: { kind: "MINUTE", minute: 60 }, condition: "ANY", action: { kind: "SUB", outPlayerId: onPitch.id, inPlayerId: healthyBench.id } },
-          { id: "r_injured", trigger: { kind: "MINUTE", minute: 60 }, condition: "ANY", action: { kind: "SUB", outPlayerId: onPitch.id, inPlayerId: injuredBench.id } },
-          { id: "r_sold", trigger: { kind: "MINUTE", minute: 60 }, condition: "ANY", action: { kind: "SUB", outPlayerId: onPitch.id, inPlayerId: 987654 } },
+          { id: "r_ok", trigger: { kind: "MINUTE", minute: 60 }, conditions: [], actions: [{ kind: "SUB", outPlayerId: onPitch.id, inPlayerId: healthyBench.id }] },
+          { id: "r_injured", trigger: { kind: "MINUTE", minute: 60 }, conditions: [], actions: [{ kind: "SUB", outPlayerId: onPitch.id, inPlayerId: injuredBench.id }] },
+          { id: "r_sold", trigger: { kind: "MINUTE", minute: 60 }, conditions: [], actions: [{ kind: "SUB", outPlayerId: onPitch.id, inPlayerId: 987654 }] },
         ],
       },
     ];
-    return { world, club, st, onPitch, healthyBench, injuredBench };
+    return { world, club, st, presets, onPitch, healthyBench, injuredBench };
   }
 
   it("discards rules whose incoming player could never legally enter the pitch", () => {
-    const { world, club, st } = setup();
-    const mutated = evaluateAutomationForMatch({ world, st, side: 0, club, ctx: { minute: 60, newEventsThisMinute: [] } });
+    const { world, club, st, presets } = setup();
+    const mutated = evaluateAutomationForMatch({ world, st, side: 0, club, presets, ctx: { minute: 60, newEventsThisMinute: [] } });
     expect(mutated).toBe(true);
-    // Invalid rules are marked fired without executing; the valid one ran.
-    expect(st.automationFiredRuleIds).toEqual(["p1:r_ok", "p1:r_injured", "p1:r_sold"]);
+    // Invalid rules are retired without executing; the valid one ran.
+    expect(st.automationFireCounts).toEqual({ "p1:r_ok": 1, "p1:r_injured": 1, "p1:r_sold": 1 });
+    expect(st.automationLog?.map((e) => e.status)).toEqual(["APPLIED", "RETIRED", "RETIRED"]);
     // ...while the healthy rule performed exactly one substitution.
     expect(st.events.filter((event) => event.type === EVENT_CODES.SUB)).toHaveLength(1);
     expect(st.usedSubs[0]).toBe(1);
@@ -441,11 +442,11 @@ describe("automation SUB-rule invalidation", () => {
   });
 
   it("never refires discarded rules on later minutes", () => {
-    const { world, club, st } = setup();
-    evaluateAutomationForMatch({ world, st, side: 0, club, ctx: { minute: 60, newEventsThisMinute: [] } });
+    const { world, club, st, presets } = setup();
+    evaluateAutomationForMatch({ world, st, side: 0, club, presets, ctx: { minute: 60, newEventsThisMinute: [] } });
     const subsAfterFirst = st.events.filter((event) => event.type === EVENT_CODES.SUB).length;
     st.minute = 75;
-    const second = evaluateAutomationForMatch({ world, st, side: 0, club, ctx: { minute: 75, newEventsThisMinute: [] } });
+    const second = evaluateAutomationForMatch({ world, st, side: 0, club, presets, ctx: { minute: 75, newEventsThisMinute: [] } });
     expect(second).toBe(false);
     expect(st.events.filter((event) => event.type === EVENT_CODES.SUB).length).toBe(subsAfterFirst);
   });

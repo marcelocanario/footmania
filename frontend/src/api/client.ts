@@ -573,6 +573,21 @@ export interface Snapshot {
   club: ClubView | null;
   nextFixture: { id: number; home: string; away: string; homeClubId: number; awayClubId: number; dayIndex: number; isHome: boolean; kickoffAt: number | null } | null;
   formationOptions: Array<{ id: number; name: string }>;
+  /** Backend-owned automation vocabulary/caps (services/snapshot.ts); the
+   *  frontend keeps no hand-copied mirror of these. */
+  automationConfig: {
+    maxPresetsRegular: number;
+    maxPresetsPerFormationPro: number;
+    maxRulesPerPreset: number;
+    maxActionsPerRule: number;
+    maxFiresCap: number;
+    defaultMaxFires: number;
+    allowedEvents: readonly string[];
+    allowedConditions: readonly string[];
+    allowedActions: readonly string[];
+    allowedOutSelects: readonly string[];
+    allowedInSelects: readonly string[];
+  };
   competitions: { id: number; kind: string; name: string; stage: string; round: number; tier: number | null; groupIndex: number | null; position: number; winnerId: number | null }[];
   squad: PlayerView[];
   juniors: PlayerView[];
@@ -983,6 +998,21 @@ export interface LiveBall {
   lastBallAction?: LiveBallAction | null;
 }
 
+/** One entry of the viewer's own private automation outcome log (plan §11).
+ *  Never carries the opponent's data, and never a rule's name/config — only
+ *  the server-side reason CODE, resolved to text client-side (see
+ *  automationReasonKey below). */
+export interface AutomationLogEntry {
+  presetId: string;
+  ruleId: string;
+  /** Which action within the rule this entry reports on — a rule may now
+   *  queue several. Absent for a RETIRED entry, which speaks for the whole rule. */
+  actionIndex?: number;
+  minute: number;
+  status: "APPLIED" | "SKIPPED" | "RETIRED";
+  reason?: number;
+}
+
 export interface LiveState {
   matchId: number;
   fixtureId: number;
@@ -1039,6 +1069,7 @@ export interface LiveState {
   awayTacticsCooldownMinutes: number;
   automationDisabled?: [boolean, boolean];
   automationFiredCount?: number;
+  automationLog?: AutomationLogEntry[];
   progressPct: number;
   coinTossWinner: 0 | 1;
   firstHalfAddedMinutes: number;
@@ -1064,6 +1095,7 @@ export interface LiveStateDelta {
   stats: MatchStats;
   newEvents: LiveEvent[];
   automationFiredCount: number;
+  automationLog: AutomationLogEntry[];
   progressPct: number;
   currentAddedTime: number | null;
   homeTacticsCooldownMinutes: number;
@@ -1410,6 +1442,10 @@ export const api = {
     request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/tactics`, { method: "POST", body: JSON.stringify(tactics) }),
   halftimeReady: (matchId: number) =>
     request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/halftime/ready`, { method: "POST" }),
+  /** REST fallback for the WS automation pause/resume toggle — used only when
+   *  the socket is down, so the control never fails silently (plan §11). */
+  liveAutomationToggle: (matchId: number, enabled: boolean) =>
+    request<{ ok: boolean; state: LiveState }>(`/api/matches/${matchId}/automation`, { method: "POST", body: JSON.stringify({ enabled }) }),
   liveWsUrl: (matchId: number) =>
     `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/matches/${matchId}/ws`,
   getLineup: (auto?: boolean, formation?: number, previewPlayerId?: number) => {
@@ -1420,11 +1456,15 @@ export const api = {
     const query = params.toString();
     return request<LineupView>(`/api/club/lineup${query ? `?${query}` : ""}`);
   },
-  setLineup: (lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
+  // freeKickTakerId is intentionally optional: the control was retired from
+  // the UI (no direct-free-kick shot resolution exists in the engine, §14),
+  // so callers simply omit it and the backend carries the stored value
+  // forward unchanged (never wiping it to null).
+  setLineup: (lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId?: number | null }) =>
     request<{ ok: boolean }>("/api/club/lineup", { method: "POST", body: JSON.stringify(lineup) }),
   setPlayerNumber: (playerId: number, number: number) =>
     request<{ ok: boolean; number: number | null; swappedWithName: string | null }>(`/api/players/${playerId}/number`, { method: "POST", body: JSON.stringify({ number }) }),
-  matchLineup: (matchId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId: number | null }) =>
+  matchLineup: (matchId: number, lineup: { formation: number; starters: number[]; subs: number[]; penaltyTakerId: number | null; freeKickTakerId?: number | null }) =>
     request<{ ok: boolean; state?: LiveState }>(`/api/matches/${matchId}/lineup`, { method: "POST", body: JSON.stringify(lineup) }),
   sellPlayer: (playerId: number, openingPrice?: number) =>
     request<{ ok: boolean; listingId?: number; openingPrice?: number }>("/api/transfers/auctions", { method: "POST", body: JSON.stringify({ playerId, openingPrice }) }),

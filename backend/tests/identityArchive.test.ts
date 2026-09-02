@@ -207,7 +207,10 @@ describe("aiTakeover", () => {
     expect(club.ledger).toEqual({ income: [], expense: [] });
     expect(club.trophies).toEqual({});
     expect(club.savedLineup).toBeNull();
-    expect(club.automationPresets).toEqual([]);
+    // Automation presets live outside the World object (services/
+    // automationPresetService.ts, plan §11 Part 4) — clearing them on
+    // takeover is the caller's (routes/admin.ts) responsibility, not this
+    // pure domain function's; see integration coverage instead.
     expect(club.captainId).toBeNull();
     expect(club.penaltyTakerId).toBeNull();
     expect(club.competitionState).toBe("ACTIVE");

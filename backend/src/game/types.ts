@@ -144,9 +144,34 @@ export interface SavedLineup {
   freeKickTakerId: number | null;
 }
 
-export type AutomationTriggerKind = "MINUTE" | "HALF_TIME" | "GOAL_SCORED" | "GOAL_CONCEDED" | "RED_CARD";
-export type AutomationCondition = "ANY" | "WINNING" | "LOSING" | "DRAWING" | "WINNING_BY_2" | "LOSING_BY_2";
-export type AutomationActionKind = "SUB" | "TACTICS";
+export type AutomationTriggerKind =
+  | "MINUTE"
+  | "HALF_TIME"
+  | "GOAL_SCORED"
+  | "GOAL_CONCEDED"
+  | "RED_CARD"
+  | "YELLOW_CARD"
+  | "OPPONENT_RED_CARD"
+  | "PLAYER_INJURED"
+  | "MISSED_PENALTY";
+export type AutomationCondition =
+  | "ANY"
+  | "WINNING"
+  | "LOSING"
+  | "DRAWING"
+  | "WINNING_BY_2"
+  | "LOSING_BY_2"
+  | "WINNING_OR_DRAWING"
+  | "LOSING_OR_DRAWING"
+  | "A_MAN_DOWN"
+  | "A_MAN_UP"
+  | "TIRED_PLAYER_ON_PITCH"
+  | "BOOKED_PLAYER_ON_PITCH"
+  | "HAS_SUBS_LEFT"
+  | "LOSING_POSSESSION";
+export type AutomationActionKind = "SUB" | "TACTICS" | "SET_TAKER" | "SWAP_SLOTS" | "STOP_AUTOMATION" | "HALFTIME_READY";
+export type AutomationOutSelect = "PLAYER" | "SLOT" | "MOST_TIRED" | "BOOKED";
+export type AutomationInSelect = "PLAYER" | "BEST_FOR_ROLE";
 
 export interface AutomationTrigger {
   kind: AutomationTriggerKind;
@@ -156,21 +181,38 @@ export interface AutomationTrigger {
 
 export interface AutomationAction {
   kind: AutomationActionKind;
-  /** SUB: player IDs */
+  /** SUB: player IDs (PLAYER selectors) or resolution mode (other selectors). */
   outPlayerId?: number;
   inPlayerId?: number;
+  outSelect?: AutomationOutSelect;
+  inSelect?: AutomationInSelect;
+  /** SUB with outSelect === "SLOT": the formation slot index to sub out. */
+  outSlotIndex?: number;
   /** TACTICS: partial tactics update */
   formation?: number;
   style?: number;
   pressing?: number;
   direction?: number;
+  /** SWAP_SLOTS: the two on-pitch players whose deployed slots are swapped. */
+  swapPlayerAId?: number;
+  swapPlayerBId?: number;
+  /** SET_TAKER: the player to designate as penalty taker (must be on the
+   *  pitch when the rule fires; scoped to the live match only, §11). */
+  takerPlayerId?: number;
 }
 
 export interface AutomationRule {
   id: string;
   trigger: AutomationTrigger;
-  condition: AutomationCondition;
-  action: AutomationAction;
+  /** ANDed conditions; empty/absent means unconditional (legacy "ANY"). */
+  conditions: AutomationCondition[];
+  /** Optional match-minute window guard; inclusive. Not valid on a MINUTE trigger. */
+  fromMinute?: number;
+  toMinute?: number;
+  /** How many times this rule may apply this match. Default 1 (§11's original guarantee). */
+  maxFires?: number;
+  /** Every action here runs, in order, when the rule fires. At least one. */
+  actions: AutomationAction[];
 }
 
 export interface AutomationPreset {
@@ -180,6 +222,22 @@ export interface AutomationPreset {
   formationId: number | null;
   enabled: boolean;
   rules: AutomationRule[];
+}
+
+/** One evaluated outcome of one rule, for the private per-side automation log
+ *  (plan §11). `reason` is an AUTOMATION_REASON code (game/constants.ts),
+ *  never prose — the client resolves the user-facing string via i18n. */
+export interface AutomationLogEntry {
+  side: 0 | 1;
+  presetId: string;
+  ruleId: string;
+  /** Index into the rule's actions[] this entry reports on. Absent for a
+   *  RETIRED entry, which speaks for the whole rule (retirement happens
+   *  before any individual action is attempted). */
+  actionIndex?: number;
+  minute: number;
+  status: "APPLIED" | "SKIPPED" | "RETIRED";
+  reason?: number;
 }
 
 export interface Club {
@@ -225,8 +283,6 @@ export interface Club {
   logoVariant?: number;
   /** Custom raster logo uploaded by Pro users (base64). Null = none/active variant fallback. */
   customLogo?: { mime: string; data: string; status: string } | null;
-  /** Automation presets (JSON; one per formation for Pro, one total for regular). */
-  automationPresets?: AutomationPreset[] | null;
   coachName: string;
   /** Season key in which the human manager last changed the coach name. */
   coachNameChangedSeasonKey?: string | null;
@@ -637,10 +693,27 @@ export interface LiveMatchState {
   pendingRestart: string | null;
   /** First action pinned by a possession start (resumed deterministically). */
   possessionFirstAction: string | null;
-  /** Automation: rule ids that have already fired this match (persisted for restart idempotency). */
+  /** Automation: legacy fired-rule-id set (pre-maxFires). A rule id present
+   *  here has fired exactly once and is retired; superseded by
+   *  automationFireCounts for matches created after maxFires shipped, but kept
+   *  so a match already in flight round-trips unchanged. Keys are
+   *  "<presetId>:<ruleId>", with bare legacy `rule.id` accepted for back-compat. */
   automationFiredRuleIds?: string[];
+  /** Automation: per-rule fire count this match, keyed like automationFiredRuleIds.
+   *  A rule is retired once its count reaches its own maxFires (default 1). */
+  automationFireCounts?: Record<string, number>;
   /** Automation: per-side kill-switch set when viewer explicitly disables automation. */
   automationDisabled?: [boolean, boolean];
+  /** Automation: private per-side outcome ledger (plan §11), capped at
+   *  AUTOMATION_CONFIG.maxLogEntries (oldest dropped first). Never shown to the
+   *  opponent or a spectator — same privacy footing as hidden player quality. */
+  automationLog?: AutomationLogEntry[];
+  /** Live-match-only penalty taker override, settable by a SET_TAKER
+   *  automation rule. Deliberately NOT the same as Club.penaltyTakerId: §11
+   *  guarantees an automated tactical change never persists past the match,
+   *  and this preserves that guarantee for the taker too. Null = defer to
+   *  Club.penaltyTakerId. Index 0 = home, 1 = away. */
+  livePenaltyTakerId?: [number | null, number | null];
   /** Per-player rating accumulator (plan §17). Written by the rating observer,
    *  persisted with the live state, and never read by gameplay logic. */
   ratingAccum?: Record<number, import("./ratingObserver").PlayerRatingAccum>;

@@ -812,6 +812,14 @@ exact same setup cold for the first time.
   ability versus the opposing goalkeeper's shot-stopping ability is the one place a
   goalkeeper's individual quality goes head-to-head against an individual attacker,
   rather than being folded into a general zone strength.
+- **Penalties**: an ordinary in-play penalty is otherwise resolved exactly like any
+  other shot, but if the club has designated a penalty taker — on their saved lineup,
+  or overridden for just this match by an automation rule (§11) — and he is on the
+  pitch, he steps up instead of whoever the normal shot-selection model would have
+  picked. A penalty shootout does the same: the designated taker (if on the pitch)
+  kicks first, then the rest follow in their usual order. Corner takers remain a
+  cosmetic presentation choice only (§14) — nobody's underlying ability changes who
+  the game shows taking one.
 - **Fouls and cards**: yellow and red card odds are calibrated against a realistic
   target number of fouls per match, then shifted up or down by how aggressively a team
   is pressing, how tired and undisciplined its players are, and how dangerous the
@@ -1534,32 +1542,66 @@ later ends with zero human clubs again, the world re-enters the same waiting sta
 
 ## 11. Tactics Automation
 
-A club can save an automation preset — a small set of rules that adjust tactics or
-make substitutions automatically during a live match, without the owner needing to be
-actively watching. A preset is tied to one specific formation; regular clubs get one
-preset overall, while clubs with Pro benefits get one preset for *each* formation they
-use.
+A club can save an automation preset — a small set of rules that adjust tactics,
+substitute players, or take a few other in-match actions automatically during a live
+match, without the owner needing to be actively watching. A preset is tied to one
+specific formation; regular clubs get one preset overall, while clubs with Pro
+benefits get one preset for *each* formation they use. A preset may hold as many
+rules as a manager wants to configure by hand — there is no gameplay cap on rule
+count (only a very large structural ceiling protecting stored-payload size, never
+expected to be reached through normal use).
 
-Each individual rule is built from three parts:
+Each individual rule is built from four parts:
 - **A trigger**: a specific match minute, half-time, a goal scored, a goal conceded,
-  or a red card.
-- **A condition**: any situation, currently winning, currently losing, currently
-  drawing, winning by two or more, or losing by two or more.
-- **An action**: either a substitution (swap a specific player out for a specific
-  player in) or a tactical change (style, pressing, and/or direction; formation only
-  when the trigger is half-time).
+  a yellow card, a red card, the opponent getting a red card, one of our players
+  getting injured, or missing a penalty.
+- **Conditions**: zero or more of the following, all of which must hold at once —
+  any situation, currently winning, currently losing, currently drawing, winning or
+  losing by two or more, winning-or-drawing, losing-or-drawing, having fewer/more
+  players on the pitch than the opponent, a tired or booked player currently on the
+  pitch, still having a substitution left, or currently losing the possession
+  battle. No conditions at all means the rule is unconditional.
+- **An optional minute window**: restricts a non-minute trigger (e.g. "goal
+  conceded") to only matter between two match minutes. Meaningless — and rejected —
+  on a trigger that is already a specific minute.
+- **An action**: a substitution, a tactical change (style, pressing, and/or
+  direction; formation only when the trigger is half-time), changing the penalty
+  taker, swapping two on-pitch players' positions, stopping all further automation
+  for the rest of the match, or signalling ready to resume the second half as soon
+  as the rule fires.
 
-Every rule fires **at most once** per match — it won't repeat itself over and over
-even if its trigger condition keeps being true. If a rule's planned substitution
-becomes impossible to actually carry out (say, the intended replacement gets injured
-or sold before the rule ever fires), the rule is simply retired for that match rather
-than trying — and failing — the same impossible action every single minute. A
-tactical change made by an automation rule only affects that one live match; it never
-overwrites the club's own saved default tactics. Every automated tactical change is
-priced exactly the same familiarity cost as if the manager had made the change by hand
-(§4.6), and an automated formation change is only allowed at the same moments a manual
-one would be — before kickoff or at half-time, which is why a preset may only attach a
-formation change to a half-time trigger.
+By default a rule applies **at most once** per match — it won't repeat itself over
+and over even if its trigger keeps recurring — but a manager may explicitly allow it
+to apply more than once (up to a generous cap). Only a *successful* application
+counts toward that limit: a rule that is merely skipped this minute (say, the
+tactics change-cooldown hasn't lifted yet, or no eligible substitute exists right
+now) is free to try again the next time its trigger and conditions line up, rather
+than being burned on the first miss. The one exception is a substitution naming a
+specific incoming player who can never legally take the pitch this match (injured,
+suspended, on the transfer block, or no longer at the club) — that rule is retired
+immediately rather than retried every minute for the rest of the match. A manager
+watching the match live sees a private log of what every one of their own rules did
+this match — applied, skipped (with why), or retired — visible only to them, never
+to the opponent or a spectator.
+
+A substitution rule may either name the two specific players, or describe how to
+pick them at the moment the rule fires: the outgoing player can be "whoever plays
+this position," "the most tired player," or "a booked player," and the incoming
+player can be "the best available replacement" for the outgoing player's role
+(using the same selection the game's own automatic injury-substitution uses). This
+is what lets a rule survive an ordinary line-up change instead of silently doing
+nothing because the two players it named by name are no longer on the pitch and
+bench it expected.
+
+A tactical change made by an automation rule only affects that one live match; it
+never overwrites the club's own saved default tactics. Every automated tactical
+change is priced exactly the same familiarity cost as if the manager had made the
+change by hand (§4.6), and an automated formation change is only allowed at the same
+moments a manual one would be — before kickoff or at half-time, which is why a
+preset may only attach a formation change to a half-time trigger. Changing the
+penalty taker through automation follows the same match-local rule: it only affects
+who steps up in *this* match (including a penalty shootout), never the club's saved
+penalty-taker preference.
 
 ---
 
@@ -1732,6 +1774,13 @@ settings with no real effect today:
   from what actually shipped (for example, an illustrative example figure for how
   strong Division 1 players should be) — where this document's numbers disagree with
   an older note, trust this document.
+- **Direct free kicks don't exist as their own shot opportunity.** A free kick simply
+  restarts open play from that spot; nobody is credited with a direct effort at goal
+  from it, and no goal is ever attributed to one. Building that would mean adding a
+  genuinely new shot source to the match engine — a real match-balance change, not a
+  wiring fix — so the free-kick-taker preference a manager could once set (still
+  stored, never wiped) has no in-match effect and its control was removed from the
+  lineup screen rather than leaving a choice on screen that visibly did nothing.
 
 ## Authentication (Google-only)
 

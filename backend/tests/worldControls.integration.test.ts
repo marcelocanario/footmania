@@ -8,6 +8,7 @@ import { buildServer } from "../src/server";
 import { scheduleEvent, ScheduledEventType } from "../src/services/scheduler";
 import { ensureCurrentSeason } from "../src/services/mpService";
 import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
+import { loadPresetsForClub } from "../src/services/automationPresetService";
 import { schedulerProcessor } from "../src/services/jobs/schedulerProcessor";
 import { createTestSessionCookie } from "./testAuth";
 
@@ -342,7 +343,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
             formationId: 4,
             enabled: true,
             rules: [
-              { id: "r1", trigger: { kind: "HALF_TIME" }, condition: "ANY", action: { kind: "TACTICS", formation: 7 } },
+              { id: "r1", trigger: { kind: "HALF_TIME" }, conditions: [], actions: [{ kind: "TACTICS", formation: 7 }] },
             ],
           },
         ],
@@ -351,11 +352,16 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(valid.statusCode).toBe(200);
 
     // The valid half-time rule was actually persisted on this user's club.
+    // Automation presets live outside the World object (plan §11 Part 4) —
+    // read them back through the same service the routes use, not via the
+    // in-memory Club (which no longer carries them).
     const user = await app.prisma.user.findUniqueOrThrow({ where: { email: "autopresetuser@test.dev" } });
     let world = await loadGlobalWorld(app.prisma);
     if (!world) throw new Error("world did not load");
     let club = world.world.clubs.find((c) => c.ownerUserId === user.id);
-    expect(club?.automationPresets?.some((p) => p.rules.some((r) => r.action.kind === "TACTICS" && r.action.formation !== undefined))).toBe(true);
+    expect(club).toBeDefined();
+    let presets = await loadPresetsForClub(app.prisma, world.save.id, club!.id);
+    expect(presets.some((p) => p.rules.some((r) => r.actions.some((a) => a.kind === "TACTICS" && a.formation !== undefined)))).toBe(true);
 
     // A formation change attached to a non-half-time trigger must be rejected
     // instead of silently stored and silently dropped at fire time.
@@ -371,7 +377,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
             formationId: 4,
             enabled: true,
             rules: [
-              { id: "r2", trigger: { kind: "MINUTE", minute: 60 }, condition: "ANY", action: { kind: "TACTICS", formation: 7, style: 1 } },
+              { id: "r2", trigger: { kind: "MINUTE", minute: 60 }, conditions: [], actions: [{ kind: "TACTICS", formation: 7, style: 1 }] },
             ],
           },
         ],
@@ -381,9 +387,11 @@ describe("admin world controls (season pause / fixture recalculation / world res
     world = await loadGlobalWorld(app.prisma);
     if (!world) throw new Error("world did not load");
     club = world.world.clubs.find((c) => c.ownerUserId === user.id);
+    expect(club).toBeDefined();
+    presets = await loadPresetsForClub(app.prisma, world.save.id, club!.id);
     // The rejected preset was not stored; the valid half-time one remains.
-    expect(club?.automationPresets?.map((p) => p.id)).toEqual(["p1"]);
-    expect(club?.automationPresets?.some((p) => p.rules.some((r) => r.action.kind === "TACTICS" && r.action.formation !== undefined))).toBe(true);
+    expect(presets.map((p) => p.id)).toEqual(["p1"]);
+    expect(presets.some((p) => p.rules.some((r) => r.actions.some((a) => a.kind === "TACTICS" && a.formation !== undefined)))).toBe(true);
   });
 
   it("holds the season clock while waiting for the first human, then starts it on join", async () => {

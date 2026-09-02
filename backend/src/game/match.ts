@@ -667,6 +667,28 @@ export interface LiveSubResult {
   error?: string;
 }
 
+/**
+ * Resolve a player's deployed role and live slot index for one side, falling
+ * back to his natural position when the slot map cannot resolve one (stale
+ * map, pre-kickoff state). Shared authority for performLiveSub and the
+ * automation dynamic selectors (game/automation.ts) — do not re-derive this
+ * elsewhere (AGENTS.md "reuse existing authoritative logic").
+ */
+export function resolveDeployedSlot(
+  st: LiveMatchState,
+  side: number,
+  playerId: number,
+  player: Player
+): { role: import("./positions").DeployedRole; slotIndex?: number } {
+  const slotMap = side === 0 ? st.homeSlotByPlayerId : st.awaySlotByPlayerId;
+  const tactics = side === 0 ? st.homeTactics : st.awayTactics;
+  const resolved = tactics ? tryDeployedRoleForSlot(slotMap, tactics.formation, playerId) : null;
+  return {
+    role: resolved?.role ?? naturalDefaultRole(player.position as import("./positions").NaturalPosition),
+    slotIndex: resolved?.slotIndex,
+  };
+}
+
 export function performLiveSub(
   rng: RngState,
   home: Club,
@@ -688,13 +710,18 @@ export function performLiveSub(
   if (!out) return { event: null, error: "Player not on the pitch" };
   if (!inPlayer) return { event: null, error: "Player not on the bench" };
   if (st.usedSubs[side] >= MP_CONFIG.maxSubsPerSide) return { event: null, error: "No substitutions left" };
+  // Membership checks come before the GK-compatibility check below: an outId
+  // that exists somewhere in allPlayers but isn't actually on THIS pitch (or
+  // an inId not actually on THIS bench) must report the accurate membership
+  // error, not a misleading GK message derived from a natural-position guess.
+  const idx = on.indexOf(outId);
+  if (idx < 0) return { event: null, error: "Player not on the pitch" };
+  const bIdx = bench.indexOf(inId);
+  if (bIdx < 0) return { event: null, error: "Player not on the bench" };
   // §9.5: an incoming GK is required only when replacing the GK slot; a GK
   // can never enter an outfield slot.
   const slotMap = side === 0 ? st.homeSlotByPlayerId : st.awaySlotByPlayerId;
-  const tactics = side === 0 ? st.homeTactics : st.awayTactics;
-  const resolvedOut = tactics ? tryDeployedRoleForSlot(slotMap, tactics.formation, outId) : null;
-  const slotIndex = resolvedOut?.slotIndex;
-  const outRole = resolvedOut?.role ?? naturalDefaultRole(out.position as import("./positions").NaturalPosition);
+  const { role: outRole, slotIndex } = resolveDeployedSlot(st, side, outId, out);
   if (outRole === "GK" && (inPlayer.position as string) !== "GK") {
     return { event: null, error: "Replace the goalkeeper with another goalkeeper" };
   }
@@ -702,10 +729,6 @@ export function performLiveSub(
     return { event: null, error: "A goalkeeper cannot enter an outfield slot" };
   }
   // Apply the substitution to the live state; the engine picks it up on next tick.
-  const idx = on.indexOf(outId);
-  if (idx < 0) return { event: null, error: "Player not on the pitch" };
-  const bIdx = bench.indexOf(inId);
-  if (bIdx < 0) return { event: null, error: "Player not on the bench" };
   // §9.1: every incoming player inherits the exact outgoing slot index.
   if (slotMap && slotIndex !== undefined) {
     slotMap[inId] = slotIndex;

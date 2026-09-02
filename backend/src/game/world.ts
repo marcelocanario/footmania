@@ -1,4 +1,5 @@
 import type {
+  AutomationPreset,
   Club,
   Competition,
   Fixture,
@@ -122,9 +123,19 @@ export function startLiveMatch(world: World, fixture: Fixture, startAt = fixture
  * rate or downtime. Auto-plays through halftime (`resume: true`) so matches
  * finish on schedule for unattended clubs.
  */
-export function advanceLiveMatches(world: World, now: number, opts?: { forceFinish?: boolean }): Match[] {
+export function advanceLiveMatches(
+  world: World,
+  now: number,
+  opts?: { forceFinish?: boolean; automationPresets?: Map<number, AutomationPreset[]> }
+): Match[] {
   const finished: Match[] = [];
   const realMsPerMatchMinute = (MP_CONFIG.matchDurationMinutes * 60 * 1000) / 90;
+  // Presets are club-scoped configuration loaded on demand by the caller
+  // (services/automationPresetService.ts), never held on the in-memory
+  // Club/World for every club (plan §11 Part 4). A caller that doesn't care
+  // about automation (tests, aiTakeover's forced completion) simply omits it;
+  // automation then safely no-ops for every club.
+  const automationPresets = opts?.automationPresets ?? new Map<number, AutomationPreset[]>();
   for (const st of [...world.liveMatches]) {
     if (st.ended) {
       const m = finalizeLiveMatch(world, st);
@@ -147,8 +158,14 @@ export function advanceLiveMatches(world: World, now: number, opts?: { forceFini
         const totalRegulation = MS.timing.regulationSeconds + (st.firstHalfAddedMinutes ?? 0) * 60 + (st.secondHalfAddedMinutes ?? 0) * 60;
         const remainingSeconds = Math.max(0, totalRegulation - st.matchClockSeconds);
         if (remainingSeconds <= 0) break;
+        const beforeLen = st.events.length;
         tickLiveMatch(world.rng, home, away, world.players, st, Math.max(1, Math.ceil(remainingSeconds / 60)), { ignoreHalfTime: true });
         st.lastAdvancedAt = now;
+        // This path jumps several match-minutes per iteration (bypassing the
+        // normal per-minute pacing), so MINUTE-triggered rules can miss their
+        // exact minute — acceptable here: only an admin's forced early
+        // completion takes this path, never the ordinary overdue catch-up.
+        processAutomation(world, st, st.events.slice(beforeLen), automationPresets);
       }
       if (st.ended) {
         const m = finalizeLiveMatch(world, st);
@@ -166,6 +183,14 @@ export function advanceLiveMatches(world: World, now: number, opts?: { forceFini
         st.halftimeStartedAt ??= now;
         st.halftimeReady ??= [false, false];
         st.lastAdvancedAt ??= now;
+        // Evaluate automation while genuinely paused at half-time: this is
+        // the fix for the half-time defect where a HALF_TIME rule (including
+        // an automated formation change, §11) could never actually apply
+        // because this branch used to `continue` before automation ever ran.
+        // Idempotent (fire-count bookkeeping) across the many ticks a real
+        // pause can span, so calling it every tick here is safe and cheap
+        // once a rule has already applied.
+        processAutomation(world, st, [], automationPresets);
         const pauseMs = MP_CONFIG.halftimePauseMinutes * 60 * 1000;
         const homeReady = !home.ownerUserId || !!st.halftimeReady[0];
         const awayReady = !away.ownerUserId || !!st.halftimeReady[1];
@@ -221,8 +246,8 @@ export function advanceLiveMatches(world: World, now: number, opts?: { forceFini
       const beforeLen = st.events.length;
       tickLiveMatch(world.rng, home, away, world.players, st, 1, { ignoreHalfTime: ignore });
       const newEvents = st.events.slice(beforeLen);
-      // Automation is human-only and retry-safe via st.automationFiredRuleIds.
-      processAutomation(world, st, newEvents);
+      // Automation is human-only and retry-safe (per-rule fire-count bookkeeping).
+      processAutomation(world, st, newEvents, automationPresets);
       // If we just entered halftime via this tick, stamp the wall-clock and pause.
       if (isHalftime(st) && st.halftimeStartedAt == null) {
         st.halftimeStartedAt = Date.now();

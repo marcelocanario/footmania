@@ -4,7 +4,7 @@ import { getPosition } from "../game/league";
 import { eloRatings } from "../game/elo";
 import { MOTD_NEWS_KIND, STYLE_NAMES, PRESSING_NAMES, DIRECTION_NAMES } from "../game/constants";
 import { formationOptions } from "../game/formations";
-import { gameConfig } from "../config";
+import { AUTOMATION_CONFIG, gameConfig } from "../config";
 import { getCommitmentTotals, financialState, remainingSeasonFraction } from "../game/finance";
 import { resolveClubKits } from "../game/kits";
 import { newsVisibleTo } from "../game/news";
@@ -433,6 +433,21 @@ export function buildSnapshot(world: World, clubId: number, includeMarket = true
         }
       : null,
     formationOptions: formationOptions(),
+    // Backend-owned automation vocabulary/caps (game/config.ts) — the
+    // frontend keeps no hand-copied mirror of these (plan §11 Part 1d).
+    automationConfig: {
+      maxPresetsRegular: AUTOMATION_CONFIG.maxPresetsRegular,
+      maxPresetsPerFormationPro: AUTOMATION_CONFIG.maxPresetsPerFormationPro,
+      maxRulesPerPreset: AUTOMATION_CONFIG.maxRulesPerPreset,
+      maxActionsPerRule: AUTOMATION_CONFIG.maxActionsPerRule,
+      maxFiresCap: AUTOMATION_CONFIG.maxFiresCap,
+      defaultMaxFires: AUTOMATION_CONFIG.defaultMaxFires,
+      allowedEvents: AUTOMATION_CONFIG.allowedEvents,
+      allowedConditions: AUTOMATION_CONFIG.allowedConditions,
+      allowedActions: AUTOMATION_CONFIG.allowedActions,
+      allowedOutSelects: AUTOMATION_CONFIG.allowedOutSelects,
+      allowedInSelects: AUTOMATION_CONFIG.allowedInSelects,
+    },
     competitions,
     squad: squadAll,
     juniors,

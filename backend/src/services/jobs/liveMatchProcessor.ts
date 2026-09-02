@@ -8,6 +8,20 @@ import { publishLiveMatchUpdates } from "../liveMatchEvents";
 import { publishUserWorldEvent } from "../worldEvents";
 import { diffLiveMatchAdvances, snapshotLiveMatches } from "../liveMatchDiff";
 import { isWorldPausedGlobally, isPaused } from "../seasonPause";
+import { loadPresetsForClubs } from "../automationPresetService";
+import type { World } from "../../game/types";
+
+/** Every club id involved in at least one currently-live match — the only
+ *  clubs whose automation presets this tick could possibly need (plan §11
+ *  Part 4: presets are loaded on demand, never held for every club). */
+function liveMatchClubIds(world: World): number[] {
+  const ids = new Set<number>();
+  for (const st of world.liveMatches) {
+    ids.add(st.homeClubId);
+    ids.add(st.awayClubId);
+  }
+  return [...ids];
+}
 
 export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ changed: boolean }> {
   // Season pause: matches are frozen mid-state and must not tick.
@@ -41,7 +55,8 @@ export async function liveMatchProcessor(prisma: PrismaClient): Promise<{ change
       // between the cheap pre-check above and this load.
       if (isPaused(loaded.world)) return { changed: false };
       before = snapshotLiveMatches(loaded.world.liveMatches);
-      finished = advanceLiveMatches(loaded.world, advancedAt);
+      const automationPresets = await loadPresetsForClubs(prisma, loaded.save.id, liveMatchClubIds(loaded.world));
+      finished = advanceLiveMatches(loaded.world, advancedAt, { automationPresets });
       if (usedNarrowPath && finished.length > 0) {
         loaded = null;
         usedNarrowPath = false;

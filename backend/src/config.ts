@@ -871,14 +871,68 @@ export const AUTOMATION_CONFIG = {
   /** Regular users: at most 1 preset total. Pro: 1 preset per formation. */
   maxPresetsRegular: 1,
   maxPresetsPerFormationPro: 1,
-  /** Maximum rules per preset. */
-  maxRulesPerPreset: 6,
+  /**
+   * Maximum rules per preset. This is a STRUCTURAL abuse/storage guard, not a
+   * balance limit — presets are stored as a single JSON blob per club
+   * (Club.automationPresetsJson) and parsed on demand (game/automation.ts,
+   * services/automationPresetService.ts). There is no intended gameplay cap
+   * on rule count; 50 is far above anything a manager would ever configure by
+   * hand and exists only to bound the size of one club's stored payload.
+   */
+  maxRulesPerPreset: 50,
+  /** Maximum actions a single rule may queue up (all run, in order, when the
+   *  rule fires). A structural guard like maxRulesPerPreset, not a balance
+   *  limit — there are only six action kinds today, so 10 already covers
+   *  every realistic combination with room to repeat one. */
+  maxActionsPerRule: 10,
+  /** Hard byte ceiling on one club's serialized presets payload (same guard). */
+  maxAutomationPayloadBytes: 262144, // 256 KB
+  /** Per-match cap on retained automation log entries (per side); oldest entries
+   *  are dropped first. A generous bound on live-state size, not a gameplay limit. */
+  maxLogEntries: 200,
+  /** Default/maximum number of times a single rule may apply within one match
+   *  when its own maxFires is unset/omitted. Preserves §11's original
+   *  "fires at most once" guarantee as the default. */
+  defaultMaxFires: 1,
+  maxFiresCap: 20,
+  /** Energy threshold (0..100) below which TIRED_PLAYER_ON_PITCH matches. */
+  tiredEnergyThreshold: 60,
+  /** Controlled-ball share (0..1) below which LOSING_POSSESSION matches. */
+  lowPossessionShare: 0.4,
   /** Allowed trigger event types. */
-  allowedEvents: ["MINUTE", "HALF_TIME", "GOAL_SCORED", "GOAL_CONCEDED", "RED_CARD"] as const,
-  /** Allowed conditions. */
-  allowedConditions: ["ANY", "WINNING", "LOSING", "DRAWING", "WINNING_BY_2", "LOSING_BY_2"] as const,
+  allowedEvents: [
+    "MINUTE",
+    "HALF_TIME",
+    "GOAL_SCORED",
+    "GOAL_CONCEDED",
+    "RED_CARD",
+    "YELLOW_CARD",
+    "OPPONENT_RED_CARD",
+    "PLAYER_INJURED",
+    "MISSED_PENALTY",
+  ] as const,
+  /** Allowed conditions (ANDed within one rule). */
+  allowedConditions: [
+    "ANY",
+    "WINNING",
+    "LOSING",
+    "DRAWING",
+    "WINNING_BY_2",
+    "LOSING_BY_2",
+    "WINNING_OR_DRAWING",
+    "LOSING_OR_DRAWING",
+    "A_MAN_DOWN",
+    "A_MAN_UP",
+    "TIRED_PLAYER_ON_PITCH",
+    "BOOKED_PLAYER_ON_PITCH",
+    "HAS_SUBS_LEFT",
+    "LOSING_POSSESSION",
+  ] as const,
   /** Allowed action kinds. */
-  allowedActions: ["SUB", "TACTICS"] as const,
+  allowedActions: ["SUB", "TACTICS", "SET_TAKER", "SWAP_SLOTS", "STOP_AUTOMATION", "HALFTIME_READY"] as const,
+  /** Allowed OUT/IN player-selector modes for a SUB action. */
+  allowedOutSelects: ["PLAYER", "SLOT", "MOST_TIRED", "BOOKED"] as const,
+  allowedInSelects: ["PLAYER", "BEST_FOR_ROLE"] as const,
 } as const;
 
 export const NICKNAME_CONFIG = {

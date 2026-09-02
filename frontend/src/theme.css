@@ -2665,6 +2665,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .event-neutral { background: rgba(228, 245, 235, 0.07); color: var(--text-2); }
 /* Curated high-frequency detail rows (corners / saves / woodwork). */
 .event-detail { background: rgba(228, 245, 235, 0.05); color: var(--text-3); }
+/* An automation rule fired (plan §11) — distinct from a manual sub/tactics change. */
+.event-auto { background: rgba(155, 129, 255, 0.18); color: #b9a6ff; }
 
 .event-row .ev-label { color: var(--text-2); }
 .event-row .ev-name { font-weight: 600; color: var(--text); }
@@ -3933,7 +3935,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .tb-root { min-width: 0; }
 
-/* automation rule builder step labels */
+/* ---------- automation rule builder ---------- */
+
 .aut-step {
   display: inline-block;
   min-width: 44px;
@@ -3942,6 +3945,177 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+/* One rule: a collapsible card with an always-visible header (number + plain-
+ * language summary) so a manager can scan several rules without opening each. */
+.aut-rule-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.aut-rule-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+.aut-rule-header:hover { background: rgba(255, 255, 255, 0.03); }
+
+.aut-rule-badge {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(240, 180, 41, 0.18);
+  color: var(--gold-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.aut-rule-chevron {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform 0.15s;
+}
+.aut-rule-chevron.collapsed { transform: rotate(-90deg); }
+
+.aut-rule-summary {
+  flex: 1 1 160px;
+  min-width: 0;
+  font-size: 0.86rem;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aut-rule-controls {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.aut-rule-body {
+  padding: 2px 12px 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* WHEN / IF / THEN: a distinct accent color per section so the eye can jump
+ * straight to the part being edited, consistent across every rule card. */
+.aut-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 0 2px 12px;
+  border-left: 3px solid var(--line);
+}
+.aut-section-when { border-left-color: #6ea8e6; }
+.aut-section-if { border-left-color: #a992f0; }
+.aut-section-then { border-left-color: var(--gold-2); }
+
+.aut-section-label {
+  color: var(--text-3);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.aut-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Minute-window guard + max-fires: power-user options, collapsed by default
+ * so the common case (no guard) reads clean. */
+.aut-advanced-toggle {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  font-size: 0.78rem;
+  cursor: pointer;
+  padding: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+}
+.aut-advanced-toggle:hover { color: var(--text-2); }
+
+.aut-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.aut-action-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.aut-action-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aut-action-badge {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-2);
+  font-size: 0.68rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+
+.aut-action-fields {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding-left: 26px;
+}
+
+.aut-warning {
+  color: var(--gold-2);
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.aut-hint {
+  color: var(--text-3);
+  font-size: 0.8rem;
 }
 
 
@@ -4165,6 +4339,9 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .tb-takers { padding-bottom: 8px; }
 .tb-taker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+/* Only the penalty taker control remains (free-kick taker retired, §14) — a
+ * single cell reads oddly stretched across the two-column grid above. */
+.tb-taker-grid-single { grid-template-columns: 1fr; max-width: 260px; }
 .tb-taker-grid label { display: grid; gap: 6px; color: var(--text-2); font-size: 0.76rem; font-weight: 600; }
 .tb-taker-grid label > span { display: inline-flex; align-items: center; gap: 5px; }
 .tb-taker-grid .select { width: 100%; min-width: 0; padding-left: 8px; padding-right: 22px; font-size: 0.78rem; }

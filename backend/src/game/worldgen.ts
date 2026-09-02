@@ -149,7 +149,6 @@ export function createHumanClub(world: World, opts: HumanClubOptions): Club {
     penaltyTakerId: null,
     logoVariant: 0,
     customLogo: null,
-    automationPresets: [],
     isHuman: true,
     ledger: { income: [], expense: [] },
     trophies: {},

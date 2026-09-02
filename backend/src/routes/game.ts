@@ -82,7 +82,11 @@ const lineupSchema = z.object({
   starters: z.array(z.number().int()).length(11),
   subs: z.array(z.number().int()).max(11),
   penaltyTakerId: z.number().int().nullable(),
-  freeKickTakerId: z.number().int().nullable(),
+  // Optional: the free-kick taker control is retired from the UI (no direct
+  // free-kick shot resolution exists in the engine, §14). Omitted means
+  // "leave as stored" (applySavedLineup carries the previous value forward);
+  // still accepted explicitly so the dormant field/migration path is unaffected.
+  freeKickTakerId: z.number().int().nullable().optional(),
 });
 
 function userClub(world: World, userId: number) {
@@ -288,6 +292,27 @@ export async function gameRoutes(app: FastifyInstance) {
       }
       const side = st.homeClubId === clubId ? 0 : 1;
       markHalftimeReady(world, st, side as 0 | 1);
+      return { value: { ok: true, state: liveStateView(world, st, req.user!.id) } };
+    });
+    return replyFrom(res, reply);
+  });
+
+  // REST fallback for the WS `{type:"automation"}` pause/resume toggle
+  // (plugins/ws.ts) — the WS path is primary; this exists so a dropped
+  // socket does not leave the control silently inert (plan §11 Part 1b).
+  app.post("/matches/:id/automation", async (req, reply) => {
+    const matchId = Number((req.params as { id: string }).id);
+    const parsed = z.object({ enabled: z.boolean() }).safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
+    const res = await withWorld(app, req.user!.id, "match_automation_toggle", async (world, clubId) => {
+      const st = world.liveMatches.find((s) => s.matchId === matchId);
+      if (!st) return { error: { code: 404, body: { error: "No live match in progress" } } };
+      if (st.homeClubId !== clubId && st.awayClubId !== clubId) {
+        return { error: { code: 403, body: { error: "You are not a participant in this match" } } };
+      }
+      const side = st.homeClubId === clubId ? 0 : 1;
+      st.automationDisabled ??= [false, false];
+      st.automationDisabled[side] = !parsed.data.enabled;
       return { value: { ok: true, state: liveStateView(world, st, req.user!.id) } };
     });
     return replyFrom(res, reply);

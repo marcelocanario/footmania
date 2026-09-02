@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import i18n from "i18next";
 import { Flag, RefreshCw, Subscript, Users, Volume2, VolumeX } from "lucide-react";
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
@@ -17,11 +18,19 @@ import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 import { FamiliarityBar } from "../components/FamiliarityBar";
 import { NaturalPosition, POSITION_ORDER, positionClass, positionLabel } from "../positions";
 import { directionOptions, pressingOptions, styleOptions } from "../tacticsOptions";
+import { automationReasonKey } from "../automation";
 
 /** Natural (squad) position label: what position the player actually plays
  *  (their base position), used for the bench list in the substitution panel. */
 function naturalPosition(player: LivePlayer): string {
   return player.naturalPosition ?? "PLAYER";
+}
+
+/** i18next's t() is typed against the literal key union derived from en.ts;
+ *  a runtime-computed key (automationReasonKey's result) needs this escape
+ *  hatch, matching MatchHistory.tsx's eventLabel/tDynamic pattern. */
+function tDynamic(key: string): string {
+  return (i18n.t as unknown as (k: string) => string)(key);
 }
 
 function matchContextLabel(state: LiveState, t: (k: string, o?: object) => string): string {
@@ -261,6 +270,7 @@ export function LiveMatch() {
       awayBench: delta.awayBench,
       usedSubs: delta.usedSubs,
       automationFiredCount: delta.automationFiredCount,
+      automationLog: delta.automationLog,
       progressPct: delta.progressPct,
       currentAddedTime: delta.currentAddedTime,
       homeTacticsCooldownMinutes: delta.homeTacticsCooldownMinutes,
@@ -704,23 +714,46 @@ export function LiveMatch() {
       })()}
 
       {!isSpectator && !isDone && state.automationDisabled !== undefined && (
-        <div className="card" style={{ marginTop: 12, padding: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          <div>
-            <div style={{ fontWeight: 700 }}>{t("live.autoPresets")}</div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{t("live.rulesFired", { count: state.automationFiredCount ?? 0, state: state.automationDisabled?.[humanSide] ? t("live.automationPaused") : t("live.automationActive") })}</div>
+        <div className="card" style={{ marginTop: 12, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <div style={{ fontWeight: 700 }}>{t("live.autoPresets")}</div>
+              <div style={{ color: "var(--text-3)", fontSize: "0.82rem" }}>{t("live.rulesFired", { count: state.automationFiredCount ?? 0, state: state.automationDisabled?.[humanSide] ? t("live.automationPaused") : t("live.automationActive") })}</div>
+            </div>
+            <button
+              className={`btn ${state.automationDisabled?.[humanSide] ? "gold" : "ghost"}`}
+              disabled={autoBusy}
+              onClick={() => {
+                void (async () => {
+                  const enabled = Boolean(state.automationDisabled?.[humanSide]);
+                  setAutoBusy(true);
+                  try {
+                    if (send({ type: "automation", enabled })) return;
+                    // WS is down: fall back to REST so the toggle never fails silently.
+                    if (matchId) {
+                      const res = await api.liveAutomationToggle(matchId, enabled);
+                      applyState(res.state);
+                    }
+                  } catch (e) {
+                    console.error(e);
+                  } finally {
+                    setAutoBusy(false);
+                  }
+                })();
+              }}
+            >
+              {state.automationDisabled?.[humanSide] ? t("live.resumeAutomation") : t("live.pauseAutomation")}
+            </button>
           </div>
-          <button
-            className={`btn ${state.automationDisabled?.[humanSide] ? "gold" : "ghost"}`}
-            disabled={autoBusy}
-            onClick={() => {
-              const enabled = Boolean(state.automationDisabled?.[humanSide]);
-              setAutoBusy(true);
-              const ok = send({ type: "automation", enabled });
-              if (!ok) setAutoBusy(false);
-            }}
-          >
-            {state.automationDisabled?.[humanSide] ? t("live.resumeAutomation") : t("live.pauseAutomation")}
-          </button>
+          {(state.automationLog?.length ?? 0) > 0 && (
+            <div className="aut-log" style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4, maxHeight: 160, overflowY: "auto" }}>
+              {[...state.automationLog!].reverse().map((entry, i) => (
+                <div key={i} style={{ fontSize: "0.8rem", color: entry.status === "APPLIED" ? "var(--grass-2)" : "var(--text-3)" }}>
+                  {entry.minute}&apos; — {entry.status === "APPLIED" ? t("live.autoLogApplied") : entry.status === "RETIRED" ? t("live.autoLogRetired", { reason: tDynamic(automationReasonKey(entry.reason)) }) : t("live.autoLogSkipped", { reason: tDynamic(automationReasonKey(entry.reason)) })}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

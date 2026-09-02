@@ -24,6 +24,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NEWS_SUBJECTS, publishNews } from "../src/game/news";
 import { msg, isMessageRef } from "../src/i18n/catalog";
+import { loadPresetsForClub, savePresetsForClub } from "../src/services/automationPresetService";
+import { evaluateAutomationForMatch } from "../src/game/automation";
+import type { AutomationPreset } from "../src/game/types";
 
 const prisma = new PrismaClient();
 
@@ -200,6 +203,41 @@ describe("global multiplayer world persistence", () => {
     // And the conversion stays idempotent across the next reload.
     const afterDelta = (await loadGlobalWorld(prisma))!.world.clubs.find((candidate) => candidate.id === club.id)!;
     expect(afterDelta.preferredHours).toEqual([22, 23, 36]);
+  });
+
+  it("keeps automation presets untouched by an unrelated club update (plan §11 Part 4)", async () => {
+    const { saveId } = await freshGlobalWorld(4714);
+    const { world } = await withSeason(saveId);
+    await prisma.user.deleteMany({ where: { id: 4702 } });
+    await prisma.user.create({ data: { id: 4702, name: "Persist Preset", email: "persist-preset@test.dev", emailVerified: true } });
+    const club = createHumanClub(world, { userId: 4702, clubName: "Preset FC", country: "BRA" });
+    await persistWorld(prisma, saveId, saveId, world);
+
+    // Presets are written directly by the service (outside the World object,
+    // outside Save.revision) — never through club.automationPresets, which no
+    // longer exists on the Club type.
+    const presets: AutomationPreset[] = [
+      { id: "p1", name: "Test preset", formationId: club.tactics.formation, enabled: true, rules: [] },
+    ];
+    await savePresetsForClub(prisma, saveId, club.id, presets);
+
+    // An unrelated world mutation (cash change) drives a full clubRow UPDATE.
+    // clubRow deliberately omits automationPresetsJson so this partial update
+    // cannot null it out — before that fix, any lazily-unloaded Club field
+    // would have been silently overwritten on the very next unrelated save.
+    const mutable = await loadGlobalWorldMutable(prisma);
+    if (!mutable) throw new Error("world did not load");
+    mutable.world.clubs.find((c) => c.id === club.id)!.cash += 500;
+    await persistWorld(prisma, mutable.save.id, mutable.save.id, mutable.world, mutable.save.revision);
+
+    const stored = await loadPresetsForClub(prisma, saveId, club.id);
+    expect(stored).toEqual(presets);
+    const cashRow = await prisma.club.findUnique({ where: { saveId_id: { saveId, id: club.id } } });
+    expect(cashRow?.cash).toBe(club.cash + 500);
+
+    // Stable across repeated reads (no duplication/drift from re-parsing).
+    const again = await loadPresetsForClub(prisma, saveId, club.id);
+    expect(again).toEqual(stored);
   });
 
   it("round-trips retained player attributes and re-derives the market value", async () => {
@@ -420,6 +458,50 @@ describe("global multiplayer world persistence", () => {
     } finally {
       gameConfig.injuries.matchTargetPerMatch = prevTarget;
     }
+  });
+
+  it("persists the automation outcome log and fire counts across a live-match reload without duplication", async () => {
+    const { saveId } = await freshGlobalWorld(4715);
+    const { seasonId, world } = await withSeason(saveId);
+    const div = world.competitions.find((c) => c.kind === "division" && c.seasonId === seasonId)!;
+    await prisma.user.deleteMany({ where: { id: 4703 } });
+    await prisma.user.create({ data: { id: 4703, name: "Persist Auto", email: "persist-auto@test.dev", emailVerified: true } });
+    const home = createHumanClub(world, { userId: 4703, clubName: "Auto Persist FC", country: "BRA" });
+    const away = world.clubs.find((c) => c.id !== home.id)!;
+    const st = createLiveMatchState(world.rng, home, away, world.players, {
+      matchId: 993001,
+      fixtureId: 993001,
+      competitionId: div.id,
+    });
+    st.minute = 60;
+    const presets: AutomationPreset[] = [
+      {
+        id: "p1",
+        name: "Test",
+        formationId: home.tactics.formation,
+        enabled: true,
+        rules: [{ id: "r1", trigger: { kind: "MINUTE", minute: 60 }, conditions: [], actions: [{ kind: "STOP_AUTOMATION" }] }],
+      },
+    ];
+    const mutated = evaluateAutomationForMatch({ world, st, side: 0, club: home, presets, ctx: { minute: 60, newEventsThisMinute: [] } });
+    expect(mutated).toBe(true);
+    expect(st.automationLog).toHaveLength(1);
+    expect(st.automationLog![0]).toMatchObject({ presetId: "p1", ruleId: "r1", status: "APPLIED" });
+
+    world.liveMatches = [st];
+    await persistWorld(prisma, saveId, saveId, world);
+    const reloaded = await loadGlobalWorld(prisma);
+    const st2 = reloaded!.world.liveMatches.find((s) => s.matchId === 993001)!;
+    expect(st2.automationLog).toEqual(st.automationLog);
+    expect(st2.automationFireCounts).toEqual(st.automationFireCounts);
+
+    // Re-evaluating the same rule on the reloaded state must neither duplicate
+    // the log entry nor re-apply the already-consumed action (maxFires: 1,
+    // the default — §11's "at most once" guarantee survives a restart).
+    const home2 = reloaded!.world.clubs.find((c) => c.id === home.id)!;
+    const mutatedAgain = evaluateAutomationForMatch({ world: reloaded!.world, st: st2, side: 0, club: home2, presets, ctx: { minute: 60, newEventsThisMinute: [] } });
+    expect(mutatedAgain).toBe(false);
+    expect(st2.automationLog).toHaveLength(1);
   });
 
   it("persists ongoing live-match progress without rewriting the world tables", async () => {

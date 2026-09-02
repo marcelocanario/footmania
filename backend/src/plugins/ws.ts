@@ -1,7 +1,7 @@
 import { WebSocket, WebSocketServer } from "ws";
 import type { FastifyInstance, FastifyPluginAsync } from "fastify";
 import { loadGlobalWorldMutable, persistLiveMatchState, persistWorld } from "../services/saveService";
-import { liveStateView, liveStateDeltaView, viewerFieldsFor } from "../services/liveView";
+import { liveStateView, liveStateDeltaView, viewerFieldsFor, automationFiredCountFor, automationLogViewFor } from "../services/liveView";
 import { applyLiveTacticsUpdate, performLiveSub, isPregame, isHalftime, rebuildLiveHumanLineup, markHalftimeReady } from "../game/match";
 import { withGlobalLock } from "../services/lock";
 import { applySavedLineup } from "../game/club";
@@ -42,7 +42,21 @@ function broadcastState(world: import("../game/types").World, matchId?: number) 
     for (const ws of sockets) {
       const meta = (ws as WebSocket & { meta?: { userId: number } }).meta;
       if (!meta) continue;
-      send(ws, { type: "state", state: { ...base, ...viewerFieldsFor(world, st, meta.userId) } });
+      // liveStateView(world, st, null) computed automationFiredCount/
+      // automationLog for a non-participant (always empty) — automation is
+      // per-side private data, so patch it in per socket alongside
+      // humanSide/isParticipant rather than treating it as viewer-neutral.
+      const { humanSide, isParticipant } = viewerFieldsFor(world, st, meta.userId);
+      send(ws, {
+        type: "state",
+        state: {
+          ...base,
+          humanSide,
+          isParticipant,
+          automationFiredCount: automationFiredCountFor(st, humanSide, isParticipant),
+          automationLog: automationLogViewFor(st, humanSide, isParticipant),
+        },
+      });
     }
   }
 }
@@ -82,9 +96,34 @@ function broadcastLiveMatchUpdates(world: import("../game/types").World, updates
       if (finished) {
         send(ws, { type: "finished", matchId: update.matchId });
       } else if (fullState) {
-        send(ws, { type: "state", state: { ...fullState, ...viewerFieldsFor(world, state!, meta.userId) } });
+        // Same per-socket automation patch as broadcastState above — fullState
+        // was computed with viewerUserId: null (always isParticipant: false),
+        // so its automation fields are empty and must be recomputed here.
+        const { humanSide, isParticipant } = viewerFieldsFor(world, state!, meta.userId);
+        send(ws, {
+          type: "state",
+          state: {
+            ...fullState,
+            humanSide,
+            isParticipant,
+            automationFiredCount: automationFiredCountFor(state!, humanSide, isParticipant),
+            automationLog: automationLogViewFor(state!, humanSide, isParticipant),
+          },
+        });
       } else {
-        send(ws, { type: "delta", delta });
+        // Automation is per-side private data (never shown to an opponent or
+        // spectator); delta is otherwise viewer-neutral and shared as-is, so
+        // patch just these two fields per socket rather than rebuilding the
+        // whole delta per viewer.
+        const { humanSide, isParticipant } = viewerFieldsFor(world, state!, meta.userId);
+        send(ws, {
+          type: "delta",
+          delta: {
+            ...delta!,
+            automationFiredCount: automationFiredCountFor(state!, humanSide, isParticipant),
+            automationLog: automationLogViewFor(state!, humanSide, isParticipant),
+          },
+        });
       }
     }
   }
@@ -329,7 +368,10 @@ async function handleMessage(
           starters: msg.starters,
           subs: msg.subs,
           penaltyTakerId: msg.penaltyTakerId ?? null,
-          freeKickTakerId: msg.freeKickTakerId ?? null,
+          // Absent (not merely falsy) means "leave as stored" — the retired
+          // free-kick taker control no longer sends this field, and coercing
+          // a missing field to null here would silently wipe it.
+          freeKickTakerId: "freeKickTakerId" in msg ? msg.freeKickTakerId ?? null : undefined,
         };
         const err = applySavedLineup(humanClub, world.players, input);
         if (err) {
