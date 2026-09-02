@@ -545,6 +545,7 @@ export const en = {
     pickColors: "Pick your colors, your own club starts here",
     rights: "All rights reserved.",
     privacy: "Privacy Policy",
+    terms: "Terms of Service",
     backToFootmania: "Back to Footmania",
   },
   notification: {

@@ -30,6 +30,7 @@ Thumbs.db
 # Specific harnesses
 .kilo
 .claude
+.reasonix
 
 #To-do file
 ./todo.txt

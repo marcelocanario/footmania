@@ -3,6 +3,7 @@ import { useLocation, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import i18n from "i18next";
 import { Toast } from "primereact/toast";
+import { Languages } from "lucide-react";
 import { authClient } from "../lib/auth-client";
 import { RotatingJersey } from "../components/RotatingJersey";
 import { api, type PublicSeasonStatus } from "../api/client";
@@ -53,6 +54,7 @@ export function Login() {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<PublicSeasonStatus | null>(null);
+  const [langOpen, setLangOpen] = useState(false);
   const location = useLocation();
   // Invite links (/login?invite=<token>): stash the token so the friendship is
   // created right after the Google sign-in lands (see App.tsx).
@@ -91,6 +93,24 @@ export function Login() {
 
   const tag = seasonTag(status);
 
+  // Close the language popout on any click or Escape outside of it.
+  useEffect(() => {
+    if (!langOpen) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const wrap = document.querySelector(".landing-lang-wrap");
+      if (wrap && !wrap.contains(event.target as Node)) setLangOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLangOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [langOpen]);
+
   return (
     <div className="landing">
       <Toast ref={toast} position="bottom-right" />
@@ -114,9 +134,28 @@ export function Login() {
               <span>{t("app.tagline")}</span>
             </div>
           </div>
-          <div className={`landing-masthead-tag${tag.live ? " live" : ""}`}>
-            {tag.live && <span className="pulse-dot" />}
-            {tag.label}
+          <div className="landing-masthead-right">
+            <div className={`landing-masthead-tag${tag.live ? " live" : ""}`}>
+              {tag.live && <span className="pulse-dot" />}
+              {tag.label}
+            </div>
+            <div className="top-pop-wrap landing-lang-wrap">
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => setLangOpen((v) => !v)}
+                title={t("settings.language")}
+                aria-label={t("settings.language")}
+                aria-expanded={langOpen}
+              >
+                <Languages size={16} />
+              </button>
+              {langOpen && (
+                <div className="popout landing-lang-popout">
+                  <LanguagePicker compact />
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -129,9 +168,6 @@ export function Login() {
             </p>
             <div className="landing-eyebrow">{t("login.pickColors")}</div>
             <RotatingJersey />
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <LanguagePicker compact />
-            </div>
             <div className="landing-cta-row">
               <button className="btn google" onClick={() => void startGoogle()} disabled={busy}>
                 <svg width="21" height="21" viewBox="0 0 24 24" aria-hidden>
@@ -148,7 +184,10 @@ export function Login() {
 
         <footer className="landing-footer">
           <div>© {new Date().getFullYear()} {t("app.name")}. {t("login.rights")}</div>
-          <Link to="/privacy" className="landing-privacy">{t("login.privacy")}</Link>
+          <div className="landing-footer-links">
+            <Link to="/privacy" className="landing-privacy">{t("login.privacy")}</Link>
+            <Link to="/terms" className="landing-privacy">{t("login.terms")}</Link>
+          </div>
         </footer>
       </div>
     </div>

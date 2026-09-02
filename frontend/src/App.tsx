@@ -33,6 +33,7 @@ const MyClub = lazyNamed(() => import("./screens/MyClub"), "MyClub");
 const TeamScreen = lazyNamed(() => import("./screens/TeamScreen"), "TeamScreen");
 const Admin = lazyNamed(() => import("./screens/Admin"), "Admin");
 const Privacy = lazyNamed(() => import("./screens/Privacy"), "Privacy");
+const Terms = lazyNamed(() => import("./screens/Terms"), "Terms");
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, setUser, status, snapshot, loadStatus, loadClub } = useGame();
@@ -203,6 +204,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
       <Route path="/privacy" element={<Privacy />} />
+      <Route path="/terms" element={<Terms />} />
           <Route
             path="/*"
             element={

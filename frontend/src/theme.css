@@ -2832,6 +2832,19 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   margin-bottom: clamp(28px, 6vh, 56px);
 }
 
+.landing-masthead-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The language picker drops down from the globe icon beside the status pill.
+   It is capped to the viewport so the three compact jersey options fit on one
+   row without ever spilling off the right edge of narrow screens. */
+.landing-lang-popout {
+  width: min(392px, calc(100vw - 32px));
+}
+
 .landing-masthead-lockup {
   display: inline-flex;
   align-items: center;
@@ -3043,6 +3056,17 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   transition: color 0.15s ease;
 }
 
+.landing-footer-links {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  margin-top: 6px;
+}
+
+.landing-footer-links .landing-privacy {
+  margin-top: 0;
+}
+
 .landing-footer .landing-privacy:hover {
   color: var(--grass-2);
 }
@@ -3119,6 +3143,12 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   .landing-inner { padding: 40px 20px 34px; }
   .landing-masthead { margin-bottom: clamp(24px, 5vh, 40px); }
   .landing-masthead-name { display: none; }
+}
+
+/* On very narrow screens the status pill no longer fits beside the lockup;
+   drop it so the language globe alone carries the masthead's right side. */
+@media (max-width: 560px) {
+  .landing-masthead-tag { display: none; }
 }
 
 /* ---------- empty states ---------- */
