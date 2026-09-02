@@ -8,6 +8,11 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 
 COPY frontend/ ./
+# The frontend imports the backend's server message catalog and per-locale
+# JSON through the @server-i18n path alias (frontend/tsconfig.json and
+# vite.config.ts), which points at ../backend/src/i18n relative to the
+# frontend. Without this copy the container build fails with TS2307.
+COPY backend/src/i18n /build/backend/src/i18n
 RUN npm run build
 
 
