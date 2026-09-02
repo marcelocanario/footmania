@@ -1,7 +1,7 @@
 # Production deployment
 
-Footmania runs on the homelab as two host-networked containers plus a
-Cloudflare Tunnel:
+Footmania runs on the homelab as two host-networked containers behind the
+existing system-wide Cloudflare Tunnel:
 
 - backend: `127.0.0.1:18085`
 - frontend/reverse proxy: `127.0.0.1:8084`
@@ -18,9 +18,9 @@ any schema other than `test`.
 1. Create `/srv/apps/footmania/container` and clone this repository there.
 2. Copy `deploy/production.env.example` to `.env` in that directory. Replace
    every `REPLACE_WITH_...` value. Do not commit `.env`.
-3. In Cloudflare, create a remotely managed tunnel and configure the public
-   hostname `footmania.app` to the service `http://127.0.0.1:8084`. Put the
-   tunnel token in `CLOUDFLARE_TUNNEL_TOKEN`.
+3. In the existing `/etc/cloudflared/config.yml`, configure the public
+   hostname `footmania.app` to the service `http://127.0.0.1:8084`, then create
+   the corresponding DNS route with `cloudflared tunnel route dns`.
 4. Register the homelab GitHub Actions runner with labels `self-hosted` and
    `footmania`.
 5. Ensure the database's `production` schema already contains the expected
@@ -47,7 +47,7 @@ From the homelab checkout:
 ```bash
 docker compose build
 docker compose run --rm backend npm run db:upgrade
-docker compose --profile tunnel up -d --build --remove-orphans --wait --wait-timeout 300
+docker compose up -d --build --remove-orphans --wait --wait-timeout 300
 curl --fail http://127.0.0.1:18085/api/health
 curl --fail http://127.0.0.1:8084/healthz
 ```
