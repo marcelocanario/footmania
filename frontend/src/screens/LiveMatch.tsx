@@ -15,7 +15,7 @@ import { PlayerScoresTable } from "../components/PlayerScoresTable";
 import { MatchStatsPanel } from "../components/MatchStatsPanel";
 import { PlayerDetailsDialog } from "../components/PlayerDetailsDialog";
 import { FamiliarityBar } from "../components/FamiliarityBar";
-import { NaturalPosition, POSITION_ORDER, positionLabel } from "../positions";
+import { NaturalPosition, POSITION_ORDER, positionClass, positionLabel } from "../positions";
 import { directionOptions, pressingOptions, styleOptions } from "../tacticsOptions";
 
 /** Natural (squad) position label: what position the player actually plays
@@ -754,14 +754,15 @@ export function LiveMatch() {
                   {onPitch.map((p) => (
                     <button
                       key={p.id}
-                      className={`sub-row${subOut?.id === p.id ? " sel" : ""}`}
+                      className={`sub-row is-on-pitch${subOut?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubOut(p)}
                     >
-                      <span className="pos-tag" title={positionLabel(p.naturalPosition)}>{p.deployedRole ?? p.naturalPosition}</span>
-                      <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
-                      <span className="sub-energy">
-                        <span>EN {Math.round(p.energy)}</span>
-                        <span className="sub-energy-track"><span className="sub-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} /></span>
+                      <span className={`tb-row-position ${positionClass(p.naturalPosition)}`} title={positionLabel(p.naturalPosition)}>{p.deployedRole ?? p.naturalPosition}</span>
+                      <span className="tb-row-body">
+                        <span className="tb-row-name">{(p.displayName ?? p.name)}</span>
+                        <span className="tb-energy-bar" aria-label={t("tactics.energyAria", { value: Math.round(p.energy) })}>
+                          <span className="tb-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} />
+                        </span>
                       </span>
                       <strong className="sub-rating">{p.overall}</strong>
                     </button>
@@ -776,15 +777,16 @@ export function LiveMatch() {
                     .map((p) => (
                     <button
                       key={p.id}
-                      className={`sub-row${subIn?.id === p.id ? " sel" : ""}`}
+                      className={`sub-row is-bench${subIn?.id === p.id ? " sel" : ""}`}
                       onClick={() => setSubIn(p)}
                       disabled={p.injuryDays > 0 || p.suspended}
                     >
-                      <span className="pos-tag" title={positionLabel(p.naturalPosition)}>{naturalPosition(p)}</span>
-                      <span style={{ flex: 1, textAlign: "left" }}>{(p.displayName ?? p.name)}</span>
-                      <span className="sub-energy">
-                        <span>EN {Math.round(p.energy)}</span>
-                        <span className="sub-energy-track"><span className="sub-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} /></span>
+                      <span className={`tb-row-position ${positionClass(p.naturalPosition)}`} title={positionLabel(p.naturalPosition)}>{naturalPosition(p)}</span>
+                      <span className="tb-row-body">
+                        <span className="tb-row-name">{(p.displayName ?? p.name)}</span>
+                        <span className="tb-energy-bar" aria-label={t("tactics.energyAria", { value: Math.round(p.energy) })}>
+                          <span className="tb-energy-fill" style={{ width: `${Math.max(0, Math.min(100, p.energy))}%` }} />
+                        </span>
                       </span>
                       <strong className="sub-rating">{p.overall}</strong>
                     </button>

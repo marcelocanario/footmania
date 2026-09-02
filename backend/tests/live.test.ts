@@ -291,6 +291,40 @@ describe("live match over REST", () => {
     expect(view.json().slots).toHaveLength(11);
     await app.close();
   });
+
+  it("saves lineups with a high catalog formation id (3-3-2-2 = 16) through /club/lineup", async () => {
+    const app = buildServer();
+    await app.ready();
+    const { cookie } = await setupClub(app, "restplayer5");
+    const { FORMATIONS } = await import("../src/game/formations");
+    const highId = FORMATIONS.find((f) => f.name === "3-3-2-2")!.id;
+    expect(highId).toBeGreaterThan(12); // guard: regression only bites ids past the old fixed cap
+
+    const auto = await app.inject({ method: "GET", url: `/api/club/lineup?auto=1&formation=${highId}`, headers: { cookie } });
+    expect(auto.statusCode).toBe(200);
+    const autoLineup = auto.json();
+    expect(autoLineup.formation).toBe(highId);
+    expect(autoLineup.slots).toHaveLength(11);
+    const persist = await app.inject({
+      method: "POST",
+      url: `/api/club/lineup`,
+      headers: { cookie },
+      payload: {
+        formation: highId,
+        starters: autoLineup.starters.map((p: { id: number }) => p.id),
+        subs: autoLineup.subs.map((p: { id: number }) => p.id),
+        penaltyTakerId: null,
+        freeKickTakerId: null,
+      },
+    });
+    expect(persist.statusCode).toBe(200);
+    expect(persist.json().ok).toBe(true);
+
+    const view = await app.inject({ method: "GET", url: `/api/club/lineup`, headers: { cookie } });
+    expect(view.statusCode).toBe(200);
+    expect(view.json().formation).toBe(highId);
+    await app.close();
+  });
 });
 
 describe("live match over WebSocket", () => {

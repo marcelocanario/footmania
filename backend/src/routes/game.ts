@@ -17,7 +17,7 @@ import { canViewPlayerPerformance, hasPro } from "../services/pro";
 import { playerMatchScoreView } from "../services/playerPerformance";
 import { conditionLabel, injuryDaysRemaining } from "../game/energyInjury";
 import { lineupForMatch, peekLineup, applySavedLineup, seniorRosterFullError, seniorRosterOverflowError } from "../game/club";
-import { formationById, formationOptions } from "../game/formations";
+import { FORMATIONS, formationById, formationOptions } from "../game/formations";
 import { adjustedTacticalRating, rolePenalty, suitabilityLabel } from "../game/outOfPosition";
 import type { DeployedRole } from "../game/positions";
 import { contractDemand, dismissYouthPlayer, promoteYouthPlayer } from "../game/season";
@@ -56,8 +56,12 @@ const contractSchema = z.object({
   contractSeasons: z.number().int().min(1).max(gameConfig.maxContractSeasons),
 });
 
+// §15.3: the formation catalog owns formation ids; the zod bound below must
+// track FORMATIONS.length (automation.ts derives MAX_FORMATION the same way).
+const MAX_FORMATION = FORMATIONS.length - 1;
+
 const tacticsSchema = z.object({
-  formation: z.number().int().min(0).max(12).optional(),
+  formation: z.number().int().min(0).max(MAX_FORMATION).optional(),
   style: z.number().int().min(0).max(2),
   pressing: z.number().int().min(0).max(2),
   direction: z.number().int().min(0).max(1),
@@ -74,7 +78,7 @@ const academyActionSchema = z.object({ action: z.enum(["promote", "dismiss"]) })
 const trainingSchema = z.object({ focus: z.enum(["assistant", "primary", "secondary"]) });
 
 const lineupSchema = z.object({
-  formation: z.number().int().min(0).max(12),
+  formation: z.number().int().min(0).max(MAX_FORMATION),
   starters: z.array(z.number().int()).length(11),
   subs: z.array(z.number().int()).max(11),
   penaltyTakerId: z.number().int().nullable(),

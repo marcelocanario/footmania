@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import i18n from "i18next";
-import { GripVertical, Target, Wand2 } from "lucide-react";
+import { Target, Wand2 } from "lucide-react";
 import { api, type LineupView, type LiveState } from "../api/client";
 import { useGame } from "../store/game";
 import { FootballKit } from "./kit/FootballKit";
 import { formationsFromSnapshot } from "../tacticsOptions";
-import { positionLabel as naturalPositionLabel } from "../positions";
+import { POSITION_ORDER, positionClass, positionLabel as naturalPositionLabel, type NaturalPosition } from "../positions";
 
 interface Ed {
   formation: number;
@@ -206,6 +206,15 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
     () => (data?.squad ?? []).map((player) => byId.get(player.id)).filter(isBoardPlayer).filter((player) => !starterIds.has(player.id) && !benchIds.has(player.id)),
     [benchIds, byId, data?.squad, starterIds]
   );
+  // Rest-of-squad order: display position (GK→ST), then overall desc, then
+  // visible name asc — deterministic, so the "unselected" zone is scannable.
+  const sortedPool = useMemo(() => {
+    const order = (player: BoardPlayer) => POSITION_ORDER[player.naturalPosition as NaturalPosition] ?? Number.MAX_SAFE_INTEGER;
+    return [...poolPlayers].sort((a, b) =>
+      order(a) - order(b) ||
+      b.overall - a.overall ||
+      a.name.localeCompare(b.name));
+  }, [poolPlayers]);
   // §16.2: labels and geometry come from the lineup response. The frontend
   // holds no formation table, so there is nothing to fall back to.
   const slotNames = useMemo(() => (data?.slots ?? []).map((s) => s.role), [data?.slots]);
@@ -430,6 +439,7 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
   }
 
   const benchSlots = Array.from({ length: 11 }, (_, index) => subs[index] ?? null);
+  const poolCount = sortedPool.length;
   const statusColor = status.kind === "err" ? "var(--red-2)" : status.kind === "ok" ? "var(--grass-2)" : "var(--text-3)";
   const pitchStyle = (index: number): CSSProperties => {
     const point = slotPoints[index] ?? { x: 50, y: 50 };
@@ -551,15 +561,15 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
         </section>
 
         <aside className="tb-side">
-          <section className="tb-side-panel" aria-label={t("tactics.benchAria")}>
+          <section className="tb-side-panel" aria-label={t("tactics.benchPoolAria")}>
             <div className="tb-panel-head">
               <div>
-                <div className="section-label">{t("tactics.bench")}</div>
-                <div className="tb-panel-hint">{t("tactics.benchHint")}</div>
+                <div className="section-label">{t("tactics.benchPoolTitle")}</div>
+                <div className="tb-panel-hint">{t("tactics.benchPoolHint")}</div>
               </div>
-              <GripVertical size={15} className="tb-muted-icon" />
+              <span className="tb-count">{subs.filter(isBoardPlayer).length + poolCount}</span>
             </div>
-            <div className="tb-bench-list">
+            <div className="tb-bench-pool-list">
               {benchSlots.map((player, index) => {
                 const location: BoardLocation = { area: "bench", index, id: player?.id ?? -1 };
                 const active = selected?.area === "bench" && selected.index === index;
@@ -567,35 +577,41 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                   <button
                     key={`bench-${index}`}
                     type="button"
-                    className={`tb-list-row${active ? " is-selected" : ""}${isOver("bench", index) ? " is-over" : ""}${!player ? " is-empty" : ""}`}
+                    className={`tb-list-row is-bench${active ? " is-selected" : ""}${isOver("bench", index) ? " is-over" : ""}${!player ? " is-empty-sub" : ""}${customTooltips && player ? " squad-tooltip-trigger" : ""}`}
                     data-tb-drop-area="bench"
                     data-tb-drop-index={index}
                     disabled={!player}
+                    {...(customTooltips && player ? { "data-pr-tooltip": naturalPositionLabel(player.naturalPosition) } : { title: player ? naturalPositionLabel(player.naturalPosition) : undefined })}
                     onPointerDown={(event) => player && beginDrag(location, event)}
                     onClick={() => player && selectLocation(location)}
                   >
-                    <span className="tb-row-number">{index + 1}</span>
-                    <span className={`tb-row-position${customTooltips && player ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": player ? naturalPositionLabel(player.naturalPosition) : undefined } : { title: player ? naturalPositionLabel(player.naturalPosition) : undefined })}>{player?.tacticalPosition ?? "—"}</span>
-                    <span className="tb-row-name">{player?.name ?? t("tactics.emptyBenchSlot")}</span>
-                    <span className="tb-row-energy">EN {player ? Math.round(player.energy) : "—"}</span>
-                    <span className="tb-row-rating">{player?.overall ?? "—"}</span>
+                    {player ? (
+                      <>
+                        <span className={`tb-row-position ${positionClass(player.naturalPosition)}`}>{player.tacticalPosition}</span>
+                        <span className="tb-row-body">
+                          <span className="tb-row-name">{player.name}</span>
+                          <span className="tb-energy-bar" aria-label={t("tactics.energyAria", { value: Math.round(player.energy) })}>
+                            <span className="tb-energy-fill" style={{ width: `${Math.max(0, Math.min(100, player.energy))}%` }} />
+                          </span>
+                        </span>
+                        <span className="tb-row-rating">{player.overall}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="tb-row-position tb-row-position-empty" />
+                        <span className="tb-row-name tb-empty-sub-slot">{t("tactics.emptySubSlot", { index: index + 1 })}</span>
+                        <span className="tb-row-rating">—</span>
+                      </>
+                    )}
                   </button>
                 );
               })}
-            </div>
-          </section>
-
-          <section className="tb-side-panel" aria-label={t("tactics.poolAria")}>
-            <div className="tb-panel-head">
-              <div>
-                <div className="section-label">{t("tactics.squadPool")}</div>
-                <div className="tb-panel-hint">{t("tactics.poolHint")}</div>
-              </div>
-              <span className="tb-count">{poolPlayers.length}</span>
-            </div>
-            <div className="tb-pool-list" data-tb-pool-background="true">
-              {poolPlayers.length === 0 && <div className="tb-pool-empty">{t("tactics.everyoneAssigned")}</div>}
-              {poolPlayers.map((player, index) => {
+              {poolCount > 0 && (
+                <div className="tb-zone-divider" aria-hidden="true">
+                  <span>{t("tactics.restOfSquadLabel")}</span>
+                </div>
+              )}
+              {sortedPool.map((player, index) => {
                 const location: BoardLocation = { area: "pool", index, id: player.id };
                 const unavailable = player.injuryDays > 0 || player.suspended;
                 const unavailableTip = player.suspended ? t("tactics.suspended") : t("tactics.injuredFor", { days: player.injuryDays });
@@ -603,17 +619,21 @@ export function TacticsBoard({ mode, matchId, liveState, onSaved, onFormationCha
                   <button
                     key={`pool-${player.id}`}
                     type="button"
-                    className={`tb-list-row tb-pool-row${unavailable ? " is-unavailable" : ""}${customTooltips && unavailable ? " squad-tooltip-trigger" : ""}`}
+                    className={`tb-list-row is-pool${unavailable ? " is-unavailable" : ""}${customTooltips ? " squad-tooltip-trigger" : ""}`}
                     data-tb-drop-area="pool"
                     data-tb-drop-index={index}
                     data-tb-drop-id={player.id}
                     disabled={unavailable}
-                    {...(customTooltips ? { "data-pr-tooltip": unavailable ? unavailableTip : undefined } : { title: unavailable ? unavailableTip : undefined })}
+                    {...(customTooltips ? { "data-pr-tooltip": unavailable ? unavailableTip : naturalPositionLabel(player.naturalPosition) } : { title: unavailable ? unavailableTip : naturalPositionLabel(player.naturalPosition) })}
                     onPointerDown={(event) => !unavailable && beginDrag(location, event)}
                   >
-                    <span className={`tb-row-position${customTooltips ? " squad-tooltip-trigger" : ""}`} {...(customTooltips ? { "data-pr-tooltip": naturalPositionLabel(player.naturalPosition) } : { title: naturalPositionLabel(player.naturalPosition) })}>{player.tacticalPosition}</span>
-                    <span className="tb-row-name">{player.name}</span>
-                    <span className="tb-row-energy">EN {Math.round(player.energy)}</span>
+                    <span className={`tb-row-position ${positionClass(player.naturalPosition)}`}>{player.tacticalPosition}</span>
+                    <span className="tb-row-body">
+                      <span className="tb-row-name">{player.name}</span>
+                      <span className="tb-energy-bar" aria-label={t("tactics.energyAria", { value: Math.round(player.energy) })}>
+                        <span className="tb-energy-fill" style={{ width: `${Math.max(0, Math.min(100, player.energy))}%` }} />
+                      </span>
+                    </span>
                     <span className="tb-row-rating">{player.overall}</span>
                   </button>
                 );

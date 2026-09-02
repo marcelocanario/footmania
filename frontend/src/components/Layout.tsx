@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Languages, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useGame } from "../store/game";
 import { useLang } from "../i18n/store";
@@ -10,6 +10,7 @@ import { useIsMobile } from "../hooks/useIsMobile";
 import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
 import { FootballKit } from "./kit/FootballKit";
 import { deriveKitDefaults } from "./kit/defaults";
+import { LanguagePicker } from "./LanguagePicker";
 
 interface NavItem {
   to: string;
@@ -176,9 +177,11 @@ export function Layout({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [showNotifs, setShowNotifs] = useState(false);
   const [showSeasonCal, setShowSeasonCal] = useState(false);
+  const [showLangPicker, setShowLangPicker] = useState(false);
   const [warnings, setWarnings] = useState<{ id: number; reason: string; createdAt: string }[]>([]);
   const notifPopRef = useRef<HTMLDivElement>(null);
   const seasonPopRef = useRef<HTMLDivElement>(null);
+  const langPopRef = useRef<HTMLDivElement>(null);
   // Fixture-id lookup used to render friendly copy for legacy notification
   // payloads that only carry club/fixture IDs.
   const matchByFixture = new Map((status?.myMatches ?? []).map((m) => [m.fixtureId, m]));
@@ -192,11 +195,13 @@ export function Layout({ children }: { children: ReactNode }) {
     const onPointerDown = (event: MouseEvent) => {
       if (notifPopRef.current && !notifPopRef.current.contains(event.target as Node)) setShowNotifs(false);
       if (seasonPopRef.current && !seasonPopRef.current.contains(event.target as Node)) setShowSeasonCal(false);
+      if (langPopRef.current && !langPopRef.current.contains(event.target as Node)) setShowLangPicker(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setShowNotifs(false);
         setShowSeasonCal(false);
+        setShowLangPicker(false);
       }
     };
     document.addEventListener("mousedown", onPointerDown);
@@ -312,10 +317,31 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
           )}
           {user && (
-            <span className="chip" title={user.name} style={user.isPro ? { borderColor: "var(--gold-2)", color: "var(--gold-2)" } : undefined}>
-              {user.isPro ? "PRO" : "REG"} {user.isAdmin && "· ADMIN"} · {user.name}
+            <span
+              className={`chip account-chip${user.isAdmin || user.isPro ? " elevated" : ""}`}
+              title={user.name}
+              style={user.isAdmin || user.isPro ? { borderColor: "var(--gold-2)", color: "var(--gold-2)" } : undefined}
+            >
+              {user.isAdmin ? t("layout.roleAdmin") : user.isPro ? t("layout.rolePro") : t("layout.roleFree")}
             </span>
           )}
+          <div className="top-pop-wrap" ref={langPopRef}>
+            <button
+              type="button"
+              className="icon-btn"
+              onClick={() => setShowLangPicker((v) => !v)}
+              title={t("settings.language")}
+              aria-label={t("settings.language")}
+              aria-expanded={showLangPicker}
+            >
+              <Languages size={15} />
+            </button>
+            {showLangPicker && (
+              <div className="popout lang-popout">
+                <LanguagePicker compact />
+              </div>
+            )}
+          </div>
           <div className="top-pop-wrap" ref={notifPopRef}>
             <button
               type="button"

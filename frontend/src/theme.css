@@ -309,13 +309,14 @@ a { color: var(--grass-2); text-decoration: none; }
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  height: 38px;
+  padding: 0 13px;
   font-size: 0.8rem;
   font-weight: 600;
   color: var(--text-2);
   background: rgba(228, 245, 235, 0.06);
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 7px 13px;
   white-space: nowrap;
 }
 
@@ -350,6 +351,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .notif-popout { width: min(440px, calc(100vw - 32px)); }
 .season-popout { width: min(320px, calc(100vw - 32px)); }
+/* Language popout in the topbar: three compact jerseys on one row. */
+.lang-popout { width: min(392px, calc(100vw - 32px)); }
 
 /* Compact text button used inside popout headers. */
 .btn.btn-xs {
@@ -535,6 +538,17 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 }
 
 .club-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var(--line-2); }
+
+/* Compact account-tier pill in the top-right: same 38px height as the
+   icon buttons around it so the row stays aligned. */
+.account-chip {
+  height: 38px;
+  padding: 0 14px;
+  font-size: 0.74rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
 
 .icon-btn {
   width: 38px;
@@ -3495,7 +3509,7 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 300px;
+  max-height: 340px;
   overflow: auto;
 }
 
@@ -3504,10 +3518,12 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   align-items: center;
   gap: 9px;
   width: 100%;
+  min-height: 46px;
   background: rgba(4, 13, 8, 0.5);
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border-left: 3px solid var(--line);
+  border-radius: 9px;
+  padding: 6px 10px;
   color: var(--text);
   font-size: 0.88rem;
   cursor: pointer;
@@ -3516,31 +3532,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 }
 
 .sub-row:hover { border-color: rgba(61, 220, 132, 0.45); }
-
-.sub-energy {
-  display: inline-flex;
-  flex: 0 0 48px;
-  flex-direction: column;
-  gap: 3px;
-  color: var(--text-3);
-  font-size: 0.72rem;
-  line-height: 1;
-}
-
-.sub-energy-track {
-  width: 48px;
-  height: 4px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(228, 245, 235, 0.12);
-}
-
-.sub-energy-fill {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--gold), var(--grass-2));
-}
+.sub-row.is-bench { border-left-color: rgba(61, 220, 132, 0.6); background: rgba(61, 220, 132, 0.08); }
+.sub-row.is-on-pitch { border-left-color: rgba(77, 163, 255, 0.6); background: rgba(77, 163, 255, 0.07); }
 
 .sub-rating { color: var(--text); font-weight: 800; }
 
@@ -4066,8 +4059,7 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .tb-player-rating { position: absolute; right: -9px; top: -2px; min-width: 19px; padding: 1px 3px; border: 1px solid rgba(255, 255, 255, 0.45); border-radius: 5px; background: rgba(4, 19, 10, 0.8); color: var(--gold-2); font-family: var(--font-display); font-size: 0.62rem; font-weight: 800; line-height: 1.1; }
 .tb-empty-dot { width: 26px; height: 26px; border: 1px dashed rgba(255, 255, 255, 0.6); border-radius: 50%; }
 
-.tb-bench-list,
-.tb-pool-list { display: flex; flex-direction: column; gap: 6px; max-height: 285px; overflow-y: auto; scrollbar-width: thin; }
+.tb-bench-pool-list { display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow-y: auto; scrollbar-width: thin; }
 
 .tb-list-row {
   display: flex;
@@ -4075,8 +4067,9 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   gap: 8px;
   width: 100%;
   min-height: 37px;
-  padding: 7px 9px;
+  padding: 6px 9px;
   border: 1px solid var(--line);
+  border-left-width: 3px;
   border-radius: 9px;
   background: rgba(4, 13, 8, 0.5);
   color: var(--text);
@@ -4087,19 +4080,88 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   touch-action: none;
 }
 
+/* Bench (substitutes) zone: green tinted, reads "next to come on". */
+.tb-list-row.is-bench { border-left-color: rgba(61, 220, 132, 0.6); background: rgba(61, 220, 132, 0.08); }
+
+/* Rest-of-squad (pool) zone: amber tinted, reads "not yet selected". */
+.tb-list-row.is-pool { border-left-color: rgba(240, 180, 41, 0.6); background: rgba(240, 180, 41, 0.07); }
+
 .tb-list-row:hover { border-color: rgba(61, 220, 132, 0.45); }
 .tb-list-row:active { cursor: grabbing; }
 .tb-list-row:disabled { opacity: 0.45; cursor: default; }
 .tb-list-row.is-selected { border-color: var(--grass); background: rgba(35, 165, 90, 0.18); }
 .tb-list-row.is-over { border-color: var(--gold); background: rgba(240, 180, 41, 0.15); box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.2); }
-.tb-list-row.is-empty { color: var(--text-3); cursor: default; }
-.tb-row-number, .tb-row-position { flex: 0 0 32px; color: var(--text-3); font-family: var(--font-display); font-size: 0.72rem; font-weight: 700; text-align: center; }
-.tb-row-position { flex-basis: 43px; color: var(--grass-2); font-size: 0.65rem; letter-spacing: 0.04em; }
-.tb-row-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tb-row-energy { color: var(--grass-2); font-family: var(--font-display); font-size: 0.68rem; font-weight: 700; white-space: nowrap; }
+
+.tb-row-position {
+  flex: 0 0 auto;
+  min-width: 34px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.tb-row-position-empty { background: transparent; }
+
+.tb-row-body { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.tb-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-row-rating { color: var(--text-3); font-family: var(--font-display); font-weight: 700; }
-.tb-pool-row.is-unavailable { cursor: not-allowed; }
-.tb-pool-empty { padding: 12px 4px; color: var(--text-3); font-size: 0.82rem; text-align: center; }
+
+/* Energy as a thin bar under the player name (all bench/pool rows). */
+.tb-energy-bar {
+  display: block;
+  width: 100%;
+  max-width: 150px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(228, 245, 235, 0.12);
+}
+.tb-energy-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--gold), var(--grass-2));
+}
+
+/* Empty bench slots stay visible as dashed placeholders so the manager sees
+   there is still a substitute spot to fill (and can drop a player onto it). */
+.tb-list-row.is-empty-sub {
+  border-left-style: dashed;
+  background: transparent;
+  color: var(--text-3);
+  cursor: default;
+}
+.tb-list-row.is-empty-sub:hover { border-color: var(--line); }
+.tb-empty-sub-slot { font-style: italic; }
+
+/* Divider between the substitutes zone and the rest-of-squad zone. */
+.tb-zone-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+  color: var(--text-3);
+  font-family: var(--font-display);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tb-zone-divider::before,
+.tb-zone-divider::after {
+  height: 1px;
+  flex: 1;
+  content: "";
+  background: rgba(228, 245, 235, 0.14);
+}
+.tb-zone-divider span { padding: 0 6px; }
+
+.tb-row-energy { color: var(--grass-2); font-family: var(--font-display); font-size: 0.68rem; font-weight: 700; white-space: nowrap; }
+.tb-list-row.is-unavailable { cursor: not-allowed; }
 
 .tb-takers { padding-bottom: 8px; }
 .tb-taker-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
