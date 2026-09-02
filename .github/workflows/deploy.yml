@@ -83,7 +83,9 @@ jobs:
         working-directory: backend
         env:
           NODE_ENV: test
-        run: npm test
+        # The suite contains deliberately long deterministic cases; serial
+        # workers avoid Vitest task-update timeouts on shared CI runners.
+        run: npm test -- --maxWorkers=1
 
       - name: Run integration tests against isolated schema
         working-directory: backend
