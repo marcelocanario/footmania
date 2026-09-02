@@ -1,0 +1,14 @@
+.git
+.github
+.agents
+.claude
+.kilo
+.playwright-mcp
+**/node_modules
+**/dist
+**/.env*
+**/*.log
+backend/tests
+backend/plans
+calibration
+plans

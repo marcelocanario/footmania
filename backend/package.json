@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json && node scripts/copy-game-data.mjs",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
     "test": "vitest run",
     "test:calibration": "vitest run --config vitest.calibration.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
@@ -15,7 +15,7 @@
     "calibrate:match": "tsx scripts/match-calibration-next.ts",
     "regenerate:match-golden": "tsx scripts/regenerate-match-golden.mts",
     "db:generate": "prisma generate",
-    "db:upgrade": "prisma migrate deploy && tsx scripts/migrate-natural-positions.ts && tsx scripts/migrate-contract-market.ts",
+    "db:upgrade": "node scripts/db-upgrade.mjs",
     "db:push": "prisma db push",
     "db:migrate-contract-market": "tsx scripts/migrate-contract-market.ts",
     "db:reset": "prisma migrate reset",

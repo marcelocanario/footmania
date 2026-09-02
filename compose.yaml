@@ -1,0 +1,53 @@
+name: footmania
+
+services:
+  backend:
+    build:
+      context: .
+      target: backend
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "18085"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:18085/api/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8084/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # The tunnel is configured in Cloudflare to publish footmania.dev to
+  # http://127.0.0.1:8084. The token is deliberately supplied only by the
+  # homelab .env and is never committed to the repository.
+  cloudflared:
+    profiles: ["tunnel"]
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      frontend:
+        condition: service_healthy
+    command: ["tunnel", "--no-autoupdate", "run", "--token", "${CLOUDFLARE_TUNNEL_TOKEN:-}"]
