@@ -137,12 +137,11 @@ jobs:
           : "${GOOGLE_CLIENT_ID:?GOOGLE_CLIENT_ID is required in .env}"
           : "${GOOGLE_CLIENT_SECRET:?GOOGLE_CLIENT_SECRET is required in .env}"
           : "${PUBLIC_ORIGIN:?PUBLIC_ORIGIN is required in .env}"
-          : "${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN is required in .env}"
 
           docker compose build
           # This command runs migrations only. It never runs the application
           # worker, and it never points at the CI/test schema.
           docker compose run --rm backend npm run db:upgrade
-          docker compose --profile tunnel up -d --build --remove-orphans --wait --wait-timeout 300
+          docker compose up -d --build --remove-orphans --wait --wait-timeout 300
           curl --fail --silent --show-error http://127.0.0.1:18085/api/health
           curl --fail --silent --show-error http://127.0.0.1:8084/healthz
