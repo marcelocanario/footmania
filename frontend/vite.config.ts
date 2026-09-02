@@ -8,6 +8,12 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      // A fresh filename forces every browser to install the new worker the
+      // moment this build ships (Cloudflare's static-asset edge cache would
+      // otherwise serve the previous sw.js for hours). Inline registration
+      // keeps the reference inside index.html, which is never cached.
+      filename: "sw-v2.js",
+      injectRegister: "inline",
       includeAssets: ["favicon.svg"],
       manifest: {
         name: "Footmania",
