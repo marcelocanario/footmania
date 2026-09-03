@@ -45,7 +45,8 @@ function statusBadge(row: StandingsRow, position: number, isTopDivision: boolean
  * position. When `onClubClick` is set, team cells become clickable.
  * `compact` drops the per-result columns so the table fits narrow side-by-side
  * cards without horizontal scrolling; `highlightClubId` tints the row of the
- * club currently being inspected (independent of the viewer's own `isMine`).
+ * club currently being inspected, otherwise the viewer's own club (`isMine`)
+ * is the row that gets tinted. Other human-run clubs are not tinted.
  */
 export function StandingsTable({
   rows,
@@ -64,13 +65,16 @@ export function StandingsTable({
 }) {
   const { t } = useTranslation();
   const tableRows = rows.map((row, index) => ({ ...row, displayPosition: index + 1 }));
+  // Which row is "ours"? An explicit target club (team profile table) wins;
+  // otherwise it is the viewer's own club when present in the table.
+  const highlightId =
+    highlightClubId !== undefined ? highlightClubId : tableRows.find((row) => row.isMine)?.clubId;
   return (
     <div className="table-wrap">
       <DataTable
         value={tableRows}
         rowClassName={(r) => [
-          r.isHuman ? "human-row" : "",
-          r.clubId === highlightClubId ? "my-row" : "",
+          r.clubId === highlightId ? "my-row" : "",
           r.displayPosition === 1 && seasonComplete ? "standings-champion" : "",
           !isTopDivision && r.promotionStatus === "POSSIBLE" ? "standings-promotion-possible" : "",
           !isTopDivision && r.promotionStatus === "PROMOTED" ? "standings-promoted" : "",

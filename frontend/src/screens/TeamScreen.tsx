@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { CalendarDays, Clock, History as HistoryIcon, Landmark, LayoutGrid, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
+import { CalendarDays, History as HistoryIcon, Landmark, LayoutGrid, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
 import { api, type FixtureView, type TeamProfile } from "../api/client";
 import { countryFlag } from "../countryFlags";
 import { money } from "../format";
@@ -58,8 +58,10 @@ export function TeamScreen() {
   const { club } = profile;
   const flag = countryFlag(club.country);
   const isOwnClub = club.id === statusClubId;
-  const played = profile.fixtures.filter((f) => f.played && f.matchId != null);
-  const upcoming = profile.fixtures.filter((f) => !f.played);
+  // The profile carries the whole division's fixtures; the team screen only
+  // lists the matches this club actually plays in (past + upcoming together).
+  const seasonFixtures = profile.fixtures.filter((f) => f.homeClubId === club.id || f.awayClubId === club.id);
+  // Champion only when the whole division has finished; the table shows every club.
   const seasonComplete = profile.fixtures.length > 0 && profile.fixtures.every((f) => f.played);
   const titlesTotal = Object.values(profile.trophies).reduce((sum, count) => sum + count, 0);
 
@@ -188,25 +190,17 @@ export function TeamScreen() {
         </div>
       </div>
 
-      {/* Recent results & upcoming matches */}
-      {(played.length > 0 || upcoming.length > 0) && (
-        <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
-          {played.length > 0 && (
-            <div className="card">
-              <h2 className="card-title"><Clock size={17} /> {t("team.recentResults")}</h2>
-              {played.slice(-6).reverse().map((f) => (
-                <TeamFixtureRow key={f.id} fixture={f} onOpenResult={() => setResultFixture(f)} />
-              ))}
-            </div>
-          )}
-          {upcoming.length > 0 && (
-            <div className="card">
-              <h2 className="card-title"><CalendarDays size={17} /> {t("team.upcomingMatches")}</h2>
-              {upcoming.slice(0, 6).map((f) => (
-                <TeamFixtureRow key={f.id} fixture={f} />
-              ))}
-            </div>
-          )}
+      {/* This club's current-season matches: past results and upcoming fixtures together. */}
+      {seasonFixtures.length > 0 && (
+        <div className="card" style={{ marginTop: 16 }}>
+          <h2 className="card-title"><CalendarDays size={17} /> {t("team.seasonMatches")}</h2>
+          {seasonFixtures.map((f) => (
+            <TeamFixtureRow
+              key={f.id}
+              fixture={f}
+              onOpenResult={f.played && f.matchId != null ? () => setResultFixture(f) : undefined}
+            />
+          ))}
         </div>
       )}
 
@@ -250,7 +244,8 @@ export function TeamScreen() {
 }
 
 /** Compact fixture row for the team screen lists. Played results open the
- *  events popout; live matches jump straight into the stadium. */
+ *  events popout; live matches jump straight into the stadium. Every row is
+ *  one of this club's own matches, so no per-row human tint is applied. */
 function TeamFixtureRow({ fixture, onOpenResult }: { fixture: FixtureView; onOpenResult?: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -258,7 +253,7 @@ function TeamFixtureRow({ fixture, onOpenResult }: { fixture: FixtureView; onOpe
   const clickable = isLive || Boolean(onOpenResult);
   return (
     <div
-      className={`result-card${fixture.isHuman ? " human" : ""}${isLive ? " live-now" : ""}`}
+      className={`result-card${isLive ? " live-now" : ""}`}
       style={{ marginBottom: 6, ...(clickable ? { cursor: "pointer" } : {}) }}
       role={clickable ? "button" : undefined}
       tabIndex={clickable ? 0 : undefined}

@@ -3398,6 +3398,11 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .p-datatable .p-datatable-tbody > tr.standings-promoted > td:first-child { box-shadow: inset 3px 0 0 var(--grass-2); }
 .p-datatable .p-datatable-tbody > tr.standings-relegated > td:first-child { box-shadow: inset 3px 0 0 var(--red-2); }
 
+/* The viewer's own club (or the club being inspected) stands out in standings
+   tables; other human-run clubs are intentionally not tinted. */
+.p-datatable .p-datatable-tbody > tr.my-row { background: rgba(35, 165, 90, 0.08); }
+.p-datatable .p-datatable-tbody > tr.my-row > td:first-child { box-shadow: inset 3px 0 0 var(--grass-2); }
+
 .squad-table-wrap,
 .squad-table-wrap .p-datatable,
 .squad-table-wrap .p-datatable-wrapper,
@@ -4534,6 +4539,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .archive-standings-table { min-width: 660px; }
 .archive-standings-table td, .archive-standings-table th { vertical-align: middle; }
 .archive-standings-table tr.archive-champion-row td { background: rgba(240, 180, 41, 0.045); }
+.archive-standings-table tr.my-row td { background: rgba(35, 165, 90, 0.08); }
+.archive-standings-table tr.my-row td:first-child { box-shadow: inset 3px 0 0 var(--grass-2); }
 .archive-club-cell { display: flex; align-items: center; gap: 8px; min-width: 260px; }
 .archive-club-cell .club-name-link { color: var(--text); font-weight: 600; }
 .archive-club-cell .history-status-badges { margin-left: auto; }
