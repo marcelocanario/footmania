@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import type { ComponentType } from "react";
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "./api/client";
 import { useGame } from "./store/game";
 import { useSettings } from "./store/settings";
@@ -27,11 +27,12 @@ const PreGame = lazyNamed(() => import("./screens/PreGame"), "PreGame");
 const Transfers = lazyNamed(() => import("./screens/Transfers"), "Transfers");
 const Finances = lazyNamed(() => import("./screens/Finances"), "Finances");
 const SeasonEnd = lazyNamed(() => import("./screens/SeasonEnd"), "SeasonEnd");
-const History = lazyNamed(() => import("./screens/History"), "History");
 const SettingsScreen = lazyNamed(() => import("./screens/Settings"), "SettingsScreen");
 const FriendsScreen = lazyNamed(() => import("./screens/Friends"), "FriendsScreen");
 const MyClub = lazyNamed(() => import("./screens/MyClub"), "MyClub");
 const TeamScreen = lazyNamed(() => import("./screens/TeamScreen"), "TeamScreen");
+const TeamOverview = lazyNamed(() => import("./screens/TeamScreen"), "TeamOverview");
+const TeamHistory = lazyNamed(() => import("./screens/History"), "TeamHistory");
 const Admin = lazyNamed(() => import("./screens/Admin"), "Admin");
 const Privacy = lazyNamed(() => import("./screens/Privacy"), "Privacy");
 const Terms = lazyNamed(() => import("./screens/Terms"), "Terms");
@@ -171,13 +172,18 @@ function ClubGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/** Bare /history resolves to the viewer's own club history (/history/:id). */
-function HistoryRedirect() {
+/** Bare /history and the old /history/:clubId URLs resolve to the team
+ *  profile's History tab (/team/:clubId/history). */
+function TeamHistoryRedirect() {
+  const { clubId } = useParams();
   const status = useGame((s) => s.status);
   const snapshot = useGame((s) => s.snapshot);
   const ownClubId = snapshot?.club?.id ?? status?.club?.id ?? status?.userClubId ?? null;
-  if (ownClubId !== null) return <Navigate to={`/history/${ownClubId}`} replace />;
-  return <PageLoading />;
+  const target = clubId !== undefined ? clubId : ownClubId !== null ? String(ownClubId) : null;
+  if (target !== null && /^[1-9]\d*$/.test(target)) return <Navigate to={`/team/${target}/history`} replace />;
+  // Malformed ids (and the no-club edge) surface the same unknown-team
+  // empty state the team screen shows, instead of a silent dashboard bounce.
+  return <div className="empty-state" style={{ paddingTop: 80 }}>{i18n.t("team.unknown")}</div>;
 }
 
 function AppRoutes() {
@@ -185,7 +191,10 @@ function AppRoutes() {
     <Routes>
       <Route path="/join" element={<Join />} />
       <Route path="/my-club" element={<ClubGuard><MyClub /></ClubGuard>} />
-      <Route path="/team/:clubId" element={<ClubGuard><TeamScreen /></ClubGuard>} />
+      <Route path="/team/:clubId" element={<ClubGuard><TeamScreen /></ClubGuard>}>
+        <Route index element={<TeamOverview />} />
+        <Route path="history" element={<TeamHistory />} />
+      </Route>
       <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
       <Route path="/squad" element={<ClubGuard><Squad /></ClubGuard>} />
       <Route path="/tactics" element={<ClubGuard><Tactics /></ClubGuard>} />
@@ -199,8 +208,8 @@ function AppRoutes() {
       <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />
       <Route path="/season-end" element={<ClubGuard><SeasonEnd /></ClubGuard>} />
       <Route path="/records" element={<Navigate to="/history" replace />} />
-      <Route path="/history" element={<ClubGuard><HistoryRedirect /></ClubGuard>} />
-      <Route path="/history/:clubId" element={<ClubGuard><History /></ClubGuard>} />
+      <Route path="/history" element={<ClubGuard><TeamHistoryRedirect /></ClubGuard>} />
+      <Route path="/history/:clubId" element={<ClubGuard><TeamHistoryRedirect /></ClubGuard>} />
       <Route path="/settings" element={<ClubGuard><SettingsScreen /></ClubGuard>} />
       <Route path="/friends" element={<ClubGuard><FriendsScreen /></ClubGuard>} />
       <Route path="/admin" element={<Admin />} />

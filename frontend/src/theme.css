@@ -4418,56 +4418,6 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .history-page { display: grid; gap: 16px; }
 
-.history-hero {
-  position: relative;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 22px;
-  min-height: 220px;
-  overflow: hidden;
-  padding: 30px 28px;
-  border: 1px solid rgba(61, 220, 132, 0.24);
-  border-radius: 26px;
-  background:
-    radial-gradient(620px 260px at 12% -30%, rgba(240, 180, 41, 0.22), transparent 66%),
-    radial-gradient(520px 280px at 92% 0%, rgba(61, 220, 132, 0.18), transparent 68%),
-    linear-gradient(135deg, #0f291c, #07130c 72%);
-  box-shadow: 0 34px 70px -32px rgba(0, 0, 0, 0.86), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-.history-hero-floodlights,
-.history-hero-stripes { position: absolute; inset: 0; pointer-events: none; }
-.history-hero-floodlights {
-  background:
-    radial-gradient(190px 130px at 10% -24px, rgba(255, 244, 214, 0.2), transparent 70%),
-    radial-gradient(190px 130px at 90% -24px, rgba(255, 244, 214, 0.16), transparent 70%);
-}
-.history-hero-stripes { opacity: 0.08; background: repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.45) 0 48px, transparent 48px 96px); }
-.history-hero-copy, .history-hero-seal { position: relative; z-index: 1; }
-.history-hero-copy { max-width: 650px; }
-.history-hero .kicker { color: var(--gold-2); }
-.history-hero h1 { margin-top: 8px; font-size: clamp(2.25rem, 5vw, 3.8rem); letter-spacing: 0.07em; line-height: 0.9; }
-.history-hero p { max-width: 560px; margin: 13px 0 0; color: var(--text-2); font-size: 1rem; line-height: 1.5; }
-.history-hero-seal {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-shrink: 0;
-  padding: 13px 15px;
-  border: 1px solid rgba(240, 180, 41, 0.38);
-  border-radius: 17px;
-  background: rgba(4, 13, 8, 0.5);
-  color: var(--gold-2);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  font-family: var(--font-display);
-  font-size: 0.76rem;
-  letter-spacing: 0.1em;
-  line-height: 1.25;
-  text-transform: uppercase;
-}
-.history-hero-seal b { color: var(--text); font-size: 0.86rem; }
-
 .history-overview-grid, .history-hall-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1.1fr) minmax(340px, 0.9fr); }
 .history-hall-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .history-journey-card, .footmania-ranking-panel, .history-records-card, .history-awards-card { min-width: 0; }
@@ -4589,14 +4539,10 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 @media (max-width: 880px) {
   .history-overview-grid, .history-hall-grid { grid-template-columns: 1fr; }
-  .history-hero { min-height: 190px; padding: 25px 21px; }
-  .history-hero-seal { display: none; }
   .season-history-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 @media (max-width: 560px) {
-  .history-hero h1 { font-size: 2.35rem; }
-  .history-hero p { font-size: 0.9rem; }
   .history-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .history-record { grid-template-columns: 45px minmax(0, 1fr); }
   .history-record b { grid-column: 2; max-width: none; }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { NavLink, useNavigate, useParams } from "react-router-dom";
+import { NavLink, Outlet, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { CalendarDays, History as HistoryIcon, Landmark, LayoutGrid, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
 import { api, type FixtureView, type TeamProfile } from "../api/client";
@@ -18,23 +18,20 @@ import { FootmaniaRankBadge } from "../components/FootmaniaRanking";
 import { SeasonHistoryTimeline } from "../components/SeasonHistoryTimeline";
 
 /**
- * Public team screen (/team/:id): identity hero, kits, current division
- * table, results & fixtures and the immutable season timeline. Every club
- * name across the app links here.
+ * Public team profile (/team/:id): identity hero, the Overview | History
+ * tab bar, and the club journey summary. Content lives in the nested routes
+ * TeamOverview (index) and TeamHistory (/team/:id/history) so the header and
+ * tabs persist across tabs.
  */
 export function TeamScreen() {
   const { t } = useTranslation();
-  const { clubId } = useParams();
+  const { clubId: clubIdParam } = useParams();
   const navigate = useNavigate();
   const statusClubId = useGame((s) => s.status?.userClubId ?? null);
   const [profile, setProfile] = useState<TeamProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Finished-match popout (events history), same as the Competitions screen.
-  const [resultFixture, setResultFixture] = useState<FixtureView | null>(null);
-  // Player info popout, reused from Squad/MatchHistory.
-  const [playerTarget, setPlayerTarget] = useState<{ id: number; name: string } | null>(null);
 
-  const id = Number(clubId);
+  const id = Number(clubIdParam);
   const load = useCallback(() => {
     if (!Number.isInteger(id) || id <= 0) {
       setError(t("team.unknown"));
@@ -42,7 +39,7 @@ export function TeamScreen() {
     }
     setError(null);
     return api.teamProfile(id).then(setProfile).catch((e) => setError((e as Error).message));
-  }, [id]);
+  }, [id, t]);
 
   useEffect(() => {
     setProfile(null);
@@ -56,13 +53,9 @@ export function TeamScreen() {
   if (!profile) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.loading")}</div>;
 
   const { club } = profile;
+  const clubId = club.id;
   const flag = countryFlag(club.country);
   const isOwnClub = club.id === statusClubId;
-  // The profile carries the whole division's fixtures; the team screen only
-  // lists the matches this club actually plays in (past + upcoming together).
-  const seasonFixtures = profile.fixtures.filter((f) => f.homeClubId === club.id || f.awayClubId === club.id);
-  // Champion only when the whole division has finished; the table shows every club.
-  const seasonComplete = profile.fixtures.length > 0 && profile.fixtures.every((f) => f.played);
   const titlesTotal = Object.values(profile.trophies).reduce((sum, count) => sum + count, 0);
 
   return (
@@ -115,17 +108,43 @@ export function TeamScreen() {
         )}
       </div>
 
-      {/* Overview | History tabs: history lives at /history/:id in the world-archive layout. */}
+      {/* Overview | History tabs; history is the nested /team/:id/history page. */}
       <div className="segmented team-tabs" role="tablist" aria-label={t("team.profileSections")} style={{ marginTop: 16 }}>
-        <NavLink to={`/team/${club.id}`} end role="tab" className={({ isActive }) => (isActive ? "active" : "")}>
+        <NavLink to={`/team/${clubId}`} end role="tab" className={({ isActive }) => (isActive ? "active" : "")}>
           <LayoutGrid size={14} /> {t("team.overviewTab")}
         </NavLink>
-        <NavLink to={`/history/${club.id}`} role="tab" className={({ isActive }) => (isActive ? "active" : "")}>
+        <NavLink to={`/team/${clubId}/history`} role="tab" className={({ isActive }) => (isActive ? "active" : "")}>
           <HistoryIcon size={14} /> {t("team.historyTab")}
         </NavLink>
       </div>
 
-      <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
+      <div style={{ marginTop: 16 }}>
+        <Outlet context={{ profile }} />
+      </div>
+    </div>
+  );
+}
+
+/** Overview tab (index of /team/:id): kits, current division table,
+ *  this club's fixtures and simple squad list. */
+export function TeamOverview() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const { profile } = useOutletContext<{ profile: TeamProfile }>();
+  const [resultFixture, setResultFixture] = useState<FixtureView | null>(null);
+  const [playerTarget, setPlayerTarget] = useState<{ id: number; name: string } | null>(null);
+
+  const { club } = profile;
+  const clubId = club.id;
+  // The profile carries the whole division's fixtures; the overview only
+  // lists the matches this club actually plays in (past + upcoming together).
+  const seasonFixtures = profile.fixtures.filter((f) => f.homeClubId === clubId || f.awayClubId === clubId);
+  // Champion only when the whole division has finished; the table shows every club.
+  const seasonComplete = profile.fixtures.length > 0 && profile.fixtures.every((f) => f.played);
+
+  return (
+    <>
+      <div className="grid cols-2 stagger">
         {/* Kits: all three designs stacked in one card */}
         <div className="card team-kit-card">
           <h2 className="card-title"><Shirt size={17} /> {t("team.kits")}</h2>
@@ -178,7 +197,7 @@ export function TeamScreen() {
                 seasonComplete={seasonComplete}
                 onClubClick={(row) => navigate(`/team/${row.clubId}`)}
                 compact
-                highlightClubId={club.id}
+                highlightClubId={clubId}
               />
             </>
           ) : (
@@ -228,18 +247,18 @@ export function TeamScreen() {
         </div>
       )}
 
-      {/* Club journey summary: the full world-archive view lives on the History tab. */}
+      {/* Club journey summary: the full archive lives on the History tab. */}
       <div className="card team-history-card" style={{ marginTop: 16 }}>
         <div className="card-title"><Trophy size={17} /> {t("team.clubJourney")}</div>
         <SeasonHistoryTimeline rows={profile.history} trophies={profile.trophies} />
-        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => navigate(`/history/${club.id}`)}>
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => navigate(`/team/${clubId}/history`)}>
           <HistoryIcon size={14} /> {t("team.viewFullHistory")}
         </button>
       </div>
 
       <MatchResultDialog fixture={resultFixture} onClose={() => setResultFixture(null)} />
       <PlayerDetailsDialog target={playerTarget} onClose={() => setPlayerTarget(null)} />
-    </div>
+    </>
   );
 }
 

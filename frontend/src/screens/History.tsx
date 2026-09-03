@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams, useOutletContext } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Award, History as HistoryIcon, Medal, Trophy } from "lucide-react";
+import { Award, History as HistoryIcon, Medal, Trophy } from "lucide-react";
 import { api, type SeasonAward, type SeasonHistoryView, type TeamProfile } from "../api/client";
 import { bestXiEntries, individualAwardDetail } from "../utils/awards";
 import { ArchivedSeasonCard } from "../components/ArchivedSeasonCard";
@@ -46,27 +46,27 @@ function AwardDetail({ award, onPlayerClick }: { award: SeasonAward; onPlayerCli
 }
 
 /**
- * Per-club history (/history/:clubId) in the world-archive layout: the viewed
- * club's journey, the global record book / awards / ranking, and the
- * season-by-season archive with the viewed club's rows highlighted. Bare
- * /history redirects to the viewer's own club, so this screen always has a
- * target club. Reached from the History tab of /team/:clubId.
+ * History tab of the team profile (/team/:clubId/history). Renders under the
+ * club hero + tab bar owned by TeamScreen; this component only carries the
+ * per-club journey card, the global record book / awards / ranking, and the
+ * season-by-season archive with this club's rows highlighted.
  */
-export function History() {
+export function TeamHistory() {
   const { t } = useTranslation();
   const { clubId } = useParams();
+  const outlet = useOutletContext<{ profile: TeamProfile }>();
   const targetClubId = Number(clubId);
   const targetValid = Number.isInteger(targetClubId) && targetClubId > 0;
   const [seasons, setSeasons] = useState<SeasonHistoryView[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [profile, setProfile] = useState<TeamProfile | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
   const [ranking, setRanking] = useState<Awaited<ReturnType<typeof api.footmaniaRanking>> | null>(null);
   const [rankingError, setRankingError] = useState<string | null>(null);
   const [playerTarget, setPlayerTarget] = useState<{ id: number; name: string } | null>(null);
   const snapshot = useGame((state) => state.snapshot);
   const status = useGame((state) => state.status);
   const ownClubId = status?.userClubId ?? snapshot?.club?.id ?? null;
+  const profile = targetValid ? outlet.profile : null;
+
   const load = useCallback(() => {
     setHistoryError(null);
     return api.history().then((res) => setSeasons(res.seasons)).catch((e) => setHistoryError((e as Error).message));
@@ -75,12 +75,6 @@ export function History() {
     setRankingError(null);
     return api.footmaniaRanking().then(setRanking).catch((e) => setRankingError((e as Error).message));
   }, []);
-  const loadProfile = useCallback(() => {
-    if (!targetValid) return;
-    setProfile(null);
-    setProfileError(null);
-    return api.teamProfile(targetClubId).then(setProfile).catch((e) => setProfileError((e as Error).message));
-  }, [targetClubId, targetValid]);
 
   useEffect(() => {
     void load();
@@ -91,17 +85,9 @@ export function History() {
     });
   }, [load, loadRanking]);
 
-  useEffect(() => {
-    void loadProfile();
-    return api.cache.subscribe((scope) => {
-      if (scope === "mp" || scope === "background:mp") void loadProfile();
-    });
-  }, [loadProfile]);
-
-  if (!targetValid) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.unknown")}</div>;
+  if (!targetValid || !profile) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.unknown")}</div>;
   if (historyError) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadFailed", { error: historyError })}</div>;
-  if (profileError) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.unknown")}</div>;
-  if (!seasons || !profile) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadingDots")}</div>;
+  if (!seasons) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadingDots")}</div>;
 
   const isOwn = ownClubId !== null && targetClubId === ownClubId;
   const clubName = profile.club.name;
@@ -118,25 +104,6 @@ export function History() {
 
   return (
     <div className="history-page">
-      <div style={{ marginBottom: 12 }}>
-        <Link to={`/team/${targetClubId}`} className="btn ghost btn-xs" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
-          <ArrowLeft size={13} /> {t("history.backToTeam")}
-        </Link>
-      </div>
-      <section className="history-hero">
-        <div className="history-hero-floodlights" aria-hidden />
-        <div className="history-hero-stripes" aria-hidden />
-        <div className="history-hero-copy">
-          <div className="kicker"><HistoryIcon size={14} /> {t("history.clubHistory")}</div>
-          <h1>{isOwn ? t("history.theArchive") : t("history.archiveFor", { club: clubName })}</h1>
-          <p>{t("history.heroIntro")}</p>
-        </div>
-        <div className="history-hero-seal">
-          <Trophy size={28} />
-          <span>{t("history.worldFootball")}<br /><b>{t("history.sinceKickoff")}</b></span>
-        </div>
-      </section>
-
       <div className="history-overview-grid">
         <section className="card history-journey-card">
           <div className="history-section-head">
