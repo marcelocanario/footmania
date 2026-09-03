@@ -231,22 +231,37 @@ export async function resumeSeason(prisma: PrismaClient, options: PauseResumeOpt
                 data: { listedAt: BigInt(loan.listedAt), claimableAt: BigInt(loan.claimableAt) },
               });
             }
-            // Live-match pacing AND the inactivity anchors: applyResumeShift
-            // moves all three, and this is the only place they reach the
-            // database (invalidateWorldCache below forces the next load to
-            // read these rows back), so a club whose only shifted field is an
-            // inactivity anchor must be written too. Skipping it would silently
-            // discard the shift and leave the club's abandonment countdown
-            // running through the freeze.
             for (const club of loaded.world.clubs) {
-              if (club.liveMatchAt === null && club.lastMeaningfulActivityAt === null && club.abandonmentEligibleAt === null) continue;
+              if (club.liveMatchAt === null) continue;
               await tx.club.updateMany({
                 where: { saveId: loaded.save.id, id: club.id },
-                data: {
-                  ...(club.liveMatchAt !== null ? { liveMatchAt: BigInt(club.liveMatchAt) } : {}),
-                  ...(club.lastMeaningfulActivityAt !== null ? { lastMeaningfulActivityAt: BigInt(club.lastMeaningfulActivityAt) } : {}),
-                  ...(club.abandonmentEligibleAt !== null ? { abandonmentEligibleAt: BigInt(club.abandonmentEligibleAt) } : {}),
-                },
+                data: { liveMatchAt: BigInt(club.liveMatchAt) },
+              });
+            }
+            // The inactivity anchors: applyResumeShift moves both, and this is
+            // the only place they reach the database (invalidateWorldCache
+            // below forces the next load to read these rows back), so without
+            // this the shift is silently discarded and a club's abandonment
+            // countdown keeps running through the freeze.
+            //
+            // Written as two set-based increments rather than one UPDATE per
+            // club: every non-null anchor moves by exactly the same `shift`,
+            // and every human club has one, so a per-club loop would add one
+            // round-trip per manager to a transaction that already issues one
+            // per unplayed fixture and pending event -- all under Prisma's
+            // default 5s interactive-transaction timeout.
+            // Guarded to match applyResumeShift, which no-ops at shift <= 0:
+            // these are the only set-wide writes here, so a zero shift would
+            // otherwise rewrite every club row for nothing.
+            if (shift > 0) {
+              const shiftBig = BigInt(shift);
+              await tx.club.updateMany({
+                where: { saveId: loaded.save.id, lastMeaningfulActivityAt: { not: null } },
+                data: { lastMeaningfulActivityAt: { increment: shiftBig } },
+              });
+              await tx.club.updateMany({
+                where: { saveId: loaded.save.id, abandonmentEligibleAt: { not: null } },
+                data: { abandonmentEligibleAt: { increment: shiftBig } },
               });
             }
             for (const st of loaded.world.liveMatches) {
