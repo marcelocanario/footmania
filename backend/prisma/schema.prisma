@@ -199,16 +199,19 @@ model Invitation {
 
 // Persistent authoritative clock for the global world.
 model GameClock {
-  id              String   @id
-  saveId          Int      @unique
-  save            Save     @relation(fields: [saveId], references: [id], onDelete: Cascade)
+  id              String    @id
+  saveId          Int       @unique
+  save            Save      @relation(fields: [saveId], references: [id], onDelete: Cascade)
   absoluteGameDay Int
   seasonId        Int
   seasonNumber    Int
   seasonDayIndex  Int
   phase           String
   lastAdvancedAt  DateTime
-  version         Int      @default(0)
+  // The boundary instant the current game day started at (dayBoundary.ts).
+  // Nullable only for pre-migration saves; every writer mirrors mp.lastBoundaryAt.
+  lastBoundaryAt  DateTime?
+  version         Int       @default(0)
 }
 
 model ScheduledEvent {

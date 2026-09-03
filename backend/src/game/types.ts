@@ -1003,6 +1003,15 @@ export interface MpState {
   seasonDayIndex?: number;
   phase?: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
   lastAdvancedAt?: number | null;
+  /**
+   * The boundary instant this game day started at, always boundary-aligned
+   * (see services/dayBoundary.ts). Unlike lastAdvancedAt — when the advance
+   * physically executed — this is the absolute grid reference: the day-advance
+   * trigger and the pending GAME_DAY_ADVANCE row derive from it, so a pause,
+   * a deferred retry or a manual advance can never move the grid off the
+   * boundary. Nullable for pre-migration saves; backfilled on first load.
+   */
+  lastBoundaryAt?: number | null;
   clockVersion?: number;
   startAbsoluteGameDay?: number;
   /** Wall-clock instant corresponding to Season Day 1. */
@@ -1045,11 +1054,18 @@ export interface MpState {
    */
   pausedAt?: number | null;
   /**
-   * Waiting-for-first-human mode: the season clock is held (pausedAt is set)
-   * and no division exists yet. The first human join clears the flag, applies
-   * the resume shift (anchoring the season start to the join moment) and
-   * lazily creates Division 1. Set at reset/season start when zero human clubs
-   * exist; the scheduler stays frozen the whole time.
+   * Launch-roster hold: the season clock is held (pausedAt is set) until the
+   * division roster completes. Entered by enterLaunchHold (world reset, or a
+   * rollover ending with zero human clubs) and released automatically by the
+   * join/return routes the moment CLUBS_PER_DIVISION clubs are owned — or
+   * early by an admin force resume. Pre-season only and never re-armed once
+   * lifted. Replaces the retired `awaitingFirstHuman` flag.
+   */
+  awaitingLaunchRoster?: boolean;
+  /**
+   * Legacy name for the same hold (pre-roster): a world already sitting in
+   * the old hold migrates via `awaitingLaunchRoster ??= awaitingFirstHuman`
+   * in normalizeWorldClock. Kept only so the old flag is read for one release.
    */
   awaitingFirstHuman?: boolean;
 }

@@ -62,6 +62,7 @@ export function generateWorld(seed: number): World {
       seasonDayIndex: 0,
       phase: "ACTIVE",
       lastAdvancedAt: null,
+      lastBoundaryAt: null,
       clockVersion: 0,
       startAbsoluteGameDay: 0,
       seasonStartAt: null,

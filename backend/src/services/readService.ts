@@ -5,7 +5,8 @@ import { calendarValues, phaseForSeasonDayIndex, seasonSchedulePreview } from ".
 import { preferredHoursFromClubRow } from "./saveService";
 import { deserializeClubKits, resolveClubKits, selectMatchKits } from "../game/kits";
 import { standingsTiebreak } from "../game/league";
-import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf } from "../game/multiplayer";
+import { compDivisionName, divisionsInSeason, groupIndexOf, tierOf, CLUBS_PER_DIVISION } from "../game/multiplayer";
+import { nextDayBoundaryAfter } from "./dayBoundary";
 
 import { NATURAL_POSITION_ORDER } from "../game/positions";
 import { footmaniaRanking, isFootmaniaRankedClub } from "../game/elo";
@@ -22,7 +23,10 @@ type MpStateView = {
   seasonDayIndex?: number;
   phase?: "ACTIVE" | "POST_MATCH" | "INTERSEASON";
   pausedAt?: number | null;
+  awaitingLaunchRoster?: boolean;
+  /** Legacy name for the launch hold, read for one release. */
   awaitingFirstHuman?: boolean;
+  lastBoundaryAt?: number | null;
 };
 
 function parseJson<T>(value: string | null | undefined, fallback: T): T {
@@ -61,7 +65,7 @@ export async function readPublicSeasonStatus(prisma: PrismaClient) {
   return {
     ready: true as const,
     paused: typeof mp.pausedAt === "number" && Number.isFinite(mp.pausedAt),
-    awaitingFirstHuman: mp.awaitingFirstHuman === true,
+    awaitingFirstHuman: mp.awaitingLaunchRoster === true || mp.awaitingFirstHuman === true,
     season: {
       seasonNumber,
       key: seasonKey({ year: mp.seasonYear ?? save.year, month: mp.seasonMonth ?? 1 }),
@@ -92,7 +96,7 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
 
   // `club` and `divisionRows` depend only on `save`/`mp`, not on each other,
   // so they can be fetched concurrently.
-  const [club, divisionRows, preservedIdentityRow] = await Promise.all([
+  const [club, divisionRows, preservedIdentityRow, playedFixtureCount, ownedClubCount] = await Promise.all([
     prisma.club.findFirst({
       where: { saveId: save.id, ownerUserId: userId },
       select: {
@@ -120,11 +124,16 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
       : Promise.resolve([] as { id: number }[]),
     // A preserved identity from a world reset: presented to the user on the
     // join screen so their club comes back with its old name, colors, kit,
-    // crest, stadium, country and match-time availability. Consumed on next join.
+    // crest, stadium, coach name and match-time availability. Consumed on next join.
     prisma.clubIdentityArchive.findUnique({
       where: { userId },
       select: { name: true, primaryColor: true, secondaryColor: true, customLogoData: true, stadiumName: true, coachName: true, country: true, kitJson: true },
     }),
+    // Launch-hold derivation: the season counts as not started while no
+    // fixture anywhere has been played.
+    prisma.fixture.count({ where: { saveId: save.id, played: true } }),
+    // Roster-hold progress: every club with an owner counts (DORMANT included).
+    prisma.club.count({ where: { saveId: save.id, ownerUserId: { not: null } } }),
   ]);
 
   // `reservedAllocation`, `playedAgg` and `myFixtureRows` each depend only on
@@ -194,10 +203,24 @@ export async function readMpStatus(prisma: PrismaClient, userId: number) {
     ready: true as const,
     saveId: save.id,
     // Season pause flag (admin freeze): clients use it to hold countdowns and
-    // disable schedule-dependent actions. awaitingFirstHuman is the special
-    // case where the pause is the world waiting for its first manager.
+    // disable schedule-dependent actions. The roster hold is the special
+    // case where the pause is the world waiting for its full roster.
     paused: typeof mp.pausedAt === "number" && Number.isFinite(mp.pausedAt),
-    awaitingFirstHuman: mp.awaitingFirstHuman === true,
+    awaitingFirstHuman: mp.awaitingLaunchRoster === true || mp.awaitingFirstHuman === true,
+    // Launch hold: the roster hold (awaitingLaunchRoster or its legacy name),
+    // or no completed round and no played fixture anywhere — archived fixtures
+    // of earlier seasons linger, so the flag alone cannot detect a fresh hold.
+    // Joining is permitted during the hold, so players in a world whose
+    // season has not started get an explanation for why nothing happens yet.
+    launchHold: mp.awaitingLaunchRoster === true || mp.awaitingFirstHuman === true || ((mp.completedRounds ?? 0) === 0 && playedFixtureCount === 0),
+    seasonStartsAt: (() => {
+      if (mp.awaitingLaunchRoster !== true && mp.awaitingFirstHuman !== true && ((mp.completedRounds ?? 0) !== 0 || playedFixtureCount !== 0)) return null;
+      const now = Date.now();
+      const anchored = mp.lastBoundaryAt;
+      return anchored !== null && anchored !== undefined && anchored > now ? anchored : nextDayBoundaryAfter(now);
+    })(),
+    launchHoldClubs: ownedClubCount,
+    launchHoldTarget: CLUBS_PER_DIVISION,
     season: {
       seasonNumber: mp.seasonNumber ?? 1,
       key: seasonKey({ year, month }),

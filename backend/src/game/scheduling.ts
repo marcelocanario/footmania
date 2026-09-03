@@ -1,4 +1,5 @@
 import { MP_CONFIG } from "../config";
+import { DAY_MS } from "../services/dayBoundary";
 
 /**
  * Preferred-time fixture scheduling.
@@ -9,6 +10,10 @@ import { MP_CONFIG } from "../config";
  * same UTC grid (clients convert from/to the user's browser timezone at the
  * edges — the server never stores a timezone). Distances are circular
  * (midnight wraps), so 23:30 is one slot away from 00:00.
+ *
+ * One game day is one boundary-to-boundary span of the authoritative
+ * dayBoundary grid (services/dayBoundary.ts), so `dayStart` anchors passed to
+ * the pickers below are always boundary instants.
  *
  * Objective per fixture (lexicographic):
  *   1. minimize the home club's distance to its preferred windows;
@@ -43,6 +48,23 @@ export function utcSlotAt(at: number): number {
   const date = new Date(at);
   const utcMinutes = date.getUTCHours() * 60 + date.getUTCMinutes();
   return Math.floor(utcMinutes / MP_CONFIG.preferredSlotMinutes);
+}
+
+/**
+ * Re-anchor an unplayed, not-yet-kicked-off fixture into its own game day.
+ * `seasonStartAt` is the boundary-aligned anchor of Season Day 1; the fixture
+ * lands on `seasonStartAt + dayIndex * DAY_MS` plus its ORIGINAL half-hour
+ * UTC slot, so the slot is preserved exactly while the day it belongs to
+ * becomes its own game day. Used by the game-day-boundary repair migration —
+ * one source of truth for "which instant a fixture belongs on". (The
+ * launch-hold lift instead RE-TIMES fixtures against the completed roster via
+ * retimeDivisionFixtures, which supersedes slot preservation there.)
+ */
+export function realignFixtureKickoff(fixture: { kickoffAt?: number; scheduledSeasonDayIndex?: number; dayIndex: number }, seasonStartAt: number): number {
+  const day = fixture.scheduledSeasonDayIndex ?? fixture.dayIndex;
+  const dayStart = seasonStartAt + day * DAY_MS;
+  const slot = utcSlotAt(fixture.kickoffAt ?? dayStart);
+  return dayStart + slot * MS_PER_SLOT;
 }
 
 /**

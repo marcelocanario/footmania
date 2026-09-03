@@ -27,7 +27,7 @@ run(npx, ["--no-install", "prisma", "migrate", "deploy"]);
 // extensionless internal imports, which plain Node ESM cannot resolve.
 // The source fallback keeps the same command useful during local development.
 const compiledScripts = join(backendRoot, "dist", "scripts");
-const migrationScripts = ["migrate-natural-positions", "migrate-contract-market"];
+const migrationScripts = ["migrate-natural-positions", "migrate-contract-market", "migrate-game-day-boundary"];
 for (const name of migrationScripts) {
   const compiled = join(compiledScripts, `${name}.js`);
   if (existsSync(compiled)) {

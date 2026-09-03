@@ -501,8 +501,9 @@ describe("division history backfill (chunked, off the join request)", () => {
     expect(after.world.mp.pausedAt ?? null).toBeNull();
     for (const f of after.world.fixtures) {
       if (f.competitionId !== divisionId || f.played) continue;
-      // Unplayed kickoffs move forward by exactly the frozen interval.
-      expect(f.kickoffAt).toBe(kickoffsBefore.get(f.id)! + resumed.shiftMs);
+      // The ~30ms freeze crosses NO day boundary, so the kickoff grid stays
+      // put (gridShift = 0); only real-time timers move by the frozen interval.
+      expect(f.kickoffAt).toBe(kickoffsBefore.get(f.id)!);
     }
     // The chunk was anchored at the frozen instant, so the shift lands it
     // exactly on resumedAt (correction 3) -- it fires on the first tick.

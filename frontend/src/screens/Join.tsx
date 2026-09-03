@@ -37,7 +37,7 @@ import { applyTeamColorPreset, deriveKitDefaults } from "../components/kit/defau
 import { PREVIEW_NUMBERS, type ClubKits } from "../components/kit/types";
 import { useGame } from "../store/game";
 import { PageLoading } from "../components/PageLoading";
-import { localSlotsToUtc } from "../utils/time";
+import { formatKickoff, localSlotsToUtc } from "../utils/time";
 
 /** Default club identity colors (Classic Red over White). */
 const DEFAULT_PRIMARY = "#d40000";
@@ -417,6 +417,23 @@ if (activeTab === "identity") {
             </span>
           </div>
           <span className="jm-season-pill open">{t("join.restored")}</span>
+        </div>
+      )}
+
+      {/* Launch hold: the season has played nothing — joining is open, day 1
+          has not started. Players already in the world get the same notice on
+          the Dashboard and the season strip in the header. */}
+      {status?.launchHold && (
+        <div className="jm-season-banner open">
+          <Clock size={17} className="jm-season-icon" />
+          <div className="jm-season-copy">
+            <b>{t("layout.launchHold")}</b>
+            <span>
+              {status.paused
+                ? t("layout.launchHoldWaiting", { count: status.launchHoldClubs, target: status.launchHoldTarget })
+                : t("layout.launchHoldStarts", { count: status.launchHoldClubs, target: status.launchHoldTarget, date: status.seasonStartsAt ? formatKickoff(status.seasonStartsAt) : "—" })}
+            </span>
+          </div>
         </div>
       )}
 

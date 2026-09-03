@@ -186,6 +186,14 @@ export interface MpStatus {
   saveId: number | null;
   /** Season pause (admin freeze): countdowns hold and market/loan actions are disabled. */
   paused: boolean;
+  /** Launch hold: the season has played nothing — joining is open, day 1 has not started. */
+  launchHold: boolean;
+  /** Boundary instant day 1 begins at while a launch hold is in effect; null otherwise. */
+  seasonStartsAt: number | null;
+  /** Owned clubs (DORMANT included) toward the roster-hold release threshold. */
+  launchHoldClubs: number;
+  /** The roster-hold release threshold — the division's full roster. */
+  launchHoldTarget: number;
   season: {
     seasonNumber: number;
     key: string;
@@ -293,12 +301,26 @@ export interface SchedulerClockView {
   interseasonStartIndex: number;
   preparationStartIndex: number;
   lastAdvancedAt: string;
+  /** Boundary instant the current game day started at — always a zero-second boundary. */
+  lastBoundaryAt: string;
   nextAutomaticDayAdvance: string | null;
   lastDayAdvance: string;
+  /** Launch hold: the season has played nothing and day 1 begins at seasonStartsAt. */
+  launchHold: boolean;
+  /** Boundary instant day 1 begins at while a launch hold is in effect; null otherwise. */
+  seasonStartsAt: number | null;
+  /** Owned clubs (DORMANT included) toward the roster-hold release threshold. */
+  launchHoldClubs: number;
+  /** The roster-hold release threshold — the division's full roster. */
+  launchHoldTarget: number;
+  /** Current-day kickoffs already in the past while paused (resolve instantly on resume). */
+  strandedKickoffs: number;
+  /** Boundary the current day will end at if resumed now. */
+  nextBoundary: number | null;
   /** Season pause state (freeze-timers semantics). */
   paused: boolean;
   pausedAt: number | null;
-  health: "HEALTHY" | "OVERDUE" | "FAILED_EVENTS" | "SCHEDULER_REQUIRES_ADMIN_REVIEW";
+  health: "HEALTHY" | "BOUNDARY_DESYNC" | "OVERDUE" | "FAILED_EVENTS" | "SCHEDULER_REQUIRES_ADMIN_REVIEW";
   pendingEvents: number;
   overdueEvents: number;
   failedEvents: number;
@@ -1588,8 +1610,8 @@ export const api = {
   // Season pause / resume (freeze timers; resume shifts every real-time anchor).
   adminSchedulerPause: (reason?: string) =>
     request<{ pausedAt: number }>("/api/admin/scheduler/pause", { method: "POST", body: JSON.stringify({ reason }) }),
-  adminSchedulerResume: (reason?: string) =>
-    request<{ resumedAt: number; shiftMs: number }>("/api/admin/scheduler/resume", { method: "POST", body: JSON.stringify({ reason }) }),
+  adminSchedulerResume: (reason?: string, force = false) =>
+    request<{ resumedAt: number; shiftMs: number; gridShiftMs: number; strandedKickoffs: number; nextBoundary: number }>("/api/admin/scheduler/resume", { method: "POST", body: JSON.stringify({ reason, force }) }),
   // Rebuild the current season's schedules — only before any match has been played.
   adminRecalculateFixtures: (reason: string) =>
     request<{ ok: boolean; divisions: number; fixturesBefore: number; fixturesAfter: number }>("/api/admin/scheduler/fixtures/recalculate", { method: "POST", body: JSON.stringify({ reason }) }),

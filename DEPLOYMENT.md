@@ -52,11 +52,28 @@ curl --fail http://127.0.0.1:18085/api/health
 curl --fail http://127.0.0.1:8084/healthz
 ```
 
-The migration command uses `prisma migrate deploy` and then the two existing
-idempotent data-migration helpers. It does not reset, truncate, or seed the
-production schema. On a brand-new schema, the running backend creates the
-global multiplayer world on first startup; that initialization is not part of
-the CI test process.
+The migration command uses `prisma migrate deploy` and then the idempotent
+data-migration helpers (natural positions, contract market, game-day
+boundary). It does not reset, truncate, or seed the production schema. On a
+brand-new schema, the running backend creates the global multiplayer world on
+first startup; that initialization is not part of the CI test process.
+
+The game-day boundary migration must complete BEFORE the long-lived backend
+starts (the deploy job already runs `db:upgrade` as a one-shot container
+first): the first worker tick after startup reads `mp.lastBoundaryAt` and the
+`GameClock.lastBoundaryAt` row, and a pending day-advance row racing the repair
+would be re-derived by the migration only if the migration runs first. The
+migration is safe to run while the world is live — Tier A only repairs clock
+bookkeeping; kickoff re-alignment is report-only unless
+`FOOTMANIA_REALIGN_KICKOFFS=1` is set while the world is paused.
+
+## Server clock contract
+
+The server runs on UTC. Every game-day boundary, kickoff-slot grid and payroll
+instant is a UTC wall-clock instant (`services/dayBoundary.ts`); the container
+pins `TZ=UTC` in the `backend` stage of the `Dockerfile` and in
+`compose.yaml`. No timezone is ever stored or configured per player — clients
+convert from/to their browser timezone at the edges.
 
 Pushes and pull requests targeting `main` run the unit, integration,
 migration, and image-build checks. Calibration is intentionally not part of

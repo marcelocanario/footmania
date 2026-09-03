@@ -111,6 +111,19 @@ const nextKickoff = snapshot.nextFixture ? formatKickoff(snapshot.nextFixture.ki
         </div>
       )}
 
+      {status?.launchHold && (
+        <div className="card" style={{ borderColor: "rgba(240,180,41,0.5)", marginBottom: 16, padding: "18px 16px" }}>
+          <h2 className="card-title" style={{ color: "var(--gold-2)" }}>
+            <Hourglass size={17} /> {t("layout.launchHold")}
+          </h2>
+          <div style={{ color: "var(--text-2)", fontSize: "0.95rem", lineHeight: 1.5 }}>
+            {status.paused
+              ? t("layout.launchHoldWaiting", { count: status.launchHoldClubs, target: status.launchHoldTarget })
+              : t("layout.launchHoldStarts", { count: status.launchHoldClubs, target: status.launchHoldTarget, date: status.seasonStartsAt ? formatKickoff(status.seasonStartsAt) : "—" })}
+          </div>
+        </div>
+      )}
+
       {inactive && (
         <div className="card" style={{ borderColor: "rgba(220,120,60,0.5)", marginBottom: 16, padding: "18px 16px" }}>
           <h2 className="card-title" style={{ color: "var(--red-2)" }}>

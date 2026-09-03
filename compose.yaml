@@ -12,6 +12,8 @@ services:
     environment:
       NODE_ENV: production
       PORT: "18085"
+      # The server's clock contract is "server time = UTC" (see Dockerfile).
+      TZ: UTC
     healthcheck:
       test:
         - CMD

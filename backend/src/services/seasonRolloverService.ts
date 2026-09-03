@@ -7,7 +7,7 @@ import {
   createDivision,
   divisionsInSeason,
   ensureDivisionFull,
-  enterWaitingForFirstHuman,
+  enterLaunchHold,
   generateDivisionFixtures,
   groupIndexOf,
   rebuildTierDivisions,
@@ -28,6 +28,7 @@ import { msg } from "../i18n/catalog";
 import { generatePreseasonReports } from "../game/preseasonReport";
 import { ensureSeasonRow, issueAllocation, removeFillerClubs } from "./mpService";
 import { nextUint } from "../game/rng";
+import { dayBoundaryAtOrBefore } from "./dayBoundary";
 
 export const ROLLOVER_WORKFLOW_STEPS: readonly RolloverWorkflowStep[] = [
   "SEASON_RESULTS_FINALIZE",
@@ -330,14 +331,15 @@ export async function executeRolloverStep(
     world.mp.joinState = "OPEN";
     world.mp.lastProcessedGameDay = 0;
     world.mp.manualRound = null;
-    world.mp.seasonStartAt = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+    world.mp.seasonStartAt = dayBoundaryAtOrBefore(now);
+    world.mp.lastBoundaryAt = world.mp.seasonStartAt;
     for (const [tier, humans] of byTier) rebuildTierDivisions(world, context.targetSeasonId, tier, humans, ref, { generateFixtures: false, assignmentSeed: context.groupAssignmentSeed });
     if (byTier.size === 0) {
       // No human clubs anywhere: do NOT pre-create an all-AI Division 1. The
-      // world waits for the first human (awaitingFirstHuman + pausedAt), and
-      // the division forms lazily on their join. Filler AI from the finished
+      // world waits for its full roster (awaitingLaunchRoster + pausedAt), and
+      // the division forms lazily on the joins. Filler AI from the finished
       // season was already removed above.
-      enterWaitingForFirstHuman(world, now);
+      enterLaunchHold(world, now);
     }
     for (const clubId of context.provisionalClubIds) {
       const club = world.clubs.find((candidate) => candidate.id === clubId);
@@ -387,10 +389,10 @@ export async function executeRolloverStep(
     }
   } else if (step === "NEXT_SEASON_STRUCTURE_VALIDATE") {
     const divisions = divisionsInSeason(world, context.targetSeasonId).filter((candidate) => candidate.status !== "ARCHIVED");
-    // Zero-human rollover: the world is in waiting-for-first-human mode with
-    // no divisions yet — nothing to validate, and the first join builds the
+    // Zero-human rollover: the world is in launch-hold mode with
+    // no divisions yet — nothing to validate, and the joins build the
     // pyramid lazily.
-    if (divisions.length === 0 && world.mp.awaitingFirstHuman === true) return;
+    if (divisions.length === 0 && (world.mp.awaitingLaunchRoster === true || world.mp.awaitingFirstHuman === true)) return;
     if (divisions.length === 0) throw new Error("Next season has no active divisions");
     for (const division of divisions) {
       const clubIds = Object.keys(division.standings).map(Number);
@@ -404,7 +406,8 @@ export async function executeRolloverStep(
     world.mp.phase = "ACTIVE";
     world.mp.seasonDayIndex = 0;
     world.mp.startAbsoluteGameDay = (world.mp.absoluteGameDay ?? world.dayIndex) + 1;
-    world.mp.seasonStartAt = Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), new Date(now).getUTCDate());
+    world.mp.seasonStartAt = dayBoundaryAtOrBefore(now);
+    world.mp.lastBoundaryAt = world.mp.seasonStartAt;
     world.mp.lastAdvancedAt = now;
     // One pre-season briefing per human club on the first day of the new
     // season. Idempotent per club/season; flow data is consumed and cleared.
@@ -413,12 +416,12 @@ export async function executeRolloverStep(
     world.mp.rolloverPhase = null;
     world.mp.rolloverContext = null;
     // A season that rolled over with zero human clubs stays in waiting mode:
-    // the clock remains held until the first human join (entered in
+    // the clock remains held until the full roster arrives (entered in
     // DIVISION_RESTRUCTURE above, re-asserted here after the commit resets
     // seasonStartAt/lastAdvancedAt).
     const hasHumans = world.clubs.some((c) => c.ownerUserId !== null);
     if (!hasHumans) {
-      enterWaitingForFirstHuman(world, now);
+      enterLaunchHold(world, now);
     }
   }
 

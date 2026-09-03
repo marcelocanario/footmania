@@ -16,8 +16,13 @@ import {
   scheduleEvent,
   ScheduledEventType,
 } from "../src/services/scheduler";
+import { advanceGameDay } from "../src/services/gameClockService";
 import { ROLLOVER_WORKFLOW_STEPS } from "../src/services/seasonRolloverService";
 import { calendarValues } from "../src/services/seasonCalendar";
+import { DAY_MS, boundariesElapsed, dayBoundaryAtOrBefore } from "../src/services/dayBoundary";
+import { CLUBS_PER_DIVISION, enterLaunchHold, placeNewClub, shouldReleaseLaunchHold } from "../src/game/multiplayer";
+import { createHumanClub } from "../src/game/worldgen";
+import { applyLaunchHoldResume, applyResumeShift, syncLaunchHoldResumeRows } from "../src/services/seasonPause";
 
 const prisma = new PrismaClient();
 
@@ -168,6 +173,70 @@ describe("durable scheduler", () => {
     expect(await prisma.scheduledEvent.count({ where: { saveId, status: "COMPLETED", type: ScheduledEventType.GAME_DAY_ADVANCE } })).toBe(1);
   });
 
+  it("writes the pending day-advance row exactly one boundary after lastBoundaryAt with zero seconds", async () => {
+    const { saveId } = await freshWorld();
+    const event = await scheduleEvent(prisma, {
+      saveId,
+      type: ScheduledEventType.GAME_DAY_ADVANCE,
+      timeBasis: "REAL_TIME",
+      dueAt: new Date(Date.now() - 1),
+      idempotencyKey: "GAME_DAY_ADVANCE:test:boundary",
+    });
+
+    const completed = await executeScheduledEvent(prisma, event.id, { now: new Date() });
+    expect(completed.status).toBe("COMPLETED");
+
+    const loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("world did not reload");
+    const boundary = loaded.world.mp.lastBoundaryAt;
+    expect(boundary).toBeDefined();
+    const boundaryDate = new Date(boundary!);
+    // The grid reference is always a zero-second boundary (the 6:13:52
+    // symptom: the pending row must never carry raw milliseconds again).
+    expect(boundaryDate.getUTCSeconds()).toBe(0);
+    expect(boundaryDate.getUTCMilliseconds()).toBe(0);
+    const pending = await prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" } });
+    expect(pending).not.toBeNull();
+    expect(pending!.dueAt!.getTime()).toBe(boundary! + DAY_MS);
+    expect(pending!.dueAt!.getUTCSeconds()).toBe(0);
+    expect(pending!.dueAt!.getUTCMilliseconds()).toBe(0);
+  });
+
+  it("a deferred advance (blocked then resolved) does not move the boundary grid", async () => {
+    const { saveId } = await freshWorld();
+    // Block the rollover with a current-day fixture that has not started.
+    const seeded = await loadGlobalWorld(prisma);
+    if (!seeded) throw new Error("world did not load");
+    const dayIndex = seeded.world.mp.seasonDayIndex ?? seeded.world.dayIndex;
+    const blocker = seeded.world.fixtures.find((fixture) => !fixture.played)!;
+    blocker.scheduledSeasonDayIndex = dayIndex;
+    blocker.dayIndex = dayIndex;
+    blocker.kickoffAt = Date.now() + 60 * 60 * 1000;
+    await persistWorld(prisma, saveId, saveId, seeded.world, seeded.save.revision);
+
+    await expect(advanceGameDay(prisma, { now: new Date(Date.now() + 60_000) })).rejects.toThrow("Cannot advance while a scheduled match is unresolved");
+
+    // Resolve the blocker: the deferred advance finally runs at an
+    // off-boundary instant and must still record the boundary grid, not the
+    // wall-clock instant it physically ran at.
+    const loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("world did not reload");
+    loaded.world.fixtures.find((fixture) => fixture.id === blocker.id)!.played = true;
+    await persistWorld(prisma, saveId, saveId, loaded.world, loaded.save.revision);
+    const advancedAt = new Date();
+    await advanceGameDay(prisma, { now: advancedAt });
+
+    const after = await loadGlobalWorld(prisma);
+    if (!after) throw new Error("world did not reload after advance");
+    const boundary = after.world.mp.lastBoundaryAt!;
+    expect(new Date(boundary).getUTCSeconds()).toBe(0);
+    // The blocked advance finally landed at an off-boundary instant; the grid
+    // still records the boundary, so the next advance is tomorrow's boundary.
+    expect(boundary).toBe(dayBoundaryAtOrBefore(advancedAt.getTime()) + DAY_MS);
+    const pending = await prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" } });
+    expect(pending!.dueAt!.getTime()).toBe(boundary + DAY_MS);
+  });
+
   it("anchors an administrator-started match at execution time", async () => {
     const { saveId, world } = await freshWorld();
     const now = new Date(Date.now() + 60_000);
@@ -213,5 +282,73 @@ describe("durable scheduler", () => {
 
     expect(await executeDueEvents(prisma, saveId, new Date())).toBe(1);
     expect((await prisma.scheduledEvent.findUniqueOrThrow({ where: { id: event.id } })).status).toBe("COMPLETED");
+  });
+
+  it("launch-hold lift: re-times fixtures, syncs MATCH_START rows, and the first advance fires at seasonBoundary + 24h", async () => {
+    const { saveId } = await freshWorld();
+    // The join route's placement writes ownerUserId with an FK to User: the
+    // roster needs real rows.
+    const userIds = Array.from({ length: CLUBS_PER_DIVISION }, (_, i) => 950200 + i);
+    await prisma.user.createMany({
+      data: userIds.map((id) => ({ id, name: `Hold User ${id}`, email: `hold-scheduler-${id}@test.dev`, emailVerified: true })),
+    });
+
+    const loaded = await loadGlobalWorld(prisma);
+    if (!loaded) throw new Error("world did not load");
+    enterLaunchHold(loaded.world, Date.now());
+    await persistWorld(prisma, saveId, saveId, loaded.world, loaded.save.revision);
+    loaded.save.revision += 1;
+
+    // The N joins, placed at the frozen instant exactly like the route does
+    // while the world is held (joins 1..N−1 never release it).
+    const seasonId = loaded.world.mp.seasonId;
+    const nextSeasonRef = { year: 2026, month: 2 };
+    for (let i = 0; i < CLUBS_PER_DIVISION - 1; i++) {
+      const club = createHumanClub(loaded.world, { userId: userIds[i], clubName: `Hold Club ${i}`, country: "BRA", preferredHours: Array.from({ length: 16 }, (_, s) => (s + i * 4) % 48) });
+      const result = placeNewClub(loaded.world, club.id, loaded.world.mp.pausedAt!, seasonId, nextSeasonRef);
+      expect(result.kind).toBe("active");
+    }
+    expect(shouldReleaseLaunchHold(loaded.world)).toBe(false);
+
+    // The N-th join completes the roster: the route's lift decision fires and
+    // the launch composition runs (raw shift, absolute boundary anchor,
+    // flags cleared).
+    const finalClub = createHumanClub(loaded.world, { userId: userIds[CLUBS_PER_DIVISION - 1], clubName: "Hold Final", country: "BRA", preferredHours: Array.from({ length: 16 }, (_, s) => (s + 12) % 48) });
+    const finalResult = placeNewClub(loaded.world, finalClub.id, loaded.world.mp.pausedAt!, seasonId, nextSeasonRef);
+    expect(finalResult.kind).toBe("active");
+    expect(shouldReleaseLaunchHold(loaded.world)).toBe(true);
+    const realNow = Date.now();
+    applyResumeShift(loaded.world, Math.max(0, realNow - loaded.world.mp.pausedAt!), 0);
+    applyLaunchHoldResume(loaded.world, realNow);
+    loaded.world.mp.pausedAt = null;
+    loaded.world.mp.awaitingLaunchRoster = false;
+    loaded.world.mp.awaitingFirstHuman = false;
+
+    await persistWorld(prisma, saveId, saveId, loaded.world, loaded.save.revision);
+    // The route's row sync: fixtures + MATCH_START + advance row + clock row.
+    await syncLaunchHoldResumeRows(prisma, saveId, loaded.world);
+    await materializeSeasonEvents(prisma, saveId, loaded.world);
+
+    const seasonBoundary = loaded.world.mp.seasonStartAt!;
+    expect(seasonBoundary).toBeGreaterThan(Date.now());
+    expect(new Date(seasonBoundary).getUTCSeconds()).toBe(0);
+    expect(loaded.world.fixtures.length).toBeGreaterThan(0);
+    for (const fixture of loaded.world.fixtures) {
+      const dayStart = seasonBoundary + fixture.scheduledSeasonDayIndex! * DAY_MS;
+      expect(fixture.kickoffAt!).toBeGreaterThanOrEqual(dayStart);
+      expect(fixture.kickoffAt!).toBeLessThan(dayStart + DAY_MS);
+      // Every pending MATCH_START row equals its fixture's re-timed kickoff.
+      const row = await prisma.scheduledEvent.findFirst({
+        where: { saveId, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: String(fixture.id), status: "PENDING" },
+      });
+      expect(row?.dueAt!.getTime()).toBe(fixture.kickoffAt!);
+    }
+
+    // The first advance fires at seasonBoundary + 24h: the pending row says
+    // so, and the boundary trigger agrees exactly.
+    const pending = await prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" } });
+    expect(pending?.dueAt!.getTime()).toBe(seasonBoundary + DAY_MS);
+    expect(boundariesElapsed(seasonBoundary, seasonBoundary + DAY_MS - 1)).toBe(0);
+    expect(boundariesElapsed(seasonBoundary, seasonBoundary + DAY_MS)).toBe(1);
   });
 });

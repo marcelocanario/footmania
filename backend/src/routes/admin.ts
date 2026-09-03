@@ -3,7 +3,7 @@ import { z } from "zod";
 import { loadGlobalWorldMutable, loadGlobalWorldReadOnly, persistWorld, StaleWorldError, invalidateWorldCache, ensureGlobalSave } from "../services/saveService";
 import { clearPresetsForClub } from "../services/automationPresetService";
 import { withGlobalLease, withGlobalLock } from "../services/lock";
-import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures, enterWaitingForFirstHuman } from "../game/multiplayer";
+import { simulateThroughRound, divisionsInSeason, isFillerAI, preferredTimeDistance, tierOf, groupIndexOf, suggestedModerationClubName, generateDivisionFixtures, enterLaunchHold } from "../game/multiplayer";
 import { ensureCurrentSeason, configuredInactivityThresholds, configuredMatchTiming, setLeagueSettings } from "../services/mpService";
 import { ROUNDS_PER_SEASON } from "../game/multiplayer";
 import { readNumberSetting } from "../services/settingsStore";
@@ -11,8 +11,10 @@ import { getCommitmentTotals } from "../game/finance";
 import { divisionAnalytics } from "../game/adminAnalytics";
 import { gameConfig } from "../config";
 import { advanceGameDay, ensureGameClock } from "../services/gameClockService";
+import { DAY_MS, nextDayBoundaryAfter } from "../services/dayBoundary";
 import { cancelScheduledEvent, executeScheduledEvent, materializeSeasonEvents, retryScheduledEvent, runRolloverCoordinatorInLock, scheduleEvent, ScheduledEventType } from "../services/scheduler";
 import {
+  countStrandedKickoffs,
   isPaused,
   isWorldPausedGlobally,
   pausedInstant,
@@ -143,7 +145,7 @@ export async function adminRoutes(app: FastifyInstance) {
         clubCount: world.clubs.length,
         humanClubCount: world.clubs.filter((c) => c.ownerUserId !== null).length,
         liveMatchCount: world.liveMatches.length,
-        awaitingFirstHuman: world.mp.awaitingFirstHuman === true,
+        awaitingLaunchRoster: world.mp.awaitingLaunchRoster === true || world.mp.awaitingFirstHuman === true,
         paused: isPaused(world),
       },
     };
@@ -372,13 +374,20 @@ export async function adminRoutes(app: FastifyInstance) {
     const clock = await ensureGameClock(app.prisma, loaded.save.id, loaded.world);
     const calendar = calendarValues();
     const now = new Date();
-    const [pendingEvents, overdueEvents, failedEvents, oldest, review] = await Promise.all([
+    const [pendingEvents, overdueEvents, failedEvents, oldest, review, pendingAdvance] = await Promise.all([
       app.prisma.scheduledEvent.count({ where: { saveId: loaded.save.id, status: "PENDING" } }),
       app.prisma.scheduledEvent.count({ where: { saveId: loaded.save.id, status: "PENDING", timeBasis: "REAL_TIME", dueAt: { lte: now } } }),
       app.prisma.scheduledEvent.count({ where: { saveId: loaded.save.id, status: "FAILED" } }),
       app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, status: "PENDING", timeBasis: "REAL_TIME", dueAt: { lte: now } }, orderBy: { dueAt: "asc" }, select: { dueAt: true } }),
       app.prisma.setting.findUnique({ where: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW" }, select: { value: true } }),
+      app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" }, orderBy: { dueAt: "asc" }, select: { dueAt: true } }),
     ]);
+    // The pending row is a mirror, not the trigger: the real trigger is
+    // boundariesElapsed(lastBoundaryAt, now). Compute the display value from
+    // the boundary so the panel can never disagree with the scheduler, and
+    // flag a BOUNDARY_DESYNC when the row was written off-grid.
+    const expectedAdvance = clock.lastBoundaryAt.getTime() + DAY_MS;
+    const boundaryDesync = pendingAdvance !== null && pendingAdvance.dueAt !== null && pendingAdvance.dueAt.getTime() !== expectedAdvance;
     return {
       clock: {
         ...clock,
@@ -392,9 +401,15 @@ export async function adminRoutes(app: FastifyInstance) {
         preparationStartIndex: calendar.preparationStartIndex,
         paused: isPaused(loaded.world),
         pausedAt: pausedInstant(loaded.world),
-        nextAutomaticDayAdvance: await app.prisma.scheduledEvent.findFirst({ where: { saveId: loaded.save.id, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" }, orderBy: { dueAt: "asc" }, select: { dueAt: true } }).then((event) => event?.dueAt ?? null),
+        nextAutomaticDayAdvance: new Date(expectedAdvance),
         lastDayAdvance: clock.lastAdvancedAt,
-        health: review?.value === "1" ? "SCHEDULER_REQUIRES_ADMIN_REVIEW" : failedEvents > 0 ? "FAILED_EVENTS" : overdueEvents > 0 ? "OVERDUE" : "HEALTHY",
+        // While paused, the admin needs the literal rule's consequence before
+        // confirming a resume: how many current-day kickoffs are already in
+        // the past (they will resolve instantly) and the boundary the current
+        // day will end at.
+        strandedKickoffs: countStrandedKickoffs(loaded.world, now.getTime()),
+        nextBoundary: nextDayBoundaryAfter(now.getTime()),
+        health: review?.value === "1" ? "SCHEDULER_REQUIRES_ADMIN_REVIEW" : boundaryDesync ? "BOUNDARY_DESYNC" : failedEvents > 0 ? "FAILED_EVENTS" : overdueEvents > 0 ? "OVERDUE" : "HEALTHY",
         pendingEvents,
         overdueEvents,
         failedEvents,
@@ -522,7 +537,7 @@ export async function adminRoutes(app: FastifyInstance) {
   // every real-time anchor forward by the frozen interval (see seasonPause.ts).
   // -------------------------------------------------------------------------
 
-  const pauseControlSchema = z.object({ reason: z.string().optional() });
+  const pauseControlSchema = z.object({ reason: z.string().optional(), force: z.boolean().optional() });
   app.post("/admin/scheduler/pause", async (req, reply) => {
     const parsed = pauseControlSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
@@ -536,12 +551,12 @@ export async function adminRoutes(app: FastifyInstance) {
     const parsed = pauseControlSchema.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "Invalid input" });
     try {
-      const res = await resumeSeason(app.prisma, { adminUserId: req.user!.id, reason: parsed.data.reason });
+      const res = await resumeSeason(app.prisma, { adminUserId: req.user!.id, reason: parsed.data.reason, force: parsed.data.force === true });
       const loaded = await loadGlobalWorldReadOnly(app.prisma);
       if (loaded) publishToHumanUsers(loaded.world, { type: "invalidate", scope: "mp" });
       return res;
     } catch (error) {
-      if (error instanceof Error && (error.message === "The season is not paused" || error.message === "The world is waiting for its first manager; resume happens automatically on join")) {
+      if (error instanceof Error && (error.message === "The season is not paused" || error.message === "The world is waiting for its full roster; resume happens automatically when the division fills")) {
         return reply.code(400).send({ error: error.message });
       }
       throw error;
@@ -683,7 +698,7 @@ export async function adminRoutes(app: FastifyInstance) {
       if (!fresh) throw new Error("World reset failed: fresh world unavailable");
       // A reset wipes every human club, so the fresh world must WAIT for its
       // first manager: no pre-seeded all-AI Division 1, season clock held.
-      enterWaitingForFirstHuman(fresh.world, Date.now());
+      enterLaunchHold(fresh.world, Date.now());
       await persistWorld(app.prisma, fresh.save.id, fresh.save.id, fresh.world, fresh.save.revision);
       await ensureGameClock(app.prisma, fresh.save.id, fresh.world);
       await materializeSeasonEvents(app.prisma, fresh.save.id, fresh.world);

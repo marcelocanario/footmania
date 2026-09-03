@@ -9,7 +9,7 @@ import { gameConfig, MP_CONFIG } from "../config";
 import { SENIOR_SQUAD_LIMIT } from "../game/constants";
 import { clubKitsSchema } from "../game/kits";
 import { validatePreferredHours } from "../game/scheduling";
-import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons } from "../game/multiplayer";
+import { placeNewClub, returnDormantClub, playPracticeMatch, divisionsInSeason, tierOf, groupIndexOf, compDivisionName, recordActivity, syncMemberships, syncClubSeasons, shouldReleaseLaunchHold } from "../game/multiplayer";
 import { ensureCurrentSeason, ensureSeasonRow, issueAllocation } from "../services/mpService";
 import { divisionHistoryChunkInput, scheduleEvent } from "../services/scheduler";
 import { applyArchivedIdentity, resolveArchiveRow } from "../game/identityArchive";
@@ -18,7 +18,7 @@ import type { World } from "../game/types";
 import { hasPro } from "../services/pro";
 import { readMpStatus, readPublicSeasonStatus, readSeasonHistory, readUserLiveMatch, footmaniaRankingView, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
-import { pausedInstant, applyResumeShift } from "../services/seasonPause";
+import { pausedInstant, applyLaunchHoldResume, applyResumeShift, syncLaunchHoldResumeRows } from "../services/seasonPause";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -42,20 +42,29 @@ function publishToHumanUsers(world: World, event: Parameters<typeof publishUserW
 }
 
 /**
- * Lift the waiting-for-first-human hold. The hold reuses the admin pause's
- * `pausedAt` field, so clearing it must first apply the resume shift: every
- * real-time anchor moves forward by the held interval (measured against the
- * REAL wall clock, not the frozen instant -- a frozen `now` would zero the
- * shift and never anchor the season to the join moment), and only then are
- * the flag and the pause cleared. Division 1 forms lazily below via
- * placeNewClub / returnDormantClub.
+ * Release the launch hold the moment the roster completes — a LAUNCH HOLD,
+ * not a maintenance pause: the season has played nothing, so it begins at the
+ * next boundary after the lift. applyLaunchHoldResume anchors
+ * seasonStartAt/lastBoundaryAt to that boundary (measured against the REAL
+ * wall clock, never the frozen instant), re-times every active division's
+ * fixtures against the now-complete set of manager preferences, and leaves
+ * day indices untouched. No-op (returns false) while the roster is still
+ * under-strength or the hold is not active, so joins 1..N−1 stay frozen and
+ * the hold never re-arms after a lift.
  */
-function liftFirstHumanHold(world: World, realNow: number): void {
+function liftLaunchHoldIfComplete(world: World, realNow: number): boolean {
+  if (!shouldReleaseLaunchHold(world)) return false;
   const pausedAt = world.mp.pausedAt ?? realNow;
-  const shift = Math.max(0, realNow - pausedAt);
-  applyResumeShift(world, shift);
+  // Real-time anchors (inactivity countdowns of clubs waiting through the
+  // hold, any pre-hold market deadline) freeze for exactly the held interval;
+  // the game-day grid takes the launch-hold anchor instead. The join path
+  // persists the whole world below, so the world mutation is sufficient here.
+  applyResumeShift(world, Math.max(0, realNow - pausedAt), 0);
+  applyLaunchHoldResume(world, realNow);
   world.mp.pausedAt = null;
+  world.mp.awaitingLaunchRoster = false;
   world.mp.awaitingFirstHuman = false;
+  return true;
 }
 
 async function withWorld(app: FastifyInstance, userId: number, fn: (world: World) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>) {
@@ -120,24 +129,18 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
         const world = loaded.world;
         // Schedule-dependent: joining places the club into the live season.
-        // The FIRST human join is the exception: while awaitingFirstHuman the
-        // season clock is held and no division exists -- this join lifts the
-        // hold (clears pausedAt, applies the resume shift so the season starts
-        // anchored to now) and Division 1 forms lazily below. Any later join
-        // while paused places the club into the SAME division an unpaused
-        // join would: the freeze means the placement instant IS pausedAt, and
-        // applyResumeShift re-anchors every real-time timer on resume.
-        const awaitingFirst = world.mp.awaitingFirstHuman === true;
-        // The held interval must be measured against the real wall clock; for
-        // any other join the world instant is the frozen pausedAt while
-        // paused, so market settlement and activity stamps freeze with it.
-        const now = awaitingFirst ? Date.now() : (pausedInstant(world) ?? Date.now());
-        // Every rejection is checked BEFORE the world is touched: the lift
-        // clears the pause and shifts every timer, so bailing out after it
+        // While the launch hold (or any pause) is active the freeze means the
+        // placement instant IS pausedAt, exactly like any other paused join;
+        // the hold itself releases later, once the roster completes, and the
+        // lift then shifts every frozen anchor forward. There is no
+        // first-join special case anymore — the world stays frozen until the
+        // roster is full.
+        const now = pausedInstant(world) ?? Date.now();
+        // Every rejection is checked BEFORE the world is touched: a release
+        // would clear the pause and shift every timer, so bailing out after it
         // would leave a mutated (if unpersisted) world behind.
         const existing = world.clubs.find((c) => c.ownerUserId === user.id);
         if (existing) return { error: { code: 409, body: { error: "You already have a club" } } };
-        if (awaitingFirst) liftFirstHumanHold(world, now);
 
         // Preferred windows come from the archive when one exists (they were
         // validated when first stored); otherwise the wizard windows validated
@@ -198,11 +201,20 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         recordActivity(world, user.id, club.id, "join", undefined, now);
         syncMemberships(world, seasonId);
         syncClubSeasons(world, seasonId);
+        // The lift decision sees the club it just placed: joins 1..N−1 leave
+        // the world frozen, and the N-th join releases the hold.
+        const lifted = liftLaunchHoldIfComplete(world, Date.now());
         try {
           await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         } catch (error) {
           if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
           continue;
+        }
+        // A launch-hold lift re-timed every unplayed kickoff: the pending
+        // MATCH_START rows and the durable clock row must follow (persistWorld
+        // only writes the world itself).
+        if (lifted) {
+          await syncLaunchHoldResumeRows(app.prisma, loaded.save.id, world);
         }
         // If placeNewClub created a brand-new division mid-season, its history
         // backfill is a background chunked job (plan Item 2), not part of this
@@ -243,24 +255,17 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         const world = loaded.world;
         // Schedule-dependent: returning re-enters the live season. It stays
         // allowed while the world is frozen -- the freeze means the placement
-        // instant IS pausedAt, and applyResumeShift re-anchors every real-time
-        // timer on resume. While awaitingFirstHuman (a DORMANT club may be
-        // present in that state: enterWaitingForFirstHuman only removes
-        // filler AI) the return ALSO lifts the hold, exactly like the first
-        // join -- otherwise the club would be placed into a world that stays
-        // frozen forever (resumeSeason throws while awaitingFirstHuman).
-        const awaitingFirst = world.mp.awaitingFirstHuman === true;
-        // The held interval is measured against the real wall clock (a frozen
-        // `now` would zero the first-human shift); any other return anchors to
-        // the frozen pausedAt while paused.
-        const now = awaitingFirst ? Date.now() : (pausedInstant(world) ?? Date.now());
+        // instant IS pausedAt, and the lift (or maintenance resume) re-anchors
+        // every real-time timer. A DORMANT club may be present in the hold
+        // (enterLaunchHold only removes filler AI): its return counts toward
+        // the roster like a first join and releases the hold once full.
+        const now = pausedInstant(world) ?? Date.now();
         // Rejections first, for the same reason as POST /mp/join: a caller
-        // with no club (or a club that is not dormant) must not lift the
-        // waiting-for-first-human hold on its way to a 400.
+        // with no club (or a club that is not dormant) must not release the
+        // launch hold on its way to a 400.
         const existing = world.clubs.find((c) => c.ownerUserId === user.id);
         if (!existing) return { error: { code: 400, body: { error: "You have no club" } } };
         if (existing.competitionState !== "DORMANT") return { error: { code: 400, body: { error: "Your club is not dormant" } } };
-        if (awaitingFirst) liftFirstHumanHold(world, now);
 
         const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
         const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
@@ -271,11 +276,19 @@ export async function multiplayerRoutes(app: FastifyInstance) {
         recordActivity(world, user.id, existing.id, "return", undefined, now);
         syncMemberships(world, seasonId);
         syncClubSeasons(world, seasonId);
+        // Same post-placement lift decision as POST /mp/join: a dormant return
+        // counts toward the roster and releases the hold once it completes.
+        const lifted = liftLaunchHoldIfComplete(world, Date.now());
         try {
           await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
         } catch (error) {
           if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
           continue;
+        }
+        // Same launch-hold row sync as POST /mp/join: re-timed kickoffs must
+        // move the pending MATCH_START rows and the durable clock row.
+        if (lifted) {
+          await syncLaunchHoldResumeRows(app.prisma, loaded.save.id, world);
         }
         // See the identical comment on POST /mp/join: a brand-new division's
         // history backfill runs as a background chunked job, not inline here.

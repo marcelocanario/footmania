@@ -7,6 +7,7 @@ import { seasonKey, joinLockRound } from "./clock";
 import { calendarValues, roundDayIndex } from "../services/seasonCalendar";
 import { pickFixtureKickoff, pickSynchronizedKickoff, stableHash, type PreferenceInput } from "./scheduling";
 import { ELO_CONFIG, gameConfig, MP_CONFIG } from "../config";
+import { DAY_MS, dayBoundaryAtOrBefore } from "../services/dayBoundary";
 import { generateName } from "./names";
 import { createRng, nextInt } from "./rng";
 import { FEATURED_COUNTRIES } from "./countries";
@@ -196,7 +197,7 @@ export function lowestActiveTier(world: World, seasonId: number): number {
 export function firstReplaceableAIDivision(world: World, seasonId: number, tier: number): Competition | null {
   const divs = divisionsInTier(world, seasonId, tier);
   // The paused check reads world.mp.pausedAt directly (same field the admin
-  // pause and waiting-for-first-human hold share) rather than importing
+  // pause and launch-hold share) rather than importing
   // services/seasonPause: nothing under game/ imports from services/ today.
   const paused = typeof world.mp.pausedAt === "number" && Number.isFinite(world.mp.pausedAt);
   for (const d of divs) {
@@ -330,7 +331,7 @@ export function initSeason(world: World, ref: { year: number; month: number }, s
   world.mp.startAbsoluteGameDay = world.mp.absoluteGameDay;
   if (world.mp.seasonStartAt === null || world.mp.seasonStartAt === undefined) {
     const now = new Date();
-    world.mp.seasonStartAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    world.mp.seasonStartAt = dayBoundaryAtOrBefore(now.getTime());
   }
   world.mp.phase = "ACTIVE";
 
@@ -357,13 +358,16 @@ export function initSeason(world: World, ref: { year: number; month: number }, s
 }
 
 /**
- * Enter "waiting for the first human" mode: remove every pre-seeded all-AI
- * division, its filler clubs, fixtures and memberships, and hold the season
- * clock (pausedAt) until the first human joins. Called by the world reset and
- * by a rollover that ends with zero human clubs — the world never plays an
- * AI-only season. Division 1 forms lazily on the first join (placeNewClub).
+ * Enter the launch hold: remove every pre-seeded all-AI division, its filler
+ * clubs, fixtures and memberships, and hold the season clock (pausedAt) until
+ * a full roster of managers owns the division slots. Called by the world reset
+ * and by a rollover that ends with zero human clubs — the world never plays an
+ * AI-only season. The hold releases automatically once CLUBS_PER_DIVISION
+ * clubs are owned (routes/multiplayer.ts liftLaunchHoldIfComplete) or early by
+ * an admin force resume; it is pre-season only and never re-arms once lifted.
+ * Division 1 forms lazily on the first join (placeNewClub).
  */
-export function enterWaitingForFirstHuman(world: World, now: number): void {
+export function enterLaunchHold(world: World, now: number): void {
   // Remove filler AI clubs and any division that contains no human.
   const fillerIds = new Set(
     world.clubs.filter((c) => c.ownerUserId === null && c.isHuman === false).map((c) => c.id),
@@ -380,8 +384,25 @@ export function enterWaitingForFirstHuman(world: World, now: number): void {
   for (const club of world.clubs) club.liveMatchAt = null;
   // Hold the clock: the scheduler and every schedule-dependent mutation gate
   // on pausedAt (isWorldPausedGlobally / isPaused).
-  world.mp.awaitingFirstHuman = true;
+  world.mp.awaitingLaunchRoster = true;
   world.mp.pausedAt = now;
+}
+
+/** Human-owned clubs count toward the roster hold (DORMANT included: dormancy
+ *  lives in competitionState and never clears ownerUserId). */
+export function humanOwnedClubCount(world: World): number {
+  return world.clubs.filter((club) => club.ownerUserId !== null).length;
+}
+
+/**
+ * True exactly when the launch hold should release: the world is held (the
+ * flag — legacy or current — is set; the derived "played nothing" condition
+ * alone never releases, so a force-resumed or admin-paused pre-season world
+ * is not re-held) AND the roster has reached CLUBS_PER_DIVISION owned clubs.
+ */
+export function shouldReleaseLaunchHold(world: World): boolean {
+  if (world.mp.awaitingLaunchRoster !== true && world.mp.awaitingFirstHuman !== true) return false;
+  return humanOwnedClubCount(world) >= CLUBS_PER_DIVISION;
 }
 
 /** Create a division (competition) with empty standings + no fixtures yet. */
@@ -426,8 +447,15 @@ export function setDivisionState(world: World, divisionId: number, state: "CREAT
  * - the last round is synchronized per division/group: one shared instant
  *   minimizes summed home distance, then summed away distance;
  * - AI fillers and legacy humans without preferences are unconstrained.
- * Fixtures are only timed here, at generation; they are never rescheduled
- * afterwards (mid-season joins inherit existing kickoffs unchanged).
+ *
+ * Fixtures are timed here, at generation, and their kickoffs normally never
+ * change afterwards (mid-season joins inherit existing kickoffs unchanged).
+ * The ONE sanctioned exception is the launch-hold lift (seasonPause.ts
+ * applyLaunchHoldResume -> retimeDivisionFixtures): at generation the slots
+ * are unconstrained AI fillers, so the humans who later replace them have not
+ * influenced their own kickoff times; re-timing once, when the roster is
+ * complete and no match has played, is equivalent to generating the season
+ * fresh with those preferences.
  */
 export function generateDivisionFixtures(world: World, comp: Competition, ref: { year: number; month: number }): Fixture[] {
   void ref;
@@ -437,12 +465,35 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
   // reproduce the same tournament calendar.
   const orderSeed = stableHash(`${comp.seasonId}:${comp.id}`);
   const fixtures = createLeagueFixtures(orderSeed, comp.id, clubIds, gameConfig.league.startDay, gameConfig.matchSpacingDays);
-  // Midnight-aligned: kickoffs must land on the 30m UTC grid (00:00, 00:30...).
+  // Boundary-aligned: kickoffs must land on the 30m UTC grid (00:00, 00:30...).
   // A raw seasonStartAt at 18:26 would produce 18:26/18:56 slots — fix by
-  // truncating to UTC midnight before adding round offsets.
+  // truncating the anchor to the day boundary (dayBoundary.ts) before adding
+  // round offsets. The boundary and the kickoff grid are one instant, so the
+  // day-advance guard and the fixtures it protects can never desync.
   const rawSeasonStart = world.mp.seasonStartAt ?? Date.now();
-  const d = new Date(rawSeasonStart);
-  const seasonStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const seasonStart = dayBoundaryAtOrBefore(rawSeasonStart);
+  assignKickoffs(world, comp, fixtures, seasonStart);
+  for (const f of fixtures) {
+    f.id = world.nextId++;
+  }
+  validateDoubleRoundRobinFixtures(fixtures, clubIds, gameConfig.league.turns);
+  comp.config.clubs = clubIds;
+  return fixtures;
+}
+
+/**
+ * The timing half of generateDivisionFixtures, shared with re-timing so the
+ * two can never drift apart: assign each fixture's kickoff inside its fixed
+ * game day, optimized against the CURRENT roster's preferred windows, with
+ * the final round synchronized across the division.
+ *
+ * Determinism caveat: pickFixtureKickoff seeds from stable identity
+ * (comp:round:home:away), so re-timing is reproducible for a given roster —
+ * but the seed inputs legitimately change when a human replaces an AI, so the
+ * result is idempotent per roster, not across roster changes. That is
+ * correct, and it is why re-timing runs exactly once, at the launch-hold lift.
+ */
+export function assignKickoffs(world: World, comp: Competition, fixtures: Fixture[], seasonStart: number): void {
   const prefOf = (clubId: number): PreferenceInput => {
     const club = clubById(world, clubId);
     return { preferredSlots: club?.preferredHours ?? null };
@@ -455,7 +506,7 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
   }
   const lastRound = fixtures.reduce((max, f) => Math.max(max, f.round), 0);
   for (const [round, roundFixtures] of byRound) {
-    const dayStart = seasonStart + roundDayIndex(round) * 24 * 60 * 60 * 1000;
+    const dayStart = seasonStart + roundDayIndex(round) * DAY_MS;
     if (round === lastRound) {
       // Seed from stable identity so retries cannot reroll kickoffs.
       const kickoff = pickSynchronizedKickoff(roundFixtures.map((f) => ({ home: prefOf(f.homeClubId), away: prefOf(f.awayClubId) })), dayStart, `${comp.id}:${round}`);
@@ -464,12 +515,22 @@ export function generateDivisionFixtures(world: World, comp: Competition, ref: {
       for (const f of roundFixtures) f.kickoffAt = pickFixtureKickoff(prefOf(f.homeClubId), prefOf(f.awayClubId), dayStart, `${comp.id}:${round}:${f.homeClubId}:${f.awayClubId}`);
     }
   }
-  for (const f of fixtures) {
-    f.id = world.nextId++;
-  }
-  validateDoubleRoundRobinFixtures(fixtures, clubIds, gameConfig.league.turns);
-  comp.config.clubs = clubIds;
-  return fixtures;
+}
+
+/**
+ * Re-time one division's unplayed fixtures against its current roster (the
+ * launch-hold lift). `seasonStart` must be boundary-aligned. Nothing has
+ * played during a launch hold by definition, but the unplayed filter guards
+ * the invariant regardless — and a fixture whose match is already live is
+ * excluded too, so a kickoff can never move out from under a started match
+ * (the derived launch branch may run while a pre-season match is live).
+ */
+export function retimeDivisionFixtures(world: World, comp: Competition, seasonStart: number): number[] {
+  const liveFixtureIds = new Set(world.liveMatches.map((match) => match.fixtureId));
+  const fixtures = world.fixtures.filter((f) => f.competitionId === comp.id && !f.played && !liveFixtureIds.has(f.id));
+  if (fixtures.length === 0) return [];
+  assignKickoffs(world, comp, fixtures, seasonStart);
+  return fixtures.map((f) => f.id);
 }
 
 /** Simulate a division through the current global round (used when creating it mid-season). */
@@ -953,7 +1014,7 @@ export function promotionCandidateTiebreak(a: PromotionCandidate, b: PromotionCa
 /** Record a meaningful-activity audit row (plan §40/§55) and refresh the club's
  *  last activity timestamp used by abandonment evaluation. The optional `now`
  *  lets callers anchor the stamp to the world's frozen instant while paused
- *  (and to the join moment on the first-human lift), so the resume shift never
+ *  (or to the real wall clock on a launch-hold lift), so the resume shift never
  *  has to second-guess it. */
 export function recordActivity(world: World, userId: number, clubId: number, activityType: string, metadata?: string, now: number = Date.now()): void {
   world.mpActivities.push({ userId, clubId, activityType, occurredAt: now, metadata: metadata ?? null });

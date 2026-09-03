@@ -92,6 +92,41 @@ Which day a fixture falls on is fixed purely by the round-robin schedule; the ki
 - Once a fixture's kickoff time is set, it never changes — even for a club that joins
   partway through the season.
 
+### 1.4 The day boundary and the kickoff grid
+
+Every game day ends at one deterministic instant: the configured
+`gameDayRolloverUtc` past UTC midnight — production is `"00:00"`, so a game day
+runs from one UTC midnight to the next. All boundary math (the day-advance
+trigger, the pending day-advance event row, the fixture kickoff anchor, payroll
+days) derives from one module (`services/dayBoundary.ts`), so they agree by
+construction:
+
+- `mp.lastBoundaryAt` is the boundary instant the current game day started at —
+  always boundary-aligned (zero seconds). `mp.lastAdvancedAt` keeps its old
+  meaning: when the advance *physically* ran (display/audit).
+- The day-advance trigger counts boundaries elapsed since `lastBoundaryAt`, so
+  a deferred advance that lands at 04:17 still records the 00:00 boundary, a
+  manual admin advance only shortens the current day (the grid stays aligned),
+  and the pending `GAME_DAY_ADVANCE` row is always exactly
+  `lastBoundaryAt + 24 h`.
+- A resume shift moves `lastBoundaryAt`/`seasonStartAt` only by whole 24-hour
+  multiples, so a pause can never leave the boundary grid off midnight or
+  silently swallow a game day (see §10.7).
+
+Kickoffs are chosen once at generation against the preferences of whoever owns
+the slots at that moment, and normally never change. The one sanctioned
+exception is the launch-hold release (§10.6): re-timing runs exactly once, with
+the full roster in place and no match played, and is equivalent to generating
+the season fresh with those preferences — deterministic per roster, since every
+kickoff pick is seeded from stable fixture identity.
+
+The admin overview derives "next automatic advance" from `lastBoundaryAt`, not
+from the pending row, and reports `BOUNDARY_DESYNC` if the two ever disagree.
+
+Setting `gameDayRolloverUtc` to something else (e.g. `"03:00"` on a UTC−3 dev
+box) moves the boundary *and* the kickoff anchor coherently; production keeps
+`"00:00"`.
+
 ---
 
 ## 2. Clubs
@@ -1532,30 +1567,74 @@ archive row exists, so returning managers see "your club identity is preserved"
 before joining. Friendships need no archiving: they already live outside the Save
 scope.
 
-### 10.6 The world waits for its first manager
+### 10.6 The world waits for its full roster
 
 After a reset — and after any season that ends with zero human clubs — the world does
-**not** play out an AI-only season. It enters **waiting-for-first-human** mode:
+**not** play out an AI-only season. It enters **launch-hold** mode
+(`awaitingLaunchRoster`):
 
 - No Division 1 (or any division) exists yet; there are no clubs and no fixtures.
 - The season clock is **held** (`pausedAt` set, the same gate the admin pause uses):
   the scheduler, day advancement, live matches and every timer stay frozen, so no
   match is ever played and nothing expires while the world is empty.
 - The landing page, the join screen and the admin overview all surface the wait
-  ("the season starts when you join" / "waiting for the first manager").
-- An admin cannot manually resume the season while it is waiting — only the first
-  human join lifts the hold.
+  ("waiting for the full roster — the season starts automatically").
+- An admin cannot manually resume the season while it is held, unless they use the
+  explicit force release (§10.7).
 
-On the first `/mp/join` (or a dormant club's return), the hold is lifted: every
-real-time anchor is shifted forward by the held interval (exactly like an admin
-resume), the waiting flag is cleared, and **Division 1 is created lazily** — the
-joining club plus seven fresh filler AI clubs, with fixtures generated from the join
-moment. Because the hold reuses the admin pause's `pausedAt` gate, this lift applies
-whether or not the world was already frozen for another reason, and the shift is always
-measured against the real wall clock at the join moment — never the frozen instant, or
-the season clock would never start. Subsequent joiners replace the remaining filler
-slots as usual. If the season later ends with zero human clubs again, the world re-enters
-the same waiting state.
+The hold is **automatic**: joining is open throughout, each `/mp/join` (or dormant
+club's return) places the club into the lazily-created Division 1 — replacing a
+filler AI slot — and the moment the division's slots are all owned by managers
+(`CLUBS_PER_DIVISION` clubs with an owner, DORMANT included), the world releases
+itself through the launch-hold path (§10.7) without any admin click. Joins 1..N−1
+leave the world frozen; only the N-th releases it. The hold is pre-season only and
+**never re-arms** once lifted: a club abandoned during the hold simply lowers the
+count, and a departure after the lift backfills with AI exactly as in a normal
+season.
+
+At the release, the season is anchored to begin at the next day boundary and every
+active division's fixtures are **re-timed** against the now-complete set of manager
+preferences (see §1.4) — at generation the slots were unconstrained AI fillers, so
+the humans who replaced them had not influenced their own kickoff times. Re-timing
+once, before any match has played, is equivalent to generating the season fresh; it
+is deterministic per roster and runs exactly once. If the season later ends with
+zero human clubs again, the world re-enters the same waiting state.
+
+### 10.7 Admin pause: two resume modes
+
+Pausing the world freezes its clock: workers, day advancement and
+schedule-dependent mutations are gated, and nothing expires during the freeze.
+Resuming has two modes, chosen by whether the season has played anything yet:
+
+- **Launch hold** — the season has played nothing (the roster hold flag, or no
+  completed round and no played fixture): this covers both `awaitingLaunchRoster`
+  and an admin "hold until Division 1 fills". On lift, `seasonStartAt` and
+  `lastBoundaryAt` are anchored to the **next boundary after the lift** (in the
+  future), so day 1 begins on a boundary, every active division's fixtures are
+  re-timed against the current roster (half-hour grid inside each fixed game day,
+  final round synchronized), and no advance fires while the anchor is in the
+  future. The admin overview and joining players see "launch hold — N of M
+  managers joined". An admin may force the release early: the hold lifts with the
+  remaining slots left as AI and the same re-timing runs.
+- **Maintenance pause** — the literal rule: the current game day always ends at
+  the next boundary, however little of it remains. The resume shift is split in
+  two:
+  - `rawShift` (the real freeze duration) moves every real-time anchor —
+    auctions, free-agent listings, loans, live-match pacing, inactivity
+    countdowns and pending real-time events;
+  - `gridShift` (whole 24-hour multiples only) moves the game-day grid —
+    `seasonStartAt`, `lastBoundaryAt`, `lastAdvancedAt`, unplayed fixtures
+    that have not kicked off, and their `MATCH_START` events. The pending
+    day-advance row is excluded from both shifts and re-derived to the
+    boundary, so it can never carry a raw millisecond delta again.
+
+A pause crossing **no** boundary leaves the current day's kickoff grid
+untouched — kickoffs that fell inside the freeze window start immediately on
+resume rather than being pushed out (the game day is atomic; this is what keeps
+a short maintenance pause from extending the current day by 24 h). The admin
+panel shows the consequence before confirming: how many current-day kickoffs are
+already in the past (they will resolve instantly) and the boundary the day will
+end at.
 
 ---
 

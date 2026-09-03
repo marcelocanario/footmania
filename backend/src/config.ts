@@ -1264,7 +1264,8 @@ export function scaleReferenceSeasonFlow(amount: number, config: Pick<GameConfig
   return Math.round(amount * seasonFlowScale(config));
 }
 
-/** Parse a configured HH:MM UTC value into its hour component. */
-export function configuredUtcHour(value: string): number {
-  return Number(value.slice(0, 2));
+/** Parse a configured HH:MM UTC value into its minute-of-day component (0..1439). */
+export function configuredUtcMinuteOfDay(value: string): number {
+  const [hours, minutes] = value.split(":").map(Number);
+  return hours * 60 + minutes;
 }

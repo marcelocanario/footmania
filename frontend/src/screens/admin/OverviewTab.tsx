@@ -19,12 +19,13 @@ interface WorldStatus {
   clubCount: number;
   humanClubCount: number;
   liveMatchCount: number;
-  awaitingFirstHuman: boolean;
+  awaitingLaunchRoster: boolean;
   paused: boolean;
 }
 
 const HEALTH_META: Record<string, { label: string; tone: ChipTone; hint: string }> = {
   HEALTHY: { label: "Healthy", tone: "done", hint: "All due events are processed and nothing failed." },
+  BOUNDARY_DESYNC: { label: "Day-boundary desync", tone: "failed", hint: "The pending day-advance row does not match the computed boundary — something wrote an off-grid anchor. Inspect the scheduler events." },
   OVERDUE: { label: "Overdue events", tone: "running", hint: "Some real-time events passed their deadline without running. Use “Scan due events” to catch up." },
   FAILED_EVENTS: { label: "Failed events", tone: "failed", hint: "One or more events failed after retries. Inspect them on the Events tab." },
   SCHEDULER_REQUIRES_ADMIN_REVIEW: { label: "Admin review required", tone: "failed", hint: "A review flag was raised — inspect failed events before advancing the clock." },
@@ -104,7 +105,7 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
           <div className="stat">
             <div className="label">World</div>
             <div className="value">{w.humanClubCount} human{w.humanClubCount === 1 ? "" : "s"}</div>
-            <div className="hint">{w.awaitingFirstHuman ? "waiting for the first manager — season clock held" : `${w.clubCount} clubs · ${w.divisionCount} divisions · ${w.liveMatchCount} live`}</div>
+            <div className="hint">{w.awaitingLaunchRoster ? "waiting for the full roster — season clock held" : `${w.clubCount} clubs · ${w.divisionCount} divisions · ${w.liveMatchCount} live`}</div>
           </div>
         </div>
       )}
@@ -124,8 +125,20 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
             </div>
             <div className="stat">
               <div className="label">Next automatic advance</div>
-              <div className="value" style={{ fontSize: "1.05rem" }}>{c.nextAutomaticDayAdvance ? relativeTime(c.nextAutomaticDayAdvance) : "paused"}</div>
-              <div className="hint">{c.nextAutomaticDayAdvance ? new Date(c.nextAutomaticDayAdvance).toLocaleString() : "no day-advance event scheduled"}</div>
+              {c.launchHold ? (
+                <>
+                  <div className="value" style={{ fontSize: "1.05rem", color: "var(--gold-2)" }}>Launch hold</div>
+                  <div className="hint">season begins {c.seasonStartsAt ? new Date(c.seasonStartsAt).toLocaleString() : "—"}</div>
+                  <div className="hint" style={{ marginTop: 4 }}>
+                    {c.launchHoldClubs} of {c.launchHoldTarget} managers joined — releases automatically when the division fills
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="value" style={{ fontSize: "1.05rem" }}>{c.nextAutomaticDayAdvance ? relativeTime(c.nextAutomaticDayAdvance) : "paused"}</div>
+                  <div className="hint">{c.nextAutomaticDayAdvance ? new Date(c.nextAutomaticDayAdvance).toLocaleString() : "no day-advance event scheduled"}</div>
+                </>
+              )}
             </div>
             <div className="stat">
               <div className="label">Last advanced</div>
@@ -142,9 +155,33 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
           <div style={{ color: "var(--text-2)", fontSize: "0.85rem", marginBottom: 10 }}>Manual controls — each action is written to the audit log.</div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             {c.paused ? (
-              <button className="btn gold" onClick={() => void runAction(() => api.adminSchedulerResume(reason || undefined), "Season resumed — timers shifted by the paused interval")}>
-                <Play size={15} /> Resume season
-              </button>
+              <>
+                <button className="btn gold" onClick={() => void runAction(() => api.adminSchedulerResume(reason || undefined), "Season resumed — timers shifted by the paused interval")}>
+                  <Play size={15} /> Resume season
+                </button>
+                {c.launchHold && (
+                  <button
+                    className="btn"
+                    onClick={() =>
+                      setConfirm({
+                        title: "Release the launch hold early",
+                        message: "Lifts the hold before the division roster fills and starts the season at the next boundary. The remaining slots stay as AI clubs, and the hold never re-arms. Fixtures are re-timed against the current roster.",
+                        confirmLabel: "Release early",
+                        minReasonLength: 10,
+                        reasonHint: "Why is the hold being released early? (min 10 characters)",
+                        onConfirm: async (r) => {
+                          await api.adminSchedulerResume(r, true);
+                          notify("success", "Launch hold released early — season begins at the next boundary");
+                          world.reload();
+                          clock.reload();
+                        },
+                      })
+                    }
+                  >
+                    <FastForward size={15} /> Release hold early…
+                  </button>
+                )}
+              </>
             ) : (
               <button className="btn gold" onClick={() => void runAction(() => api.adminSchedulerPause(reason || undefined), "Season paused — world clock frozen")}>
                 <Pause size={15} /> Pause season
@@ -202,6 +239,11 @@ export function OverviewTab({ version, notify, clock }: TabProps & { clock: Admi
           {c.paused && (
             <div style={{ color: "var(--gold-2)", fontSize: "0.8rem", marginTop: 10 }}>
               Season is paused since {new Date(c.pausedAt ?? Date.now()).toLocaleString()}. Resuming shifts every deadline, kickoff and live-match clock by the frozen interval — nothing expires while paused.
+              {!c.launchHold && (
+                <>
+                  {" "}Resuming now ends the current game day at the next boundary ({c.nextBoundary ? new Date(c.nextBoundary).toLocaleString() : "—"}): {c.strandedKickoffs} of its kickoff(s) {c.strandedKickoffs === 1 ? "is" : "are"} already in the past and will resolve instantly — you can wait for the boundary instead.
+                </>
+              )}
             </div>
           )}
         </AdminCard>

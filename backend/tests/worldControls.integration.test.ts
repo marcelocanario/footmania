@@ -1,17 +1,26 @@
 import { afterAll, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { TEST_DATABASE_URL } from "./testDbUrl";
 process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.NODE_ENV = "test";
 
 import { buildServer } from "../src/server";
-import { scheduleEvent, ScheduledEventType } from "../src/services/scheduler";
+import { materializeSeasonEvents, scheduleEvent, ScheduledEventType } from "../src/services/scheduler";
 import { ensureCurrentSeason } from "../src/services/mpService";
 import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
 import { loadPresetsForClub } from "../src/services/automationPresetService";
 import { schedulerProcessor } from "../src/services/jobs/schedulerProcessor";
+import { ensureGameClock } from "../src/services/gameClockService";
+import { DAY_MS, boundariesElapsed, dayBoundaryAtOrBefore } from "../src/services/dayBoundary";
+import { realignFixtureKickoff } from "../src/game/scheduling";
+import { CLUBS_PER_DIVISION } from "../src/game/multiplayer";
 import { createHumanClub } from "../src/game/worldgen";
+import { startLiveMatch } from "../src/game/world";
 import { createTestSessionCookie } from "./testAuth";
+import type { LiveMatchState } from "../src/game/types";
 
 async function registerAndLogin(app: Awaited<ReturnType<typeof buildServer>>, username: string): Promise<string> {
   return (await createTestSessionCookie(app, { name: username, email: `${username}@test.dev` })).cookie;
@@ -65,8 +74,6 @@ describe("admin world controls (season pause / fixture recalculation / world res
 
     const worldBefore = await loadGlobalWorld(app.prisma);
     if (!worldBefore) throw new Error("world did not load");
-    const kickoffBefore = worldBefore.world.fixtures.find((f) => !f.played && f.kickoffAt !== undefined)?.kickoffAt;
-    expect(kickoffBefore).toBeDefined();
     const dueEvent = await scheduleEvent(app.prisma, {
       saveId: worldBefore.save.id,
       type: ScheduledEventType.AUCTION_END,
@@ -110,23 +117,46 @@ describe("admin world controls (season pause / fixture recalculation / world res
     const scan = await app.inject({ method: "POST", url: "/api/admin/scheduler/scan", headers: { cookie: adminCookie } });
     expect(scan.statusCode).toBe(409);
 
-    // Resume shifts real-time anchors by the frozen interval.
+    // Resume shifts real-time anchors by the frozen interval. The ~30ms
+    // freeze crosses NO day boundary, so the grid shift is 0 — but this world
+    // has never played anything, so the resume takes the LAUNCH branch: the
+    // season re-anchors to the next boundary and every kickoff is re-timed
+    // onto that grid (nothing has played, so this is equivalent to a fresh
+    // generation). Only real-time timers move by the frozen interval.
     await new Promise((resolve) => setTimeout(resolve, 30));
     const resumed = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: {} });
     expect(resumed.statusCode).toBe(200);
     const shiftMs = resumed.json().shiftMs as number;
     expect(shiftMs).toBeGreaterThanOrEqual(30);
+    expect(resumed.json().gridShiftMs).toBe(0);
+    expect(resumed.json().strandedKickoffs).toBe(0);
+    expect(typeof resumed.json().nextBoundary).toBe("number");
 
     const eventAfter = await app.prisma.scheduledEvent.findUniqueOrThrow({ where: { id: dueEvent.id } });
     expect(eventAfter.dueAt!.getTime()).toBe(new Date(dueEvent.dueAt!).getTime() + shiftMs);
     const worldAfter = await loadGlobalWorld(app.prisma);
     if (!worldAfter) throw new Error("world did not load after resume");
     expect(worldAfter.world.mp.pausedAt ?? null).toBeNull();
-    expect(worldAfter.world.mp.lastAdvancedAt).toBe((worldBefore.world.mp.lastAdvancedAt as number) + shiftMs);
-    const kickoffAfter = worldAfter.world.fixtures.find((f) => f.id === worldBefore.world.fixtures.find((x) => !x.played && x.kickoffAt !== undefined)!.id);
-    expect(kickoffAfter?.kickoffAt).toBe(kickoffBefore! + shiftMs);
+    // The launch branch records the resume instant as the physical advance.
+    expect(worldAfter.world.mp.lastAdvancedAt).toBe(resumed.json().resumedAt);
+    // The grid reference is boundary-aligned after the resume (zero seconds).
+    const boundary = worldAfter.world.mp.lastBoundaryAt;
+    expect(boundary).toBeDefined();
+    expect(new Date(boundary!).getUTCSeconds()).toBe(0);
+    expect(new Date(boundary!).getUTCMilliseconds()).toBe(0);
+    expect(worldAfter.world.mp.seasonStartAt).toBe(boundary);
+    // Every unplayed kickoff was re-timed onto the boundary grid inside its
+    // own game day (the frozen interval is not what moved them).
+    for (const fixture of worldAfter.world.fixtures) {
+      if (fixture.played || fixture.kickoffAt === undefined) continue;
+      const dayStart = boundary! + (fixture.scheduledSeasonDayIndex ?? fixture.dayIndex) * DAY_MS;
+      expect(fixture.kickoffAt).toBeGreaterThanOrEqual(dayStart);
+      expect(fixture.kickoffAt).toBeLessThan(dayStart + DAY_MS);
+      expect((fixture.kickoffAt - dayStart) % (30 * 60 * 1000)).toBe(0);
+    }
     const clockRow = await app.prisma.gameClock.findFirstOrThrow({ where: { saveId: worldAfter.save.id } });
     expect(clockRow.lastAdvancedAt.getTime()).toBe(worldAfter.world.mp.lastAdvancedAt);
+    expect(clockRow.lastBoundaryAt!.getTime()).toBe(boundary);
 
     const statusAfter = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: userCookie } });
     expect(statusAfter.json().paused).toBe(false);
@@ -134,6 +164,169 @@ describe("admin world controls (season pause / fixture recalculation / world res
     // Resuming again is rejected cleanly.
     const doubleResume = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: {} });
     expect(doubleResume.statusCode).toBe(400);
+  });
+
+  it("computes next automatic advance from the boundary and flags a hand-corrupted row as BOUNDARY_DESYNC", async () => {
+    await app.ready();
+    const adminCookie = await registerAndLogin(app, "clockadmin");
+    await app.prisma.user.update({ where: { email: "clockadmin@test.dev" }, data: { isAdmin: true } });
+
+    await ensureGlobalSave(app.prisma);
+    await ensureCurrentSeason(app.prisma);
+    const loaded = await loadGlobalWorld(app.prisma);
+    if (!loaded) throw new Error("world did not load");
+    const saveId = loaded.save.id;
+    // Anchor the clock so lastBoundaryAt exists and the row can be compared.
+    loaded.world.mp.lastAdvancedAt = Date.now();
+    await persistWorld(app.prisma, saveId, saveId, loaded.world, loaded.save.revision);
+    const clock = await ensureGameClock(app.prisma, saveId, loaded.world);
+
+    // Corrupt the pending row to an off-grid instant — the exact fingerprint
+    // of the drift bug (a raw millisecond delta written by a resume shift).
+    const existing = await app.prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" } });
+    const corrupted = new Date(Date.now() + 6 * 3600 * 1000 + 13 * 60 * 1000 + 52 * 1000);
+    if (existing) {
+      await app.prisma.scheduledEvent.update({ where: { id: existing.id }, data: { dueAt: corrupted } });
+    } else {
+      await scheduleEvent(app.prisma, { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, timeBasis: "REAL_TIME", dueAt: corrupted, idempotencyKey: "GAME_DAY_ADVANCE:desync-test" });
+    }
+
+    const res = await app.inject({ method: "GET", url: "/api/admin/scheduler/clock", headers: { cookie: adminCookie } });
+    expect(res.statusCode).toBe(200);
+    const view = res.json().clock;
+    expect(view.health).toBe("BOUNDARY_DESYNC");
+    // The panel shows the boundary-derived value, never the corrupted row.
+    expect(new Date(view.nextAutomaticDayAdvance).getTime()).toBe(new Date(view.lastBoundaryAt).getTime() + DAY_MS);
+    expect(new Date(view.nextAutomaticDayAdvance).getUTCSeconds()).toBe(0);
+    expect(view.lastBoundaryAt).toBeDefined();
+    expect(clock.lastBoundaryAt.getTime()).toBe(new Date(view.lastBoundaryAt).getTime());
+  });
+
+  it("repair migration reports without mutating, applies under FOOTMANIA_REALIGN_KICKOFFS=1, and refuses while a live match is in progress", async () => {
+    await app.ready();
+    await ensureGlobalSave(app.prisma);
+    await ensureCurrentSeason(app.prisma);
+    const loaded = await loadGlobalWorld(app.prisma);
+    if (!loaded) throw new Error("world did not load");
+    const saveId = loaded.save.id;
+    const world = loaded.world;
+
+    // Anchor stays aligned (Tier A becomes a no-op on it) and two unplayed
+    // kickoffs drift one full day off their own game day.
+    const now = Date.now();
+    world.mp.seasonStartAt = dayBoundaryAtOrBefore(now);
+    world.mp.lastAdvancedAt = world.mp.seasonStartAt;
+    const drifted = world.fixtures.filter((f) => !f.played && f.kickoffAt !== undefined).slice(0, 2);
+    expect(drifted).toHaveLength(2);
+    // Capture AFTER the drift: report mode must leave the DRIFTED value in
+    // place, and apply mode must move it off that value.
+    for (const fixture of drifted) fixture.kickoffAt! += DAY_MS;
+    const driftedKickoffs = drifted.map((f) => f.kickoffAt!);
+    await persistWorld(app.prisma, saveId, saveId, world, loaded.save.revision);
+    await materializeSeasonEvents(app.prisma, saveId, world);
+    // A review flag the unattended db:upgrade run must clear.
+    await app.prisma.setting.create({ data: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW", value: "1" } });
+
+    const backendRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const tsx = join(backendRoot, "node_modules", ".bin", process.platform === "win32" ? "tsx.cmd" : "tsx");
+    const script = join(backendRoot, "scripts", "migrate-game-day-boundary.ts");
+    const runScript = (env: Record<string, string> = {}) =>
+      spawnSync(tsx, [script], {
+        cwd: backendRoot,
+        encoding: "utf8",
+        // Windows exposes tsx as a .cmd shim, which needs a shell for spawnSync.
+        shell: process.platform === "win32",
+        env: { ...process.env, DATABASE_URL: TEST_DATABASE_URL, ...env },
+      });
+
+    // The MATCH_START row was materialized from the PRE-drift kickoff and
+    // materialization is idempotent, so it still carries that value. Report
+    // mode must leave it exactly as it is — whatever it is.
+    const msBeforeRow = await app.prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: String(drifted[0].id) } });
+    const msBefore = msBeforeRow?.dueAt!.getTime();
+
+    // Report mode: exit 0, kickoffs and MATCH_START rows untouched, the
+    // review flag cleared (Tier A).
+    const report = runScript();
+    expect(report.status).toBe(0);
+    expect(report.stdout).toContain("report only");
+    const afterReport = await loadGlobalWorld(app.prisma);
+    if (!afterReport) throw new Error("world did not load");
+    expect(afterReport.world.fixtures.find((f) => f.id === drifted[0].id)?.kickoffAt).toBe(driftedKickoffs[0]);
+    expect(afterReport.world.fixtures.find((f) => f.id === drifted[1].id)?.kickoffAt).toBe(driftedKickoffs[1]);
+    const msReport = await app.prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: String(drifted[0].id) } });
+    expect(msReport?.dueAt!.getTime()).toBe(msBefore);
+    expect(await app.prisma.setting.count({ where: { key: "SCHEDULER_REQUIRES_ADMIN_REVIEW" } })).toBe(0);
+
+    // Apply mode requires a paused world.
+    const pausedWorld = await loadGlobalWorld(app.prisma);
+    if (!pausedWorld) throw new Error("world did not load");
+    pausedWorld.world.mp.pausedAt = Date.now();
+    await persistWorld(app.prisma, saveId, saveId, pausedWorld.world, pausedWorld.save.revision);
+    const applied = runScript({ FOOTMANIA_REALIGN_KICKOFFS: "1" });
+    expect(applied.status).toBe(0);
+    const afterApply = await loadGlobalWorld(app.prisma);
+    if (!afterApply) throw new Error("world did not load");
+    const aligned = afterApply.world.fixtures.find((f) => f.id === drifted[0].id)!;
+    expect(aligned.kickoffAt).toBe(realignFixtureKickoff(aligned, afterApply.world.mp.seasonStartAt!));
+    expect(aligned.kickoffAt).not.toBe(driftedKickoffs[0]);
+    const msAfter = await app.prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: String(drifted[0].id) } });
+    expect(msAfter?.dueAt!.getTime()).toBe(aligned.kickoffAt!);
+
+    // Idempotency: a re-run after the apply reports nothing and changes nothing.
+    const replay = runScript({ FOOTMANIA_REALIGN_KICKOFFS: "1" });
+    expect(replay.status).toBe(0);
+    expect(replay.stdout).toContain("all unplayed fixtures are inside their own game day");
+    const afterReplay = await loadGlobalWorld(app.prisma);
+    if (!afterReplay) throw new Error("world did not load");
+    expect(afterReplay.world.fixtures.find((f) => f.id === drifted[0].id)?.kickoffAt).toBe(aligned.kickoffAt);
+
+    // Refusal: a live match in progress must block the apply, exit non-zero,
+    // and leave the fixture untouched.
+    const liveWorld = await loadGlobalWorld(app.prisma);
+    if (!liveWorld) throw new Error("world did not load");
+    const victim = liveWorld.world.fixtures.find((f) => !f.played && f.kickoffAt !== undefined)!;
+    victim.kickoffAt! += DAY_MS;
+    const victimKickoff = victim.kickoffAt!;
+    // A DIFFERENT fixture goes live. Live fixtures are excluded from
+    // re-alignment by design, so making the drifted one live would leave
+    // nothing misaligned and the refusal would never be exercised.
+    // Build a REAL live match: a hand-rolled LiveMatchState omits fields
+    // hydrateLiveMatchState requires, so the world fails to rebuild on the
+    // next load and every later test in this file inherits the corruption.
+    const liveFixture = liveWorld.world.fixtures.find((f) => !f.played && f.id !== victim.id && f.kickoffAt !== undefined)!;
+    expect(startLiveMatch(liveWorld.world, liveFixture, Date.now())).not.toBeNull();
+    await persistWorld(app.prisma, saveId, saveId, liveWorld.world, liveWorld.save.revision);
+    const refused = runScript({ FOOTMANIA_REALIGN_KICKOFFS: "1" });
+    expect(refused.status).not.toBe(0);
+    const afterRefuse = await loadGlobalWorld(app.prisma);
+    expect(afterRefuse?.world.fixtures.find((f) => f.id === victim.id)?.kickoffAt).toBe(victimKickoff);
+
+    // Clean up the refusal setup so later tests in this file see a live-match
+    // free world again (the recalculate guard forbids regeneration while any
+    // current-season match is live). Live-match rows are append-only through
+    // persistWorld, so the row is deleted directly; the victim kickoff is
+    // re-aligned and its MATCH_START row follows it.
+    await app.prisma.liveMatch.deleteMany({ where: { saveId } });
+    const cleanup = await loadGlobalWorld(app.prisma);
+    if (!cleanup) throw new Error("world did not load");
+    cleanup.world.liveMatches = [];
+    // startLiveMatch also RECORDS a match and stamps the clubs; the fixture
+    // recalculation guard rejects a season that has any recorded match, so
+    // every trace of the started match has to go, not just the live row.
+    cleanup.world.matches = cleanup.world.matches.filter((m) => m.fixtureId !== liveFixture.id);
+    for (const club of cleanup.world.clubs) club.liveMatchAt = null;
+    await app.prisma.match.deleteMany({ where: { saveId, fixtureId: liveFixture.id } });
+    // Apply mode required a paused world; leaving it paused makes every later
+    // test in this file fail with 409 (world paused).
+    cleanup.world.mp.pausedAt = null;
+    const restored = cleanup.world.fixtures.find((f) => f.id === victim.id)!;
+    restored.kickoffAt = realignFixtureKickoff(restored, cleanup.world.mp.seasonStartAt!);
+    await persistWorld(app.prisma, saveId, saveId, cleanup.world, cleanup.save.revision);
+    await app.prisma.scheduledEvent.updateMany({
+      where: { saveId, type: ScheduledEventType.MATCH_START, entityType: "MATCH", entityId: String(victim.id), status: { in: ["PENDING", "FAILED"] } },
+      data: { dueAt: new Date(restored.kickoffAt!) },
+    });
   });
 
   it("recalculates pre-season schedules and refuses once a match exists", async () => {
@@ -209,12 +402,12 @@ describe("admin world controls (season pause / fixture recalculation / world res
 
     const fresh = await loadGlobalWorld(app.prisma);
     if (!fresh) throw new Error("fresh world did not load");
-    // A reset leaves the world waiting for its first manager: no Division 1,
+    // A reset leaves the world in the launch hold: no Division 1,
     // no filler clubs, no fixtures, season clock held.
     expect(fresh.world.clubs.length).toBe(0);
     expect(fresh.world.competitions.length).toBe(0);
     expect(fresh.world.fixtures.length).toBe(0);
-    expect(fresh.world.mp.awaitingFirstHuman).toBe(true);
+    expect(fresh.world.mp.awaitingLaunchRoster).toBe(true);
     expect(fresh.world.mp.pausedAt).toBeTypeOf("number");
     expect(await app.prisma.gameClock.count()).toBe(1);
     expect(await app.prisma.scheduledEvent.count({ where: { saveId: fresh.save.id } })).toBeGreaterThan(0);
@@ -316,10 +509,10 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(club!.kits?.away).toMatchObject({ primary: "#111133", secondary: "#ffcc00", pattern: "diagonal-split" });
     // The wizard's name/country/stadium/coach were overridden by the archive.
     expect(club!.coachName).not.toBe("Wizard Coach");
-    // The first join lifted the waiting-for-first-human hold and formed
-    // Division 1 lazily.
+    // The first join formed Division 1 lazily, but the world stays in the
+    // launch hold until the full roster arrives (one club is not eight).
     expect(world.world.mp.awaitingFirstHuman).not.toBe(true);
-    expect(world.world.mp.pausedAt ?? null).toBeNull();
+    expect(world.world.mp.pausedAt).toBeTypeOf("number");
     expect(world.world.competitions.some((c) => c.kind === "division" && c.seasonId === world.world.mp.seasonId)).toBe(true);
     expect(world.world.fixtures.length).toBeGreaterThan(0);
   });
@@ -395,7 +588,7 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(presets.some((p) => p.rules.some((r) => r.actions.some((a) => a.kind === "TACTICS" && a.formation !== undefined)))).toBe(true);
   });
 
-  it("holds the season clock while waiting for the first human, then starts it on join", async () => {
+  it("holds the season clock until the roster completes; only the full roster or a force resume starts it", async () => {
     await app.ready();
     const adminCookie = await registerAndLogin(app, "waitadmin");
     await app.prisma.user.update({ where: { email: "waitadmin@test.dev" }, data: { isAdmin: true } });
@@ -403,14 +596,14 @@ describe("admin world controls (season pause / fixture recalculation / world res
     const secondCookie = await registerAndLogin(app, "waitsecond");
 
     await ensureCurrentSeason(app.prisma);
-    // Reset the world (no humans survive): this is what enters waiting mode.
-    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter waiting-for-first-human mode" } });
+    // Reset the world (no humans survive): this is what enters the hold.
+    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter the launch hold" } });
     expect(reset.statusCode).toBe(200);
 
-    // No humans yet: the world waits — no Division 1, no clubs, clock held.
+    // No humans yet: the world holds — no Division 1, no clubs, clock frozen.
     let world = await loadGlobalWorld(app.prisma);
     if (!world) throw new Error("world did not load");
-    expect(world.world.mp.awaitingFirstHuman).toBe(true);
+    expect(world.world.mp.awaitingLaunchRoster).toBe(true);
     expect(world.world.mp.pausedAt).toBeTypeOf("number");
     expect(world.world.competitions.length).toBe(0);
     expect(world.world.clubs.length).toBe(0);
@@ -420,16 +613,16 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(publicStatus.json().awaitingFirstHuman).toBe(true);
     expect(publicStatus.json().paused).toBe(true);
 
-    // An admin manual resume is refused while waiting.
-    const refusedResume = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: { reason: "should not be allowed while waiting" } });
+    // A plain admin resume is refused while held.
+    const refusedResume = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: { reason: "should not be allowed while the roster is incomplete" } });
     expect(refusedResume.statusCode).toBe(400);
 
-    // The first join lifts the hold and forms Division 1.
+    // The first join forms Division 1 lazily but does NOT release the hold.
     await joinClub(app, firstCookie, "Founding FC");
     const afterFirst = await loadGlobalWorld(app.prisma);
     if (!afterFirst) throw new Error("world did not load after first join");
-    expect(afterFirst.world.mp.awaitingFirstHuman).not.toBe(true);
-    expect(afterFirst.world.mp.pausedAt ?? null).toBeNull();
+    expect(afterFirst.world.mp.awaitingLaunchRoster).toBe(true);
+    expect(afterFirst.world.mp.pausedAt).toBeTypeOf("number");
     const division = afterFirst.world.competitions.find((c) => c.kind === "division" && c.seasonId === afterFirst.world.mp.seasonId);
     expect(division).toBeDefined();
     expect(Object.keys(division!.standings).length).toBe(8);
@@ -437,15 +630,35 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(afterFirst.world.clubs.filter((c) => c.ownerUserId === null).length).toBe(7);
     expect(afterFirst.world.fixtures.length).toBeGreaterThan(0);
     const status = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: firstCookie } });
-    expect(status.json().awaitingFirstHuman).toBe(false);
-    expect(status.json().paused).toBe(false);
+    expect(status.json().awaitingFirstHuman).toBe(true);
+    expect(status.json().paused).toBe(true);
+    // The roster progress is surfaced from the authoritative fields.
+    expect(status.json().launchHoldClubs).toBe(1);
+    expect(status.json().launchHoldTarget).toBe(CLUBS_PER_DIVISION);
 
-    // A second human joins the now-formed Division 1 (replacing another filler).
+    // An admin FORCE resume lifts the under-strength hold early.
+    const forced = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: { reason: "release the hold early for the test", force: true } });
+    expect(forced.statusCode).toBe(200);
+    const afterForce = await loadGlobalWorld(app.prisma);
+    if (!afterForce) throw new Error("world did not load after force resume");
+    expect(afterForce.world.mp.awaitingLaunchRoster).not.toBe(true);
+    expect(afterForce.world.mp.pausedAt ?? null).toBeNull();
+    expect(afterForce.world.mp.seasonStartAt!).toBeGreaterThan(Date.now());
+    expect(new Date(afterForce.world.mp.seasonStartAt!).getUTCSeconds()).toBe(0);
+    expect(afterForce.world.mp.lastBoundaryAt).toBe(afterForce.world.mp.seasonStartAt);
+    // The remaining slots are still AI fillers.
+    expect(afterForce.world.clubs.filter((c) => c.ownerUserId !== null).length).toBe(1);
+    expect(afterForce.world.clubs.filter((c) => c.ownerUserId === null).length).toBe(7);
+
+    // A second human joins the released world (replacing another filler).
     await joinClub(app, secondCookie, "Second SC");
     const afterSecond = await loadGlobalWorld(app.prisma);
     if (!afterSecond) throw new Error("world did not load after second join");
     expect(afterSecond.world.clubs.filter((c) => c.ownerUserId !== null).length).toBe(2);
     expect(afterSecond.world.clubs.filter((c) => c.ownerUserId === null).length).toBe(6);
+    // The hold never re-arms after the lift.
+    expect(afterSecond.world.mp.awaitingLaunchRoster).not.toBe(true);
+    expect(afterSecond.world.mp.pausedAt ?? null).toBeNull();
   });
 
   it("lets managers join and return while paused, while market, contract and admin controls stay frozen", async () => {
@@ -457,10 +670,8 @@ describe("admin world controls (season pause / fixture recalculation / world res
 
     await ensureGlobalSave(app.prisma);
     await ensureCurrentSeason(app.prisma);
-    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "clean slate for the paused join test" } });
-    expect(reset.statusCode).toBe(200);
 
-    // Host joins first: the first-human lift starts the season, D1 forms.
+    // Host joins first: the season runs and Division 1 is already formed.
     await joinClub(app, hostCookie, "Paused Host FC");
     const host = await app.prisma.user.findUniqueOrThrow({ where: { email: "pausedjoinshost@test.dev" } });
 
@@ -528,66 +739,136 @@ describe("admin world controls (season pause / fixture recalculation / world res
     expect(statusAfter.json().paused).toBe(false);
   });
 
-  it("lifts the waiting-for-first-human hold on a paused join and a paused dormant return, shifting by the held interval", async () => {
+  it("holds through joins 1..N−1 (including a dormant return) and releases on the N-th, re-timing the fixtures", async () => {
     await app.ready();
-    const adminCookie = await registerAndLogin(app, "waitliftadmin");
-    await app.prisma.user.update({ where: { email: "waitliftadmin@test.dev" }, data: { isAdmin: true } });
-    const joinerCookie = await registerAndLogin(app, "waitliftjoin");
-    const returnerCookie = await registerAndLogin(app, "waitliftreturn");
+    const adminCookie = await registerAndLogin(app, "rosteradmin");
+    await app.prisma.user.update({ where: { email: "rosteradmin@test.dev" }, data: { isAdmin: true } });
+    const cookies: string[] = [];
+    const windows: number[][] = [];
+    for (let i = 0; i < CLUBS_PER_DIVISION; i++) {
+      const cookie = await registerAndLogin(app, `rosterjoin${i}`);
+      cookies.push(cookie);
+      // Each manager picks a distinct 8-hour window (16 half-hour slots).
+      windows.push(Array.from({ length: 16 }, (_, s) => (s + i * 4) % 48));
+    }
 
     await ensureGlobalSave(app.prisma);
     await ensureCurrentSeason(app.prisma);
+    // Reset enters the launch hold (zero humans).
+    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter the roster hold for the auto-release test" } });
+    expect(reset.statusCode).toBe(200);
+    const saveId = reset.json().newSaveId as number;
 
-    // Phase 1: a DORMANT club exists in a world waiting for its first manager
-    // (enterWaitingForFirstHuman keeps human clubs; only ACTIVE humans per tier
-    // are checked). Its return must lift the hold like the first join would.
-    const resetA = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter waiting mode for the dormant return lift test" } });
-    expect(resetA.statusCode).toBe(200);
-    const returner = await app.prisma.user.findUniqueOrThrow({ where: { email: "waitliftreturn@test.dev" } });
-    const waitingA = await loadGlobalWorld(app.prisma);
-    if (!waitingA) throw new Error("world did not load");
-    const pausedAtA = waitingA.world.mp.pausedAt as number;
-    const seasonStartA = waitingA.world.mp.seasonStartAt;
-    expect(seasonStartA).toBeTypeOf("number");
-    const dormant = createHumanClub(waitingA.world, { userId: returner.id, clubName: "Waiting Return FC", country: "BRA" });
+    const held = await loadGlobalWorld(app.prisma);
+    if (!held) throw new Error("world did not load");
+    expect(held.world.mp.awaitingLaunchRoster).toBe(true);
+    const holdInstant = held.world.mp.pausedAt as number;
+    expect(holdInstant).toBeTypeOf("number");
+
+    // A DORMANT club already waits in the held world; its return places it
+    // (counting toward the roster) but must NOT release the hold. It carries
+    // the first manager's window so the re-timing honors it like any join.
+    const returner = await app.prisma.user.findUniqueOrThrow({ where: { email: "rosterjoin0@test.dev" } });
+    const dormant = createHumanClub(held.world, { userId: returner.id, clubName: "Waiting Return FC", country: "BRA", preferredHours: windows[0] });
     dormant.competitionState = "DORMANT";
-    await persistWorld(app.prisma, waitingA.save.id, waitingA.save.id, waitingA.world, waitingA.save.revision);
+    await persistWorld(app.prisma, saveId, saveId, held.world, held.save.revision);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const returned = await app.inject({ method: "POST", url: "/api/mp/return", headers: { cookie: returnerCookie } });
+    const returned = await app.inject({ method: "POST", url: "/api/mp/return", headers: { cookie: cookies[0] } });
     expect(returned.statusCode).toBe(200);
-    const afterReturn = await loadGlobalWorld(app.prisma);
-    if (!afterReturn) throw new Error("world did not load");
-    expect(afterReturn.world.mp.awaitingFirstHuman).toBe(false);
-    expect(afterReturn.world.mp.pausedAt ?? null).toBeNull();
-    // The hold was lifted with a REAL now, so the resume shift actually moved
-    // the season start forward by the held interval (never a zero shift).
-    expect(afterReturn.world.mp.seasonStartAt! - seasonStartA!).toBeGreaterThanOrEqual(50);
-    expect(afterReturn.world.competitions.some((c) => c.kind === "division" && c.seasonId === afterReturn.world.mp.seasonId)).toBe(true);
-    const returnedClub = afterReturn.world.clubs.find((c) => c.ownerUserId === returner.id);
-    expect(returnedClub?.competitionState).toBe("ACTIVE");
+    let world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    expect(world.world.mp.awaitingLaunchRoster).toBe(true);
+    expect(world.world.mp.pausedAt).toBe(holdInstant);
+    expect(world.world.clubs.find((c) => c.ownerUserId === returner.id)?.competitionState).toBe("ACTIVE");
+    // A division formed lazily around the return; its fixtures are still
+    // anchored to the pre-hold seasonStartAt until the lift.
+    const seasonIdAfterReturn = world.world.mp.seasonId;
+    expect(world.world.competitions.some((c) => c.kind === "division" && c.seasonId === seasonIdAfterReturn)).toBe(true);
 
-    // Phase 2: the first join while waiting lifts the hold the same way.
-    const resetB = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter waiting mode for the join lift test" } });
-    expect(resetB.statusCode).toBe(200);
-    const waitingB = await loadGlobalWorld(app.prisma);
-    if (!waitingB) throw new Error("world did not load");
-    const pausedAtB = waitingB.world.mp.pausedAt as number;
-    const seasonStartB = waitingB.world.mp.seasonStartAt;
+    // Joins 2..N−1 keep the world frozen.
+    for (let i = 1; i < CLUBS_PER_DIVISION - 1; i++) {
+      const join = await app.inject({
+        method: "POST",
+        url: "/api/mp/join",
+        headers: { cookie: cookies[i] },
+        payload: { clubName: `Roster FC ${i}`, country: "BRA", stadiumName: `Arena ${i}`, coachName: `Coach ${i}`, preferredHours: windows[i] },
+      });
+      expect(join.statusCode).toBe(200);
+    }
+    world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    expect(world.world.mp.awaitingLaunchRoster).toBe(true);
+    expect(world.world.mp.pausedAt).toBe(holdInstant);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await joinClub(app, joinerCookie, "Waiting Join FC");
-    const afterJoin = await loadGlobalWorld(app.prisma);
-    if (!afterJoin) throw new Error("world did not load");
-    expect(afterJoin.world.mp.awaitingFirstHuman).toBe(false);
-    expect(afterJoin.world.mp.pausedAt ?? null).toBeNull();
-    expect(afterJoin.world.mp.seasonStartAt! - seasonStartB!).toBeGreaterThanOrEqual(50);
-    const division = afterJoin.world.competitions.find((c) => c.kind === "division" && c.seasonId === afterJoin.world.mp.seasonId);
-    expect(division).toBeDefined();
-    // Both phases really started from a held clock, not from an already
-    // lifted world.
-    expect(pausedAtA).toBeTypeOf("number");
-    expect(pausedAtB).toBeTypeOf("number");
+    // The N-th join completes the roster: the world releases itself.
+    const finalJoin = await app.inject({
+      method: "POST",
+      url: "/api/mp/join",
+      headers: { cookie: cookies[CLUBS_PER_DIVISION - 1] },
+      payload: { clubName: "Roster Final", country: "BRA", stadiumName: "Final Arena", coachName: "Final Coach", preferredHours: windows[CLUBS_PER_DIVISION - 1] },
+    });
+    expect(finalJoin.statusCode).toBe(200);
+    world = await loadGlobalWorld(app.prisma);
+    if (!world) throw new Error("world did not load");
+    // A narrowed const: `world` is reassigned later, which resets TypeScript's
+    // null-narrowing inside the closures below.
+    const released = world;
+    expect(released.world.mp.awaitingLaunchRoster).not.toBe(true);
+    expect(released.world.mp.awaitingFirstHuman).not.toBe(true);
+    expect(released.world.mp.pausedAt ?? null).toBeNull();
+    expect(released.world.clubs.filter((c) => c.ownerUserId !== null).length).toBe(CLUBS_PER_DIVISION);
+    const seasonBoundary = released.world.mp.seasonStartAt!;
+    expect(seasonBoundary).toBeGreaterThan(Date.now());
+    expect(new Date(seasonBoundary).getUTCSeconds()).toBe(0);
+    expect(released.world.mp.lastBoundaryAt).toBe(seasonBoundary);
+
+    // The lift re-timed every fixture onto the boundary grid inside its own
+    // game day, and each human club's HOME fixtures landed inside its stated
+    // availability window (home preference is the first objective — except
+    // the synchronized final round, which optimizes the division sum and is
+    // checked separately below).
+    const fixturesByHome = new Map<number, { kickoffAt: number; round: number }[]>();
+    let lastRound = 0;
+    for (const fixture of released.world.fixtures) {
+      lastRound = Math.max(lastRound, fixture.round);
+      const dayStart = seasonBoundary + fixture.scheduledSeasonDayIndex! * DAY_MS;
+      expect(fixture.kickoffAt!).toBeGreaterThanOrEqual(dayStart);
+      expect(fixture.kickoffAt!).toBeLessThan(dayStart + DAY_MS);
+      expect((fixture.kickoffAt! - dayStart) % (30 * 60 * 1000)).toBe(0);
+      const list = fixturesByHome.get(fixture.homeClubId) ?? [];
+      list.push({ kickoffAt: fixture.kickoffAt!, round: fixture.round });
+      fixturesByHome.set(fixture.homeClubId, list);
+    }
+    const finals = released.world.fixtures.filter((f) => f.round === lastRound);
+    expect(finals.length).toBeGreaterThan(0);
+    expect(new Set(finals.map((f) => f.kickoffAt)).size).toBe(1);
+    const joiners = await app.prisma.user.findMany({ where: { email: { in: Array.from({ length: CLUBS_PER_DIVISION }, (_, i) => `rosterjoin${i}@test.dev`) } }, select: { id: true, email: true } });
+    const joinerByEmail = new Map(joiners.map((u) => [u.email, u.id]));
+    for (let i = 0; i < CLUBS_PER_DIVISION; i++) {
+      const clubId = released.world.clubs.find((c) => c.ownerUserId === joinerByEmail.get(`rosterjoin${i}@test.dev`))?.id;
+      expect(clubId).toBeDefined();
+      const home = (fixturesByHome.get(clubId!) ?? []).filter((f) => f.round !== lastRound);
+      expect(home.length).toBeGreaterThan(0);
+      for (const f of home) {
+        const slot = Math.round(((f.kickoffAt - seasonBoundary) % DAY_MS) / (30 * 60 * 1000));
+        expect(windows[i]).toContain(slot);
+      }
+    }
+
+    // Pending MATCH_START rows follow the re-timed kickoffs exactly.
+    await materializeSeasonEvents(app.prisma, saveId, released.world);
+    const msRows = await app.prisma.scheduledEvent.findMany({ where: { saveId, type: ScheduledEventType.MATCH_START, status: "PENDING" } });
+    expect(msRows.length).toBeGreaterThan(0);
+    for (const row of msRows) {
+      const fixture = released.world.fixtures.find((f) => f.id === Number(row.entityId));
+      expect(row.dueAt!.getTime()).toBe(fixture?.kickoffAt);
+    }
+
+    // The first advance fires at seasonBoundary + 24h, and not before.
+    const pending = await app.prisma.scheduledEvent.findFirst({ where: { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" } });
+    expect(pending?.dueAt!.getTime()).toBe(seasonBoundary + DAY_MS);
+    expect(boundariesElapsed(seasonBoundary, seasonBoundary + DAY_MS - 1)).toBe(0);
+    expect(boundariesElapsed(seasonBoundary, seasonBoundary + DAY_MS)).toBe(1);
   });
 });
 

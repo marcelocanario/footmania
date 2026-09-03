@@ -1,11 +1,14 @@
 import type { PrismaClient } from "@prisma/client";
-import { gameConfig, configuredUtcHour } from "../config";
+import { gameConfig } from "../config";
 import { calendarValues, phaseForSeasonDayIndex } from "./seasonCalendar";
 import { withGlobalLease, withGlobalLock } from "./lock";
 import { loadGlobalWorldMutable, persistWorld } from "./saveService";
 import { executeGameDayEventsInLock, executeMandatoryEventsInLock, materializeSeasonEvents, scheduleEvent, ScheduledEventType } from "./scheduler";
 import { rollover } from "./mpService";
 import { publishUserWorldEvent } from "./worldEvents";
+import { DAY_MS, dayBoundaryAtOrBefore, nextDayBoundaryAfter } from "./dayBoundary";
+import { isLaunchHold } from "./seasonPause";
+import { CLUBS_PER_DIVISION } from "../game/multiplayer";
 
 export interface GameClockView {
   id: "WORLD";
@@ -21,6 +24,16 @@ export interface GameClockView {
   interseasonStartIndex: number;
   preparationStartIndex: number;
   lastAdvancedAt: Date;
+  /** The boundary instant this game day started at — always boundary-aligned. */
+  lastBoundaryAt: Date;
+  /** True while the season has played nothing (launch hold, pre- or post-lift). */
+  launchHold: boolean;
+  /** Boundary day 1 begins at while a launch hold is (or was just) in effect. */
+  seasonStartsAt: number | null;
+  /** Owned clubs (DORMANT included) toward the roster-hold release threshold. */
+  launchHoldClubs: number;
+  /** The roster-hold release threshold — CLUBS_PER_DIVISION. */
+  launchHoldTarget: number;
   version: number;
 }
 
@@ -33,11 +46,6 @@ export interface AdvanceGameDayOptions {
   leaseHeld?: boolean;
 }
 
-function midnightUtcOf(ms: number): number {
-  const d = new Date(ms);
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
 function normalizeWorldClock(world: import("../game/types").World): void {
   const absoluteGameDay = world.mp.absoluteGameDay ?? Math.max(0, world.dayIndex);
   const seasonDayIndex = world.mp.seasonDayIndex ?? Math.max(0, Math.min(gameConfig.seasonDays - 1, world.dayIndex));
@@ -47,17 +55,25 @@ function normalizeWorldClock(world: import("../game/types").World): void {
   world.mp.seasonNumber ??= Math.max(1, world.year);
   world.mp.phase = phaseForSeasonDayIndex(seasonDayIndex, gameConfig);
   world.mp.clockVersion ??= 0;
-  // Midnight-aligned: kickoffs are on the 30m UTC grid (00:00, 00:30...).
-  // A raw seasonStartAt at 18:26 would produce 18:26/18:56 slots. Align to
-  // midnight unless the world is currently paused — pause/shift preserves
-  // the exact wall-clock mapping and will be re-anchored to midnight at
-  // the next rollover (seasonRolloverService).
+  // Roster-hold migration: a world already sitting in the old first-human
+  // hold carries the legacy flag; the new flag is authoritative from now on.
+  world.mp.awaitingLaunchRoster ??= world.mp.awaitingFirstHuman;
+  // The game-day grid reference: always the boundary instant (dayBoundary.ts).
+  // lastAdvancedAt stays "when the advance physically ran" for display/audit.
+  world.mp.lastBoundaryAt ??= dayBoundaryAtOrBefore(world.mp.lastAdvancedAt ?? Date.now());
+  // Boundary-aligned: kickoffs are on the 30m UTC grid (00:00, 00:30...) and
+  // the anchor for that grid is the day boundary itself. A raw seasonStartAt
+  // at 18:26 would produce 18:26/18:56 slots. Align to the boundary unless
+  // the world is currently paused — pause/shift preserves the exact wall-clock
+  // mapping and will be re-anchored to the boundary at the next rollover
+  // (seasonRolloverService). With the two-shift resume split every anchor is
+  // boundary-aligned by construction, so this re-snap is normally a no-op.
   const isPaused = world.mp.pausedAt !== null && world.mp.pausedAt !== undefined;
   if (world.mp.seasonStartAt === null || world.mp.seasonStartAt === undefined) {
-    world.mp.seasonStartAt = midnightUtcOf(world.mp.lastAdvancedAt ?? Date.now());
+    world.mp.seasonStartAt = dayBoundaryAtOrBefore(world.mp.lastAdvancedAt ?? Date.now());
   } else if (!isPaused) {
-    const mid = midnightUtcOf(world.mp.seasonStartAt);
-    if (mid !== world.mp.seasonStartAt) world.mp.seasonStartAt = mid;
+    const aligned = dayBoundaryAtOrBefore(world.mp.seasonStartAt);
+    if (aligned !== world.mp.seasonStartAt) world.mp.seasonStartAt = aligned;
   }
 }
 
@@ -66,6 +82,7 @@ export async function ensureGameClock(prisma: PrismaClient, saveId: number, worl
   if (!loaded) throw new Error("Global world unavailable");
   normalizeWorldClock(loaded.world);
   const now = loaded.world.mp.lastAdvancedAt ? new Date(loaded.world.mp.lastAdvancedAt) : new Date();
+  const lastBoundaryAt = loaded.world.mp.lastBoundaryAt !== null && loaded.world.mp.lastBoundaryAt !== undefined ? new Date(loaded.world.mp.lastBoundaryAt) : now;
   const row = await prisma.gameClock.upsert({
     where: { saveId },
     update: {
@@ -75,6 +92,7 @@ export async function ensureGameClock(prisma: PrismaClient, saveId: number, worl
       seasonDayIndex: loaded.world.mp.seasonDayIndex!,
       phase: loaded.world.mp.phase!,
       lastAdvancedAt: now,
+      lastBoundaryAt,
       version: loaded.world.mp.clockVersion ?? 0,
     },
     create: {
@@ -86,14 +104,25 @@ export async function ensureGameClock(prisma: PrismaClient, saveId: number, worl
       seasonDayIndex: loaded.world.mp.seasonDayIndex!,
       phase: loaded.world.mp.phase!,
       lastAdvancedAt: now,
+      lastBoundaryAt,
       version: loaded.world.mp.clockVersion ?? 0,
     },
   });
-  return toClockView(row);
+  return toClockView(row, loaded.world);
 }
 
-function toClockView(row: { absoluteGameDay: number; seasonId: number; seasonNumber: number; seasonDayIndex: number; phase: string; lastAdvancedAt: Date; version: number }): GameClockView {
+function toClockView(row: { absoluteGameDay: number; seasonId: number; seasonNumber: number; seasonDayIndex: number; phase: string; lastAdvancedAt: Date; lastBoundaryAt: Date | null; version: number }, world: import("../game/types").World): GameClockView {
   const calendar = calendarValues();
+  const now = Date.now();
+  const launchHold = isLaunchHold(world);
+  // The boundary day 1 begins at. Once the hold has been lifted this is the
+  // anchored mp.lastBoundaryAt (in the future); while still held it is the
+  // projected start — the next boundary after now.
+  let seasonStartsAt: number | null = null;
+  if (launchHold) {
+    const anchored = world.mp.lastBoundaryAt;
+    seasonStartsAt = anchored !== null && anchored !== undefined && anchored > now ? anchored : nextDayBoundaryAfter(now);
+  }
   return {
     id: "WORLD",
     absoluteGameDay: row.absoluteGameDay,
@@ -108,12 +137,13 @@ function toClockView(row: { absoluteGameDay: number; seasonId: number; seasonNum
     interseasonStartIndex: calendar.interseasonStartIndex,
     preparationStartIndex: calendar.preparationStartIndex,
     lastAdvancedAt: row.lastAdvancedAt,
+    lastBoundaryAt: row.lastBoundaryAt ?? row.lastAdvancedAt,
+    launchHold,
+    seasonStartsAt,
+    launchHoldClubs: world.clubs.filter((club) => club.ownerUserId !== null).length,
+    launchHoldTarget: CLUBS_PER_DIVISION,
     version: row.version,
   };
-}
-
-function nextMidnight(now: Date): Date {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1));
 }
 
 /** The only service allowed to increment the multiplayer game clock. */
@@ -201,6 +231,16 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
 
     const now = options.now ?? new Date();
     const nextAbsolute = currentAbsolute + 1;
+    // The grid reference for the day that is about to start. Automatic
+    // advances record exactly one boundary step, so a deferred advance that
+    // finally lands at 04:17 still records the 00:00 boundary and the next
+    // advance is tomorrow 00:00 — no drift and no "advance again" when a
+    // blocked advance lands late. A manual/forced advance re-anchors to the
+    // day containing now: the manual day is short, but the grid stays aligned.
+    const isManual = options.source === "ADMIN" || options.force === true;
+    const nextBoundary = isManual
+      ? dayBoundaryAtOrBefore(now.getTime())
+      : (world.mp.lastBoundaryAt ?? dayBoundaryAtOrBefore(world.mp.lastAdvancedAt ?? now.getTime())) + DAY_MS;
     if (currentIndex + 1 >= gameConfig.seasonDays) {
       // Mandatory scheduled events normally complete the rollover workflow
       // before this boundary. The fallback covers saves whose workflow events
@@ -215,7 +255,8 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
        fresh.world.mp.seasonNumber = world.mp.seasonNumber ?? 1;
       fresh.world.mp.seasonDayIndex = 0;
        fresh.world.mp.startAbsoluteGameDay = nextAbsolute;
-       fresh.world.mp.seasonStartAt = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+       fresh.world.mp.lastBoundaryAt = nextBoundary;
+       fresh.world.mp.seasonStartAt = nextBoundary;
       fresh.world.mp.phase = "ACTIVE";
        fresh.world.mp.lastAdvancedAt = now.getTime();
         fresh.world.mp.clockVersion = (world.mp.clockVersion ?? 0) + 1;
@@ -223,7 +264,7 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
        fresh.save.revision += 1;
        await materializeSeasonEvents(prisma, fresh.save.id, fresh.world);
        await executeGameDayEventsInLock(prisma, fresh.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true, fresh);
-       await scheduleNextAutomaticAdvance(prisma, fresh.save.id, nextAbsolute, now);
+       await scheduleNextAutomaticAdvance(prisma, fresh.save.id, nextAbsolute, nextBoundary);
         const row = await ensureGameClock(prisma, fresh.save.id, fresh.world);
         await writeAdminAudit(prisma, fresh.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
         publishDayAdvanced(fresh.world);
@@ -234,12 +275,13 @@ async function advanceGameDayUnlocked(prisma: PrismaClient, options: AdvanceGame
     world.mp.seasonDayIndex = currentIndex + 1;
     world.mp.phase = phaseForSeasonDayIndex(world.mp.seasonDayIndex, gameConfig);
     world.mp.lastAdvancedAt = now.getTime();
+    world.mp.lastBoundaryAt = nextBoundary;
     world.mp.clockVersion = (world.mp.clockVersion ?? 0) + 1;
     await persistWorld(prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
     loaded.save.revision += 1;
     await materializeSeasonEvents(prisma, loaded.save.id, world);
     await executeGameDayEventsInLock(prisma, loaded.save.id, nextAbsolute, now, "BEGIN_OF_DAY", true, loaded);
-    await scheduleNextAutomaticAdvance(prisma, loaded.save.id, nextAbsolute, now);
+    await scheduleNextAutomaticAdvance(prisma, loaded.save.id, nextAbsolute, nextBoundary);
     const row = await ensureGameClock(prisma, loaded.save.id, loaded.world);
     await writeAdminAudit(prisma, loaded.save.id, options, { absoluteGameDay: currentAbsolute, seasonDayIndex: currentIndex }, row);
     publishDayAdvanced(loaded.world);
@@ -252,13 +294,16 @@ function publishDayAdvanced(world: import("../game/types").World): void {
   }
 }
 
-async function scheduleNextAutomaticAdvance(prisma: PrismaClient, saveId: number, nextAbsolute: number, now: Date): Promise<void> {
+async function scheduleNextAutomaticAdvance(prisma: PrismaClient, saveId: number, nextAbsolute: number, lastBoundaryAt: number): Promise<void> {
   await prisma.scheduledEvent.updateMany({ where: { saveId, type: ScheduledEventType.GAME_DAY_ADVANCE, status: "PENDING" }, data: { status: "CANCELLED", version: { increment: 1 } } });
   await scheduleEvent(prisma, {
     saveId,
     type: ScheduledEventType.GAME_DAY_ADVANCE,
     timeBasis: "REAL_TIME",
-    dueAt: nextMidnight(now),
+    // The pending row is a display/audit mirror: the actual trigger is
+    // boundariesElapsed(lastBoundaryAt, now) in the scheduler processor. Both
+    // derive from the same boundary, so they can never disagree.
+    dueAt: new Date(lastBoundaryAt + DAY_MS),
     priority: 10000,
     payload: { targetAbsoluteGameDay: nextAbsolute },
     idempotencyKey: `GAME_DAY_ADVANCE:${nextAbsolute + 1}`,
@@ -279,8 +324,4 @@ async function writeAdminAudit(prisma: PrismaClient, saveId: number, options: Ad
       reason: options.reason ?? null,
     },
   });
-}
-
-export function schedulerRolloverHourUtc(): number {
-  return configuredUtcHour(gameConfig.scheduler.gameDayRolloverUtc);
 }

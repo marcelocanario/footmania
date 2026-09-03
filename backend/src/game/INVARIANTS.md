@@ -267,14 +267,20 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     reset untouched.
 
 40. **The world never plays an AI-only season.** After a reset, or after any
-    rollover that ends with zero human clubs, the world enters
-    waiting-for-first-human mode: no division, club or fixture exists, and the
+    rollover that ends with zero human clubs, the world enters launch-hold mode
+    (`awaitingLaunchRoster`): no division, club or fixture exists, and the
     season clock is held via the same `pausedAt` gate as an admin pause
     (scheduler, day advancement, live matches and all timers frozen; manual
-    admin resume refused). Only the first human join (or a dormant return)
-    lifts the hold: it applies the resume shift so the season starts anchored
-    to the join moment, clears the flag, and creates Division 1 lazily
-    (`placeNewClub`), which the joining club plus seven fresh filler AI fill.
+    admin resume refused without the force flag). Joining is open throughout:
+    each join (or dormant return) places the club into the lazily-created
+    Division 1, replacing a filler AI slot, and the hold releases itself the
+    moment `CLUBS_PER_DIVISION` clubs are owned — anchoring the season to the
+    NEXT day boundary after the release (seasonStartAt/lastBoundaryAt, in the
+    future — never the join moment itself, so day 1 always starts on a
+    boundary), clearing the flag, and re-timing every active division's
+    fixtures against the now-complete roster (the one sanctioned kickoff
+    re-scheduling: no match has played, so it is equivalent to generating the
+    season fresh). The hold is pre-season only and never re-arms once lifted.
     A season that ends with zero humans re-enters the same waiting state.
 
 41. **Paused joins place into the same division an unpaused join would.**

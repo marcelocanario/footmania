@@ -4,7 +4,7 @@ import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, Shie
 import { useTranslation } from "react-i18next";
 import { useGame } from "../store/game";
 import { useLang } from "../i18n/store";
-import { relativeTime } from "../utils/time";
+import { formatKickoff, relativeTime } from "../utils/time";
 import { api } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
@@ -343,6 +343,14 @@ export function Layout({ children }: { children: ReactNode }) {
               </button>
               {showSeasonCal && (
                 <div className="popout season-popout">
+                  {status.launchHold && (
+                    <div style={{ color: "var(--gold-2)", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: 10 }}>
+                      <b>{t("layout.launchHold")}</b> —{" "}
+                      {status.paused
+                        ? t("layout.launchHoldWaiting", { count: status.launchHoldClubs, target: status.launchHoldTarget })
+                        : t("layout.launchHoldStarts", { count: status.launchHoldClubs, target: status.launchHoldTarget, date: status.seasonStartsAt ? formatKickoff(status.seasonStartsAt) : "—" })}
+                    </div>
+                  )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 14 }}>
                     <h3 style={{ margin: 0 }}>{t("common.season")} {status.season.seasonNumber}</h3>
                     <span style={{ color: "var(--text-3)", fontSize: "0.75rem" }}>

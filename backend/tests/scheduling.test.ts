@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { makeClub, makeWorld } from "./helpers";
 import type { Competition, World } from "../src/game/types";
 import { emptyStandingsRow } from "../src/game/league";
-import { generateDivisionFixtures } from "../src/game/multiplayer";
+import { generateDivisionFixtures, retimeDivisionFixtures } from "../src/game/multiplayer";
 import { roundDayIndex } from "../src/services/seasonCalendar";
 import {
   pickFixtureKickoff,
@@ -173,6 +173,104 @@ describe("generateDivisionFixtures timing", () => {
       const dayOffset = Math.floor(((f.kickoffAt ?? 0) - SEASON_START) / DAY_MS);
       expect(dayOffset).toBe(roundDayIndex(f.round));
     }
+  });
+});
+
+describe("launch-hold re-timing (retimeDivisionFixtures)", () => {
+  it("re-times every kickoff onto the 30-minute grid inside its own game day", () => {
+    const prefs = [slots(24, 35), slots(30, 41), slots(36, 47), slots(0, 11), slots(6, 17), slots(12, 23), slots(18, 29), null];
+    const { world, comp } = testWorld(prefs);
+    const fixtures = generateDivisionFixtures(world, comp, { year: 2026, month: 1 });
+    world.fixtures.push(...fixtures);
+    retimeDivisionFixtures(world, comp, SEASON_START);
+    // Only this division's fixtures: makeWorld seeds played league history
+    // with no kickoffAt, which re-timing correctly leaves untouched.
+    for (const f of fixtures) {
+      const dayStart = SEASON_START + roundDayIndex(f.round) * DAY_MS;
+      expect(f.kickoffAt!).toBeGreaterThanOrEqual(dayStart);
+      expect(f.kickoffAt!).toBeLessThan(dayStart + DAY_MS);
+      expect((f.kickoffAt! - dayStart) % SLOT_MS).toBe(0);
+    }
+  });
+
+  it("re-times a club's fixtures into its narrow preferred window after the AI-era kickoff missed it", () => {
+    // Pre-hold generation: every slot is an unconstrained AI filler, so the
+    // seeded spread samples the whole day regardless of any later human.
+    const { world, comp } = testWorld(Array(8).fill(null));
+    const fixtures = generateDivisionFixtures(world, comp, { year: 2026, month: 1 });
+    world.fixtures.push(...fixtures);
+    // A human takes over one slot during the hold, bringing a narrow window.
+    const human = world.clubs.find((c) => c.id === 100)!;
+    human.ownerUserId = 1;
+    human.isHuman = true;
+    human.preferredHours = slots(20, 27); // 10:00–14:00
+
+    // Provably violated premise: force one of the human's home kickoffs
+    // outside the window — exactly the AI-era outcome the re-timing fixes.
+    const victim = fixtures.find((f) => f.homeClubId === human.id)!;
+    victim.kickoffAt = SEASON_START + roundDayIndex(victim.round) * DAY_MS + 6 * SLOT_MS; // 03:00
+    const victimKickoff = victim.kickoffAt!;
+    expect(slots(20, 27)).not.toContain(utcSlotAt(victimKickoff));
+
+    retimeDivisionFixtures(world, comp, SEASON_START);
+
+    expect(victim.kickoffAt).not.toBe(victimKickoff);
+    // Every home fixture of the club now lands inside its window (home
+    // preference is the first objective).
+    const homeFixtures = fixtures.filter((f) => f.homeClubId === human.id);
+    expect(homeFixtures.length).toBeGreaterThan(0);
+    for (const f of homeFixtures) {
+      expect(slots(20, 27)).toContain(utcSlotAt(f.kickoffAt!));
+    }
+  });
+
+  it("keeps the final round synchronized across the division after re-timing", () => {
+    const { world, comp } = testWorld(Array(8).fill(null));
+    const fixtures = generateDivisionFixtures(world, comp, { year: 2026, month: 1 });
+    world.fixtures.push(...fixtures);
+    retimeDivisionFixtures(world, comp, SEASON_START);
+    const lastRound = Math.max(...fixtures.map((f) => f.round));
+    const finals = world.fixtures.filter((f) => f.round === lastRound);
+    expect(finals.length).toBe(4);
+    expect(new Set(finals.map((f) => f.kickoffAt)).size).toBe(1);
+    const dayStart = SEASON_START + roundDayIndex(lastRound) * DAY_MS;
+    expect(finals[0].kickoffAt!).toBeGreaterThanOrEqual(dayStart);
+    expect(finals[0].kickoffAt!).toBeLessThan(dayStart + DAY_MS);
+  });
+
+  it("re-timing twice with an unchanged roster is a no-op", () => {
+    const prefs = [slots(24, 35), slots(30, 41), slots(36, 47), slots(0, 11), slots(6, 17), slots(12, 23), slots(18, 29), null];
+    const { world, comp } = testWorld(prefs);
+    const fixtures = generateDivisionFixtures(world, comp, { year: 2026, month: 1 });
+    world.fixtures.push(...fixtures);
+    retimeDivisionFixtures(world, comp, SEASON_START);
+    const first = world.fixtures.map((f) => f.kickoffAt);
+    retimeDivisionFixtures(world, comp, SEASON_START);
+    expect(world.fixtures.map((f) => f.kickoffAt)).toEqual(first);
+  });
+
+  it("leaves played fixtures untouched", () => {
+    const { world, comp } = testWorld(Array(8).fill(null));
+    const fixtures = generateDivisionFixtures(world, comp, { year: 2026, month: 1 });
+    world.fixtures.push(...fixtures);
+    world.fixtures[0].played = true;
+    const playedKickoff = world.fixtures[0].kickoffAt!;
+    retimeDivisionFixtures(world, comp, SEASON_START);
+    expect(world.fixtures[0].kickoffAt).toBe(playedKickoff);
+  });
+
+  it("leaves a fixture with a live match untouched (a kickoff never moves out from under a started match)", () => {
+    const { world, comp } = testWorld(Array(8).fill(null));
+    const fixtures = generateDivisionFixtures(world, comp, { year: 2026, month: 1 });
+    world.fixtures.push(...fixtures);
+    const live = fixtures[0];
+    world.liveMatches.push({ matchId: 1, fixtureId: live.id, homeClubId: live.homeClubId, awayClubId: live.awayClubId, lastAdvancedAt: live.kickoffAt!, minute: 30, ended: false } as unknown as import("../src/game/types").LiveMatchState);
+    const liveKickoff = live.kickoffAt!;
+    retimeDivisionFixtures(world, comp, SEASON_START);
+    expect(live.kickoffAt).toBe(liveKickoff);
+    // The rest of the division was re-timed.
+    const other = fixtures.find((f) => f !== live)!;
+    expect(other.kickoffAt).toBeDefined();
   });
 });
 

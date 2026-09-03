@@ -32,7 +32,12 @@ RUN npm run build
 FROM node:20-bookworm-slim AS backend
 
 ENV NODE_ENV=production \
-    NODE_OPTIONS=--enable-source-maps
+    NODE_OPTIONS=--enable-source-maps \
+    # The server's clock contract is "server time = UTC": every game-day
+    # boundary is a UTC instant (services/dayBoundary.ts). The base image's
+    # local clock already is UTC; pinning TZ makes that explicit and keeps
+    # container logs readable on any host.
+    TZ=UTC
 
 WORKDIR /app/backend
 

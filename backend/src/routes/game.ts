@@ -37,6 +37,7 @@ import {
 } from "../game/familiarity";
 import { materializeSeasonEvents } from "../services/scheduler";
 import { isPaused, worldPausedError } from "../services/seasonPause";
+import { dayBoundaryAtOrBefore } from "../services/dayBoundary";
 import { createNotification } from "../services/notifications";
 import { marketUpdatedEvents } from "../services/marketEvents";
 import { publishUserWorldEvent, type UserWorldEvent } from "../services/worldEvents";
@@ -896,7 +897,7 @@ export function nextPayrollTimestamp(world: World): number | null {
   const dayIndex = world.mp.seasonDayIndex ?? world.dayIndex;
   let nextIndex = (Math.floor(dayIndex / interval) + 1) * interval - 1;
   if (nextIndex <= dayIndex) nextIndex += interval;
-  const seasonStart = world.mp.seasonStartAt ?? Date.UTC(world.mp.seasonYear, world.mp.seasonMonth - 1, 1);
+  const seasonStart = world.mp.seasonStartAt ?? dayBoundaryAtOrBefore(Date.now());
   if (nextIndex < gameConfig.seasonDays) return seasonStart + nextIndex * 24 * 60 * 60 * 1000;
   // Payroll resumes on the first interval day of the next game season.
   return seasonStart + (gameConfig.seasonDays + interval - 1) * 24 * 60 * 60 * 1000;
