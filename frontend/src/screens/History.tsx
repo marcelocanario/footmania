@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Award, History as HistoryIcon, Medal, Trophy } from "lucide-react";
-import { api, type SeasonAward, type SeasonHistoryView } from "../api/client";
+import { ArrowLeft, Award, History as HistoryIcon, Medal, Trophy } from "lucide-react";
+import { api, type SeasonAward, type SeasonHistoryView, type TeamProfile } from "../api/client";
 import { bestXiEntries, individualAwardDetail } from "../utils/awards";
 import { ArchivedSeasonCard } from "../components/ArchivedSeasonCard";
 import { FootmaniaRankingPanel } from "../components/FootmaniaRanking";
@@ -44,14 +45,28 @@ function AwardDetail({ award, onPlayerClick }: { award: SeasonAward; onPlayerCli
   );
 }
 
+/**
+ * Per-club history (/history/:clubId) in the world-archive layout: the viewed
+ * club's journey, the global record book / awards / ranking, and the
+ * season-by-season archive with the viewed club's rows highlighted. Bare
+ * /history redirects to the viewer's own club, so this screen always has a
+ * target club. Reached from the History tab of /team/:clubId.
+ */
 export function History() {
   const { t } = useTranslation();
+  const { clubId } = useParams();
+  const targetClubId = Number(clubId);
+  const targetValid = Number.isInteger(targetClubId) && targetClubId > 0;
   const [seasons, setSeasons] = useState<SeasonHistoryView[] | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [profile, setProfile] = useState<TeamProfile | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [ranking, setRanking] = useState<Awaited<ReturnType<typeof api.footmaniaRanking>> | null>(null);
   const [rankingError, setRankingError] = useState<string | null>(null);
   const [playerTarget, setPlayerTarget] = useState<{ id: number; name: string } | null>(null);
   const snapshot = useGame((state) => state.snapshot);
+  const status = useGame((state) => state.status);
+  const ownClubId = status?.userClubId ?? snapshot?.club?.id ?? null;
   const load = useCallback(() => {
     setHistoryError(null);
     return api.history().then((res) => setSeasons(res.seasons)).catch((e) => setHistoryError((e as Error).message));
@@ -60,6 +75,12 @@ export function History() {
     setRankingError(null);
     return api.footmaniaRanking().then(setRanking).catch((e) => setRankingError((e as Error).message));
   }, []);
+  const loadProfile = useCallback(() => {
+    if (!targetValid) return;
+    setProfile(null);
+    setProfileError(null);
+    return api.teamProfile(targetClubId).then(setProfile).catch((e) => setProfileError((e as Error).message));
+  }, [targetClubId, targetValid]);
 
   useEffect(() => {
     void load();
@@ -70,28 +91,44 @@ export function History() {
     });
   }, [load, loadRanking]);
 
-  if (historyError) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadFailed", { error: historyError })}</div>;
-  if (!seasons) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadingDots")}</div>;
+  useEffect(() => {
+    void loadProfile();
+    return api.cache.subscribe((scope) => {
+      if (scope === "mp" || scope === "background:mp") void loadProfile();
+    });
+  }, [loadProfile]);
 
+  if (!targetValid) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.unknown")}</div>;
+  if (historyError) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadFailed", { error: historyError })}</div>;
+  if (profileError) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("team.unknown")}</div>;
+  if (!seasons || !profile) return <div className="empty-state" style={{ paddingTop: 80 }}>{t("history.loadingDots")}</div>;
+
+  const isOwn = ownClubId !== null && targetClubId === ownClubId;
+  const clubName = profile.club.name;
   const records = snapshot?.records ?? [];
   const awards = snapshot?.seasonAwards ?? [];
-  const myRows = seasons.flatMap((season) => season.divisions.flatMap((division) => division.standings.filter((row) => row.isMine)));
-  const myFinishes = seasons.flatMap((season) => season.divisions.flatMap((division) => {
-    const position = division.standings.findIndex((row) => row.isMine);
+  const clubRows = seasons.flatMap((season) => season.divisions.flatMap((division) => division.standings.filter((row) => row.clubId === targetClubId)));
+  const clubFinishes = seasons.flatMap((season) => season.divisions.flatMap((division) => {
+    const position = division.standings.findIndex((row) => row.clubId === targetClubId);
     return position >= 0 ? [position + 1] : [];
   }));
-  const myDivisionCount = seasons.reduce((total, season) => total + season.divisions.filter((division) => division.standings.some((row) => row.isMine)).length, 0);
-  const bestFinish = myFinishes.length > 0 ? Math.min(...myFinishes) : null;
-  const titles = seasons.reduce((total, season) => total + season.divisions.filter((division) => division.standings[0]?.isMine).length, 0);
+  const clubDivisionCount = seasons.reduce((total, season) => total + season.divisions.filter((division) => division.standings.some((row) => row.clubId === targetClubId)).length, 0);
+  const bestFinish = clubFinishes.length > 0 ? Math.min(...clubFinishes) : null;
+  const titles = seasons.reduce((total, season) => total + season.divisions.filter((division) => division.standings[0]?.clubId === targetClubId).length, 0);
 
   return (
     <div className="history-page">
+      <div style={{ marginBottom: 12 }}>
+        <Link to={`/team/${targetClubId}`} className="btn ghost btn-xs" style={{ display: "inline-flex", alignItems: "center", gap: 6, textDecoration: "none" }}>
+          <ArrowLeft size={13} /> {t("history.backToTeam")}
+        </Link>
+      </div>
       <section className="history-hero">
         <div className="history-hero-floodlights" aria-hidden />
         <div className="history-hero-stripes" aria-hidden />
         <div className="history-hero-copy">
           <div className="kicker"><HistoryIcon size={14} /> {t("history.clubHistory")}</div>
-          <h1>{t("history.theArchive")}</h1>
+          <h1>{isOwn ? t("history.theArchive") : t("history.archiveFor", { club: clubName })}</h1>
           <p>{t("history.heroIntro")}</p>
         </div>
         <div className="history-hero-seal">
@@ -104,19 +141,19 @@ export function History() {
         <section className="card history-journey-card">
           <div className="history-section-head">
             <div>
-              <div className="kicker">{t("history.yourFootprint")}</div>
-              <h2>{t("history.yourJourney")}</h2>
+              <div className="kicker">{isOwn ? t("history.yourFootprint") : t("history.footprintFor", { club: clubName })}</div>
+              <h2>{isOwn ? t("history.yourJourney") : t("history.journeyFor", { club: clubName })}</h2>
             </div>
-            <span className="history-section-note">{myRows.length ? t("history.recordedCampaigns", { count: myRows.length }) : t("history.noArchivedCampaigns")}</span>
+            <span className="history-section-note">{clubRows.length ? t("history.recordedCampaigns", { count: clubRows.length }) : t("history.noArchivedCampaigns")}</span>
           </div>
           <div className="history-stat-grid">
-            <div className="history-stat-card"><span>{t("history.seasons")}</span><b>{myRows.length}</b></div>
-            <div className="history-stat-card"><span>{t("history.yourDivisions")}</span><b>{myDivisionCount}</b></div>
+            <div className="history-stat-card"><span>{t("history.seasons")}</span><b>{clubRows.length}</b></div>
+            <div className="history-stat-card"><span>{t("history.yourDivisions")}</span><b>{clubDivisionCount}</b></div>
             <div className="history-stat-card"><span>{t("history.leagueTitles")}</span><b>{titles}</b></div>
             <div className="history-stat-card"><span>{t("history.bestFinish")}</span><b>{bestFinish === null ? "—" : `#${bestFinish}`}</b></div>
           </div>
-          {myRows.length === 0 && <div className="history-callout">{t("history.firstSeasonNote")}</div>}
-          {myRows.length > 0 && <div className="history-callout good">{t("history.rowsHighlighted")}</div>}
+          {clubRows.length === 0 && <div className="history-callout">{isOwn ? t("history.firstSeasonNote") : t("history.firstSeasonNoteFor", { club: clubName })}</div>}
+          {clubRows.length > 0 && <div className="history-callout good">{isOwn ? t("history.rowsHighlighted") : t("history.rowsHighlightedFor", { club: clubName })}</div>}
         </section>
         {ranking ? (
           <FootmaniaRankingPanel rankings={ranking.rankings} totalRanked={ranking.totalRanked} viewerRank={ranking.viewerRank} />
@@ -172,7 +209,7 @@ export function History() {
           <div className="card empty-state"><HistoryIcon size={30} /><span>{t("history.noCompletedSeasons")}</span></div>
         ) : (
           <div className="archive-season-list">
-            {seasons.map((season, index) => <ArchivedSeasonCard key={season.seasonId} season={season} initialOpen={index === 0} />)}
+            {seasons.map((season, index) => <ArchivedSeasonCard key={season.seasonId} season={season} initialOpen={index === 0} highlightClubId={targetClubId} />)}
           </div>
         )}
       </section>

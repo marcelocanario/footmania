@@ -64,11 +64,13 @@ function useMarketList<T extends { naturalPosition: string; age: number; overall
   nameOf: (item: T) => string,
   priceOf: (item: T) => number,
   skillsOf: (item: T) => Partial<Record<keyof SkillSet, number>> | undefined,
+  isOwn?: (item: T) => boolean,
 ) {
   return useMemo(() => {
     const inRange = (value: number, min: number | null, max: number | null) =>
       (min === null || value >= min) && (max === null || value <= max);
     const filtered = items.filter((item) => {
+      if (filters.hideOwnPlayers && isOwn?.(item)) return false;
       const q = filters.query.trim().toLowerCase();
       const nameMatches = !q || nameOf(item).toLowerCase().includes(q);
       const positionMatches = filters.positions.length === 0 || filters.positions.includes(item.naturalPosition);
@@ -93,7 +95,7 @@ function useMarketList<T extends { naturalPosition: string; age: number; overall
         default: return b.overall - a.overall;
       }
     });
-  }, [items, filters, valueOf, salaryOf, nameOf, priceOf, skillsOf]);
+  }, [items, filters, valueOf, salaryOf, nameOf, priceOf, skillsOf, isOwn]);
 }
 
 export function Transfers() {
@@ -218,6 +220,7 @@ export function Transfers() {
     try {
       await api.cancelAuction(auction.id);
       toast.current?.show({ severity: "success", summary: t("transfers.listingCancelled") });
+      refresh();
       loadAuctions();
     } catch (e) {
       toast.current?.show({ severity: "error", summary: t("transfers.errorTitle"), detail: (e as Error).message });
@@ -301,6 +304,7 @@ export function Transfers() {
     (a) => a.playerName,
     (a) => a.currentPrice,
     (a) => a.skills,
+    (a) => a.sellerClubId === myClubId,
   );
   const filteredFreeAgents = useMarketList(
     freeAgents,
@@ -324,15 +328,29 @@ export function Transfers() {
     (row) => row.loan.feeAmount ?? 0,
     (row) => row.skills,
   );
-  const sellableSquad = useMemo(() => squad.filter((p) => !p.onSale && !p.onLoan && !p.onLoanOut), [squad]);
-  const filteredSellable = useMarketList(
-    sellableSquad,
+  // List-for-Sale rows: the whole senior squad, where a player that already has
+  // one of MY active listings is carried inline (highlighted) with its live
+  // listing data instead of a duplicate "sell" row. Loaned-in/loaned-out
+  // players are not listable so they stay out of this list.
+  type SellPlayerRow = PlayerView & { listing?: AuctionView };
+  const sellRows = useMemo<SellPlayerRow[]>(() => {
+    const listingByPlayer = new Map(myActiveListings.map((listing) => [listing.playerId, listing]));
+    return squad
+      .filter((p) => !p.onLoan && !p.onLoanOut)
+      .filter((p) => !p.onSale || listingByPlayer.has(p.id))
+      .map((p) => {
+        const listing = listingByPlayer.get(p.id);
+        return listing ? { ...p, listing } : p;
+      });
+  }, [squad, myActiveListings]);
+  const filteredSell = useMarketList(
+    sellRows,
     sellFilters,
-    (p) => p.value,
-    (p) => p.salary,
-    (p) => p.displayName ?? p.name,
+    (row) => row.value,
+    (row) => row.salary,
+    (row) => row.displayName ?? row.name,
     () => 0,
-    (p) => p.skills,
+    (row) => row.skills,
   );
 
   return (
@@ -350,7 +368,7 @@ export function Transfers() {
             { value: "auctions", label: t("transfers.auctions"), icon: <Gavel size={14} />, count: auctions.length },
             { value: "free", label: t("transfers.freeAgents"), icon: <Users size={14} />, count: freeAgents.length },
             { value: "loans", label: t("transfers.loansTab"), icon: <Users size={14} />, count: loans.filter((loan) => loan.available).length },
-            { value: "sell", label: t("transfers.sell"), icon: <HandCoins size={14} /> },
+            { value: "sell", label: t("transfers.sell"), icon: <HandCoins size={14} />, count: myActiveListings.length },
           ]}
         />
       </div>
@@ -376,6 +394,7 @@ export function Transfers() {
             <>
               <div className="transfer-rows">
                 {filteredAuctions.map((a) => {
+                  const isMine = a.sellerClubId === myClubId;
                   const outbid = a.myMaxBid !== null && !a.amILeading;
                   return (
                     <TransferPlayerRow
@@ -384,21 +403,39 @@ export function Transfers() {
                       position={a.naturalPosition}
                       overall={a.overall}
                       age={a.age}
+                      own={isMine}
                       onClick={() => setPlayerTarget({ id: a.playerId, name: a.playerName })}
                       meta={
                         <>
-                          {t("transfers.salarySeason", { amount: money(a.salary) })} · {t("transfers.opening")} <b style={{ color: "var(--text-2)" }}>{money(a.openingPrice)}</b> · {t("transfers.current")} <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · {t("transfers.bidders", { count: a.bidderCount })}
+                          {isMine
+                            ? <>
+                                {t("transfers.current")} <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · {t("transfers.bidders", { count: a.bidderCount })}
+                              </>
+                            : <>
+                                {t("transfers.salarySeason", { amount: money(a.salary) })} · {t("transfers.opening")} <b style={{ color: "var(--text-2)" }}>{money(a.openingPrice)}</b> · {t("transfers.current")} <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · {t("transfers.bidders", { count: a.bidderCount })}
+                              </>}
                         </>
                       }
                       sub={<>{t("transfers.endsIn")} <AuctionCountdown deadline={a.deadline} paused={status?.paused} /></>}
-                      statusChip={<TransferStatusChips amILeading={a.amILeading} outbid={outbid} myMaxBid={a.myMaxBid} myMaxLabel={t("transfers.yourMax")} />}
+                      statusChip={isMine
+                        ? <span className="chip" style={{ color: "var(--gold-2)", borderColor: "rgba(240,180,41,0.5)" }}>{t("transfers.yourListing")}</span>
+                        : <TransferStatusChips amILeading={a.amILeading} outbid={outbid} myMaxBid={a.myMaxBid} myMaxLabel={t("transfers.yourMax")} />}
                       right={
-                        <>
-                          <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>{t("transfers.history")}</button>
-                          <button className="btn" {...pauseLock} onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
-                            {a.myMaxBid !== null ? t("transfers.increaseMax") : t("transfers.bid")}
-                          </button>
-                        </>
+                        isMine ? (
+                          <>
+                            <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>{t("transfers.history")}</button>
+                            {a.bidderCount === 0
+                              ? <button className="btn ghost" {...pauseLock} onClick={() => cancelListing(a)}>{t("transfers.cancelListing")}</button>
+                              : <span className="chip">{t("transfers.bidsCannotCancel")}</span>}
+                          </>
+                        ) : (
+                          <>
+                            <button className="btn ghost" onClick={() => void openAuctionHistory(a, "TRANSFER")}>{t("transfers.history")}</button>
+                            <button className="btn" {...pauseLock} onClick={() => { setAuctionBidTarget(a); setAuctionContractSeasons(a.myContractSeasons ?? 1); setAuctionBidAmount(Math.max(a.openingPrice, a.currentPrice + a.bidIncrement)); }}>
+                              {a.myMaxBid !== null ? t("transfers.increaseMax") : t("transfers.bid")}
+                            </button>
+                          </>
+                        )
                       }
                     />
                   );
@@ -415,6 +452,7 @@ export function Transfers() {
             resultCount={filteredAuctions.length}
             totalCount={auctions.length}
             priceLabel={t("transfers.priceCurrentLabel")}
+            showHideOwn
           />
         </div>
       )}
@@ -530,35 +568,7 @@ export function Transfers() {
       {tab === "sell" && (
         <div className="transfer-layout">
           <div className="card">
-          {myActiveListings.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <div className="kicker" style={{ marginBottom: 6 }}>{t("transfers.yourActiveListings")}</div>
-              <div className="transfer-rows">
-                {myActiveListings.map((a) => (
-                  <TransferPlayerRow
-                    key={a.id}
-                    name={a.playerName}
-                    position={a.naturalPosition}
-                    overall={a.overall}
-                    age={a.age}
-                    onClick={() => setPlayerTarget({ id: a.playerId, name: a.playerName })}
-                    meta={
-                      <>
-                        {t("transfers.current")} <b style={{ color: "var(--gold-2)" }}>{money(a.currentPrice)}</b> · {t("transfers.bidders", { count: a.bidderCount })}
-                      </>
-                    }
-                    sub={<>{t("transfers.endsIn")} <AuctionCountdown deadline={a.deadline} paused={status?.paused} /></>}
-                    right={
-                      a.bidderCount === 0
-                        ? <button className="btn ghost" {...pauseLock} onClick={() => cancelListing(a)}>{t("transfers.cancelListing")}</button>
-                        : <span className="chip">{t("transfers.bidsCannotCancel")}</span>
-                    }
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-          {squad.length === 0 ? (
+          {sellRows.length === 0 ? (
             <div className="empty-state">
               <span style={{ fontSize: 26 }}>📤</span>
               {t("transfers.noSellable")}
@@ -567,20 +577,51 @@ export function Transfers() {
             <>
               <div className="kicker" style={{ marginBottom: 6 }}>{t("transfers.listAPlayer")}</div>
               <div className="transfer-rows">
-                {filteredSellable.map((p) => (
-                  <TransferPlayerRow
-                    key={p.id}
-                    name={p.displayName ?? p.name}
-                    position={p.naturalPosition}
-                    overall={p.overall}
-                    age={p.age}
-                    onClick={() => setPlayerTarget({ id: p.id, name: p.name })}
-                    meta={<>{t("squad.overall")} <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · {t("transfers.value")} {money(p.value)}</>}
-                    right={<button className="btn ghost" {...pauseLock} onClick={() => setSellPlayer(p)}>{t("transfers.sell")}</button>}
-                  />
-                ))}
+                {filteredSell.map((p) => {
+                  const listing = p.listing;
+                  if (listing) {
+                    return (
+                      <TransferPlayerRow
+                        key={p.id}
+                        name={p.displayName ?? p.name}
+                        position={p.naturalPosition}
+                        overall={p.overall}
+                        age={p.age}
+                        own
+                        onClick={() => setPlayerTarget({ id: p.id, name: p.displayName ?? p.name })}
+                        meta={
+                          <>
+                            {t("transfers.current")} <b style={{ color: "var(--gold-2)" }}>{money(listing.currentPrice)}</b> · {t("transfers.bidders", { count: listing.bidderCount })}
+                          </>
+                        }
+                        sub={<>{t("transfers.endsIn")} <AuctionCountdown deadline={listing.deadline} paused={status?.paused} /></>}
+                        statusChip={<span className="chip" style={{ color: "var(--gold-2)", borderColor: "rgba(240,180,41,0.5)" }}>{t("transfers.yourListing")}</span>}
+                        right={
+                          <>
+                            <button className="btn ghost" onClick={() => void openAuctionHistory(listing, "TRANSFER")}>{t("transfers.history")}</button>
+                            {listing.bidderCount === 0
+                              ? <button className="btn ghost" {...pauseLock} onClick={() => cancelListing(listing)}>{t("transfers.cancelListing")}</button>
+                              : <span className="chip">{t("transfers.bidsCannotCancel")}</span>}
+                          </>
+                        }
+                      />
+                    );
+                  }
+                  return (
+                    <TransferPlayerRow
+                      key={p.id}
+                      name={p.displayName ?? p.name}
+                      position={p.naturalPosition}
+                      overall={p.overall}
+                      age={p.age}
+                      onClick={() => setPlayerTarget({ id: p.id, name: p.displayName ?? p.name })}
+                      meta={<>{t("squad.overall")} <b style={{ color: "var(--text-2)" }}>{p.overall}</b> · {t("transfers.value")} {money(p.value)}</>}
+                      right={<button className="btn ghost" {...pauseLock} onClick={() => setSellPlayer(p)}>{t("transfers.sell")}</button>}
+                    />
+                  );
+                })}
               </div>
-              {filteredSellable.length === 0 && <div className="empty-state">{t("transfers.noSquadFilter")}</div>}
+              {filteredSell.length === 0 && <div className="empty-state">{t("transfers.noSquadFilter")}</div>}
             </>
           )}
           </div>
@@ -588,8 +629,8 @@ export function Transfers() {
             filters={sellFilters}
             onChange={setSellFilters}
             sortOptions={SELL_SORT_OPTIONS}
-            resultCount={filteredSellable.length}
-            totalCount={sellableSquad.length}
+            resultCount={filteredSell.length}
+            totalCount={sellRows.length}
             showPriceFilter={false}
           />
         </div>

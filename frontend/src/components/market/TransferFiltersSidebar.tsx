@@ -15,6 +15,8 @@ export interface SortOption {
 
 export interface MarketFilters {
   query: string;
+  /** When true, players owned by the viewing club are hidden from the list. */
+  hideOwnPlayers: boolean;
   positions: string[];
   sortKey: string;
   overallMin: number | null;
@@ -33,6 +35,7 @@ export interface MarketFilters {
 export function createMarketFilters(): MarketFilters {
   return {
     query: "",
+    hideOwnPlayers: false,
     positions: [],
     sortKey: "ovr-desc",
     overallMin: null,
@@ -127,6 +130,7 @@ export function TransferFiltersSidebar({
   totalCount,
   showPriceFilter = true,
   priceLabel,
+  showHideOwn = false,
 }: {
   filters: MarketFilters;
   onChange: (next: MarketFilters) => void;
@@ -135,6 +139,10 @@ export function TransferFiltersSidebar({
   totalCount: number;
   showPriceFilter?: boolean;
   priceLabel?: string;
+  /** Show the "Hide my players" toggle (market tabs whose list can include
+   *  your own squad — e.g. auctions). Absent on the List-for-Sale tab, where
+   *  the own-squad rows are the whole point of the tab. */
+  showHideOwn?: boolean;
 }) {
   const { t } = useTranslation();
   const priceLabelText = priceLabel ?? t("market.currentPrice");
@@ -142,6 +150,7 @@ export function TransferFiltersSidebar({
   const activeFilterCount = [
     filters.query,
     filters.positions.length > 0,
+    showHideOwn && filters.hideOwnPlayers,
     filters.overallMin !== null,
     filters.overallMax !== null,
     filters.ageMin !== null,
@@ -200,6 +209,17 @@ export function TransferFiltersSidebar({
           style={{ width: "100%" }}
         />
       </div>
+
+      {showHideOwn && (
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", color: "var(--text-2)", fontSize: "0.84rem" }}>
+          <input
+            type="checkbox"
+            checked={filters.hideOwnPlayers}
+            onChange={(event) => update("hideOwnPlayers", event.target.checked)}
+          />
+          {t("market.hideOwnPlayers")}
+        </label>
+      )}
 
       <div className="transfer-filter-section">
         <div className="section-label">{t("market.playerProfile")}</div>

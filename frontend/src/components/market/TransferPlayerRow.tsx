@@ -17,6 +17,7 @@ export function TransferPlayerRow({
   statusChip,
   right,
   muted = false,
+  own = false,
   onClick,
   sub,
 }: {
@@ -30,12 +31,14 @@ export function TransferPlayerRow({
   statusChip?: React.ReactNode;
   right?: React.ReactNode;
   muted?: boolean;
+  /** True when the row is a listing placed by the viewing club; tinted. */
+  own?: boolean;
   onClick?: () => void;
   sub?: React.ReactNode;
 }) {
   const { t } = useTranslation();
   return (
-    <div className={`card hoverable transfer-row${muted ? " transfer-row-muted" : ""}`} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+    <div className={`card hoverable transfer-row${muted ? " transfer-row-muted" : ""}${own ? " transfer-row-own" : ""}`} style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
       <div style={{ flex: 1, minWidth: 200 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}>
           <span className={`pos-tag ${positionClass(position)}`} title={position}>{positionLetter(position)}</span>

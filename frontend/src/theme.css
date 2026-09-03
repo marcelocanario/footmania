@@ -907,7 +907,8 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .segmented::-webkit-scrollbar { display: none; }
 
-.segmented button {
+.segmented button,
+.segmented a {
   border: none;
   background: transparent;
   color: var(--text-2);
@@ -921,11 +922,13 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   gap: 7px;
   white-space: nowrap;
   cursor: pointer;
+  text-decoration: none;
   transition: background 0.16s ease, color 0.16s ease;
 }
 
-.segmented button:hover { color: var(--text); }
-.segmented button.active {
+.segmented button:hover, .segmented a:hover { color: var(--text); }
+.segmented button.active,
+.segmented a.active {
   background: linear-gradient(180deg, rgba(61, 220, 132, 0.24), rgba(35, 165, 90, 0.18));
   color: var(--grass-2);
   box-shadow: inset 0 0 0 1px rgba(61, 220, 132, 0.32);
@@ -1418,6 +1421,15 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .transfer-row { transition: border-color 0.15s ease; }
 .transfer-row:hover { border-color: var(--line-2); }
 .transfer-row-muted { opacity: 0.62; }
+
+/* A transfer listing placed by the viewing club (auctions + List for Sale):
+   gold left edge + faint tint so it stands out from the public rows. */
+.transfer-row-own {
+  border-color: rgba(240, 180, 41, 0.4);
+  background: linear-gradient(180deg, rgba(240, 180, 41, 0.09), rgba(240, 180, 41, 0.03));
+  box-shadow: inset 3px 0 0 var(--gold-2);
+}
+.transfer-row.transfer-row-own:hover { border-color: rgba(240, 180, 41, 0.7); }
 
 .link-btn {
   background: none;
@@ -5038,6 +5050,9 @@ html, body { overflow-x: clip; }
      `.card.hoverable`, and that higher-specificity rule above already
      resets their border — a same-value reset here would be dead code.) */
   .card.hoverable:hover { border-color: var(--line); }
+  /* Own transfer listings keep their gold edge even in the touch "stuck
+     hover" state (they must stay visibly highlighted after a tap). */
+  .transfer-row.transfer-row-own:hover { border-color: rgba(240, 180, 41, 0.55); }
   .notif-row:hover:not(:disabled) { background: none; }
   .notif-row.unread:hover:not(:disabled) { background: rgba(35, 165, 90, 0.06); }
   .topbar nav.top-nav a:hover { color: var(--text); background: none; }
@@ -5045,7 +5060,7 @@ html, body { overflow-x: clip; }
   .sub-row:hover { border-color: var(--line); }
   .topbar .icon-btn:hover { color: var(--text-2); background: none; border-color: var(--line); }
   .icon-btn.danger:hover { color: var(--red-2); background: none; border-color: rgba(229, 72, 77, 0.45); }
-  .segmented button:hover { color: var(--text-2); }
+  .segmented button:hover, .segmented a:hover { color: var(--text-2); }
   .bottom-sheet a:hover { color: var(--text-2); background: none; }
   .btn:hover { filter: none; }
   .btn.ghost:hover { background: none; }
@@ -5057,7 +5072,7 @@ html, body { overflow-x: clip; }
   .icon-btn { width: 42px; height: 42px; }
   .btn.sm { min-height: 42px; }
   .btn.btn-xs { min-height: 34px; }
-  .segmented button { padding-top: 12px; padding-bottom: 12px; }
+  .segmented button, .segmented a { padding-top: 12px; padding-bottom: 12px; }
   .chip { min-height: 32px; }
 }
 

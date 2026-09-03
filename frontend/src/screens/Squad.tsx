@@ -7,7 +7,7 @@ import { Dropdown } from "primereact/dropdown";
 import { MultiSelect } from "primereact/multiselect";
 import { Toast } from "primereact/toast";
 import { Tooltip } from "primereact/tooltip";
-import { Activity, AlertTriangle, BatteryLow, BatteryMedium, CalendarDays, Clapperboard, Dumbbell, FileSignature, Handshake, HeartPulse, History as HistoryIcon, Pencil, ShieldAlert, ShieldCheck, Sparkles, Square, Tag, Target, Trash2, TrendingUp, Trophy, UserMinus, Users } from "lucide-react";
+import { Activity, AlertTriangle, BatteryLow, BatteryMedium, CalendarDays, Dumbbell, FileSignature, Handshake, HeartPulse, History as HistoryIcon, Pencil, ShieldAlert, Sparkles, Square, Tag, Target, Trash2, TrendingUp, Trophy, UserMinus, Users } from "lucide-react";
 import { api, type FinanceSnapshot, type PlayerView } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
@@ -20,10 +20,6 @@ import { PlayerSkillsRadar } from "../components/PlayerSkillsRadar";
 import { PlayerTrendSparkline } from "../components/PlayerTrendSparkline";
 import { PlayerScoresBarChart } from "../components/PlayerScoresBarChart";
 import { Segmented } from "../components/Segmented";
-import { TacticsBoard } from "../components/TacticsBoard";
-import { AutomationPanel } from "../components/AutomationPanel";
-import { FamiliarityBar } from "../components/FamiliarityBar";
-import { directionOptions, pressingOptions, styleOptions, type TacticOption } from "../tacticsOptions";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { money } from "../format";
 import { InputText } from "primereact/inputtext";
@@ -31,8 +27,7 @@ import { countryFlag } from "../countryFlags";
 import { ListForSaleDialog } from "../components/market/ListForSaleDialog";
 import { squadActionState } from "./squadActions";
 
-type Tab = "seniors" | "juniors" | "tactics";
-type TrainingFocus = "assistant" | "primary" | "secondary";
+type Tab = "seniors" | "juniors";
 type PlayerPanelTab = "customization" | "history";
 type HistorySectionTab = "seasons" | "transfers" | "evolution";
 
@@ -71,16 +66,6 @@ function positionBody(p: PlayerView) {
   // binding (below) fires on focus/blur as well as hover, but only for
   // elements that can actually receive focus.
   return <span tabIndex={0} className={`pos-tag ${positionClass(p.naturalPosition)} squad-tooltip-trigger`} data-pr-tooltip={positionLabel(p.naturalPosition)}>{positionLetter(p.naturalPosition)}</span>;
-}
-
-/** Dropdown menu item for tactic options: label plus optional one-line description. */
-function tacticItemTemplate(option: TacticOption) {
-  return (
-    <div>
-      <div style={{ fontWeight: 600 }}>{option.label}</div>
-      {option.desc && <div style={{ fontSize: "0.8rem", opacity: 0.85, marginTop: 2, lineHeight: 1.4 }}>{option.desc}</div>}
-    </div>
-  );
 }
 
 function squadNumberBody(p: PlayerView) {
@@ -221,12 +206,7 @@ export function Squad() {
   const [finance, setFinance] = useState<FinanceSnapshot | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ title: string; message: string; onConfirm: () => Promise<void> } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
-  const [tactics, setTactics] = useState(snapshot?.club?.tactics ? { formation: snapshot.club.tactics.formation, style: snapshot.club.tactics.style, pressing: snapshot.club.tactics.pressing, direction: snapshot.club.tactics.direction } : { formation: 4, style: 0, pressing: 0, direction: 0 });
-  // Formation currently picked in the tactics board; scopes the automation panel.
-  const [boardFormation, setBoardFormation] = useState<number>(snapshot?.club?.tactics?.formation ?? 4);
   const [tab, setTab] = useState<Tab>("seniors");
-  const [tacticsJustSaved, setTacticsJustSaved] = useState(false);
-  const [trainingFocus, setTrainingFocus] = useState<TrainingFocus>(snapshot?.club?.trainingFocus ?? "assistant");
   const toast = useRef<Toast>(null);
   const user = useGame((s) => s.user);
   const [nicknameInput, setNicknameInput] = useState("");
@@ -290,18 +270,6 @@ export function Squad() {
   }, []);
 
   const club = snapshot?.club;
-  // plans/6 §17 UI: familiarity bars for the drafted tactic combination. The
-  // server computes all projections; when an unsaved formation is picked on
-  // the board the projections would not match, so we show the saved value only.
-  const clubTactics = club?.tactics ?? null;
-  const formationSaved = !clubTactics || tactics.formation === clubTactics.formation;
-  const draftMatchesSaved =
-    !!clubTactics && formationSaved &&
-    tactics.style === clubTactics.style && tactics.pressing === clubTactics.pressing && tactics.direction === clubTactics.direction;
-  const draftProjection = clubTactics?.projections?.find(
-    (p) => p.style === tactics.style && p.pressing === tactics.pressing && p.direction === tactics.direction
-  )?.familiarity ?? null;
-  const shownFamiliarity = draftMatchesSaved ? clubTactics?.familiarity : formationSaved ? draftProjection : null;
   const seniors = snapshot?.squad ?? [];
   const juniors = snapshot?.juniors ?? [];
   const rows = tab === "juniors" ? juniors : seniors;
@@ -368,31 +336,6 @@ export function Squad() {
        - selected.salary * finance.remainingSeasonFraction
        + renewDemand * finance.remainingSeasonFraction
     : null;
-
-  const saveTrainingFocus = async (focus: TrainingFocus) => {
-    if (false) return;
-    try {
-      await api.setTrainingFocus(focus);
-      setTrainingFocus(focus);
-      toast.current?.show({ severity: "success", summary: t("squad.trainingFocusSaved") });
-      await refresh();
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
-    }
-  };
-
-  const saveTactics = async () => {
-    if (false) return;
-    try {
-      await api.setTactics({ style: tactics.style, pressing: tactics.pressing, direction: tactics.direction });
-      toast.current?.show({ severity: "success", summary: t("squad.tacticsSaved") });
-      setTacticsJustSaved(true);
-      window.setTimeout(() => setTacticsJustSaved(false), 3000);
-      refresh();
-    } catch (e) {
-      toast.current?.show({ severity: "error", summary: t("squad.errorTitle"), detail: (e as Error).message });
-    }
-  };
 
   const loanAction = async (p: PlayerView) => {
     if (false) return;
@@ -585,7 +528,7 @@ export function Squad() {
       <div className="page-head">
         <div>
           <div className="kicker">{club?.name ?? t("squad.title")}</div>
-          <h1>{tab === "juniors" ? t("squad.juniors") : tab === "tactics" ? t("squad.tactics") : t("squad.seniors")}</h1>
+          <h1>{tab === "juniors" ? t("squad.juniors") : t("squad.seniors")}</h1>
         </div>
         <Segmented<Tab>
           value={tab}
@@ -593,7 +536,6 @@ export function Squad() {
           items={[
             { value: "seniors", label: t("squad.seniors"), icon: <Users size={14} />, count: seniors.length },
             { value: "juniors", label: t("squad.juniors"), icon: <Dumbbell size={14} />, count: juniors.length },
-            { value: "tactics", label: t("squad.tactics"), icon: <ShieldCheck size={14} /> },
           ]}
         />
       </div>
@@ -604,78 +546,7 @@ export function Squad() {
         </div>
       )}
 
-      {tab === "tactics" ? (
-        <>
-          <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 3fr) minmax(0, 2fr)", alignItems: "start", gap: 16 }}>
-            <div className="card">
-              <h2 className="card-title"><ShieldCheck size={17} /> {t("squad.tactics")}</h2>
-              <TacticsBoard mode="club" onFormationChange={setBoardFormation} customTooltips />
-            </div>
-          <div className="card">
-            <h2 className="card-title"><Clapperboard size={17} /> {t("squad.matchStrategy")}</h2>
-            <div className="form-group">
-              <label htmlFor="tac-style">{t("squad.style")}</label>
-              <Dropdown id="tac-style" value={tactics.style} options={styleOptions()} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, style: e.value })} style={{ width: "100%" }} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="tac-press">{t("squad.pressing")}</label>
-              <Dropdown id="tac-press" value={tactics.pressing} options={pressingOptions()} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, pressing: e.value })} style={{ width: "100%" }} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="tac-dir">{t("squad.direction")}</label>
-              <Dropdown id="tac-dir" value={tactics.direction} options={directionOptions()} itemTemplate={tacticItemTemplate} onChange={(e) => setTactics({ ...tactics, direction: e.value })} style={{ width: "100%" }} />
-            </div>
-            {clubTactics?.familiarity !== undefined && (
-              <div className="form-group">
-                <label>{t("squad.tacticalFamiliarity")}</label>
-                <FamiliarityBar value={shownFamiliarity ?? clubTactics.familiarity} projected={draftMatchesSaved ? null : formationSaved ? draftProjection : null} customTooltips />
-                <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
-                  {t("squad.familiarityHint")}
-                </div>
-              </div>
-            )}
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <button className="btn" onClick={saveTactics} style={{ flex: 1 }}>
-                {t("common.save")}
-              </button>
-              {tacticsJustSaved && (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--grass-2)", fontWeight: 700, fontSize: "0.9rem", whiteSpace: "nowrap" }}>
-                  <ShieldCheck size={15} /> {t("squad.saved")}
-                </span>
-              )}
-            </div>
-            <div className="form-group" style={{ marginTop: 18 }}>
-              <label htmlFor="training-focus">{t("squad.trainingFocus")}</label>
-              <Dropdown
-                id="training-focus"
-                value={trainingFocus}
-                options={[
-                  { label: t("squad.trainingAssistant"), desc: t("squad.trainingAssistantDesc"), value: "assistant" },
-                  { label: t("squad.trainingPrimary"), desc: t("squad.trainingPrimaryDesc"), value: "primary" },
-                  { label: t("squad.trainingSecondary"), desc: t("squad.trainingSecondaryDesc"), value: "secondary" },
-                ]}
-                itemTemplate={(option) => (
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{option.label}</div>
-                    <div style={{ fontSize: "0.8rem", opacity: 0.85, marginTop: 2, lineHeight: 1.4 }}>{option.desc}</div>
-                  </div>
-                )}
-                onChange={(e) => void saveTrainingFocus(e.value as TrainingFocus)}
-                style={{ width: "100%" }}
-              />
-              <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 7, lineHeight: 1.5 }}>
-                {t("squad.trainingHint")}
-              </div>
-            </div>
-            <div style={{ color: "var(--text-3)", fontSize: "0.82rem", marginTop: 12, lineHeight: 1.5 }}>
-              {t("squad.tacticsHint")}
-            </div>
-          </div>
-          </div>
-          <AutomationPanel formation={boardFormation} customTooltips />
-        </>
-      ) : (
-        <div className="grid squad-roster-grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
+      <div className="grid squad-roster-grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
           <div className="card" style={{ padding: isMobile ? 10 : 20 }}>
             <div className="table-wrap squad-table-wrap">
               <DataTable
@@ -989,7 +860,6 @@ export function Squad() {
             </div>
           )}
         </div>
-      )}
 
       <ListForSaleDialog player={sellTarget} onClose={() => setSellTarget(null)} onListed={() => { setSellTarget(null); refresh(); }} customTooltips />
 

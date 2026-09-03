@@ -20,6 +20,7 @@ const Login = lazyNamed(() => import("./screens/Login"), "Login");
 const Join = lazyNamed(() => import("./screens/Join"), "Join");
 const Dashboard = lazyNamed(() => import("./screens/Dashboard"), "Dashboard");
 const Squad = lazyNamed(() => import("./screens/Squad"), "Squad");
+const Tactics = lazyNamed(() => import("./screens/Tactics"), "Tactics");
 const Competitions = lazyNamed(() => import("./screens/Competitions"), "Competitions");
 const LiveMatch = lazyNamed(() => import("./screens/LiveMatch"), "LiveMatch");
 const PreGame = lazyNamed(() => import("./screens/PreGame"), "PreGame");
@@ -170,6 +171,15 @@ function ClubGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Bare /history resolves to the viewer's own club history (/history/:id). */
+function HistoryRedirect() {
+  const status = useGame((s) => s.status);
+  const snapshot = useGame((s) => s.snapshot);
+  const ownClubId = snapshot?.club?.id ?? status?.club?.id ?? status?.userClubId ?? null;
+  if (ownClubId !== null) return <Navigate to={`/history/${ownClubId}`} replace />;
+  return <PageLoading />;
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -178,6 +188,7 @@ function AppRoutes() {
       <Route path="/team/:clubId" element={<ClubGuard><TeamScreen /></ClubGuard>} />
       <Route path="/dashboard" element={<ClubGuard><Dashboard /></ClubGuard>} />
       <Route path="/squad" element={<ClubGuard><Squad /></ClubGuard>} />
+      <Route path="/tactics" element={<ClubGuard><Tactics /></ClubGuard>} />
       <Route path="/competitions" element={<ClubGuard><Competitions /></ClubGuard>} />
       {/* Matches screen removed: fixtures live inside Tables. Old links redirect. */}
       <Route path="/matchday" element={<Navigate to="/competitions" replace />} />
@@ -188,7 +199,8 @@ function AppRoutes() {
       <Route path="/finances" element={<ClubGuard><Finances /></ClubGuard>} />
       <Route path="/season-end" element={<ClubGuard><SeasonEnd /></ClubGuard>} />
       <Route path="/records" element={<Navigate to="/history" replace />} />
-      <Route path="/history" element={<ClubGuard><History /></ClubGuard>} />
+      <Route path="/history" element={<ClubGuard><HistoryRedirect /></ClubGuard>} />
+      <Route path="/history/:clubId" element={<ClubGuard><History /></ClubGuard>} />
       <Route path="/settings" element={<ClubGuard><SettingsScreen /></ClubGuard>} />
       <Route path="/friends" element={<ClubGuard><FriendsScreen /></ClubGuard>} />
       <Route path="/admin" element={<Admin />} />

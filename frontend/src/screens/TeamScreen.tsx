@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { CalendarDays, Clock, Landmark, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
+import { CalendarDays, Clock, History as HistoryIcon, Landmark, LayoutGrid, Pencil, Shirt, Trophy, UserRound, Users } from "lucide-react";
 import { api, type FixtureView, type TeamProfile } from "../api/client";
 import { countryFlag } from "../countryFlags";
 import { money } from "../format";
@@ -111,6 +111,16 @@ export function TeamScreen() {
             <Pencil size={13} /> {t("team.editMyClub")}
           </button>
         )}
+      </div>
+
+      {/* Overview | History tabs: history lives at /history/:id in the world-archive layout. */}
+      <div className="segmented team-tabs" role="tablist" aria-label={t("team.profileSections")} style={{ marginTop: 16 }}>
+        <NavLink to={`/team/${club.id}`} end role="tab" className={({ isActive }) => (isActive ? "active" : "")}>
+          <LayoutGrid size={14} /> {t("team.overviewTab")}
+        </NavLink>
+        <NavLink to={`/history/${club.id}`} role="tab" className={({ isActive }) => (isActive ? "active" : "")}>
+          <HistoryIcon size={14} /> {t("team.historyTab")}
+        </NavLink>
       </div>
 
       <div className="grid cols-2 stagger" style={{ marginTop: 16 }}>
@@ -224,10 +234,13 @@ export function TeamScreen() {
         </div>
       )}
 
-      {/* Club journey: the same movement language used by the world archive. */}
+      {/* Club journey summary: the full world-archive view lives on the History tab. */}
       <div className="card team-history-card" style={{ marginTop: 16 }}>
         <div className="card-title"><Trophy size={17} /> {t("team.clubJourney")}</div>
         <SeasonHistoryTimeline rows={profile.history} trophies={profile.trophies} />
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => navigate(`/history/${club.id}`)}>
+          <HistoryIcon size={14} /> {t("team.viewFullHistory")}
+        </button>
       </div>
 
       <MatchResultDialog fixture={resultFixture} onClose={() => setResultFixture(null)} />

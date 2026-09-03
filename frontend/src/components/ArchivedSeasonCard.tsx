@@ -5,7 +5,12 @@ import type { SeasonHistoryView } from "../api/client";
 import { ClubNameLink } from "./ClubNameLink";
 import { HistoryStatusBadges } from "./HistoryStatusBadges";
 
-export function ArchivedSeasonCard({ season, initialOpen = false }: { season: SeasonHistoryView; initialOpen?: boolean }) {
+/**
+ * One archived season card. When highlightClubId is set, that club's rows are
+ * highlighted instead of the viewer's own (per-club history view); the "you"
+ * chip always stays on the viewer's own row so both signals stay visible.
+ */
+export function ArchivedSeasonCard({ season, initialOpen = false, highlightClubId = null }: { season: SeasonHistoryView; initialOpen?: boolean; highlightClubId?: number | null }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(initialOpen);
   const divisionCount = season.divisions.length;
@@ -50,8 +55,10 @@ export function ArchivedSeasonCard({ season, initialOpen = false }: { season: Se
                     </tr>
                   </thead>
                   <tbody>
-                    {division.standings.map((row, index) => (
-                      <tr key={row.clubId} className={`${row.isMine ? "my-row " : ""}${index === 0 ? "archive-champion-row" : ""}`}>
+                    {division.standings.map((row, index) => {
+                      const highlighted = highlightClubId !== null ? row.clubId === highlightClubId : row.isMine;
+                      return (
+                      <tr key={row.clubId} className={`${highlighted ? "my-row " : ""}${index === 0 ? "archive-champion-row" : ""}`}>
                         <td><span className={`rank-pill${index === 0 ? " champion-rank" : ""}`}>{index + 1}</span></td>
                         <td>
                           <div className="archive-club-cell">
@@ -68,7 +75,8 @@ export function ArchivedSeasonCard({ season, initialOpen = false }: { season: Se
                         <td>{row.goalsAgainst}</td>
                         <td><b>{row.points}</b></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

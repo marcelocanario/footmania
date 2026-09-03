@@ -139,7 +139,7 @@ export function PreGame() {
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "center", gap: 10, marginTop: 16 }}>
-            <button className="btn" onClick={() => navigate("/squad")}><ClipboardList size={15} /> {t("pregame.squadTactics")}</button>
+            <button className="btn" onClick={() => navigate("/tactics")}><ClipboardList size={15} /> {t("pregame.squadTactics")}</button>
             <button className="btn ghost" onClick={() => navigate("/dashboard")}>{t("pregame.dashboard")} <ArrowRight size={14} /></button>
           </div>
         </div>

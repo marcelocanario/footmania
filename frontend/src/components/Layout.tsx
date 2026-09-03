@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Languages, Settings as SettingsIcon, UserPlus, Hourglass, MoreHorizontal } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, Shirt, Bell, Languages, Settings as SettingsIcon, UserPlus, Hourglass, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useGame } from "../store/game";
 import { useLang } from "../i18n/store";
@@ -8,25 +8,27 @@ import { relativeTime } from "../utils/time";
 import { api } from "../api/client";
 import { useIsMobile } from "../hooks/useIsMobile";
 import { useLiveMatchWatcher } from "../hooks/useLiveMatchWatcher";
-import { FootballKit } from "./kit/FootballKit";
-import { deriveKitDefaults } from "./kit/defaults";
 import { LanguagePicker } from "./LanguagePicker";
 
 interface NavItem {
   to: string;
-  key: "nav.home" | "nav.squad" | "nav.tables" | "nav.transfers" | "nav.finances" | "nav.myClub" | "nav.history" | "nav.friends" | "nav.settings" | "nav.admin";
+  key: "nav.home" | "nav.squad" | "nav.tactics" | "nav.tables" | "nav.transfers" | "nav.finances" | "nav.myClub" | "nav.friends" | "nav.settings" | "nav.admin";
   icon: ReactNode;
   admin?: boolean;
 }
 
+// MY_CLUB_ROUTE is a marker, never rendered as-is: it resolves to the
+// viewer's own team screen (/team/:ownClubId) at render time (myClubTo).
+const MY_CLUB_ROUTE = "/my-club";
+
 const NAV: NavItem[] = [
   { to: "/dashboard", key: "nav.home", icon: <Home size={15} /> },
+  { to: MY_CLUB_ROUTE, key: "nav.myClub", icon: <Shirt size={15} /> },
   { to: "/squad", key: "nav.squad", icon: <Users size={15} /> },
-  { to: "/competitions", key: "nav.tables", icon: <Table2 size={15} /> },
+  { to: "/tactics", key: "nav.tactics", icon: <ShieldCheck size={15} /> },
   { to: "/transfers", key: "nav.transfers", icon: <ArrowLeftRight size={15} /> },
   { to: "/finances", key: "nav.finances", icon: <Wallet size={15} /> },
-  { to: "/my-club", key: "nav.myClub", icon: <Shirt size={15} /> },
-  { to: "/history", key: "nav.history", icon: <HistoryIcon size={15} /> },
+  { to: "/competitions", key: "nav.tables", icon: <Table2 size={15} /> },
   { to: "/friends", key: "nav.friends", icon: <UserPlus size={15} /> },
   { to: "/settings", key: "nav.settings", icon: <SettingsIcon size={15} /> },
 ];
@@ -188,13 +190,15 @@ export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const isMobile = useIsMobile();
   useLiveMatchWatcher();
-  const club = snapshot?.club;
   const teamCreationRequired = status !== null && !status.club;
   // Admins always reach the admin page, even before creating a team. Every
   // other destination stays locked until a club exists.
   const navLockedFor = (to: string) => teamCreationRequired && to !== "/admin";
-  const provisional = club?.competitionState === "PROVISIONAL" || status?.club?.competitionState === "PROVISIONAL";
-  const dormant = club?.competitionState === "DORMANT" || status?.club?.competitionState === "DORMANT";
+  // The "My Club" entry opens the viewer's own team screen. Until the club id
+  // is known it falls back to the /my-club marker (ClubGuard resolves it).
+  const ownClubId = snapshot?.club?.id ?? status?.club?.id ?? status?.userClubId ?? null;
+  const myClubTo = ownClubId !== null ? `/team/${ownClubId}` : MY_CLUB_ROUTE;
+  const resolvedNav: NavItem[] = NAV.map((item) => item.to === MY_CLUB_ROUTE ? { ...item, to: myClubTo } : item);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [showNotifs, setShowNotifs] = useState(false);
   const [showSeasonCal, setShowSeasonCal] = useState(false);
@@ -210,15 +214,15 @@ export function Layout({ children }: { children: ReactNode }) {
   const matchByFixture = new Map((status?.myMatches ?? []).map((m) => [m.fixtureId, m]));
 
   const adminNav: NavItem[] = user?.isAdmin
-    ? [...NAV, { to: "/admin", key: "nav.admin", icon: <ShieldCheck size={15} />, admin: true }]
-    : NAV;
+    ? [...resolvedNav, { to: "/admin", key: "nav.admin", icon: <ShieldCheck size={15} />, admin: true }]
+    : resolvedNav;
   // Everything the bottom bar's "More" sheet lists: every adminNav entry that
   // is not one of the four persistent slots, in the same order as NAV.
   const moreNav = adminNav.filter((n) => !PRIMARY_TO.includes(n.to));
   // Highlight the "More" trigger itself when the current route lives inside
-  // the sheet — otherwise(finances, my-club, …) the bar would show no active
-  // slot at all. Prefix match covers nested routes (e.g. /team/:id is not in
-  // the sheet, so it correctly leaves the trigger dim).
+  // the sheet — otherwise the bar would show no active slot at all. Prefix
+  // match covers nested routes; other clubs' /team/:id pages correctly leave
+  // the trigger dim while the viewer's own team page highlights it.
   const moreActive = moreNav.some((n) => location.pathname === n.to || location.pathname.startsWith(`${n.to}/`));
 
   // Close anchored topbar popouts (and the bottom-bar "More" sheet) on any
@@ -308,7 +312,7 @@ export function Layout({ children }: { children: ReactNode }) {
           <nav className="top-nav">
             {adminNav.map((item) => (
               <NavLink
-                key={item.to}
+                key={item.key}
                 to={item.to}
                 className={({ isActive }) => (isActive ? "active" : "") + (item.admin ? " admin" : "")}
                 onClick={(event) => {
@@ -434,19 +438,6 @@ export function Layout({ children }: { children: ReactNode }) {
               </div>
             )}
           </div>
-          {club && (
-            <span className="club-chip" onClick={() => navigate(`/team/${club.id}`)} title={`${club.name} — ${t("layout.teamProfile")}`}>
-              <FootballKit
-                {...(club.kits?.home ?? deriveKitDefaults(club.primaryColor, club.secondaryColor).home)}
-                size={26}
-                flat
-              />
-              {club.shortName}
-              {provisional && <span className="chip" style={{ borderColor: "rgba(240,180,41,0.4)", color: "var(--gold-2)" }}>PROV</span>}
-              {dormant && <span className="chip" style={{ borderColor: "rgba(120,140,130,0.4)", color: "var(--text-3)" }}>DORMANT</span>}
-              {status?.club?.inactivity?.eligible && <span className="chip" style={{ borderColor: "rgba(220,120,60,0.5)", color: "var(--red-2)" }}>INACTIVE</span>}
-            </span>
-          )}
           <button className="icon-btn" onClick={logout} title={t("auth.logout")} aria-label={t("auth.logout")}>
             <LogOut size={15} />
           </button>
@@ -483,7 +474,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <nav className="bottom-bar" aria-label={t("layout.primaryNavigation")}>
           {adminNav.filter((n) => PRIMARY_TO.includes(n.to)).map((item) => (
             <NavLink
-              key={item.to}
+              key={item.key}
               to={item.to}
               className={({ isActive }) => (isActive ? "active" : "")}
               onClick={(event) => {
@@ -510,7 +501,7 @@ export function Layout({ children }: { children: ReactNode }) {
               <div className="bottom-sheet" role="menu">
                 {moreNav.map((item) => (
                   <NavLink
-                    key={item.to}
+                    key={item.key}
                     to={item.to}
                     role="menuitem"
                     className={({ isActive }) => (isActive ? "active" : "") + (item.admin ? " admin" : "")}
