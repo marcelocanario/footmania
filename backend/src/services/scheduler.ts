@@ -168,13 +168,23 @@ function priorityFor(type: string, priority?: number): number {
  * for the caller to pass to `scheduleEvent` -- this stays a pure, DB-free
  * helper so both the join/return routes (the first chunk) and the handler
  * itself (later chunks) build the exact same shape.
+ *
+ * `dueAt` defaults to now, but a caller placing a club WHILE the world is
+ * paused anchors the first chunk to the frozen instant instead: the resume
+ * shift moves every pending REAL_TIME event forward by the frozen interval,
+ * so a chunk created at pausedAt lands exactly on resumedAt and fires on the
+ * first tick after the world is live again. A real-now chunk would be shifted
+ * to `now + (resumedAt - pausedAt)` and fire that same interval AFTER resume,
+ * letting completedRounds advance past the division's fixed finalRound -- the
+ * exact stranding the SIMULATING_HISTORY skip in firstReplaceableAIDivision
+ * is designed to prevent.
  */
-export function divisionHistoryChunkInput(saveId: number, divisionId: number, round: number, finalRound: number): ScheduleEventInput {
+export function divisionHistoryChunkInput(saveId: number, divisionId: number, round: number, finalRound: number, dueAt: Date = new Date()): ScheduleEventInput {
   return {
     saveId,
     type: ScheduledEventType.DIVISION_HISTORY_SIMULATE,
     timeBasis: "REAL_TIME",
-    dueAt: new Date(),
+    dueAt,
     entityType: "DIVISION",
     entityId: String(divisionId),
     payload: { divisionId, round, finalRound },

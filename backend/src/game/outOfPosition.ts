@@ -1,7 +1,7 @@
 /**
  * The single authority for out-of-position deployment (plan §7).
  *
- * INVARIANT 42: the compatibility penalty is applied EXACTLY ONCE, as a raw
+ * INVARIANT 43: the compatibility penalty is applied EXACTLY ONCE, as a raw
  * skill subtraction, and is monotonic — it can never improve a player. There is
  * no fit multiplier, no readiness change and no OVR effect.
  *

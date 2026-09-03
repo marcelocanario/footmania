@@ -11,6 +11,15 @@ import { withGlobalLease, withGlobalLock } from "./lock";
  * schedule-dependent user mutations are gated. Nothing advances and nothing
  * expires during the freeze — there is deliberately NO catch-up.
  *
+ * Joining and dormant-returning are DELIBERATELY EXEMPT from the gate: a paused
+ * joiner places into the same division an unpaused join would, anchoring every
+ * timestamp to the frozen instant (routes/multiplayer.ts resolves `now` as
+ * pausedAt while paused), and the history backfill chunk is scheduled at the
+ * frozen instant so the resume shift lands it exactly on resumedAt. Market,
+ * contract and admin controls stay frozen. While awaitingFirstHuman the pause
+ * IS the wait, and only a join/return lifts it — with the shift measured
+ * against the real wall clock so the season actually starts.
+ *
  * Resume shifts every real-time anchor forward by exactly the frozen interval
  * (now - pausedAt):
  *  - pending/failed REAL_TIME ScheduledEvent.dueAt (+ embedded payload stamps),
@@ -222,11 +231,22 @@ export async function resumeSeason(prisma: PrismaClient, options: PauseResumeOpt
                 data: { listedAt: BigInt(loan.listedAt), claimableAt: BigInt(loan.claimableAt) },
               });
             }
+            // Live-match pacing AND the inactivity anchors: applyResumeShift
+            // moves all three, and this is the only place they reach the
+            // database (invalidateWorldCache below forces the next load to
+            // read these rows back), so a club whose only shifted field is an
+            // inactivity anchor must be written too. Skipping it would silently
+            // discard the shift and leave the club's abandonment countdown
+            // running through the freeze.
             for (const club of loaded.world.clubs) {
-              if (club.liveMatchAt === null) continue;
+              if (club.liveMatchAt === null && club.lastMeaningfulActivityAt === null && club.abandonmentEligibleAt === null) continue;
               await tx.club.updateMany({
                 where: { saveId: loaded.save.id, id: club.id },
-                data: { liveMatchAt: BigInt(club.liveMatchAt) },
+                data: {
+                  ...(club.liveMatchAt !== null ? { liveMatchAt: BigInt(club.liveMatchAt) } : {}),
+                  ...(club.lastMeaningfulActivityAt !== null ? { lastMeaningfulActivityAt: BigInt(club.lastMeaningfulActivityAt) } : {}),
+                  ...(club.abandonmentEligibleAt !== null ? { abandonmentEligibleAt: BigInt(club.abandonmentEligibleAt) } : {}),
+                },
               });
             }
             for (const st of loaded.world.liveMatches) {

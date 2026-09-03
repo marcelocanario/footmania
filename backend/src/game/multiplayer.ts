@@ -195,6 +195,10 @@ export function lowestActiveTier(world: World, seasonId: number): number {
 /** Replaceable AI slot in the first (lowest-group) division of a tier, or null. */
 export function firstReplaceableAIDivision(world: World, seasonId: number, tier: number): Competition | null {
   const divs = divisionsInTier(world, seasonId, tier);
+  // The paused check reads world.mp.pausedAt directly (same field the admin
+  // pause and waiting-for-first-human hold share) rather than importing
+  // services/seasonPause: nothing under game/ imports from services/ today.
+  const paused = typeof world.mp.pausedAt === "number" && Number.isFinite(world.mp.pausedAt);
   for (const d of divs) {
     // A division still backfilling its history (plan Item 2) has its
     // finalRound fixed to whatever world.mp.completedRounds was when its
@@ -202,10 +206,22 @@ export function firstReplaceableAIDivision(world: World, seasonId: number, tier:
     // would skip scheduling a backfill of its own (this function is only
     // reached when an EXISTING division is found, not a new one) and, if
     // completedRounds has since advanced further, permanently strand that
-    // division a few rounds behind the rest of the season. Skip it -- a
-    // second joiner gets its own fresh division with its own correctly
-    // fixed finalRound instead.
-    if (d.status === "SIMULATING_HISTORY") continue;
+    // division a few rounds behind the rest of the season. A RUNNING world
+    // therefore skips it -- a second joiner gets its own fresh division with
+    // its own correctly fixed finalRound instead.
+    //
+    // While the world is PAUSED the skip is deliberately bypassed: the
+    // freeze gates the scheduler, day advancement and the admin round
+    // controls on pausedAt, so completedRounds cannot advance between two
+    // paused joiners and the fixed finalRound stays correct for every one of
+    // them. The one risk in skipping -- a second paused joiner re-scheduling
+    // chunk 1 for an already-backfilling division -- is a no-op: the
+    // DIVISION_HISTORY_SIMULATE idempotency key is
+    // `DIVISION_HISTORY_SIMULATE:${divisionId}:${round}` and scheduleEvent
+    // returns the existing row regardless of its status, so no second chunk
+    // chain can form. Consecutive paused joiners therefore land in the SAME
+    // division, exactly as they would over an unpaused stretch.
+    if (d.status === "SIMULATING_HISTORY" && !paused) continue;
     if (highestRankedReplaceableAI(world, d) !== null) return d;
   }
   return null;
@@ -885,7 +901,7 @@ export function returnDormantClub(world: World, clubId: number, now: number, sea
   // falls back to PROVISIONAL above records nothing).
   recordActiveClubBoundaryChange(world, world.players.filter((p) => p.clubId === club.id).length, 1);
   club.abandonmentEligibleAt = null;
-  club.lastMeaningfulActivityAt = Date.now();
+  club.lastMeaningfulActivityAt = now;
   publishNews(world, {
     kind: "mp",
     subject: NEWS_SUBJECTS.clubStatus,
@@ -935,9 +951,11 @@ export function promotionCandidateTiebreak(a: PromotionCandidate, b: PromotionCa
 }
 
 /** Record a meaningful-activity audit row (plan §40/§55) and refresh the club's
- *  last activity timestamp used by abandonment evaluation. */
-export function recordActivity(world: World, userId: number, clubId: number, activityType: string, metadata?: string): void {
-  const now = Date.now();
+ *  last activity timestamp used by abandonment evaluation. The optional `now`
+ *  lets callers anchor the stamp to the world's frozen instant while paused
+ *  (and to the join moment on the first-human lift), so the resume shift never
+ *  has to second-guess it. */
+export function recordActivity(world: World, userId: number, clubId: number, activityType: string, metadata?: string, now: number = Date.now()): void {
   world.mpActivities.push({ userId, clubId, activityType, occurredAt: now, metadata: metadata ?? null });
   const club = clubById(world, clubId);
   if (club) {

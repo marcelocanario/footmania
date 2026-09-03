@@ -18,7 +18,7 @@ import type { World } from "../game/types";
 import { hasPro } from "../services/pro";
 import { readMpStatus, readPublicSeasonStatus, readSeasonHistory, readUserLiveMatch, footmaniaRankingView, divisionStandingsView, divisionFixturesView, buildTeamProfile } from "../services/readService";
 import { publishUserWorldEvent } from "../services/worldEvents";
-import { isPaused, worldPausedError, applyResumeShift } from "../services/seasonPause";
+import { pausedInstant, applyResumeShift } from "../services/seasonPause";
 
 const joinSchema = z.object({
   clubName: z.string().min(1).max(60),
@@ -39,6 +39,23 @@ function publishToHumanUsers(world: World, event: Parameters<typeof publishUserW
   for (const club of world.clubs) {
     if (club.ownerUserId !== null) publishUserWorldEvent(club.ownerUserId, event);
   }
+}
+
+/**
+ * Lift the waiting-for-first-human hold. The hold reuses the admin pause's
+ * `pausedAt` field, so clearing it must first apply the resume shift: every
+ * real-time anchor moves forward by the held interval (measured against the
+ * REAL wall clock, not the frozen instant -- a frozen `now` would zero the
+ * shift and never anchor the season to the join moment), and only then are
+ * the flag and the pause cleared. Division 1 forms lazily below via
+ * placeNewClub / returnDormantClub.
+ */
+function liftFirstHumanHold(world: World, realNow: number): void {
+  const pausedAt = world.mp.pausedAt ?? realNow;
+  const shift = Math.max(0, realNow - pausedAt);
+  applyResumeShift(world, shift);
+  world.mp.pausedAt = null;
+  world.mp.awaitingFirstHuman = false;
 }
 
 async function withWorld(app: FastifyInstance, userId: number, fn: (world: World) => Promise<{ error?: { code: number; body: unknown }; value?: unknown }>) {
@@ -94,110 +111,122 @@ export async function multiplayerRoutes(app: FastifyInstance) {
       // row is consumed on successful placement.
       const archiveRow = await app.prisma.clubIdentityArchive.findUnique({ where: { userId: user.id } });
       const archive = archiveRow ? resolveArchiveRow(archiveRow) : null;
-      const loaded = await loadGlobalWorldMutable(app.prisma);
-      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
-      const world = loaded.world;
-      // Schedule-dependent: joining places the club into the live season.
-      // The FIRST human join is the exception: while awaitingFirstHuman the
-      // season clock is held and no division exists — this join lifts the
-      // hold (clears pausedAt, applies the resume shift so the season starts
-      // anchored to now) and Division 1 forms lazily below. Any later join
-      // while paused is still rejected.
-      const awaitingFirst = world.mp.awaitingFirstHuman === true;
-      if (isPaused(world) && !awaitingFirst) return { error: worldPausedError };
-      const existing = world.clubs.find((c) => c.ownerUserId === user.id);
-      if (existing) return { error: { code: 409, body: { error: "You already have a club" } } };
+      // Each attempt restarts at loadGlobalWorldMutable: reusing a club built
+      // against a stale world would carry a stale world.nextId and RNG
+      // position. issueAllocation is idempotent via world.seasonAllocations
+      // and a discarded attempt persisted nothing, so re-issuing is correct.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const loaded = await loadGlobalWorldMutable(app.prisma);
+        if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+        const world = loaded.world;
+        // Schedule-dependent: joining places the club into the live season.
+        // The FIRST human join is the exception: while awaitingFirstHuman the
+        // season clock is held and no division exists -- this join lifts the
+        // hold (clears pausedAt, applies the resume shift so the season starts
+        // anchored to now) and Division 1 forms lazily below. Any later join
+        // while paused places the club into the SAME division an unpaused
+        // join would: the freeze means the placement instant IS pausedAt, and
+        // applyResumeShift re-anchors every real-time timer on resume.
+        const awaitingFirst = world.mp.awaitingFirstHuman === true;
+        // The held interval must be measured against the real wall clock; for
+        // any other join the world instant is the frozen pausedAt while
+        // paused, so market settlement and activity stamps freeze with it.
+        const now = awaitingFirst ? Date.now() : (pausedInstant(world) ?? Date.now());
+        // Every rejection is checked BEFORE the world is touched: the lift
+        // clears the pause and shifts every timer, so bailing out after it
+        // would leave a mutated (if unpersisted) world behind.
+        const existing = world.clubs.find((c) => c.ownerUserId === user.id);
+        if (existing) return { error: { code: 409, body: { error: "You already have a club" } } };
+        if (awaitingFirst) liftFirstHumanHold(world, now);
 
-      // Preferred windows come from the archive when one exists (they were
-      // validated when first stored); otherwise the wizard windows validated
-      // above are used.
-      const club = createHumanClub(
-        world,
-        archive
-          ? applyArchivedIdentity(archive, {
-              userId: user.id,
-              clubName: parsed.data.clubName,
-              country: parsed.data.country,
-              primaryColor: parsed.data.primaryColor,
-              secondaryColor: parsed.data.secondaryColor,
-              kits: parsed.data.kits ?? null,
-              stadiumName: parsed.data.stadiumName,
-              // The Google display name is the default manager name (the frontend
-              // prefills it and it is editable); a legacy client may omit it.
-              coachName: parsed.data.coachName ?? user.name,
-              preferredHours,
-            })
-          : {
-              userId: user.id,
-              clubName: parsed.data.clubName,
-              country: parsed.data.country,
-              primaryColor: parsed.data.primaryColor,
-              secondaryColor: parsed.data.secondaryColor,
-              kits: parsed.data.kits ?? null,
-              stadiumName: parsed.data.stadiumName,
-              coachName: parsed.data.coachName ?? user.name,
-              preferredHours,
-            },
-      );
-      // The archived crest is applied after creation (customLogo is not part
-      // of the wizard payload).
-      if (archive?.customLogo) {
-        club.customLogo = archive.customLogo;
-        club.logoVariant = archive.logoVariant;
-      }
-
-      const now = Date.now();
-      // Lift the waiting-for-first-human hold: shift every real-time anchor
-      // forward by the held interval (same semantics as an admin resume) so
-      // the season clock starts fresh at this join moment, then clear the
-      // hold. Division 1 is created lazily by placeNewClub below.
-      if (awaitingFirst) {
-        const pausedAt = world.mp.pausedAt ?? now;
-        const shift = Math.max(0, now - pausedAt);
-        applyResumeShift(world, shift);
-        world.mp.pausedAt = null;
-        world.mp.awaitingFirstHuman = false;
-      }
-
-      const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
-      const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
-      const seasonId = world.mp.seasonId;
-      const nextSeasonRef = { year: nextStart.getUTCFullYear(), month: nextStart.getUTCMonth() + 1 };
-      const result = placeNewClub(world, club.id, now, seasonId, nextSeasonRef);
-
-      if (result.kind === "provisional") {
-        const nextSeason = await ensureSeasonRow(app.prisma, nextSeasonRef);
-        await issueAllocation(app.prisma, world, club.id, nextSeason.seasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
-        world.mpQueue.push({ clubId: club.id, source: "NEW_CLUB", queuedAt: Date.now(), preferredSeasonId: nextSeason.seasonId });
-      } else {
-        const completed = world.mp.completedRounds;
-        await issueAllocation(app.prisma, world, club.id, seasonId, result.tier, {
-          type: "ACTIVE_PRORATED",
-          remainingRounds: Math.max(0, gameConfig.roundsPerSeason - completed),
-        });
-      }
-
-      recordActivity(loaded.world, user.id, club.id, "join");
-      syncMemberships(loaded.world, seasonId);
-      syncClubSeasons(loaded.world, seasonId);
-      await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-      // If placeNewClub created a brand-new division mid-season, its history
-      // backfill is a background chunked job (plan Item 2), not part of this
-      // request -- see divisionHistoryChunkInput's doc comment. The join
-      // itself is already complete regardless: the club was placed above.
-      if (result.kind === "active") {
-        const division = world.competitions.find((c) => c.id === result.divisionId);
-        if (division?.status === "SIMULATING_HISTORY") {
-          await scheduleEvent(app.prisma, divisionHistoryChunkInput(loaded.save.id, division.id, 1, world.mp.completedRounds));
+        // Preferred windows come from the archive when one exists (they were
+        // validated when first stored); otherwise the wizard windows validated
+        // above are used.
+        const club = createHumanClub(
+          world,
+          archive
+            ? applyArchivedIdentity(archive, {
+                userId: user.id,
+                clubName: parsed.data.clubName,
+                country: parsed.data.country,
+                primaryColor: parsed.data.primaryColor,
+                secondaryColor: parsed.data.secondaryColor,
+                kits: parsed.data.kits ?? null,
+                stadiumName: parsed.data.stadiumName,
+                // The Google display name is the default manager name (the frontend
+                // prefills it and it is editable); a legacy client may omit it.
+                coachName: parsed.data.coachName ?? user.name,
+                preferredHours,
+              })
+            : {
+                userId: user.id,
+                clubName: parsed.data.clubName,
+                country: parsed.data.country,
+                primaryColor: parsed.data.primaryColor,
+                secondaryColor: parsed.data.secondaryColor,
+                kits: parsed.data.kits ?? null,
+                stadiumName: parsed.data.stadiumName,
+                coachName: parsed.data.coachName ?? user.name,
+                preferredHours,
+              },
+        );
+        // The archived crest is applied after creation (customLogo is not part
+        // of the wizard payload).
+        if (archive?.customLogo) {
+          club.customLogo = archive.customLogo;
+          club.logoVariant = archive.logoVariant;
         }
+
+        const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
+        const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
+        const seasonId = world.mp.seasonId;
+        const nextSeasonRef = { year: nextStart.getUTCFullYear(), month: nextStart.getUTCMonth() + 1 };
+        const result = placeNewClub(world, club.id, now, seasonId, nextSeasonRef);
+
+        if (result.kind === "provisional") {
+          const nextSeason = await ensureSeasonRow(app.prisma, nextSeasonRef);
+          await issueAllocation(app.prisma, world, club.id, nextSeason.seasonId, 1, { type: "PROVISIONAL_NEXT_SEASON" });
+          world.mpQueue.push({ clubId: club.id, source: "NEW_CLUB", queuedAt: now, preferredSeasonId: nextSeason.seasonId });
+        } else {
+          const completed = world.mp.completedRounds;
+          await issueAllocation(app.prisma, world, club.id, seasonId, result.tier, {
+            type: "ACTIVE_PRORATED",
+            remainingRounds: Math.max(0, gameConfig.roundsPerSeason - completed),
+          });
+        }
+
+        recordActivity(world, user.id, club.id, "join", undefined, now);
+        syncMemberships(world, seasonId);
+        syncClubSeasons(world, seasonId);
+        try {
+          await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        } catch (error) {
+          if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
+          continue;
+        }
+        // If placeNewClub created a brand-new division mid-season, its history
+        // backfill is a background chunked job (plan Item 2), not part of this
+        // request -- see divisionHistoryChunkInput's doc comment. The join
+        // itself is already complete regardless: the club was placed above.
+        // While paused the chunk is anchored to the frozen instant so the
+        // resume shift lands it exactly on resumedAt. A second paused joiner
+        // landing in the same already-backfilling division re-schedules chunk
+        // 1 harmlessly (idempotency key DIVISION_HISTORY_SIMULATE:division:round).
+        if (result.kind === "active") {
+          const division = world.competitions.find((c) => c.id === result.divisionId);
+          if (division?.status === "SIMULATING_HISTORY") {
+            await scheduleEvent(app.prisma, divisionHistoryChunkInput(loaded.save.id, division.id, 1, world.mp.completedRounds, new Date(now)));
+          }
+        }
+        // Consume the preserved identity: it has been re-applied to the club.
+        if (archiveRow) {
+          await app.prisma.clubIdentityArchive.delete({ where: { userId: user.id } });
+        }
+        publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
+        publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
+        return { value: { ok: true, clubId: club.id, result, preserved: archive !== null } };
       }
-      // Consume the preserved identity: it has been re-applied to the club.
-      if (archiveRow) {
-        await app.prisma.clubIdentityArchive.delete({ where: { userId: user.id } });
-      }
-      publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
-      publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
-      return { value: { ok: true, clubId: club.id, result, preserved: archive !== null } };
+      throw new Error("World mutation could not be committed");
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;
@@ -208,37 +237,61 @@ export async function multiplayerRoutes(app: FastifyInstance) {
     const user = req.user!;
     const res = await withGlobalLock(async () => {
       await ensureCurrentSeason(app.prisma);
-       const loaded = await loadGlobalWorldMutable(app.prisma);
-      if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
-      const world = loaded.world;
-      // Schedule-dependent: returning re-enters the live season.
-      if (isPaused(world)) return { error: worldPausedError };
-      const existing = world.clubs.find((c) => c.ownerUserId === user.id);
-      if (!existing) return { error: { code: 400, body: { error: "You have no club" } } };
-      if (existing.competitionState !== "DORMANT") return { error: { code: 400, body: { error: "Your club is not dormant" } } };
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const loaded = await loadGlobalWorldMutable(app.prisma);
+        if (!loaded) return { error: { code: 500, body: { error: "World unavailable" } } };
+        const world = loaded.world;
+        // Schedule-dependent: returning re-enters the live season. It stays
+        // allowed while the world is frozen -- the freeze means the placement
+        // instant IS pausedAt, and applyResumeShift re-anchors every real-time
+        // timer on resume. While awaitingFirstHuman (a DORMANT club may be
+        // present in that state: enterWaitingForFirstHuman only removes
+        // filler AI) the return ALSO lifts the hold, exactly like the first
+        // join -- otherwise the club would be placed into a world that stays
+        // frozen forever (resumeSeason throws while awaitingFirstHuman).
+        const awaitingFirst = world.mp.awaitingFirstHuman === true;
+        // The held interval is measured against the real wall clock (a frozen
+        // `now` would zero the first-human shift); any other return anchors to
+        // the frozen pausedAt while paused.
+        const now = awaitingFirst ? Date.now() : (pausedInstant(world) ?? Date.now());
+        // Rejections first, for the same reason as POST /mp/join: a caller
+        // with no club (or a club that is not dormant) must not lift the
+        // waiting-for-first-human hold on its way to a 400.
+        const existing = world.clubs.find((c) => c.ownerUserId === user.id);
+        if (!existing) return { error: { code: 400, body: { error: "You have no club" } } };
+        if (existing.competitionState !== "DORMANT") return { error: { code: 400, body: { error: "Your club is not dormant" } } };
+        if (awaitingFirst) liftFirstHumanHold(world, now);
 
-      const now = Date.now();
-      const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
-      const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
-      const seasonId = world.mp.seasonId;
-      const nextSeasonRef = { year: nextStart.getUTCFullYear(), month: nextStart.getUTCMonth() + 1 };
-      const result = returnDormantClub(world, existing.id, now, seasonId, nextSeasonRef);
+        const ref = { year: world.mp.seasonYear, month: world.mp.seasonMonth };
+        const nextStart = new Date(Date.UTC(ref.month === 12 ? ref.year + 1 : ref.year, ref.month % 12, 1));
+        const seasonId = world.mp.seasonId;
+        const nextSeasonRef = { year: nextStart.getUTCFullYear(), month: nextStart.getUTCMonth() + 1 };
+        const result = returnDormantClub(world, existing.id, now, seasonId, nextSeasonRef);
 
-      recordActivity(world, user.id, existing.id, "return");
-      syncMemberships(world, seasonId);
-      syncClubSeasons(world, seasonId);
-      await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
-      // See the identical comment on POST /mp/join: a brand-new division's
-      // history backfill runs as a background chunked job, not inline here.
-      if (result.kind === "active") {
-        const division = world.competitions.find((c) => c.id === result.divisionId);
-        if (division?.status === "SIMULATING_HISTORY") {
-          await scheduleEvent(app.prisma, divisionHistoryChunkInput(loaded.save.id, division.id, 1, world.mp.completedRounds));
+        recordActivity(world, user.id, existing.id, "return", undefined, now);
+        syncMemberships(world, seasonId);
+        syncClubSeasons(world, seasonId);
+        try {
+          await persistWorld(app.prisma, loaded.save.id, loaded.save.id, world, loaded.save.revision);
+        } catch (error) {
+          if (!(error instanceof StaleWorldError) || attempt === 2) throw error;
+          continue;
         }
+        // See the identical comment on POST /mp/join: a brand-new division's
+        // history backfill runs as a background chunked job, not inline here.
+        // While paused the chunk is anchored to the frozen instant so the
+        // resume shift lands it exactly on resumedAt.
+        if (result.kind === "active") {
+          const division = world.competitions.find((c) => c.id === result.divisionId);
+          if (division?.status === "SIMULATING_HISTORY") {
+            await scheduleEvent(app.prisma, divisionHistoryChunkInput(loaded.save.id, division.id, 1, world.mp.completedRounds, new Date(now)));
+          }
+        }
+        publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
+        publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
+        return { value: { ok: true, result } };
       }
-      publishToHumanUsers(world, { type: "invalidate", scope: "mp" });
-      publishUserWorldEvent(user.id, { type: "invalidate", scope: "club" });
-      return { value: { ok: true, result } };
+      throw new Error("World mutation could not be committed");
     });
     if ("error" in res && res.error) return reply.code(res.error.code).send(res.error.body);
     return res.value;

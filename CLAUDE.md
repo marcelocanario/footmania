@@ -12,7 +12,7 @@ Three documents are authoritative and must be consulted before non-trivial work:
 - **`BUSINESS_RULES.md`** — code-verified reference of every implemented rule, formula and
   algorithm (world structure, players, match sim, energy/injury, market, finance, calendar,
   multiplayer lifecycle). Documents behavior *as coded*.
-- **`backend/src/game/INVARIANTS.md`** — 44 non-negotiable multiplayer invariants. Any change
+- **`backend/src/game/INVARIANTS.md`** — 47 non-negotiable multiplayer invariants. Any change
   must preserve them; several (single OVR authority, single salary authority, hidden-quality
   privacy, one-cause-one-effect, ephemeral AI filler) are easy to violate accidentally.
 

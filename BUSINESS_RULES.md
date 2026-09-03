@@ -1395,6 +1395,16 @@ that season specifically — new clubs founded after that point are held in a wa
 state until next season begins, never based on the calendar date, only on how much of
 the season has actually been played.
 
+Joining is allowed while the world is frozen by an admin pause, and it is identical to
+joining while running: the club is placed into the same division an unpaused join would
+find, and every timestamp (market settlement, activity anchors, the backfill schedule)
+is anchored to the frozen instant rather than the wall clock. The freeze only means the
+placement instant *is* the frozen instant — `applyResumeShift` re-anchors every
+real-time timer on resume, so nothing is time-dependent. A division created by a paused
+joiner shows an empty table until the world resumes; its history then backfills, one
+round per scheduler tick, before the division goes live. Market, contract and admin
+controls stay frozen either way.
+
 - **Joining before the door closes**: the new club takes over an existing AI club's
   slot in whichever division sits at the current bottom of the pyramid — inheriting
   that slot's position in the table, but only its *future* matches get rewritten;
@@ -1441,6 +1451,11 @@ A dormant club can return at any time — but always re-enters at the very botto
 current pyramid, never back at whatever tier it left from, and doesn't receive a fresh
 new-club starting budget on its return (its existing finances, whatever they were,
 simply pick back up).
+
+A dormant return is also allowed while the world is frozen: the club re-enters the same
+bottom-tier division an unpaused return would land in, with its timestamps anchored to
+the frozen instant. If the return happens while the world is waiting for its first
+manager, it lifts that hold exactly like the first join (see §10.6).
 
 ### 10.3 AI clubs come and go every season
 
@@ -1535,8 +1550,12 @@ On the first `/mp/join` (or a dormant club's return), the hold is lifted: every
 real-time anchor is shifted forward by the held interval (exactly like an admin
 resume), the waiting flag is cleared, and **Division 1 is created lazily** — the
 joining club plus seven fresh filler AI clubs, with fixtures generated from the join
-moment. Subsequent joiners replace the remaining filler slots as usual. If the season
-later ends with zero human clubs again, the world re-enters the same waiting state.
+moment. Because the hold reuses the admin pause's `pausedAt` gate, this lift applies
+whether or not the world was already frozen for another reason, and the shift is always
+measured against the real wall clock at the join moment — never the frozen instant, or
+the season clock would never start. Subsequent joiners replace the remaining filler
+slots as usual. If the season later ends with zero human clubs again, the world re-enters
+the same waiting state.
 
 ---
 

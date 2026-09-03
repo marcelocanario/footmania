@@ -528,7 +528,7 @@ export const en = {
   layout: {
     primary: "Primary",
     seasonPaused: "Season paused",
-    seasonPausedDescription: "An administrator has frozen the world clock. Matches, transfers, loans and contracts are on hold; tactics and squad management stay available.",
+    seasonPausedDescription: "An administrator has frozen the world clock. Matches, transfers, loans and contracts are on hold; tactics and squad management stay available. New clubs can still join.",
     moderationNotice: "Moderation notice",
     acknowledge: "Acknowledge",
     teamProfile: "team profile",
@@ -553,7 +553,7 @@ export const en = {
   },
   login: {
     staticTag: "One world. One season.",
-    pausedTag: "Season paused · resumes shortly",
+    pausedTag: "Season paused · new clubs can still join",
     preSeasonTag: "Pre-season · next season forming",
     wrappingTag: "Season wrapping up · next campaign forming",
     lockedTag: "Season in full swing · new clubs can prep now",

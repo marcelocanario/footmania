@@ -10,6 +10,7 @@ import { ensureCurrentSeason } from "../src/services/mpService";
 import { ensureGlobalSave, loadGlobalWorld, persistWorld } from "../src/services/saveService";
 import { loadPresetsForClub } from "../src/services/automationPresetService";
 import { schedulerProcessor } from "../src/services/jobs/schedulerProcessor";
+import { createHumanClub } from "../src/game/worldgen";
 import { createTestSessionCookie } from "./testAuth";
 
 async function registerAndLogin(app: Awaited<ReturnType<typeof buildServer>>, username: string): Promise<string> {
@@ -445,6 +446,148 @@ describe("admin world controls (season pause / fixture recalculation / world res
     if (!afterSecond) throw new Error("world did not load after second join");
     expect(afterSecond.world.clubs.filter((c) => c.ownerUserId !== null).length).toBe(2);
     expect(afterSecond.world.clubs.filter((c) => c.ownerUserId === null).length).toBe(6);
+  });
+
+  it("lets managers join and return while paused, while market, contract and admin controls stay frozen", async () => {
+    await app.ready();
+    const adminCookie = await registerAndLogin(app, "pausedjoinsadmin");
+    await app.prisma.user.update({ where: { email: "pausedjoinsadmin@test.dev" }, data: { isAdmin: true } });
+    const hostCookie = await registerAndLogin(app, "pausedjoinshost");
+    const newcomerCookie = await registerAndLogin(app, "pausedjoinsnew");
+
+    await ensureGlobalSave(app.prisma);
+    await ensureCurrentSeason(app.prisma);
+    const reset = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "clean slate for the paused join test" } });
+    expect(reset.statusCode).toBe(200);
+
+    // Host joins first: the first-human lift starts the season, D1 forms.
+    await joinClub(app, hostCookie, "Paused Host FC");
+    const host = await app.prisma.user.findUniqueOrThrow({ where: { email: "pausedjoinshost@test.dev" } });
+
+    // Host goes dormant and leaves its division, exactly like a rollover
+    // abandonment (dormant clubs are frozen whole and out of the pyramid).
+    const seeded = await loadGlobalWorld(app.prisma);
+    if (!seeded) throw new Error("world did not load");
+    const hostClub = seeded.world.clubs.find((c) => c.ownerUserId === host.id);
+    expect(hostClub).toBeDefined();
+    hostClub!.competitionState = "DORMANT";
+    const hostDivision = seeded.world.competitions.find((c) => c.kind === "division" && c.standings[hostClub!.id] !== undefined)!;
+    delete hostDivision.standings[hostClub!.id];
+    await persistWorld(app.prisma, seeded.save.id, seeded.save.id, seeded.world, seeded.save.revision);
+
+    // Freeze the world.
+    const paused = await app.inject({ method: "POST", url: "/api/admin/scheduler/pause", headers: { cookie: adminCookie }, payload: { reason: "maintenance before signup wave" } });
+    expect(paused.statusCode).toBe(200);
+    const pausedAt = paused.json().pausedAt as number;
+
+    // A brand-new manager joins while frozen: placement succeeds, the club
+    // enters the SAME division an unpaused join would, and its timestamps are
+    // anchored to the frozen instant.
+    await joinClub(app, newcomerCookie, "Frozen Newcomer");
+    const duringPause = await loadGlobalWorld(app.prisma);
+    if (!duringPause) throw new Error("world did not load");
+    expect(duringPause.world.mp.pausedAt).toBe(pausedAt);
+    expect(duringPause.world.mp.awaitingFirstHuman).toBe(false);
+    const newcomer = await app.prisma.user.findUniqueOrThrow({ where: { email: "pausedjoinsnew@test.dev" } });
+    const newcomerClub = duringPause.world.clubs.find((c) => c.ownerUserId === newcomer.id);
+    expect(newcomerClub).toBeDefined();
+    expect(newcomerClub!.competitionState).toBe("ACTIVE");
+    expect(newcomerClub!.lastMeaningfulActivityAt).toBe(pausedAt);
+    const newcomerDivision = duringPause.world.competitions.find((c) => c.kind === "division" && c.standings[newcomerClub!.id] !== undefined);
+    expect(newcomerDivision).toBeDefined();
+
+    // The dormant host returns while frozen: allowed, and it re-enters the
+    // same bottom-tier division with its activity anchor at the frozen instant.
+    const returning = await app.inject({ method: "POST", url: "/api/mp/return", headers: { cookie: hostCookie } });
+    expect(returning.statusCode).toBe(200);
+    const afterReturn = await loadGlobalWorld(app.prisma);
+    if (!afterReturn) throw new Error("world did not load");
+    expect(afterReturn.world.mp.pausedAt).toBe(pausedAt);
+    const hostClubAfter = afterReturn.world.clubs.find((c) => c.ownerUserId === host.id);
+    expect(hostClubAfter).toBeDefined();
+    expect(hostClubAfter!.competitionState).toBe("ACTIVE");
+    expect(hostClubAfter!.lastMeaningfulActivityAt).toBe(pausedAt);
+    const hostDivisionAfter = afterReturn.world.competitions.find((c) => c.kind === "division" && c.standings[hostClubAfter!.id] !== undefined);
+    expect(hostDivisionAfter?.id).toBe(newcomerDivision!.id);
+
+    // Market, contract and admin clock controls remain frozen while paused.
+    const player = await app.prisma.player.findFirstOrThrow({ where: { saveId: duringPause.save.id, clubId: { not: null } }, select: { id: true } });
+    const release = await app.inject({ method: "POST", url: `/api/players/${player.id}/release`, headers: { cookie: newcomerCookie } });
+    expect(release.statusCode).toBe(409);
+    const contract = await app.inject({ method: "POST", url: `/api/players/${player.id}/contract`, headers: { cookie: newcomerCookie }, payload: { contractSeasons: 2 } });
+    expect(contract.statusCode).toBe(409);
+    const advance = await app.inject({ method: "POST", url: "/api/admin/scheduler/day/advance", headers: { cookie: adminCookie }, payload: {} });
+    expect(advance.statusCode).toBe(409);
+
+    // Resume unfreezes the world for everyone.
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const resumed = await app.inject({ method: "POST", url: "/api/admin/scheduler/resume", headers: { cookie: adminCookie }, payload: {} });
+    expect(resumed.statusCode).toBe(200);
+    expect((resumed.json().shiftMs as number)).toBeGreaterThanOrEqual(30);
+    const statusAfter = await app.inject({ method: "GET", url: "/api/mp/status", headers: { cookie: newcomerCookie } });
+    expect(statusAfter.json().paused).toBe(false);
+  });
+
+  it("lifts the waiting-for-first-human hold on a paused join and a paused dormant return, shifting by the held interval", async () => {
+    await app.ready();
+    const adminCookie = await registerAndLogin(app, "waitliftadmin");
+    await app.prisma.user.update({ where: { email: "waitliftadmin@test.dev" }, data: { isAdmin: true } });
+    const joinerCookie = await registerAndLogin(app, "waitliftjoin");
+    const returnerCookie = await registerAndLogin(app, "waitliftreturn");
+
+    await ensureGlobalSave(app.prisma);
+    await ensureCurrentSeason(app.prisma);
+
+    // Phase 1: a DORMANT club exists in a world waiting for its first manager
+    // (enterWaitingForFirstHuman keeps human clubs; only ACTIVE humans per tier
+    // are checked). Its return must lift the hold like the first join would.
+    const resetA = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter waiting mode for the dormant return lift test" } });
+    expect(resetA.statusCode).toBe(200);
+    const returner = await app.prisma.user.findUniqueOrThrow({ where: { email: "waitliftreturn@test.dev" } });
+    const waitingA = await loadGlobalWorld(app.prisma);
+    if (!waitingA) throw new Error("world did not load");
+    const pausedAtA = waitingA.world.mp.pausedAt as number;
+    const seasonStartA = waitingA.world.mp.seasonStartAt;
+    expect(seasonStartA).toBeTypeOf("number");
+    const dormant = createHumanClub(waitingA.world, { userId: returner.id, clubName: "Waiting Return FC", country: "BRA" });
+    dormant.competitionState = "DORMANT";
+    await persistWorld(app.prisma, waitingA.save.id, waitingA.save.id, waitingA.world, waitingA.save.revision);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const returned = await app.inject({ method: "POST", url: "/api/mp/return", headers: { cookie: returnerCookie } });
+    expect(returned.statusCode).toBe(200);
+    const afterReturn = await loadGlobalWorld(app.prisma);
+    if (!afterReturn) throw new Error("world did not load");
+    expect(afterReturn.world.mp.awaitingFirstHuman).toBe(false);
+    expect(afterReturn.world.mp.pausedAt ?? null).toBeNull();
+    // The hold was lifted with a REAL now, so the resume shift actually moved
+    // the season start forward by the held interval (never a zero shift).
+    expect(afterReturn.world.mp.seasonStartAt! - seasonStartA!).toBeGreaterThanOrEqual(50);
+    expect(afterReturn.world.competitions.some((c) => c.kind === "division" && c.seasonId === afterReturn.world.mp.seasonId)).toBe(true);
+    const returnedClub = afterReturn.world.clubs.find((c) => c.ownerUserId === returner.id);
+    expect(returnedClub?.competitionState).toBe("ACTIVE");
+
+    // Phase 2: the first join while waiting lifts the hold the same way.
+    const resetB = await app.inject({ method: "POST", url: "/api/admin/world/reset", headers: { cookie: adminCookie }, payload: { confirmation: "RESET", reason: "enter waiting mode for the join lift test" } });
+    expect(resetB.statusCode).toBe(200);
+    const waitingB = await loadGlobalWorld(app.prisma);
+    if (!waitingB) throw new Error("world did not load");
+    const pausedAtB = waitingB.world.mp.pausedAt as number;
+    const seasonStartB = waitingB.world.mp.seasonStartAt;
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await joinClub(app, joinerCookie, "Waiting Join FC");
+    const afterJoin = await loadGlobalWorld(app.prisma);
+    if (!afterJoin) throw new Error("world did not load");
+    expect(afterJoin.world.mp.awaitingFirstHuman).toBe(false);
+    expect(afterJoin.world.mp.pausedAt ?? null).toBeNull();
+    expect(afterJoin.world.mp.seasonStartAt! - seasonStartB!).toBeGreaterThanOrEqual(50);
+    const division = afterJoin.world.competitions.find((c) => c.kind === "division" && c.seasonId === afterJoin.world.mp.seasonId);
+    expect(division).toBeDefined();
+    // Both phases really started from a held clock, not from an already
+    // lifted world.
+    expect(pausedAtA).toBeTypeOf("number");
+    expect(pausedAtB).toBeTypeOf("number");
   });
 });
 

@@ -277,33 +277,43 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     (`placeNewClub`), which the joining club plus seven fresh filler AI fill.
     A season that ends with zero humans re-enters the same waiting state.
 
-41. **Natural position has exactly one authority.** `Player.position` (the nine
+41. **Paused joins place into the same division an unpaused join would.**
+    Joining and dormant-returning stay allowed while `pausedAt` is set: the
+    placement instant IS the frozen instant, and `applyResumeShift` re-anchors
+    every real-time timer on resume. The `SIMULATING_HISTORY` skip in
+    `firstReplaceableAIDivision` is relaxed while paused only — `completedRounds`
+    cannot advance under the freeze, so the fixed `finalRound` of a backfilling
+    division stays correct for every paused joiner, and a second joiner
+    re-scheduling chunk 1 is an idempotency-keyed no-op. Market, contract and
+    admin controls remain frozen.
+
+42. **Natural position has exactly one authority.** `Player.position` (the nine
     natural positions) is the only persisted position identity. Broad group is
     always derived, never stored; a deployed role belongs only to a
     formation/live slot and is never persisted on the player. No `side` or
     `tacPos` field may be reintroduced, and no numeric position may appear in
     a public API.
 
-42. **Out-of-position deployment is a single monotonic raw-skill penalty.**
+43. **Out-of-position deployment is a single monotonic raw-skill penalty.**
     Playing a natural position in a deployed role applies the configured
     compatibility penalty exactly once: `effectiveRaw = clamp(raw - penalty, 1,
     100)` for every consumed skill; `usableZ = robustZ(effectiveRaw) * readiness`
     (no fit multiplier). The penalty never changes OVR, value, salary, or
     intrinsic development, and it can never improve a player.
 
-43. **OVR is derived from persisted visible skills through the natural
+44. **OVR is derived from persisted visible skills through the natural
     position's broad group.** OVR is never stored as an independent authority
     and never changes when a player's natural position migrates within its
     broad group. The position-model migration is atomic, retry-safe, refuses
     active live matches, and changes no numeric player/economic state.
 
-44. **Passing and Playmaking have distinct causal pathways.** Passing is
+45. **Passing and Playmaking have distinct causal pathways.** Passing is
     action-execution quality; Playmaking affects only forward destination
     quality in the match engine. Playmaking never enters athleticism, fatigue,
     recovery, injury, or lasting-setback calculations, and no AI config or
     profile field may treat it as physical.
 
-45. **News history is render-immutable.** A persisted `NewsItem` is never
+46. **News history is render-immutable.** A persisted `NewsItem` is never
     rewritten once written: its `text`, `entriesJson` and `bodyJson` are the
     authoritative record, and the client renders whatever was stored. Localized
     news is emitted as a stable message key (`body`) at publish time; merging
@@ -311,7 +321,7 @@ These invariants are the non-negotiable rules of the multiplayer league engine
     entries. Legacy rows (non-null `text`, null `bodyJson`) are never backfilled
     or migrated to keys — they keep rendering from `text` forever.
 
-46. **Automation presets are club-scoped configuration, deliberately kept
+47. **Automation presets are club-scoped configuration, deliberately kept
     outside the World object and outside `Save.revision`'s transaction**
     (`services/automationPresetService.ts`; `Club.automationPresetsJson`).
     They are loaded on demand for only the clubs whose matches are actually
