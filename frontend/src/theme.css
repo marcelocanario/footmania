@@ -17,7 +17,11 @@
 }
 
 .language-option {
-  min-width: 112px;
+  /* No min-width: FootballKit renders a real width/height on the <svg>
+     (FootballKit.tsx), so this flex item's content already has a genuine
+     intrinsic size — the box hugs the wider of the kit or the label plus
+     padding automatically. A hardcoded min-width here would just drift out
+     of sync the next time the kit's `size` prop changes. */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -47,8 +51,9 @@
 }
 
 .language-picker.compact .language-option {
-  min-width: 86px;
-  padding: 5px 4px;
+  /* Same reasoning as the base rule above: no min-width, the box sizes
+     itself from the kit/label content plus this padding. */
+  padding: 4px;
   font-size: 0.78rem;
 }
 
@@ -351,8 +356,21 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
 .notif-popout { width: min(440px, calc(100vw - 32px)); }
 .season-popout { width: min(320px, calc(100vw - 32px)); }
-/* Language popout in the topbar: three compact jerseys on one row. */
-.lang-popout { width: min(392px, calc(100vw - 32px)); }
+/* Language popout in the topbar: three small jersey cards, nowhere near
+   needing a 392px-wide box (that number predates the cards' own sizing
+   being fixed to hug their content — see .language-option above). This
+   244px is measured from the actual content: 3 cards x (56px kit + 2x4px
+   padding) + 2x8px row gap + 2x14px popout padding = 244px.
+   Tried making this width:auto/max-content instead of a fixed number so it
+   would never need re-measuring by hand: both fought the containing-block
+   sizing model rather than using it — width:auto ties the shrink-to-fit
+   calculation to whichever ancestor is actually positioned, which on a wide
+   screen is .top-pop-wrap (sized to just the trigger button), collapsing
+   the popout far below its content's width and forcing the 3 cards to wrap
+   into a vertical stack instead of staying in one row. A fixed ceiling
+   sized to the real content, with the same min()-vs-100vw safety clamp
+   every other popout here already uses, is the reliable option. */
+.lang-popout { width: min(244px, calc(100vw - 32px)); }
 
 /* Compact text button used inside popout headers. */
 .btn.btn-xs {
@@ -2727,7 +2745,12 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 .landing {
   position: relative;
   min-height: 100vh;
-  overflow: hidden;
+  /* clip, not hidden: hidden still permits touch/programmatic scrolling with
+     no visible scrollbar (only clip actually blocks it), and the decorative
+     floodlight/stripe/dust layers below are wider than the viewport on
+     small screens — a horizontal swipe on the hero would otherwise drag the
+     whole landing page sideways with no way back except a reload. */
+  overflow: clip;
   background: var(--bg);
   color: var(--text);
 }
@@ -2855,10 +2878,11 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 }
 
 /* The language picker drops down from the globe icon beside the status pill.
-   It is capped to the viewport so the three compact jersey options fit on one
-   row without ever spilling off the right edge of narrow screens. */
+   Same content-measured 244px as .lang-popout above (see its comment for
+   why width:auto/max-content don't work here — same containing-block
+   collapse applies to this popout's own wrap). */
 .landing-lang-popout {
-  width: min(392px, calc(100vw - 32px));
+  width: min(244px, calc(100vw - 32px));
 }
 
 .landing-masthead-lockup {
@@ -3272,7 +3296,12 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   }
 }
 
-@media (max-width: 1100px) {
+/* Widened from 1100px (plan §2.5 L3): the second track's 320px floor was
+   squeezing the pitch on real tablet widths (881-1100px) before this
+   collapsed it to one column — 1280px gives the pitch room on every width
+   this app treats as "not desktop" (the app's own mobile/desktop split is
+   880px; this is the one place a wider intermediate tier matters). */
+@media (max-width: 1280px) {
   .live-columns { grid-template-columns: 1fr; }
   .live-side-content { max-height: none; }
 }
@@ -3290,9 +3319,9 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
 
   .topbar nav.top-nav, .topbar .club-chip { display: none; }
 
-  .topbar .day-chip { margin-left: auto; }
+  .bottom-bar { display: flex; }
 
-  .bottom-bar, .fab { display: flex; }
+  .fab { display: grid; place-items: center; }
 
   .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: 1fr; }
 
@@ -4566,4 +4595,496 @@ button.day-chip:hover { background: rgba(228, 245, 235, 0.11); border-color: var
   .season-timeline::before { left: 13px; top: 22px; bottom: 22px; }
   .season-timeline-marker { justify-content: flex-start; padding: 0 0 0 1px; }
   .season-timeline-marker span { padding-left: 10px; padding-right: 10px; }
+}
+
+/* ============================================================
+   MOBILE REFINEMENTS (≤880 / ≤560)
+   ============================================================
+   Appended as one trailing section rather than folded into the existing
+   per-feature ≤880/≤560 blocks above. Media queries add zero specificity, so
+   an unconditional rule written later in this file would otherwise beat an
+   earlier mobile override at equal specificity — appending last means every
+   rule here wins its cascade without needing !important, except where an
+   inline style on the element forces it (called out per rule below).
+   Desktop (>880px) is untouched by this entire section. */
+
+/* ---------- app shell: topbar fit (plan §2.1 A1) ---------- */
+
+@media (max-width: 880px) {
+  .topbar { gap: 8px; min-width: 0; }
+  .topbar .top-right { gap: 8px; min-width: 0; }
+  /* Role/tier pill (Free/Pro/Admin) duplicates info already on Settings;
+     drop it here so the three icon buttons and the day chip fit. */
+  .topbar .account-chip { display: none; }
+  /* .icon-btn has no flex-shrink by default, so it is the first thing to
+     squash into an oval once the row runs out of room — pin its size.
+     42px (not 38px) so the X4 touch-target rule below actually takes
+     effect here: flex-basis beats width in a flex row, and this more
+     specific selector would otherwise hold topbar icons at 38px wide. */
+  .topbar .icon-btn { flex: 0 0 42px; }
+  /* "Footmania" is a bare text node (no wrapping span), so it cannot be
+     hidden on its own — zeroing the logo's font-size collapses the text
+     while the <img> mark stays visible at its own explicit height. */
+  .topbar .logo { font-size: 1.05rem; letter-spacing: 0.06em; gap: 7px; min-width: 0; }
+  .topbar .logo .logo-img { height: 26px; }
+  .topbar .day-chip { font-size: 0.72rem; padding: 0 10px; gap: 5px; }
+}
+
+@media (max-width: 560px) {
+  .topbar { padding: 8px 12px; }
+  /* Logo mark only: font-size:0 also zeroes .logo-alpha (sized in em), so it
+     needs an explicit display:none rather than relying on the zero size. */
+  .topbar .logo { font-size: 0; gap: 0; }
+  .topbar .logo .logo-alpha { display: none; }
+  .topbar .day-chip { font-size: 0.7rem; padding: 0 9px; }
+}
+
+/* ---------- app shell: popouts anchor to the topbar, not the trigger
+   (plan §2.1 A4) ----------
+   .topbar has backdrop-filter (see the top-bar rule above), which makes it
+   a containing block for position:fixed descendants — so a fixed popout
+   would resolve `top` against the topbar's own box, landing one topbar-
+   height too low. Instead make .top-pop-wrap non-positioned so .topbar
+   itself (position:sticky, already a positioned ancestor) anchors the
+   still-absolutely-positioned .popout, and let it span the viewport
+   instead of the small chip it used to hang off. */
+
+@media (max-width: 880px) {
+  /* Scoped to .topbar: Login's landing page reuses the bare .top-pop-wrap /
+     .popout classes for its own language picker (Login.tsx), but sits
+     outside .topbar with no positioned ancestor closer than .landing-inner
+     (100vh tall) — an unscoped rule here would relocate that popout to
+     roughly one viewport-height below its trigger button instead of fixing
+     it. */
+  .topbar .top-pop-wrap { position: static; }
+  .topbar .popout { top: calc(100% + 8px); left: 12px; right: 12px; width: auto; }
+  .topbar .notif-popout, .topbar .season-popout { width: auto; }
+  /* Reposition only — do NOT also set width:auto here. The language
+     popout's own base rule already gives it the correct fixed 244px (it
+     never needs notif/season's viewport-spanning width; matching their
+     left:12px/right:12px would leave dead space after the card row). This
+     override selector is more specific than that base rule (two classes vs
+     one), so a width:auto here would win and override it right back to
+     shrink-to-fit sizing — which is what broke this on desktop in the
+     first place; the same mismatch happens on mobile once the row is
+     narrow enough, so keep width out of this rule entirely. */
+  .topbar .lang-popout { left: auto; right: 12px; }
+}
+
+/* ---------- landing page: language popout clips off-screen (found while
+   verifying the .topbar popout fix above; same defect, different screen) ----------
+   Login.tsx reuses the bare .top-pop-wrap/.popout classes for its own
+   language picker but sits outside .topbar entirely, so the .topbar-scoped
+   fix above does not reach it. Its only positioned ancestor is
+   .landing-inner (min-height:100vh), which is why an EARLIER pass had to
+   scope the .topbar fix rather than reuse the bare selectors — anchoring
+   this one to .landing-inner would place it ~one viewport-height below the
+   button. .landing-masthead is a plain flex row spanning the full masthead
+   width with no special rendering, so it can safely become the anchor
+   instead, exactly like .topbar above. */
+@media (max-width: 880px) {
+  .landing-masthead { position: relative; }
+  .landing-lang-wrap { position: static; }
+  /* Same reasoning as .topbar .lang-popout above: only one offset (right)
+     plus width:auto triggers the browser's own shrink-to-fit sizing for an
+     absolutely-positioned box, instead of stretching to the viewport and
+     leaving dead space after the 3-card row. */
+  /* Reposition only — see .topbar .lang-popout's comment above for why
+     width isn't set here: the base rule's fixed 244px already applies at
+     every width and a width:auto override here would just reintroduce the
+     same shrink-to-fit collapse. */
+  .landing-lang-popout { top: calc(100% + 8px); left: auto; right: 12px; }
+}
+
+/* ---------- app shell: bottom-bar "More" sheet (plan §2.1 A3) ----------
+   Lives here in the trailing mobile section (not next to .bottom-bar
+   above): the sheet DOM only renders when useIsMobile() matches, so these
+   rules are scoped to the same ≤880px query and touch nothing on desktop.
+   The trigger mirrors .bottom-bar a's look exactly (same flex column, same
+   48px min touch target) since it sits in the same row; it just isn't a
+   NavLink. The 0.55rem/0.03em label sizing in the next block still wins
+   for the trigger (equal specificity, later in the file). */
+@media (max-width: 880px) {
+  .bottom-sheet-wrap { position: relative; display: flex; flex: 1; }
+
+  .bottom-sheet-trigger {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 7px 2px;
+    border: none;
+    border-radius: 12px;
+    background: none;
+    color: var(--text-3);
+    font-family: inherit;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: color 0.15s ease;
+    min-height: 48px;
+  }
+
+  .bottom-sheet-trigger:active { color: var(--text); }
+  .bottom-sheet-trigger.active { color: var(--grass-2); }
+  .bottom-sheet-trigger.active svg { filter: drop-shadow(0 0 9px rgba(61, 220, 132, 0.55)); }
+
+  /* The sheet itself opens upward from the bar, mirroring .popout's surface
+     treatment (same gradient/border/shadow) so it reads as the same design
+     language rather than a one-off. */
+  .bottom-sheet {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    right: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 190px;
+    max-width: calc(100vw - 24px);
+    background: linear-gradient(180deg, #10291b, #0a1810);
+    border: 1px solid var(--line-2);
+    border-radius: 14px;
+    box-shadow: 0 24px 50px -20px rgba(0, 0, 0, 0.85);
+    padding: 8px;
+  }
+
+  .bottom-sheet a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    color: var(--text-2);
+    font-weight: 600;
+    font-size: 0.85rem;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+
+  .bottom-sheet a:hover { background: rgba(228, 245, 235, 0.06); color: var(--text); }
+  .bottom-sheet a.active { color: var(--grass-2); background: rgba(61, 220, 132, 0.1); }
+  .bottom-sheet a.admin { color: var(--gold-2); }
+  .bottom-sheet a.admin.active { background: rgba(240, 180, 41, 0.12); }
+}
+
+/* ---------- app shell: reclaim dead bottom padding, fit 5 bottom-bar labels
+   (plan §2.1 A6 + the bottom-bar half of A3) ----------
+   The FAB (when present) obstructs ~140px (bottom:80px + 60px height); the
+   170px this used to reserve overshot that by ~30px on every screen, FAB or
+   not. The bottom-bar label size drops from 0.6rem: A3's fix moved Tables
+   into the persistent 4 and added a 5th "More" slot, so five labels now
+   share the row that four used to. */
+@media (max-width: 880px) {
+  .content { padding-bottom: calc(150px + env(safe-area-inset-bottom)); }
+  .bottom-bar a, .bottom-sheet-trigger {
+    font-size: 0.55rem;
+    letter-spacing: 0.03em;
+    padding: 6px 1px;
+  }
+}
+
+/* ---------- app shell: season calendar fits its popout (plan §2.1 A5) ---------- */
+
+@media (max-width: 880px) {
+  .cal-grid { gap: 3px; }
+  .cal-cell { min-height: 40px; font-size: 0.72rem; }
+}
+
+/* ---------- app shell: prevent page-level horizontal scroll (plan §2.1 N8)
+   ---------- Safety net, unconditional: clip rather than hidden so it does
+   not interfere with .topbar's position:sticky. */
+
+html, body { overflow-x: clip; }
+
+/* ---------- squad: scroll instead of truncate (plan §2.3 S1) ----------
+   Keep table-layout: fixed (do not flip to auto — squad-table's cells are
+   white-space:nowrap, so under auto layout their content min-widths would
+   beat the percentage widths and blow past this floor unpredictably).
+   Under fixed layout the inline percentage widths resolve against the
+   table's own used width, so a wider floor just makes every column
+   proportionally wider — Name goes from ~80px to ~190px. Scrolling only
+   .p-datatable-wrapper (not .squad-table-wrap itself) keeps the filter
+   header and paginator, which are its siblings, from scrolling sideways
+   too. No !important needed: min-width is not part of Squad.tsx's inline
+   tableStyle.
+   The load-bearing constraint is on the .squad-roster-grid flex items: the
+   mobile layout turns the roster grid into a COLUMN flex (S2 below), and a
+   column flex item's automatic minimum size is its content's min-content —
+   so without min-width:0 on the card, the 760px table floor stretches the
+   whole card past the viewport. Pinning the flex children lets the
+   .p-datatable-wrapper become the scroll container (it stays at the card's
+   width and scrolls its 760px table). Verified live at 360px viewport:
+   wrapper 306px client / 760px scrollable, card 328px, no document-level
+   horizontal scroll. */
+@media (max-width: 880px) {
+  .squad-roster-grid { width: 100%; }
+  .squad-roster-grid > .card { width: 100%; min-width: 0; }
+  .squad-table-wrap .p-datatable-wrapper { overflow-x: auto; }
+  .squad-table-wrap .p-datatable-table { min-width: 760px; }
+
+  /* Touch targets: condition/suspension/yellow-card were 24px, the sole
+     carrier of that information, in a column now given real width by the
+     760px floor above. */
+  .squad-condition, .squad-suspension, .squad-yellowcard { width: 34px; height: 34px; }
+
+  /* Two side-by-side flex-basis filters (220px + 180px) no longer fit next
+     to each other once the card padding drops to 10px on mobile. */
+  .squad-filters { flex-direction: column; align-items: stretch; }
+  .squad-filters .p-inputtext,
+  .squad-filters .p-multiselect { flex: 1 1 auto; width: 100%; min-width: 0; }
+
+  /* A tap on a row now visibly moves the top of the screen instead of
+     appending the player card below a 15-row paginated table. squad-roster-
+     grid is added alongside Squad.tsx's existing inline gridTemplateColumns,
+     which still governs the desktop 2-column layout above 880px. */
+  .squad-roster-grid { display: flex; flex-direction: column; }
+  .squad-roster-grid > .card:last-child { order: -1; }
+}
+
+/* ---------- automation rule builder: no mobile treatment existed at all
+   (plan §2.3 N4) ----------
+   .aut-row/.aut-action-fields already wrap via flex-wrap, so their fields
+   don't overflow — but each stays on its own line at full width, and the
+   fixed 26px left indent on .aut-action-fields compounds visually next to
+   an already-narrow card. */
+@media (max-width: 560px) {
+  .aut-row { flex-direction: column; align-items: stretch; }
+  .aut-action-fields { flex-direction: column; align-items: stretch; padding-left: 10px; }
+  /* Every Dropdown/InputNumber in these rows carries an inline
+     style={{minWidth: N}} (AutomationPanel.tsx), which PrimeReact applies
+     directly to the .p-dropdown/.p-inputnumber root — an inline style beats
+     any CSS rule for the same property regardless of selector specificity,
+     so width/min-width need !important here to actually take effect. */
+  .aut-row > .p-dropdown, .aut-row > .p-inputnumber,
+  .aut-action-fields > .p-dropdown, .aut-action-fields > .p-inputnumber {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  .aut-rule-badge { width: 30px; height: 30px; }
+  .aut-rule-header { gap: 8px; }
+}
+
+/* ---------- competitions: division/group dropdowns and fixture chips
+   (plan §2.4 C2/C3) ---------- */
+@media (max-width: 880px) {
+  /* Both Dropdowns carry an inline style={{minWidth: 150}} (Competitions.tsx)
+     that PrimeReact applies straight to .p-dropdown — !important needed to
+     beat it, same as the automation rule builder above. */
+  .page-head .p-dropdown { min-width: 0 !important; flex: 1 1 45%; }
+  .result-card .chip { min-width: 0 !important; }
+}
+
+/* ---------- live match: pitch declutter (plan §2.5 L1) ----------
+   Supersedes the earlier ≤880 rule (.pitch-player{width:52px}) a few
+   hundred lines above — same selectors, later in the cascade, no
+   !important needed. 22 markers at 52px overlap badly once the pitch
+   itself measures ~320px wide on a phone (aspect-ratio:100/64 inside the
+   content/card padding). Names shrink at ≤880, then hide entirely at ≤560
+   except for pitch-player-highlight (the current event's actor, already
+   driven by MatchPitch.tsx), which gets its name back as an absolutely
+   positioned label below the marker so it never widens the tap target. */
+@media (max-width: 880px) {
+  .pitch-player { width: 44px; }
+  .pitch-player-name { max-width: 44px; font-size: 0.5rem; }
+  .pitch-player-kit { width: 30px; height: 30px; }
+}
+@media (max-width: 560px) {
+  .pitch-player { width: 30px; }        /* also the tap target — do not go lower */
+  .pitch-player-kit { width: 28px; height: 28px; }
+  .pitch-player-name { display: none; }
+  .pitch-player-highlight .pitch-player-name {
+    display: block;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 84px;
+    z-index: 1;
+    font-size: 0.6rem;
+  }
+
+  .live-score { font-size: 2.6rem; }
+  .live-score .score-team { display: block; margin: 2px 0; font-size: 0.85rem; }
+}
+
+/* ---------- live match: single-column substitutions modal (plan §2.5 L2) ----------
+   !important is required: LiveMatch.tsx sets gridTemplateColumns inline on
+   this .grid, and no selector specificity beats an inline style. .modal has
+   exactly one .grid descendant (the on-pitch/bench two-up), confirmed by
+   grep before writing this rule. .sub-list was a fixed 340px — two of those
+   plus the section headings and footer buttons exceed .modal's 86vh cap,
+   producing a nested scroll trap on touch; 34vh keeps both lists reachable
+   inside the modal's own scroll. */
+@media (max-width: 880px) {
+  .modal .grid { grid-template-columns: 1fr !important; }
+  .modal .sub-list { max-height: 34vh; }
+}
+
+/* ---------- live match: automation log scroll containment (plan §2.5 N4b)
+   ---------- Unrelated to any specific viewport width, but scoped to ≤880
+   for consistency with the rest of this section: a flick inside the log
+   should not also scroll the page behind it, on a screen that already has
+   .live-side-content and .sub-list as sibling scroll regions. */
+@media (max-width: 880px) {
+  .aut-log { overscroll-behavior: contain; }
+}
+
+/* ---------- shared: horizontal-scroll affordance (plan §2.8) ----------
+   Every table that this plan keeps wide (Squad, standings, archived
+   seasons, fixtures, history) scrolls inside a .table-wrap — with no
+   indication that there is more content off-screen. The standard CSS edge-
+   shadow pattern: two fixed gradients + two scroll-position gradients whose
+   scroll-attachment (local vs scroll) makes the shadows appear only while
+   scrollable content is actually present on that side. Purely declarative;
+   nothing here changes layout or adds markup. */
+@media (max-width: 880px) {
+  .table-wrap {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    background:
+      linear-gradient(90deg, var(--surface) 30%, transparent) left / 22px 100% no-repeat,
+      linear-gradient(-90deg, var(--surface) 30%, transparent) right / 22px 100% no-repeat,
+      radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.4), transparent) left / 12px 100% no-repeat,
+      radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.4), transparent) right / 12px 100% no-repeat;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  /* Same affordance for the other scroll-on-overflow control (Admin's nine
+     tabs, Squad's seniors/juniors/tactics switcher). Faded edge uses
+     .segmented's own resting fill (rgba(4,13,8,0.6) at rest, opaque here)
+     rather than var(--surface) — the pill shape means the fade only reads
+     correctly against its own background tone. */
+  .segmented {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    background:
+      linear-gradient(90deg, rgba(4, 13, 8, 0.9) 30%, transparent) left / 18px 100% no-repeat,
+      linear-gradient(-90deg, rgba(4, 13, 8, 0.9) 30%, transparent) right / 18px 100% no-repeat,
+      rgba(4, 13, 8, 0.6);
+    background-attachment: local, local, local;
+  }
+}
+
+/* ---------- dashboard: hero tiles + stats fit two-up (plan §2.2 D1/D2) ----------
+   .grid.cols-3 was forced to a single column at ≤880 (:3297 above), which
+   stacked three near-full-height hero cards and pushed the news feed two
+   screens down. Three cards over two columns read better: the first two
+   (position/cash) are compact one-liners, and the last (next fixture, the
+   only one holding two club links) spans the full row below them via the
+   nth-child rule. Both .grid.cols-3 call sites have exactly three children
+   (Dashboard + admin AnalyticsTab, which is out of scope but safe under the
+   same rule). .stats-row reverts :3299's column stack — two 2-digit tiles
+   fit side by side at 375px. */
+@media (max-width: 880px) {
+  .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.cols-3 > *:nth-child(3):last-child { grid-column: 1 / -1; }
+  .stats-row { flex-direction: row; }
+  .stats-row .stat { min-width: 0; }
+}
+
+/* ---------- transfers: filter panel gets a height cap and a ≤560 collapse
+   (plan §2.6 T1) ---------- On phones the fully-expanded filter panel is a
+   wall of two-column grids before any listing; the ≤880 block that reorders
+   it to the top already handles the layout order, so here it only needs a
+   scroll cap so the page stops growing unboundedly, and the missing ≤560
+   one-column collapse for the attribute/skill grids (which stay 1fr 1fr
+   with 52px number inputs down to 560px today). */
+@media (max-width: 880px) {
+  .transfer-filters-card { max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; }
+  .transfer-attr-filters { gap: 6px; }
+  .transfer-skill-filters { grid-template-columns: 1fr 1fr; gap: 4px 8px; }
+}
+@media (max-width: 560px) {
+  .transfer-attr-filters, .transfer-skill-filters { grid-template-columns: 1fr; }
+}
+
+/* ---------- history: close the 561-880px gaps (plan §2.7 H1/H2/N11) ----------
+   .season-timeline-metrics (three 0.64rem-label + 1rem-value cells) and
+   .history-stat-grid (four 1.45rem-value columns) never collapsed until
+   560px — on a 561-880px phone-in-landscape or small tablet each cell was
+   unusably narrow. Both now drop a tier at ≤880 and the timeline goes fully
+   single-column at ≤560. */
+@media (max-width: 880px) {
+  .season-timeline-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .history-stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .season-timeline-metrics { grid-template-columns: 1fr; }
+}
+
+/* ---------- cross-cutting: no sticky hover on touch (plan §2.10 X2) ----------
+   Touch has no hover state: after a tap, the last element keeps its :hover
+   styles until the next tap elsewhere. One guarded block neutralises the
+   hover effects that move or tint a tapped element, so a tap doesn't end
+   looking "pressed". Devices with hover keep every effect. */
+@media (hover: none) {
+  /* Movement that would leave an element looking "lifted" after a tap. */
+  .card.hoverable:hover,
+  .footmania-ranking-row:hover,
+  .jm-tab:hover,
+  .kd-pattern:hover,
+  .tb-list-row:hover,
+  .sub-row:hover,
+  .aut-rule-header:hover { transform: none; }
+
+  /* Subtle background/border tint shifts that look like a stuck press.
+     `.notif-row.unread` keeps its resting unread tint; `.sub-row` never
+     tints a background on hover, only a border, so clearing its border
+     alone is enough. (No `.transfer-row` line: transfer rows are also
+     `.card.hoverable`, and that higher-specificity rule above already
+     resets their border — a same-value reset here would be dead code.) */
+  .card.hoverable:hover { border-color: var(--line); }
+  .notif-row:hover:not(:disabled) { background: none; }
+  .notif-row.unread:hover:not(:disabled) { background: rgba(35, 165, 90, 0.06); }
+  .topbar nav.top-nav a:hover { color: var(--text); background: none; }
+  .tb-list-row:hover { border-color: var(--line); }
+  .sub-row:hover { border-color: var(--line); }
+  .topbar .icon-btn:hover { color: var(--text-2); background: none; border-color: var(--line); }
+  .icon-btn.danger:hover { color: var(--red-2); background: none; border-color: rgba(229, 72, 77, 0.45); }
+  .segmented button:hover { color: var(--text-2); }
+  .bottom-sheet a:hover { color: var(--text-2); background: none; }
+  .btn:hover { filter: none; }
+  .btn.ghost:hover { background: none; }
+  .btn.ghost.danger:hover { box-shadow: none; }
+}
+
+/* ---------- cross-cutting: touch target sizes (plan §2.10 X4) ---------- */
+@media (max-width: 880px) {
+  .icon-btn { width: 42px; height: 42px; }
+  .btn.sm { min-height: 42px; }
+  .btn.btn-xs { min-height: 34px; }
+  .segmented button { padding-top: 12px; padding-bottom: 12px; }
+  .chip { min-height: 32px; }
+}
+
+/* ---------- admin: scrolling is expected (plan §2.9 companion) ----------
+   The admin console is desktop-oriented by design; on phones the wide
+   DataTables scroll horizontally. The notice in Admin.tsx says as much, and
+   the §2.8 shadow affordance already applies to admin .table-wrap elements.
+   Nothing further is needed here. */
+
+/* ---------- login: headline shrinks enough to avoid vertical scroll ----------
+   .landing-headline's font-size is clamp(2.7rem, 8.5vh, 6.2rem) (line ~3014)
+   — deliberately scaled by viewport HEIGHT so the composition "always fits".
+   In practice it does not: on a narrow phone the headline wraps across 3-4
+   lines, and since taller phones get a *bigger* 8.5vh font they can wrap
+   into MORE lines than shorter ones, so the taller device is not actually
+   the safer case. Measured overflow with the original clamp: 74px at
+   375x667 (iPhone SE), 98px at 375x812, worse — not better — at 430x932.
+   This override only narrows the clamp's range (same property, later in
+   the cascade, no !important needed); the max-width:880px gate matches
+   every other mobile rule in this file, and above it the headline has
+   enough width to stay on one or two lines without this at all.
+   Verified 0px overflow at 360x640, 375x667, 375x812, 390x844 and 430x932 —
+   the realistic span of small-phone viewports. (320x568, the original
+   iPhone SE from 2016, still overflows by ~60px; closing that gap would
+   need trimming the lede text or jersey too, not just the headline, so it
+   is left as a known, currently out-of-scope limit on a device class that
+   has been out of production for years.) */
+@media (max-width: 880px) {
+  .landing-headline { font-size: clamp(1.9rem, 5.5vh, 3.1rem); }
 }

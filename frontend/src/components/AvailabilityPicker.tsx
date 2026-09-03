@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { userTimeZone } from "../utils/time";
+import { useIsMobile } from "../hooks/useIsMobile";
 
 /**
  * Preferred match-time picker: a 24-hour timeline of 48 half-hour slots the
@@ -40,6 +41,16 @@ interface Props {
 
 export function AvailabilityPicker({ value, onChange, disabled }: Props) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
+  // A 24-column row puts each of the 48 slots at ~9px on a 375px phone — far
+  // below any touch target. On mobile the day splits into two stacked 12-hour
+  // bands (00:00-12:00 / 12:00-24:00); slots 0-23 land in the top band, 24-47
+  // in the bottom, each band keeping its own :00/:30 gutter and legend row.
+  const cols = isMobile ? 12 : 24;
+  const bands = cols === 24 ? 1 : 2;
+  const cell = isMobile ? 32 : 26;
+  const gap = isMobile ? 2 : 3;
+  const bandSlots = cols === 24 ? SLOTS_PER_DAY : SLOTS_PER_DAY / 2; // 48 or 24
   const presets: { label: string; slots: number[] }[] = [
     { label: t("availability.allDay"), slots: PRESET_SLOTS.allDay() },
     { label: t("availability.daytime"), slots: PRESET_SLOTS.daytime() },
@@ -92,79 +103,109 @@ export function AvailabilityPicker({ value, onChange, disabled }: Props) {
         <button type="button" className="btn sm ghost" disabled={disabled} onClick={() => onChange([])}>{t("availability.clear")}</button>
       </div>
       {/* Each column is one hour: full hour (:00) stacked above its half-hour (:30),
-          with minute indicators on the left edge. */}
-      <div style={{ display: "flex", gap: 6 }}>
-        <div
-          aria-hidden
-          style={{
-            display: "grid",
-            gridTemplateRows: "26px 26px",
-            gap: 3,
-            fontSize: "0.68rem",
-            color: "var(--text-3)",
-            alignItems: "center",
-            textAlign: "right",
-            minWidth: 16,
-            userSelect: "none",
-          }}
-        >
-          <span>:00</span>
-          <span>:30</span>
+          with minute indicators on the left edge. On mobile the 24 hours render as
+          two stacked 12-hour bands (see `bands` above); each band repeats the
+          gutter + grid + legend trio so the row of hour labels stays truthful. */}
+      {Array.from({ length: bands }, (_, b) => (
+        <div key={b} style={{ marginTop: b > 0 ? 8 : 0 }}>
+          {/* Outer gutter-to-grid gap stays 6 on both tiers (desktop-identical);
+              only the cell and gutter-row gaps tighten to 2 on mobile. */}
+          <div style={{ display: "flex", gap: 6 }}>
+            <div
+              aria-hidden
+              style={{
+                display: "grid",
+                gridTemplateRows: `${cell}px ${cell}px`,
+                gap,
+                fontSize: "0.68rem",
+                color: "var(--text-3)",
+                alignItems: "center",
+                textAlign: "right",
+                minWidth: 16,
+                userSelect: "none",
+              }}
+            >
+              <span>:00</span>
+              <span>:30</span>
+            </div>
+            <div style={{ flex: 1, display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gap, userSelect: "none", touchAction: "none" }}>
+              {Array.from({ length: bandSlots }, (_, i) => {
+                const slot = b * bandSlots + i;
+                const isSel = selected.has(slot);
+                return (
+                  <button
+                    key={slot}
+                    type="button"
+                    title={slotLabel(slot)}
+                    aria-label={slotLabel(slot)}
+                    aria-pressed={isSel}
+                    disabled={disabled}
+                    onPointerDown={(e) => {
+                      // Touch gives the pointerdown target implicit pointer
+                      // capture, so the enter events that drive drag-paint
+                      // never fire on neighboring cells; releasing the capture
+                      // here lets pointerenter resume hit-testing normally.
+                      if (e.pointerType !== "mouse" && e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      }
+                      if (e.shiftKey && anchor.current !== null && !disabled) {
+                        const mode = !selected.has(anchor.current);
+                        painting.current = { active: true, mode };
+                        applyRange(anchor.current, slot, mode);
+                        return;
+                      }
+                      const mode = !isSel;
+                      anchor.current = slot;
+                      painting.current = { active: true, mode };
+                      apply(slot, mode);
+                    }}
+                    onPointerEnter={(e) => {
+                      if (painting.current.active && e.buttons > 0) apply(slot, painting.current.mode);
+                    }}
+                    style={{
+                      height: cell,
+                      borderRadius: 5,
+                      cursor: "pointer",
+                      border: isSel ? "1px solid var(--grass-2)" : "1px solid var(--line)",
+                      background: isSel ? "var(--grass-2)" : "transparent",
+                      padding: 0,
+                      opacity: disabled ? 0.5 : 1,
+                      // Hour-within-band: floor(slot/2) is the hour of the day;
+                      // mod `cols` (24 desktop, 12 mobile) folds it into the
+                      // band's 1..cols column. Row is the :00/:30 half.
+                      gridColumn: (Math.floor(slot / 2) % cols) + 1,
+                      gridRow: (slot % 2) + 1,
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "var(--text-3)", marginTop: 4 }}>
+            {cols === 24 ? (
+              <>
+                <span>00:00</span>
+                <span>06:00</span>
+                <span>12:00</span>
+                <span>18:00</span>
+                <span>24:00</span>
+              </>
+            ) : (
+              <>
+                <span>{String(b * 12).padStart(2, "0")}:00</span>
+                <span>{String(b * 12 + 6).padStart(2, "0")}:00</span>
+                <span>{String(b * 12 + 12).padStart(2, "0")}:00</span>
+              </>
+            )}
+          </div>
         </div>
-        <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(24, 1fr)", gap: 3, userSelect: "none", touchAction: "none" }}>
-          {Array.from({ length: SLOTS_PER_DAY }, (_, slot) => {
-            const isSel = selected.has(slot);
-            return (
-              <button
-                key={slot}
-                type="button"
-                title={slotLabel(slot)}
-                aria-label={slotLabel(slot)}
-                aria-pressed={isSel}
-                disabled={disabled}
-                onPointerDown={(e) => {
-                  if (e.shiftKey && anchor.current !== null && !disabled) {
-                    const mode = !selected.has(anchor.current);
-                    painting.current = { active: true, mode };
-                    applyRange(anchor.current, slot, mode);
-                    return;
-                  }
-                  const mode = !isSel;
-                  anchor.current = slot;
-                  painting.current = { active: true, mode };
-                  apply(slot, mode);
-                }}
-                onPointerEnter={(e) => {
-                  if (painting.current.active && e.buttons > 0) apply(slot, painting.current.mode);
-                }}
-                style={{
-                  height: 26,
-                  borderRadius: 5,
-                  cursor: "pointer",
-                  border: isSel ? "1px solid var(--grass-2)" : "1px solid var(--line)",
-                  background: isSel ? "var(--grass-2)" : "transparent",
-                  padding: 0,
-                  opacity: disabled ? 0.5 : 1,
-                  gridColumn: Math.floor(slot / 2) + 1,
-                  gridRow: (slot % 2) + 1,
-                }}
-              />
-            );
-          })}
-        </div>
-      </div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.78rem", color: "var(--text-3)", marginTop: 4 }}>
-        <span>00:00</span>
-        <span>06:00</span>
-        <span>12:00</span>
-        <span>18:00</span>
-        <span>24:00</span>
-      </div>
+      ))}
       <div style={{ marginTop: 8, fontSize: "0.88rem", color: enough ? "var(--text-2)" : "var(--gold-2)" }}>
         {t("availability.hoursSelected", { hours: hours.toFixed(1) })}{!enough && ` ${t("availability.pickAtLeast", { hours: MIN_SLOTS / 2 })}`}
       </div>
       <div style={{ marginTop: 4, fontSize: "0.78rem", color: "var(--text-3)" }}>
-        {t("availability.hint", { zone: userTimeZone() })}
+        {/* No shift-click on touch: the mobile copy promises tap/drag instead. */}
+        {t(isMobile ? "availability.hintTouch" : "availability.hint", { zone: userTimeZone() })}
       </div>
     </div>
   );

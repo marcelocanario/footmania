@@ -4,6 +4,7 @@ import { BarChart3, CalendarClock, CalendarRange, Gauge, ListTree, Megaphone, Re
 import { api } from "../api/client";
 import { useGame } from "../store/game";
 import { Segmented } from "../components/Segmented";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { useAdminFetch } from "./admin/adminShared";
 import { OverviewTab } from "./admin/OverviewTab";
 import { EventsTab } from "./admin/EventsTab";
@@ -19,6 +20,7 @@ type TabId = "overview" | "events" | "liveops" | "season" | "competitions" | "an
 
 export function Admin() {
   const { user } = useGame();
+  const isMobile = useIsMobile();
   const toast = useRef<Toast>(null);
   const [tab, setTab] = useState<TabId>("overview");
   // Bumped by manual refresh / window focus so the mounted tab refetches.
@@ -84,6 +86,12 @@ export function Admin() {
           ]}
         />
       </div>
+
+      {isMobile && (
+        <div className="card" style={{ padding: "10px 14px", marginBottom: 12, borderColor: "var(--line-2)", color: "var(--text-2)", fontSize: "0.85rem" }}>
+          The admin console is designed for desktop — tables scroll horizontally on small screens.
+        </div>
+      )}
 
       {clock.error && (
         <div className="card" style={{ borderColor: "rgba(255,99,99,0.5)", color: "#ff6b6b", marginBottom: 12 }}>

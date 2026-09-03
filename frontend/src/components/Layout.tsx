@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Languages, Settings as SettingsIcon, UserPlus, Hourglass } from "lucide-react";
+import { Users, Table2, ArrowLeftRight, Wallet, CalendarDays, LogOut, Home, ShieldCheck, Radio, History as HistoryIcon, Shirt, Bell, Languages, Settings as SettingsIcon, UserPlus, Hourglass, MoreHorizontal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useGame } from "../store/game";
 import { useLang } from "../i18n/store";
@@ -30,6 +30,27 @@ const NAV: NavItem[] = [
   { to: "/friends", key: "nav.friends", icon: <UserPlus size={15} /> },
   { to: "/settings", key: "nav.settings", icon: <SettingsIcon size={15} /> },
 ];
+
+// The mobile bottom bar has room for only four persistent destinations plus
+// a "More" trigger; every other NAV entry (including Admin, when present)
+// moves into the sheet the trigger opens. Keep this list in sync with NAV
+// above — it exists only to pick the four out of the full set, not to
+// duplicate their icons/routes.
+const PRIMARY_TO = ["/dashboard", "/squad", "/competitions", "/transfers"];
+
+// Full nav labels ("Transfers", and its longer fr/pt-BR equivalents) do not
+// fit a ~70px bottom-bar slot at any legible size; the primary four use the
+// dedicated navShort.* catalog entries instead. A switch (rather than a
+// runtime "nav." -> "navShort." string rewrite) keeps every call type-checked
+// against the real i18next resource keys.
+function primaryShortKey(to: string): "navShort.home" | "navShort.squad" | "navShort.tables" | "navShort.transfers" {
+  switch (to) {
+    case "/squad": return "navShort.squad";
+    case "/competitions": return "navShort.tables";
+    case "/transfers": return "navShort.transfers";
+    default: return "navShort.home";
+  }
+}
 
 interface SeasonDayEntry {
   day: number;
@@ -178,10 +199,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const [showNotifs, setShowNotifs] = useState(false);
   const [showSeasonCal, setShowSeasonCal] = useState(false);
   const [showLangPicker, setShowLangPicker] = useState(false);
+  const [showMore, setShowMore] = useState(false);
   const [warnings, setWarnings] = useState<{ id: number; reason: string; createdAt: string }[]>([]);
   const notifPopRef = useRef<HTMLDivElement>(null);
   const seasonPopRef = useRef<HTMLDivElement>(null);
   const langPopRef = useRef<HTMLDivElement>(null);
+  const morePopRef = useRef<HTMLDivElement>(null);
   // Fixture-id lookup used to render friendly copy for legacy notification
   // payloads that only carry club/fixture IDs.
   const matchByFixture = new Map((status?.myMatches ?? []).map((m) => [m.fixtureId, m]));
@@ -189,19 +212,30 @@ export function Layout({ children }: { children: ReactNode }) {
   const adminNav: NavItem[] = user?.isAdmin
     ? [...NAV, { to: "/admin", key: "nav.admin", icon: <ShieldCheck size={15} />, admin: true }]
     : NAV;
+  // Everything the bottom bar's "More" sheet lists: every adminNav entry that
+  // is not one of the four persistent slots, in the same order as NAV.
+  const moreNav = adminNav.filter((n) => !PRIMARY_TO.includes(n.to));
+  // Highlight the "More" trigger itself when the current route lives inside
+  // the sheet — otherwise(finances, my-club, …) the bar would show no active
+  // slot at all. Prefix match covers nested routes (e.g. /team/:id is not in
+  // the sheet, so it correctly leaves the trigger dim).
+  const moreActive = moreNav.some((n) => location.pathname === n.to || location.pathname.startsWith(`${n.to}/`));
 
-  // Close anchored topbar popouts on any click or Escape outside of them.
+  // Close anchored topbar popouts (and the bottom-bar "More" sheet) on any
+  // click or Escape outside of them.
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
       if (notifPopRef.current && !notifPopRef.current.contains(event.target as Node)) setShowNotifs(false);
       if (seasonPopRef.current && !seasonPopRef.current.contains(event.target as Node)) setShowSeasonCal(false);
       if (langPopRef.current && !langPopRef.current.contains(event.target as Node)) setShowLangPicker(false);
+      if (morePopRef.current && !morePopRef.current.contains(event.target as Node)) setShowMore(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setShowNotifs(false);
         setShowSeasonCal(false);
         setShowLangPicker(false);
+        setShowMore(false);
       }
     };
     document.addEventListener("mousedown", onPointerDown);
@@ -447,7 +481,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
       {isMobile && (
         <nav className="bottom-bar" aria-label={t("layout.primaryNavigation")}>
-          {adminNav.filter((n) => n.to !== "/competitions").map((item) => (
+          {adminNav.filter((n) => PRIMARY_TO.includes(n.to)).map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -458,9 +492,44 @@ export function Layout({ children }: { children: ReactNode }) {
               aria-disabled={navLockedFor(item.to)}
             >
               {item.icon}
-              {t(item.key)}
+              {t(primaryShortKey(item.to))}
             </NavLink>
           ))}
+          <div className="bottom-sheet-wrap" ref={morePopRef}>
+            <button
+              type="button"
+              className={`bottom-sheet-trigger${showMore || moreActive ? " active" : ""}`}
+              onClick={() => setShowMore((v) => !v)}
+              aria-expanded={showMore}
+              aria-haspopup="menu"
+            >
+              <MoreHorizontal size={15} />
+              {t("navShort.more")}
+            </button>
+            {showMore && (
+              <div className="bottom-sheet" role="menu">
+                {moreNav.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    role="menuitem"
+                    className={({ isActive }) => (isActive ? "active" : "") + (item.admin ? " admin" : "")}
+                    onClick={(event) => {
+                      if (navLockedFor(item.to)) {
+                        event.preventDefault();
+                        return;
+                      }
+                      setShowMore(false);
+                    }}
+                    aria-disabled={navLockedFor(item.to)}
+                  >
+                    {item.icon}
+                    {t(item.key)}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+          </div>
         </nav>
       )}
 

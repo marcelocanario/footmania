@@ -67,7 +67,10 @@ function conditionIcon(condition: string) {
 // parameter (plus other module-level helpers/components), so a fresh closure
 // per render (and per row) buys nothing and only adds allocation churn.
 function positionBody(p: PlayerView) {
-  return <span className={`pos-tag ${positionClass(p.naturalPosition)} squad-tooltip-trigger`} data-pr-tooltip={positionLabel(p.naturalPosition)}>{positionLetter(p.naturalPosition)}</span>;
+  // tabIndex so a tap can focus this span on touch: the shared tooltip
+  // binding (below) fires on focus/blur as well as hover, but only for
+  // elements that can actually receive focus.
+  return <span tabIndex={0} className={`pos-tag ${positionClass(p.naturalPosition)} squad-tooltip-trigger`} data-pr-tooltip={positionLabel(p.naturalPosition)}>{positionLetter(p.naturalPosition)}</span>;
 }
 
 /** Dropdown menu item for tactic options: label plus optional one-line description. */
@@ -672,7 +675,7 @@ export function Squad() {
           <AutomationPanel formation={boardFormation} customTooltips />
         </>
       ) : (
-        <div className="grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
+        <div className="grid squad-roster-grid" style={{ gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 2fr) minmax(0, 1fr)", alignItems: "start" }}>
           <div className="card" style={{ padding: isMobile ? 10 : 20 }}>
             <div className="table-wrap squad-table-wrap">
               <DataTable
@@ -739,19 +742,19 @@ export function Squad() {
                   <h3 style={{ fontSize: "1.35rem" }}>{selectedPlayer.displayName ?? selectedPlayer.name}{selectedPlayer.nickname && <span style={{ color: "var(--gold-2)", fontWeight: 400, fontSize: "0.9rem" }}> “{selectedPlayer.nickname}”</span>}</h3>
                   {selectedPlayer.nickname && <div style={{ color: "var(--text-3)", fontSize: "0.78rem" }}>{t("squad.realName", { name: selectedPlayer.name })}</div>}
                   <div style={{ color: "var(--text-2)", fontSize: "0.86rem", marginTop: 3 }}>
-                    <span className="squad-tooltip-trigger" data-pr-tooltip={positionLabel(selectedPlayer.naturalPosition)}>{selectedPlayer.naturalPosition}</span> · {selectedPlayer.age} yrs ·{" "}
-                    <span className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
+                    <span tabIndex={0} className="squad-tooltip-trigger" data-pr-tooltip={positionLabel(selectedPlayer.naturalPosition)}>{selectedPlayer.naturalPosition}</span> · {selectedPlayer.age} yrs ·{" "}
+                    <span tabIndex={0} className="squad-tooltip-trigger" data-pr-tooltip={selectedPlayer.country} aria-label={`Country: ${selectedCountryName}`}>
                       {selectedCountryFlag && <span aria-hidden="true">{selectedCountryFlag} </span>}
                       {selectedCountryName}
                     </span>
                     {selectedPlayer.suspendedGames > 0 && <span className="flag-chip" style={{ marginLeft: 6 }}>{t("squad.suspendedChip", { count: selectedPlayer.suspendedGames })}</span>}
                     {!!selectedPlayer.injuryDaysRemaining && selectedPlayer.injuryDaysRemaining > 0 && (
-                      <span className="flag-chip squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`${t("squad.injuryCause")}: ${selectedPlayer.injuryCause ?? "—"}`}>
+                      <span tabIndex={0} className="flag-chip squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={`${t("squad.injuryCause")}: ${selectedPlayer.injuryCause ?? "—"}`}>
                         {t("squad.injuredChip", { returnDay: t("squad.injuredReturn", { day: (selectedPlayer.injuryUntilAbsoluteGameDay ?? 0) + 1 }) })}
                       </span>
                     )}
-                    {selectedPlayer.onLoan && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={t("squad.onLoanFrom", { club: selectedPlayer.loanFromName ?? t("squad.anotherClub") })}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
-                    {selectedPlayer.onLoanOut && <span className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={t("squad.onLoanAt", { club: selectedPlayer.loanClubName ?? t("squad.anotherClub") })}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
+                    {selectedPlayer.onLoan && <span tabIndex={0} className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={t("squad.onLoanFrom", { club: selectedPlayer.loanFromName ?? t("squad.anotherClub") })}>LOAN · {selectedPlayer.loanFromName ?? "—"}</span>}
+                    {selectedPlayer.onLoanOut && <span tabIndex={0} className="flag-chip fc-loan squad-tooltip-trigger" style={{ marginLeft: 6 }} data-pr-tooltip={t("squad.onLoanAt", { club: selectedPlayer.loanClubName ?? t("squad.anotherClub") })}>LOAN · {selectedPlayer.loanClubName ?? "—"}</span>}
                   </div>
                 </div>
               </div>
@@ -837,7 +840,7 @@ export function Squad() {
                             ) : (
                               <div className="squad-history-list">
                                 {historyData.seasons.map((season) => (
-                                  <div className="squad-history-row squad-tooltip-trigger" key={season.seasonKey} data-pr-tooltip={`${season.seasonKey} · ${season.clubName}`}>
+                                  <div tabIndex={0} className="squad-history-row squad-tooltip-trigger" key={season.seasonKey} data-pr-tooltip={`${season.seasonKey} · ${season.clubName}`}>
                                     <strong>{season.seasonKey}</strong>
                                     <span className="squad-history-row-detail">{season.clubName} · {season.appearances} {t("squad.apps")} · {season.goals}G · {season.assists}A · {season.yellows}Y · {season.reds}R{(season.mvps ?? 0) > 0 ? ` · ${season.mvps} ${t("squad.mvpsShort")}` : ""}</span>
                                   </div>

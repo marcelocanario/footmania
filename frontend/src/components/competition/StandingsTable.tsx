@@ -88,7 +88,7 @@ export function StandingsTable({
         <Column key="team" header={t("standings.team")} body={(r: StandingsRowWithPosition) => (
           <span
             style={{
-              display: "flex", alignItems: "center", gap: 10,
+              display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
               ...(onClubClick ? { cursor: "pointer" } : {}),
             }}
             role={onClubClick ? "button" : undefined}

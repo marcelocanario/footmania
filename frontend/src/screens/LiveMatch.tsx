@@ -6,6 +6,7 @@ import { Flag, RefreshCw, Subscript, Users, Volume2, VolumeX } from "lucide-reac
 import { api, type LiveEvent, type LivePlayer, type LiveState, type LiveStateDelta } from "../api/client";
 import { useGame } from "../store/game";
 import { useSettings } from "../store/settings";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { TacticsBoard } from "../components/TacticsBoard";
 import { MatchPitch } from "../components/MatchPitch";
 import { eventKey, hasPitchCue } from "../components/matchPitchUtils";
@@ -60,6 +61,7 @@ interface WsMessage {
 
 export function LiveMatch() {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const refresh = useGame((s) => s.refresh);
   const setLiveMatch = useGame((s) => s.setLiveMatch);
   const snapshot = useGame((s) => s.snapshot);
@@ -746,7 +748,7 @@ export function LiveMatch() {
             </button>
           </div>
           {(state.automationLog?.length ?? 0) > 0 && (
-            <div className="aut-log" style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4, maxHeight: 160, overflowY: "auto" }}>
+            <div className="aut-log" style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8, display: "flex", flexDirection: "column", gap: 4, maxHeight: isMobile ? "30vh" : 160, overflowY: "auto" }}>
               {[...state.automationLog!].reverse().map((entry, i) => (
                 <div key={i} style={{ fontSize: "0.8rem", color: entry.status === "APPLIED" ? "var(--grass-2)" : "var(--text-3)" }}>
                   {entry.minute}&apos; — {entry.status === "APPLIED" ? t("live.autoLogApplied") : entry.status === "RETIRED" ? t("live.autoLogRetired", { reason: tDynamic(automationReasonKey(entry.reason)) }) : t("live.autoLogSkipped", { reason: tDynamic(automationReasonKey(entry.reason)) })}

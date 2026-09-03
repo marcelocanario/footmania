@@ -200,6 +200,18 @@ export const en = {
     settings: "Settings",
     admin: "Admin",
   },
+  // Bottom-bar-only labels: the mobile nav strip has ~70px per slot, too
+  // narrow for "Transfers" (and its longer fr/pt-BR equivalents) at any
+  // legible size. Keep the desktop top-nav on `nav.*`; only these five
+  // slots (the bottom bar's four persistent items plus its "More" sheet
+  // trigger) use the short set.
+  navShort: {
+    home: "Home",
+    squad: "Squad",
+    tables: "Tables",
+    transfers: "Market",
+    more: "More",
+  },
   squad: {
     title: "Squad",
     seniors: "Senior Squad",
@@ -1334,6 +1346,7 @@ export const en = {
     hoursSelected: "{{hours}} h selected",
     pickAtLeast: "— pick at least {{hours}} hours",
     hint: "Shift-click to fill a range of slots at once. Times shown in your timezone ({{zone}}).",
+    hintTouch: "Tap to paint single slots, or drag across them to fill a range at once. Times shown in your timezone ({{zone}}).",
   },
   playerName: {
     sus: "SUS",

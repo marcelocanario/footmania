@@ -6,6 +6,7 @@ import { TabView, TabPanel } from "primereact/tabview";
 import { ArrowUp, ArrowDown } from "lucide-react";
 import { api, type FixtureView, type PyramidResponse, type StandingsRow } from "../api/client";
 import { useGame } from "../store/game";
+import { useIsMobile } from "../hooks/useIsMobile";
 import { groupLabel } from "../components/competition/shared";
 import { StandingsTable } from "../components/competition/StandingsTable";
 import { FixturesList } from "../components/competition/FixturesList";
@@ -15,6 +16,7 @@ export function Competitions() {
   const { t } = useTranslation();
   const { status } = useGame();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [pyramid, setPyramid] = useState<PyramidResponse | null>(null);
   const [selectedTier, setSelectedTier] = useState<number | null>(null);
   const [selectedDiv, setSelectedDiv] = useState<number | null>(null);
@@ -108,6 +110,7 @@ export function Competitions() {
               isTopDivision={isTopDivision}
               seasonComplete={seasonComplete}
               onClubClick={(row) => navigate(`/team/${row.clubId}`)}
+              compact={isMobile}
             />
           </div>
         </TabPanel>
